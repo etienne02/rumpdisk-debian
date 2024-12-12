@@ -1,4 +1,4 @@
-/*	$NetBSD: aarp.c,v 1.43 2018/12/22 14:28:56 maxv Exp $	*/
+/*	$NetBSD: aarp.c,v 1.47 2024/07/05 04:31:53 rin Exp $	*/
 
 /*
  * Copyright (c) 1990,1991 Regents of The University of Michigan.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aarp.c,v 1.43 2018/12/22 14:28:56 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aarp.c,v 1.47 2024/07/05 04:31:53 rin Exp $");
 
 #include "opt_mbuftrace.h"
 #include "opt_atalk.h"
@@ -70,15 +70,18 @@ struct aarptab  aarptab[AARPTAB_SIZE];
 #define AARPTAB_HASH(a) \
     ((((a).s_net << 8 ) + (a).s_node ) % AARPTAB_NB )
 
-#define AARPTAB_LOOK(aat,addr) { \
-    int		n; \
-    aat = &aarptab[ AARPTAB_HASH(addr) * AARPTAB_BSIZ ]; \
-    for ( n = 0; n < AARPTAB_BSIZ; n++, aat++ ) \
-	if ( aat->aat_ataddr.s_net == (addr).s_net && \
-	     aat->aat_ataddr.s_node == (addr).s_node ) \
-	    break; \
-	if ( n >= AARPTAB_BSIZ ) \
-	    aat = 0; \
+#define AARPTAB_LOOK(aat, addr) { 				\
+	int n;							\
+								\
+	(aat) = &aarptab[AARPTAB_HASH(addr) * AARPTAB_BSIZ];	\
+	for (n = 0; n < AARPTAB_BSIZ; n++, (aat)++) {		\
+		if ((aat)->aat_ataddr.s_net == (addr).s_net &&	\
+	            (aat)->aat_ataddr.s_node == (addr).s_node)	\
+			break;					\
+	}							\
+	if (n >= AARPTAB_BSIZ) {				\
+		(aat) = 0;					\
+	}							\
 }
 
 #define AARPT_AGE	(60 * 1)
@@ -295,8 +298,7 @@ aarpresolve(struct ifnet *ifp, struct mbuf *m,
 	}
 
 	/* entry has not completed */
-	if (aat->aat_hold)
-		m_freem(aat->aat_hold);
+	m_freem(aat->aat_hold);
 	aat->aat_hold = m;
 	aarpwhohas(ifp, destsat);
 	splx(s);
@@ -526,8 +528,7 @@ static void
 aarptfree(struct aarptab *aat)
 {
 
-	if (aat->aat_hold)
-		m_freem(aat->aat_hold);
+	m_freem(aat->aat_hold);
 	aat->aat_hold = 0;
 	aat->aat_timer = aat->aat_flags = 0;
 	aat->aat_ataddr.s_net = 0;

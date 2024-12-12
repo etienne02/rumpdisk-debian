@@ -1,4 +1,4 @@
-/*	$NetBSD: df.c,v 1.98 2021/01/03 01:43:12 ginsbach Exp $ */
+/*	$NetBSD: df.c,v 1.104 2024/10/06 17:03:28 christos Exp $ */
 
 /*
  * Copyright (c) 1980, 1990, 1993, 1994
@@ -45,7 +45,7 @@ __COPYRIGHT(
 #if 0
 static char sccsid[] = "@(#)df.c	8.7 (Berkeley) 4/2/94";
 #else
-__RCSID("$NetBSD: df.c,v 1.98 2021/01/03 01:43:12 ginsbach Exp $");
+__RCSID("$NetBSD: df.c,v 1.104 2024/10/06 17:03:28 christos Exp $");
 #endif
 #endif /* not lint */
 
@@ -76,13 +76,20 @@ __dead static void usage(void);
 static void	 prthumanval(int64_t, int);
 static void	 prthuman(const struct statvfs *, int64_t, int64_t);
 
-static int	 aflag, cflag, gflag, hflag, iflag, lflag, nflag, Pflag, Wflag;
+static int	 aflag, cflag, fflag, gflag, hflag, iflag, lflag;
+static int	 Mflag, Nflag, nflag, Pflag, qflag, Wflag;
 static long	 usize;
 static char	**typelist;
+static size_t	 mntcount;
 
 #define WIDTH_INODE	10
 #define WIDTH_BLKSIZE	12
 static int blksize_width = WIDTH_BLKSIZE;
+
+static int fudgeunits = 0;
+
+#define	streq(a, b)	(strcmp((a), (b)) == 0)
+#define	warnq(args)	do { if (!qflag) warnx args; } while (0)
 
 int
 main(int argc, char *argv[])
@@ -90,19 +97,26 @@ main(int argc, char *argv[])
 	struct stat stbuf;
 	struct statvfs *mntbuf, totals;
 	int ch, maxwidth, width;
-	size_t i, mntcount;
+	size_t i;
 	char *mntpt;
 
 	setprogname(argv[0]);
 	(void)setlocale(LC_ALL, "");
 
-	while ((ch = getopt(argc, argv, "acGghiklmnPt:W")) != -1)
+	while ((ch = getopt(argc, argv, "abcfGgHhiklMmNnPqt:W")) != -1)
 		switch (ch) {
 		case 'a':
 			aflag = 1;
 			break;
+		case 'b':
+			hflag = 0;
+			usize = 512;
+			break;
 		case 'c':
 			cflag = 1;
+			break;
+		case 'f':
+			fflag = 1;
 			break;
 		case 'g':
 			hflag = 0;
@@ -111,6 +125,9 @@ main(int argc, char *argv[])
 		case 'G':
 			gflag = 1;
 			break;
+		case 'H':
+			fudgeunits = HN_DIVISOR_1000;
+			/* FALL THROUGH */
 		case 'h':
 			hflag = 1;
 			usize = 0;
@@ -125,15 +142,24 @@ main(int argc, char *argv[])
 		case 'l':
 			lflag = 1;
 			break;
+		case 'M':
+			Mflag = 1;
+			break;
 		case 'm':
 			hflag = 0;
 			usize = 1024 * 1024;
+			break;
+		case 'N':
+			Nflag = 1;
 			break;
 		case 'n':
 			nflag = 1;
 			break;
 		case 'P':
 			Pflag = 1;
+			break;
+		case 'q':
+			qflag = 1;
 			break;
 		case 'W':
 			Wflag = 1;
@@ -149,12 +175,18 @@ main(int argc, char *argv[])
 			usage();
 		}
 
+	if (fflag && (Pflag || gflag))
+		errx(EXIT_FAILURE,
+		    "only one of -f -G and -P may be specified");
 	if (gflag && (Pflag || iflag))
 		errx(EXIT_FAILURE,
 		    "only one of -G and -P or -i may be specified");
 	if (Pflag && iflag)
 		errx(EXIT_FAILURE,
 		    "only one of -P and -i may be specified");
+	if (fflag)
+		Nflag = 1;
+
 #if 0
 	/*
 	 * The block size cannot be checked until after getbsize() is called.
@@ -180,7 +212,8 @@ main(int argc, char *argv[])
 		for (/*EMPTY*/; *argv != NULL; argv++) {
 			if (stat(*argv, &stbuf) < 0) {
 				if ((mntpt = getmntpt(*argv)) == 0) {
-					warn("%s", *argv);
+					if (!qflag)
+						warn("%s", *argv);
 					continue;
 				}
 			} else if (S_ISBLK(stbuf.st_mode)) {
@@ -188,48 +221,61 @@ main(int argc, char *argv[])
 					mntpt = *argv;
 			} else
 				mntpt = *argv;
+
 			/*
 			 * Statfs does not take a `wait' flag, so we cannot
 			 * implement nflag here.
 			 */
-			if (!statvfs(mntpt, &mntbuf[mntcount]))
-				if (lflag &&
+			if (!statvfs(mntpt, &mntbuf[mntcount])) {
+				if (Mflag &&
+				    !streq(mntpt, mntbuf[mntcount].f_mntonname))
+					warnq(("%s is not a mount point",
+					    mntpt));
+				else if (lflag &&
 				    (mntbuf[mntcount].f_flag & MNT_LOCAL) == 0)
-					warnx("Warning: %s is not a local %s",
-					    *argv, "file system");
+					warnq(("Warning: %s is not a local %s",
+					    *argv, "file system"));
 				else if
 				    (!selected(mntbuf[mntcount].f_fstypename,
 					sizeof(mntbuf[mntcount].f_fstypename)))
-					warnx("Warning: %s mounted as a %s %s",
+					warnq(("Warning: %s mounted as a %s %s",
 					    *argv,
 					    mntbuf[mntcount].f_fstypename,
-					    "file system");
+					    "file system"));
 				else
 					++mntcount;
-			else
+			} else if (!qflag)
 				warn("%s", *argv);
 		}
 	}
 
 	if (cflag) {
 		memset(&totals, 0, sizeof(totals));
-		totals.f_bsize = DEV_BSIZE;
+		totals.f_frsize = DEV_BSIZE;
 		strlcpy(totals.f_mntfromname, "total",
 			sizeof(totals.f_mntfromname));
 	}
 
 	maxwidth = 0;
 	for (i = 0; i < mntcount; i++) {
-		width = (int)strlen(Wflag && mntbuf[i].f_mntfromlabel[0] ?
-		    mntbuf[i].f_mntfromlabel : mntbuf[i].f_mntfromname);
+		width = 0;
+		if (Wflag && mntbuf[i].f_mntfromlabel[0]) {
+			/* +5 is for "NAME=" added later */
+			width = (int)strlen(mntbuf[i].f_mntfromlabel) + 5;
+		}
+		if (width == 0)
+			width = (int)strlen(mntbuf[i].f_mntfromname);
 		if (width > maxwidth)
 			maxwidth = width;
 		if (cflag)
 			addstat(&totals, &mntbuf[i]);
 	}
-	for (i = 0; i < mntcount; i++)
-		prtstat(&mntbuf[i], maxwidth);
 
+	if (cflag == 0 || fflag == 0)
+		for (i = 0; i < mntcount; i++)
+			prtstat(&mntbuf[i], maxwidth);
+
+	mntcount = fflag;
 	if (cflag)
 		prtstat(&totals, maxwidth);
 
@@ -239,14 +285,14 @@ main(int argc, char *argv[])
 static char *
 getmntpt(const char *name)
 {
-	size_t mntcount, i;
+	size_t count, i;
 	struct statvfs *mntbuf;
 
-	mntcount = getmntinfo(&mntbuf, MNT_NOWAIT);
-	if (mntcount == 0)
+	count = getmntinfo(&mntbuf, MNT_NOWAIT);
+	if (count == 0)
 		err(EXIT_FAILURE, "Can't get mount information");
-	for (i = 0; i < mntcount; i++) {
-		if (!strcmp(mntbuf[i].f_mntfromname, name))
+	for (i = 0; i < count; i++) {
+		if (streq(mntbuf[i].f_mntfromname, name))
 			return mntbuf[i].f_mntonname;
 	}
 	return 0;
@@ -312,17 +358,17 @@ maketypelist(char *fslist)
  * current (not cached) info.  Returns the new count of valid statvfs bufs.
  */
 static size_t
-regetmntinfo(struct statvfs **mntbufp, size_t mntcount)
+regetmntinfo(struct statvfs **mntbufp, size_t count)
 {
 	size_t i, j;
 	struct statvfs *mntbuf;
 
 	if (!lflag && typelist == NULL && aflag)
-		return nflag ? mntcount : (size_t)getmntinfo(mntbufp, MNT_WAIT);
+		return nflag ? count : (size_t)getmntinfo(mntbufp, MNT_WAIT);
 
 	mntbuf = *mntbufp;
 	j = 0;
-	for (i = 0; i < mntcount; i++) {
+	for (i = 0; i < count; i++) {
 		if (!aflag && (mntbuf[i].f_flag & MNT_IGNORE) != 0)
 			continue;
 		if (lflag && (mntbuf[i].f_flag & MNT_LOCAL) == 0)
@@ -355,7 +401,7 @@ prthumanval(int64_t bytes, int width)
 
 	(void)humanize_number(buf, sizeof(buf) - (bytes < 0 ? 0 : 1),
 	    bytes, "", HN_AUTOSCALE,
-	    HN_B | HN_NOSPACE | HN_DECIMAL);
+	    HN_B | HN_NOSPACE | HN_DECIMAL | fudgeunits);
 
 	(void)printf("%*s", width, buf);
 }
@@ -446,7 +492,7 @@ prtstat(const struct statvfs *sfsp, int maxwidth)
 		    (uint64_t)sfsp->f_bavail);
 		(void)printf("%10" PRId64 " total files  %10" PRId64
 		    " free files %12lx filesys id\n",
-		    (uint64_t)sfsp->f_ffree, (uint64_t)sfsp->f_files,
+		    (uint64_t)sfsp->f_files, (uint64_t)sfsp->f_ffree,
 		    sfsp->f_fsid);
 		(void)printf("%10s fstype  %#15lx flag  %17ld filename "
 		    "length\n", sfsp->f_fstypename, sfsp->f_flag,
@@ -465,6 +511,10 @@ prtstat(const struct statvfs *sfsp, int maxwidth)
 		maxwidth = 12;
 	if (++timesthrough == 1) {
 		switch (blocksize = usize) {
+		case 512:
+			header = "512-blocks";
+			headerlen = (int)strlen(header);
+			break;
 		case 1024:
 			header = Pflag ? "1024-blocks" : "1K-blocks";
 			headerlen = (int)strlen(header);
@@ -506,7 +556,7 @@ prtstat(const struct statvfs *sfsp, int maxwidth)
 				    "non-standard block size incompatible with -P");
 			(void)printf("Filesystem %s Used Available Capacity "
 			    "Mounted on\n", header);
-		} else {
+		} else if (!Nflag) {
 			(void)printf("%-*.*s %*s %*s %*s %%Cap",
 			    maxwidth, maxwidth, "Filesystem",
 			    blksize_width, header,
@@ -547,6 +597,22 @@ prtstat(const struct statvfs *sfsp, int maxwidth)
 		return;
 	}
 
+	if (fflag) {
+		if (iflag)
+			(void)printf("%jd", sfsp->f_ffree);
+		else if (hflag)
+			prthumanval(bavail * sfsp->f_frsize, 1);
+		else
+			(void)printf("%jd", fsbtoblk(bavail,
+			    sfsp->f_frsize, blocksize));
+
+		if (mntcount != 1)
+			(void)printf(" %s\n", sfsp->f_mntonname);
+		else
+			(void)printf("\n");
+		return;
+	}
+
 	(void)printf("%-*.*s ", maxwidth, maxwidth, mntfromname);
 
 	if (hflag)
@@ -577,8 +643,8 @@ usage(void)
 {
 
 	(void)fprintf(stderr,
-	    "Usage: %s [-aglnW] [-Ghkm|-ihkm|-Pk] [-t type] [file | "
-	    "file_system ...]\n",
+	    "Usage: %s [-aclMnqW] [-G|-bkP|-bfgHhikmN] [-t type] [file | "
+	    "file_system]...\n",
 	    getprogname());
 	exit(1);
 	/* NOTREACHED */

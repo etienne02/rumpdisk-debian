@@ -1,7 +1,7 @@
-/*	$NetBSD: subr_kcpuset.c,v 1.12 2019/07/26 05:39:55 msaitoh Exp $	*/
+/*	$NetBSD: subr_kcpuset.c,v 1.20 2023/09/23 18:21:11 ad Exp $	*/
 
 /*-
- * Copyright (c) 2011 The NetBSD Foundation, Inc.
+ * Copyright (c) 2011, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -41,15 +41,16 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_kcpuset.c,v 1.12 2019/07/26 05:39:55 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_kcpuset.c,v 1.20 2023/09/23 18:21:11 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
 
 #include <sys/atomic.h>
+#include <sys/intr.h>
 #include <sys/sched.h>
 #include <sys/kcpuset.h>
-#include <sys/pool.h>
+#include <sys/kmem.h>
 
 /* Number of CPUs to support. */
 #define	KC_MAXCPUS		roundup2(MAXCPUS, 32)
@@ -64,7 +65,7 @@ struct kcpuset {
 typedef struct kcpuset_impl {
 	/* Reference count. */
 	u_int			kc_refcnt;
-	/* Next to free, if non-NULL (used when multiple references). */ 
+	/* Next to free, if non-NULL (used when multiple references). */
 	struct kcpuset *	kc_next;
 	/* Actual variable-sized field of bits. */
 	struct kcpuset		kc_field;
@@ -96,8 +97,7 @@ static bool			kc_initialised = false;
  */
 static size_t			kc_bitsize __read_mostly = KC_BITSIZE_EARLY;
 static size_t			kc_nfields __read_mostly = KC_NFIELDS_EARLY;
-
-static pool_cache_t		kc_cache __read_mostly;
+static size_t			kc_memsize __read_mostly;
 
 static kcpuset_t *		kcpuset_create_raw(bool);
 
@@ -114,10 +114,9 @@ kcpuset_sysinit(void)
 	/* Set a kcpuset_t sizes. */
 	kc_nfields = (KC_MAXCPUS >> KC_SHIFT);
 	kc_bitsize = sizeof(uint32_t) * kc_nfields;
-	KASSERT(kc_nfields != 0 && kc_bitsize != 0);
-
-	kc_cache = pool_cache_init(sizeof(kcpuset_impl_t) + kc_bitsize,
-	    coherency_unit, 0, 0, "kcpuset", NULL, IPL_NONE, NULL, NULL, NULL);
+	kc_memsize = sizeof(kcpuset_impl_t) + kc_bitsize;
+	KASSERT(kc_nfields != 0);
+	KASSERT(kc_bitsize != 0);
 
 	/* First, pre-allocate kcpuset entries. */
 	for (i = 0; i < kc_last_idx; i++) {
@@ -194,7 +193,7 @@ kcpuset_create_raw(bool zero)
 {
 	kcpuset_impl_t *kc;
 
-	kc = pool_cache_get(kc_cache, PR_WAITOK);
+	kc = kmem_alloc(kc_memsize, KM_SLEEP);
 	kc->kc_refcnt = 1;
 	kc->kc_next = NULL;
 
@@ -228,6 +227,7 @@ kcpuset_clone(kcpuset_t **retkcp, const kcpuset_t *kcp)
 void
 kcpuset_destroy(kcpuset_t *kcp)
 {
+	const size_t size = kc_memsize;
 	kcpuset_impl_t *kc;
 
 	KASSERT(kc_initialised);
@@ -236,7 +236,7 @@ kcpuset_destroy(kcpuset_t *kcp)
 	do {
 		kc = KC_GETSTRUCT(kcp);
 		kcp = kc->kc_next;
-		pool_cache_put(kc_cache, kc);
+		kmem_free(kc, size);
 	} while (kcp);
 }
 
@@ -262,9 +262,11 @@ kcpuset_unuse(kcpuset_t *kcp, kcpuset_t **lst)
 	KASSERT(kc_initialised);
 	KASSERT(kc->kc_refcnt > 0);
 
+	membar_release();
 	if (atomic_dec_uint_nv(&kc->kc_refcnt) != 0) {
 		return;
 	}
+	membar_acquire();
 	KASSERT(kc->kc_next == NULL);
 	if (lst == NULL) {
 		kcpuset_destroy(kcp);

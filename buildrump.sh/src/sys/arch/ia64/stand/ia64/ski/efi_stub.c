@@ -1,4 +1,4 @@
-/*	$NetBSD: efi_stub.c,v 1.4 2012/12/27 20:21:51 martin Exp $	*/
+/*	$NetBSD: efi_stub.c,v 1.7 2022/08/21 10:30:54 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2003,2004 Marcel Moolenaar
@@ -48,8 +48,8 @@ extern void acpi_stub_init(void);
 extern void sal_stub_init(void);
 
 struct efi_cfgtbl efi_cfgtab[] = {
-	{ EFI_TABLE_ACPI20,	(intptr_t)&acpi_root },
-	{ EFI_TABLE_SAL,	(intptr_t)&sal_systab }
+	{ .ct_uuid = EFI_TABLE_ACPI20,	.ct_data = &acpi_root },
+	{ .ct_uuid = EFI_TABLE_SAL,	.ct_data = &sal_systab },
 };
 
 static efi_status GetTime(struct efi_tm *, struct efi_tmcap *);
@@ -72,55 +72,57 @@ static efi_status ResetSystem(enum efi_reset, efi_status, u_long, efi_char *);
 
 struct efi_rt efi_rttab = {
 	/* Header. */
-	{	0,			/* XXX Signature */
-		0,			/* XXX Revision */
-		0,			/* XXX HeaderSize */
-		0,			/* XXX CRC32 */
+	.rt_hdr = {
+		.th_sig = 0,		/* XXX Signature */
+		.th_rev = 0,		/* XXX Revision */
+		.th_hdrsz = 0,		/* XXX HeaderSize */
+		.th_crc32 = 0,		/* XXX CRC32 */
 	},
 
 	/* Time services */
-	GetTime,
-	SetTime,
-	GetWakeupTime,
-	SetWakeupTime,
+	.rt_gettime = GetTime,
+	.rt_settime = SetTime,
+	.rt_getwaketime = GetWakeupTime,
+	.rt_setwaketime = SetWakeupTime,
 
 	/* Virtual memory services */
-	SetVirtualAddressMap,
-	ConvertPointer,
+	.rt_setvirtual = SetVirtualAddressMap,
+	.rt_cvtptr = ConvertPointer,
 
 	/* Variable services */
-	GetVariable,
-	GetNextVariableName,
-	SetVariable,
+	.rt_getvar = GetVariable,
+	.rt_scanvar = GetNextVariableName,
+	.rt_setvar = SetVariable,
 
 	/* Misc */
-	GetNextHighMonotonicCount,
-	ResetSystem
+	.rt_gethicnt = GetNextHighMonotonicCount,
+	.rt_reset = ResetSystem
 };
 
 struct efi_systbl efi_systab = {
 	/* Header. */
-	{	EFI_SYSTBL_SIG,
-		0,			/* XXX Revision */
-		0,			/* XXX HeaderSize */
-		0,			/* XXX CRC32 */
+	.st_hdr = {
+		.th_sig = EFI_SYSTBL_SIG,
+		.th_rev = 0,		/* XXX Revision */
+		.th_hdrsz = 0,		/* XXX HeaderSize */
+		.th_crc32 = 0,		/* XXX CRC32 */
 	},
 
 	/* Firmware info. */
-	L"FreeBSD", 0, 0,
+	.st_fwvendor = L"FreeBSD", .st_fwrev = 0, .__pad = 0,
 
 	/* Console stuff. */
-	NULL, NULL,
-	NULL, NULL,
-	NULL, NULL,
+	.st_cin = NULL, .st_cinif = NULL,
+	.st_cout = NULL, .st_coutif = NULL,
+	.st_cerr = NULL, .st_cerrif = NULL,
 
 	/* Services (runtime first). */
-	(intptr_t)&efi_rttab,
-	NULL,
+	.st_rt = &efi_rttab,
+	.st_bs = NULL,
 
 	/* Configuration tables. */
-	sizeof(efi_cfgtab)/sizeof(struct efi_cfgtbl),
-	(intptr_t)efi_cfgtab
+	.st_entries = sizeof(efi_cfgtab)/sizeof(struct efi_cfgtbl),
+	.st_cfgtbl = efi_cfgtab,
 };
 
 static efi_status
@@ -183,7 +185,7 @@ SetVirtualAddressMap(u_long mapsz, u_long descsz, uint32_t version,
 {
 	uint64_t delta;
 
-	delta = (uintptr_t)memmap->md_virt - memmap->md_phys;
+	delta = memmap->md_virt - memmap->md_phys;
 	Reloc(&efi_rttab.rt_gettime, delta);
 	Reloc(&efi_rttab.rt_settime, delta);
 	return (0);		/* Hah... */
@@ -246,25 +248,25 @@ ski_init_stubs(struct bootinfo *bi)
 
 	memp[0].md_type = EFI_MD_TYPE_PALCODE;
 	memp[0].md_phys = 0x100000;
-	memp[0].md_virt = NULL;
+	memp[0].md_virt = 0;
 	memp[0].md_pages = (4L*1024*1024)>>12;
 	memp[0].md_attr = EFI_MD_ATTR_WB | EFI_MD_ATTR_RT;
 
 	memp[1].md_type = EFI_MD_TYPE_FREE;
 	memp[1].md_phys = 5L*1024*1024;
-	memp[1].md_virt = NULL;
+	memp[1].md_virt = 0;
 	memp[1].md_pages = (128L*1024*1024)>>12;
 	memp[1].md_attr = EFI_MD_ATTR_WB;
 
 	memp[2].md_type = EFI_MD_TYPE_FREE;
 	memp[2].md_phys = 4L*1024*1024*1024;
-	memp[2].md_virt = NULL;
+	memp[2].md_virt = 0;
 	memp[2].md_pages = (64L*1024*1024)>>12;
 	memp[2].md_attr = EFI_MD_ATTR_WB;
 
 	memp[3].md_type = EFI_MD_TYPE_IOPORT;
 	memp[3].md_phys = 0xffffc000000;
-	memp[3].md_virt = NULL;
+	memp[3].md_virt = 0;
 	memp[3].md_pages = (64L*1024*1024)>>12;
 	memp[3].md_attr = EFI_MD_ATTR_UC;
 

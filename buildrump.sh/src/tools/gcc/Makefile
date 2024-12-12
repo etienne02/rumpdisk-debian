@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.104 2021/05/08 19:36:28 christos Exp $
+#	$NetBSD: Makefile,v 1.114 2024/08/10 23:49:12 mrg Exp $
 
 .include <bsd.hostinit.mk>
 
@@ -8,13 +8,19 @@ MODULE=		${EXTERNAL_GCC_SUBDIR}
 GCCDIST=	${.CURDIR}/../../external/gpl3/${EXTERNAL_GCC_SUBDIR}/dist
 GNUHOSTDIST=	${GCCDIST}
 
-.if ${HAVE_GCC} == 9
+.if ${HAVE_GCC} == 10
 MKNATIVE=		${.CURDIR}/mknative-gcc.old
 .endif
 
 # Defaults
 CC_FOR_BUILD=		${HOST_CXX:Q}
 MKNATIVE?=		${.CURDIR}/mknative-gcc
+
+# Force C++11 so builds succeed on hosts where this isn't the compiler
+# default, e.g., NetBSD 8.x with GCC 5.5.
+.if ${HAVE_GCC} > 10
+HOST_CXXFLAGS+=		-std=c++11
+.endif
 
 .if ${MACHINE_ARCH} == "x86_64" || ${MACHINE_ARCH} == "sparc64"
 MULTILIB_ARGS= --enable-multilib
@@ -35,7 +41,6 @@ COMMON_CONFIGURE_ARGS=	--target=${MACHINE_GNU_PLATFORM} \
 			--with-bugurl=http://www.NetBSD.org/support/send-pr.html \
 			--with-pkgversion="NetBSD ${NETBSD_GCC_VERSION}" \
 			--with-system-zlib \
-			--without-isl \
 			--enable-__cxa_atexit \
 			--enable-libstdcxx-time=rt \
 			--enable-libstdcxx-threads \
@@ -58,12 +63,21 @@ COMMON_CONFIGURE_ARGS+=	--enable-fix-cortex-a53-835769 \
 COMMON_CONFIGURE_ARGS+=	--with-default-libstdcxx-abi=new
 .endif
 
+# We enabled isl support for GCC 12.  Move into normal segment when
+# removing GCC 10.
+.if ${HAVE_GCC} < 12 || defined(NOGCCISL)
+COMMON_CONFIGURE_ARGS+=	--without-isl
+.else
+COMMON_CONFIGURE_ARGS+=	--with-isl=${TOOLDIR}
+.endif
+
 CONFIGURE_ARGS=	${COMMON_CONFIGURE_ARGS}
 CONFIGURE_ARGS+= \
 		--with-sysroot=${DESTDIR} \
 		--with-mpc=${TOOLDIR} \
 		--with-mpfr=${TOOLDIR} \
 		--with-gmp=${TOOLDIR} \
+		${ISL_CONFIGURE_ARGS} \
 		--disable-nls \
 		${MULTILIB_ARGS} \
 		${SOFTFLOAT_ARGS} \
@@ -71,7 +85,12 @@ CONFIGURE_ARGS+= \
 		--enable-languages="${GCC_LANGUAGES}"
 
 GCC_CPPFLAGS=	-DNETBSD_TOOLS -DTARGET_SYSTEM_ROOT=0 \
-		-DTARGET_SYSTEM_ROOT_RELOCATABLE
+		-DTARGET_SYSTEM_ROOT_RELOCATABLE 
+#		${HOST_CPPFLAGS}
+
+.if ${MACHINE} == "vax"
+GCC_CPPFLAGS+=	-DNB_FIX_VAX_BACKEND
+.endif
 
 MAKE_ARGS=	MACHINE= MAKEINFO=${TOOL_MAKEINFO:Q} \
 		LIBGCC= LIBGCC1= LIBGCC1_TEST= LIBGCC2= INSTALL_LIBGCC= \
@@ -107,6 +126,12 @@ MKNATIVE_CONFIG_TARGET_LIBS+= \
 MKNATIVE_CONFIG_TARGET_LIBS+= \
 	configure-target-libsanitizer
 .endif
+.endif
+
+.if ${HAVE_GCC} <= 10
+EXTRA_FILES=	gcov-iov.h
+.else
+EXTRA_FILES=	bversion.h gtyp-input.list
 .endif
 
 BINENV=		/usr/bin/env -i
@@ -164,22 +189,7 @@ native-gcc: .native/.configure_done
 		${MACHINE_GNU_PLATFORM} ${GCC_MACHINE_ARCH} ${DESTDIR} ${TOOLDIR}
 
 NATIVE_CONFIGURE_ARGS=	${COMMON_CONFIGURE_ARGS}
-MPC=		${NETBSDSRCDIR}/external/lgpl3/mpc
-MPFR=		${NETBSDSRCDIR}/external/lgpl3/mpfr
-GMP=		${NETBSDSRCDIR}/external/lgpl3/gmp
-MPCOBJ!=	cd ${MPC}/lib/libmpc && ${PRINTOBJDIR}
-MPFROBJ!=	cd ${MPFR}/lib/libmpfr && ${PRINTOBJDIR}
-GMPOBJ!=	cd ${GMP}/lib/libgmp && ${PRINTOBJDIR}
-
-.include "../../external/lgpl3/gmp/Makefile.arch"
-
-NATIVE_CONFIGURE_ARGS+=	\
-			--with-mpc-lib=${MPCOBJ} \
-			--with-mpfr-lib=${MPFROBJ} \
-			--with-gmp-lib=${GMPOBJ} \
-			--with-mpc-include=${MPC}/dist/src \
-			--with-mpfr-include=${MPFR}/dist/src \
-			--with-gmp-include=${GMP}/lib/libgmp/arch/${GMP_MACHINE_ARCH}
+.include "lgpl3.mk"
 
 .if ${MACHINE_ARCH} != "vax"
 NATIVE_CONFIGURE_ARGS+= --enable-tls
@@ -229,7 +239,7 @@ MKENV_BUILD_MAKE=cd .native && ${MKNATIVE_ENV} ${BUILD_MAKE}
 				    -e 's/\(maybe-all-target-libgcc:\) all-target-libgcc/\1/' \
 				< Makefile.config > Makefile)
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
-		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e tree-check.h config.h multilib.h gcov-iov.h)
+		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e tree-check.h config.h multilib.h ${EXTRA_FILES})
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
 		(cd .native/gcc && ${MKNATIVE_ENV} ${BUILD_MAKE} -e libgcc.mvars tconfig.h); \
 		(cd .native && touch gcc/cc1obj gcc/cc1plus gcc/f771 gcc/libgcc.a gcc/libgcc_s.so)
@@ -271,16 +281,21 @@ PREV_GCC=
 
 CLEANFILES+=	PREV_GCC
 
+# Include the local NetBSD GCC version so that bumps to it trigger rebuilds.
+NETBSD_GCC_VERSION_NOSPACE= ${NETBSD_GCC_VERSION:S/ /-/gW}
+
 realall realdepend: .MAKE
-.if !empty(PREV_GCC) && "${PREV_GCC}" != "${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC}"
+.if !empty(PREV_GCC) && "${PREV_GCC}" != "${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC}-${NETBSD_GCC_VERSION_NOSPACE}"
 	@echo "*** WARNING: GCC has changed version?"
 	@echo "*** PREV_GCC '${PREV_GCC}'"
-	@echo "***     !=  EXTERNAL_GCC_SUBDIR-HAVE_GCC '${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC}'"
+	@echo "*** NETBSD_GCC_VERSION_NOSPACE '${NETBSD_GCC_VERSION_NOSPACE}'"
+	@echo "***     !=  EXTERNAL_GCC_SUBDIR-HAVE_GCC-NETBSD_GCC_VERSION_NOSPACE:"
+	@echo "***     !=  '${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC}-${NETBSD_GCC_VERSION_NOSPACE}'"
 	@echo "*** Cleaning mis-matched tools/gcc"
 	rm -f PREV_GCC
 	(cd ${.CURDIR} && ${MAKE} cleandir)
 .endif
-	echo ${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC} >PREV_GCC
+	echo ${EXTERNAL_GCC_SUBDIR}-${HAVE_GCC}-${NETBSD_GCC_VERSION_NOSPACE} >PREV_GCC
 
 clean: clean.native
 clean.native:

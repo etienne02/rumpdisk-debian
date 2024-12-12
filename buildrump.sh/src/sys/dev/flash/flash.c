@@ -1,4 +1,4 @@
-/*	$NetBSD: flash.c,v 1.17 2021/08/07 16:19:10 thorpej Exp $	*/
+/*	$NetBSD: flash.c,v 1.19 2022/09/25 21:56:12 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2011 Department of Software Engineering,
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: flash.c,v 1.17 2021/08/07 16:19:10 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: flash.c,v 1.19 2022/09/25 21:56:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -55,7 +55,6 @@ __KERNEL_RCSID(0, "$NetBSD: flash.c,v 1.17 2021/08/07 16:19:10 thorpej Exp $");
 #include <sys/bufq.h>
 #include <sys/disk.h>
 #include <sys/disklabel.h>
-#include <sys/malloc.h>
 #include <sys/reboot.h>
 
 #include "ioconf.h"
@@ -648,22 +647,21 @@ flash_modcmd(modcmd_t cmd, void *opaque)
 	switch (cmd) {
 	case MODULE_CMD_INIT:
 #ifdef _MODULE
-		error = config_init_component(cfdriver_ioconf_flash,
-		    cfattach_ioconf_flash, cfdata_ioconf_flash);
-		if (error)
-			return error;
 		error = devsw_attach("flash", &flash_bdevsw, &bmaj,
 		    &flash_cdevsw, &cmaj);
 		if (error)
-			config_fini_component(cfdriver_ioconf_flash,
-			    cfattach_ioconf_flash, cfdata_ioconf_flash);
+			return error;
+		error = config_init_component(cfdriver_ioconf_flash,
+		    cfattach_ioconf_flash, cfdata_ioconf_flash);
+		if (error)
+			devsw_detach(&flash_bdevsw, &flash_cdevsw);
 #endif
 		return error;
 	case MODULE_CMD_FINI:
 #ifdef _MODULE
-		devsw_detach(&flash_bdevsw, &flash_cdevsw);
 		error = config_fini_component(cfdriver_ioconf_flash,
 		    cfattach_ioconf_flash, cfdata_ioconf_flash);
+		devsw_detach(&flash_bdevsw, &flash_cdevsw);
 #endif
 		return error;
 	default:

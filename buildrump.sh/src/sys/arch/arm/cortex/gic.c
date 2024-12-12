@@ -1,4 +1,4 @@
-/*	$NetBSD: gic.c,v 1.49 2021/08/10 17:12:31 jmcneill Exp $	*/
+/*	$NetBSD: gic.c,v 1.57 2023/10/05 12:30:59 riastradh Exp $	*/
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -30,12 +30,11 @@
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
-#include "opt_gic.h"
 
 #define _INTR_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gic.c,v 1.49 2021/08/10 17:12:31 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gic.c,v 1.57 2023/10/05 12:30:59 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -52,10 +51,6 @@ __KERNEL_RCSID(0, "$NetBSD: gic.c,v 1.49 2021/08/10 17:12:31 jmcneill Exp $");
 
 #include <arm/cortex/gic_reg.h>
 #include <arm/cortex/mpcore_var.h>
-
-#ifdef GIC_SPLFUNCS
-#include <arm/cortex/gic_splfuncs.h>
-#endif
 
 void armgic_irq_handler(void *);
 
@@ -229,11 +224,14 @@ armgic_set_priority(struct pic_softc *pic, int ipl)
 	struct armgic_softc * const sc = PICTOSOFTC(pic);
 	struct cpu_info * const ci = curcpu();
 
-	if (ipl < ci->ci_hwpl) {
+	while (ipl < ci->ci_hwpl) {
 		/* Lowering priority mask */
 		ci->ci_hwpl = ipl;
+		__insn_barrier();
 		gicc_write(sc, GICC_PMR, armgic_ipl_to_priority(ipl));
 	}
+	__insn_barrier();
+	ci->ci_cpl = ipl;
 }
 
 #ifdef MULTIPROCESSOR
@@ -321,19 +319,25 @@ armgic_irq_handler(void *tf)
 	struct cpu_info * const ci = curcpu();
 	struct armgic_softc * const sc = &armgic_softc;
 	const int old_ipl = ci->ci_cpl;
-#ifdef DIAGNOSTIC
 	const int old_mtx_count = ci->ci_mtx_count;
-	const int old_l_biglocks = ci->ci_curlwp->l_biglocks;
-#endif
+	const int old_l_blcnt = ci->ci_curlwp->l_blcnt;
 #ifdef DEBUG
 	size_t n = 0;
 #endif
 
 	ci->ci_data.cpu_nintr++;
 
-	if (ci->ci_hwpl != old_ipl) {
+	/*
+	 * Raise ci_hwpl (and PMR) to ci_cpl and IAR will tell us if the
+	 * interrupt that got us here can have its handler run or not.
+	 */
+	if (ci->ci_hwpl <= old_ipl) {
 		ci->ci_hwpl = old_ipl;
 		gicc_write(sc, GICC_PMR, armgic_ipl_to_priority(old_ipl));
+		/*
+		 * we'll get no interrupts when PMR is IPL_HIGH, so bail
+		 * early.
+		 */
 		if (old_ipl == IPL_HIGH) {
 			return;
 		}
@@ -373,11 +377,13 @@ armgic_irq_handler(void *tf)
 		 *
 		 * However, if are just raising ipl, we can just update ci_cpl.
 		 */
+
+		/* Surely we can KASSERT(ipl < ci->ci_cpl); */
 		const int ipl = is->is_ipl;
 		if (__predict_false(ipl < ci->ci_cpl)) {
 			pic_do_pending_ints(I32_bit, ipl, tf);
 			KASSERT(ci->ci_cpl == ipl);
-		} else {
+		} else if (ci->ci_cpl != ipl) {
 			KASSERTMSG(ipl > ci->ci_cpl, "ipl %d cpl %d hw-ipl %#x",
 			    ipl, ci->ci_cpl,
 			    gicc_read(sc, GICC_PMR));
@@ -401,7 +407,7 @@ armgic_irq_handler(void *tf)
 	pic_do_pending_ints(I32_bit, old_ipl, tf);
 	KASSERTMSG(ci->ci_cpl == old_ipl, "ci_cpl %d old_ipl %d", ci->ci_cpl, old_ipl);
 	KASSERT(old_mtx_count == ci->ci_mtx_count);
-	KASSERT(old_l_biglocks == ci->ci_curlwp->l_biglocks);
+	KASSERT(old_l_blcnt == ci->ci_curlwp->l_blcnt);
 }
 
 void
@@ -462,6 +468,7 @@ armgic_establish_irq(struct pic_softc *pic, struct intrsource *is)
 		 * default.
 		 */
 		is->is_mpsafe = true;
+		is->is_percpu = true;
 #endif
 	}
 
@@ -603,7 +610,7 @@ armgic_attach(device_t parent, device_t self, void *aux)
 	struct mpcore_attach_args * const mpcaa = aux;
 
 	sc->sc_dev = self;
-	self->dv_private = sc;
+	device_set_private(self, sc);
 
 	sc->sc_memt = mpcaa->mpcaa_memt;	/* provided for us */
 	bus_space_subregion(sc->sc_memt, mpcaa->mpcaa_memh, mpcaa->mpcaa_off1,
@@ -733,10 +740,6 @@ armgic_attach(device_t parent, device_t self, void *aux)
 	aprint_normal_dev(sc->sc_dev, "%u Priorities, %zu SPIs, %u PPIs, "
 	    "%u SGIs\n",  priorities, sc->sc_gic_lines - ppis - sgis, ppis,
 	    sgis);
-
-#ifdef GIC_SPLFUNCS
-	gic_spl_init();
-#endif
 }
 
 CFATTACH_DECL_NEW(armgic, 0,

@@ -1,4 +1,4 @@
-/*	$NetBSD: chown.c,v 1.8 2012/10/24 01:12:51 enami Exp $	*/
+/*	$NetBSD: chown.c,v 1.12 2023/05/04 18:34:55 christos Exp $	*/
 
 /*
  * Copyright (c) 1988, 1993, 1994, 2003
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1988, 1993, 1994, 2003\
 #if 0
 static char sccsid[] = "@(#)chown.c	8.8 (Berkeley) 4/4/94";
 #else
-__RCSID("$NetBSD: chown.c,v 1.8 2012/10/24 01:12:51 enami Exp $");
+__RCSID("$NetBSD: chown.c,v 1.12 2023/05/04 18:34:55 christos Exp $");
 #endif
 #endif /* not lint */
 
@@ -82,7 +82,7 @@ main(int argc, char **argv)
 {
 	FTS *ftsp;
 	FTSENT *p;
-	int Hflag, Lflag, Rflag, ch, fflag, fts_options, hflag, rval, vflag;
+	int Hflag, Lflag, Rflag, ch, fflag, fts_options, hflag, rval, vflag, dflag;
 	char *cp, *reference;
 	int (*change_owner)(const char *, uid_t, gid_t);
 
@@ -94,12 +94,15 @@ main(int argc, char **argv)
 	ischown = (myname[2] == 'o');
 	reference = NULL;
 
-	Hflag = Lflag = Rflag = fflag = hflag = vflag = 0;
-	while ((ch = getopt_long(argc, argv, "HLPRfhv",
+	Hflag = Lflag = Rflag = fflag = hflag = vflag = dflag = 0;
+	while ((ch = getopt_long(argc, argv, "HLPRdfhv",
 	    chown_longopts, NULL)) != -1)
 		switch (ch) {
 		case 1:
 			reference = optarg;
+			break;
+		case 'd':
+			dflag = 1;
 			break;
 		case 'H':
 			Hflag = 1;
@@ -224,13 +227,25 @@ main(int argc, char **argv)
 			/*
 			 * The only symlinks that end up here are ones that
 			 * don't point to anything.  Note that if we are
-			 * doing a phisycal walk, we never reach here unless
+			 * doing a physical walk, we never reach here unless
 			 * we asked to follow explicitly.
 			 */
 			continue;
 		default:
 			break;
 		}
+
+		/*
+		 * If dflag was set, and the owner and group are already
+		 * set to the right values and the set-user-id and
+		 * set-group-id bits are both already clear, skip any
+		 * attempt to update.
+		 */
+		if (dflag &&
+		    (uid == (uid_t)-1 || p->fts_statp->st_uid == uid) &&
+		    (gid == (gid_t)-1 || p->fts_statp->st_gid == gid) &&
+		    (p->fts_statp->st_mode & 07000) == 0)
+			continue;
 
 		if ((*change_owner)(p->fts_accpath, uid, gid) && !fflag) {
 			warn("%s", p->fts_path);
@@ -294,8 +309,8 @@ usage(void)
 {
 
 	(void)fprintf(stderr,
-	    "Usage: %s [-R [-H | -L | -P]] [-fhv] %s file ...\n"
-	    "\t%s [-R [-H | -L | -P]] [-fhv] --reference=rfile file ...\n",
+	    "Usage: %s [-R [-H | -L | -P]] [-dfhv] %s file ...\n"
+	    "\t%s [-R [-H | -L | -P]] [-dfhv] --reference=rfile file ...\n",
 	    myname, ischown ? "owner:group|owner|:group" : "group",
 	    myname);
 	exit(EXIT_FAILURE);

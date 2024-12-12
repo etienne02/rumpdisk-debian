@@ -1,4 +1,4 @@
-/*	$NetBSD: md.h,v 1.4 2019/12/09 19:16:53 martin Exp $	*/
+/*	$NetBSD: md.h,v 1.8 2022/06/17 16:09:47 tsutsui Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -54,12 +54,12 @@
 #define PART_USR	PART_D	/* Can be after PART_FIRST_FREE */
 #define PART_FIRST_FREE	PART_E
 
-#define DEFSWAPRAM	32	/* Assume at least this RAM for swap calc */
-#define DEFROOTSIZE	48	/* Default root size */
+#define DEFROOTSIZE	40	/* Default root size */
+#define DEFSWAPSIZE	32	/* Default swap size */
 #define DEFVARSIZE	32	/* Default /var size, if created */
-#define DEFUSRSIZE	1024	/* Default /usr size, if /home */
-#define XNEEDMB		256	/* Extra megs for full X installation */
-#define	DEBNEEDMB	800	/* Extra megs for debug sets */
+#define DEFUSRSIZE	700	/* Default /usr size, if /home */
+#define XNEEDMB		250	/* Extra megs for full X installation */
+#define DEBNEEDMB	800	/* Extra megs for debug sets */
 
 /* have support for booting from UFS2 */
 #define HAVE_UFS2_BOOT
@@ -92,7 +92,7 @@
 
 /*
  * We rely on kernel support to translate Human68k partitions
- * to in-core disklabels, so we can not check for existance of "real"
+ * to in-core disklabels, so we can not check for existence of "real"
  * disklabels on-disk before offering disklabel partitions.
  */
-#define	DISKLABEL_NO_ONDISK_VERIFY	1
+#define DISKLABEL_NO_ONDISK_VERIFY	1

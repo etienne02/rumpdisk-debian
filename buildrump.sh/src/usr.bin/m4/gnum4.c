@@ -1,4 +1,4 @@
-/* $NetBSD: gnum4.c,v 1.10 2016/01/16 16:59:18 christos Exp $ */
+/* $NetBSD: gnum4.c,v 1.13 2023/05/24 22:14:31 christos Exp $ */
 /* $OpenBSD: gnum4.c,v 1.39 2008/08/21 21:01:04 espie Exp $ */
 
 /*
@@ -33,7 +33,7 @@
 #include "nbtool_config.h"
 #endif
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: gnum4.c,v 1.10 2016/01/16 16:59:18 christos Exp $");
+__RCSID("$NetBSD: gnum4.c,v 1.13 2023/05/24 22:14:31 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -438,7 +438,7 @@ twiddle(const char *p)
 			p+=2;
 			continue;
 		}
-		if (*p == '(' || *p == ')' || *p == '|')
+		if (strchr("()|{}", *p) != NULL)
 			addchar('\\');
 
 		addchar(*p);
@@ -812,6 +812,6 @@ thaw_state(const char *fname)
 		}
 	}
 out:
-	m4errx(EXIT_FAILURE, "Unexprected end of file in `%s'", fname);
+	m4errx(EXIT_FAILURE, "Unexpected end of file in `%s'", fname);
 }
 #endif

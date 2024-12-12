@@ -1,4 +1,4 @@
-/*	$NetBSD: refresh.c,v 1.57 2020/03/30 06:54:37 ryo Exp $	*/
+/*	$NetBSD: refresh.c,v 1.60 2024/12/05 22:21:53 christos Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)refresh.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: refresh.c,v 1.57 2020/03/30 06:54:37 ryo Exp $");
+__RCSID("$NetBSD: refresh.c,v 1.60 2024/12/05 22:21:53 christos Exp $");
 #endif
 #endif /* not lint && not SCCSID */
 
@@ -105,7 +105,7 @@ re_nextline(EditLine *el)
 	 */
 	if (el->el_refresh.r_cursor.v + 1 >= el->el_terminal.t_size.v) {
 		int i, lins = el->el_terminal.t_size.v;
-		wchar_t *firstline = el->el_vdisplay[0];
+		wint_t *firstline = el->el_vdisplay[0];
 
 		for(i = 1; i < lins; i++)
 			el->el_vdisplay[i - 1] = el->el_vdisplay[i];
@@ -168,7 +168,7 @@ re_putliteral(EditLine *el, const wchar_t *begin, const wchar_t *end)
 	int i, w;
 
 	c = literal_add(el, begin, end, &w);
-	if (c == 0 || w <= 0)
+	if (c == 0 || w < 0)
 		return;
 	el->el_vdisplay[cur->v][cur->h] = c;
 
@@ -178,7 +178,7 @@ re_putliteral(EditLine *el, const wchar_t *begin, const wchar_t *end)
 	while (--i > 0)
 		el->el_vdisplay[cur->v][cur->h + i] = MB_FILL_CHAR;
 
-	cur->h += w;
+	cur->h += w ? w : 1;
 	if (cur->h >= sizeh) {
 		/* assure end of line */
 		el->el_vdisplay[cur->v][sizeh] = '\0';
@@ -212,7 +212,7 @@ re_putc(EditLine *el, wint_t c, int shift)
 	if (!shift)
 		return;
 
-	cur->h += w;	/* advance to next place */
+	cur->h += w ? w : 1;	/* advance to next place */
 	if (cur->h >= sizeh) {
 		/* assure end of line */
 		el->el_vdisplay[cur->v][sizeh] = '\0';
@@ -334,7 +334,8 @@ re_refresh(EditLine *el)
 	ELRE_DEBUG(1, (__F, "updating %d lines.\r\n", el->el_refresh.r_newcv));
 	for (i = 0; i <= el->el_refresh.r_newcv; i++) {
 		/* NOTE THAT re_update_line MAY CHANGE el_display[i] */
-		re_update_line(el, el->el_display[i], el->el_vdisplay[i], i);
+		re_update_line(el, (wchar_t *)el->el_display[i],
+		    (wchar_t *)el->el_vdisplay[i], i);
 
 		/*
 		 * Copy the new line to be the current one, and pad out with
@@ -343,7 +344,8 @@ re_refresh(EditLine *el)
 		 * end of the screen line, it won't be a NUL or some old
 		 * leftover stuff.
 		 */
-		re__copy_and_pad(el->el_display[i], el->el_vdisplay[i],
+		re__copy_and_pad((wchar_t *)el->el_display[i],
+		    (wchar_t *)el->el_vdisplay[i],
 		    (size_t) el->el_terminal.t_size.h);
 	}
 	ELRE_DEBUG(1, (__F,
@@ -355,7 +357,8 @@ re_refresh(EditLine *el)
 			terminal_move_to_line(el, i);
 			terminal_move_to_char(el, 0);
                         /* This wcslen should be safe even with MB_FILL_CHARs */
-			terminal_clear_EOL(el, (int) wcslen(el->el_display[i]));
+			terminal_clear_EOL(el,
+			    (int) wcslen((const wchar_t *)el->el_display[i]));
 #ifdef DEBUG_REFRESH
 			terminal_overwrite(el, L"C\b", 2);
 #endif /* DEBUG_REFRESH */
@@ -1091,7 +1094,7 @@ re_refresh_cursor(EditLine *el)
 static void
 re_fastputc(EditLine *el, wint_t c)
 {
-	wchar_t *lastline;
+	wint_t *lastline;
 	int w;
 
 	w = wcwidth(c);
@@ -1126,7 +1129,8 @@ re_fastputc(EditLine *el, wint_t c)
 			el->el_cursor.v++;
 			lastline = el->el_display[++el->el_refresh.r_oldcv];
 		}
-		re__copy_and_pad(lastline, L"", (size_t)el->el_terminal.t_size.h);
+		re__copy_and_pad((wchar_t *)lastline, L"",
+		    (size_t)el->el_terminal.t_size.h);
 
 		if (EL_HAS_AUTO_MARGINS) {
 			if (EL_HAS_MAGIC_MARGINS) {
@@ -1151,6 +1155,10 @@ re_fastaddc(EditLine *el)
 	wchar_t c;
 	int rhdiff;
 
+	if (el->el_line.cursor == el->el_line.buffer) {
+		re_refresh(el);
+		return;
+	}
 	c = el->el_line.cursor[-1];
 
 	if (c == '\t' || el->el_line.cursor != el->el_line.lastchar) {

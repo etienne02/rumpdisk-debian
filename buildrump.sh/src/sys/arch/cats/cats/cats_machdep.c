@@ -1,4 +1,4 @@
-/*	$NetBSD: cats_machdep.c,v 1.92 2021/08/27 09:29:05 skrll Exp $	*/
+/*	$NetBSD: cats_machdep.c,v 1.96 2024/10/21 13:37:07 skrll Exp $	*/
 
 /*
  * Copyright (c) 1997,1998 Mark Brinicombe.
@@ -40,9 +40,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cats_machdep.c,v 1.92 2021/08/27 09:29:05 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cats_machdep.c,v 1.96 2024/10/21 13:37:07 skrll Exp $");
 
 #include "opt_arm_debug.h"
+#include "opt_cats.h"
 #include "opt_ddb.h"
 #include "opt_modular.h"
 
@@ -172,41 +173,41 @@ int comcnmode = CONMODE;
 
 static const struct pmap_devmap cats_devmap[] = {
 	/* Map 1MB for CSR space */
-	{ DC21285_ARMCSR_VBASE,			DC21285_ARMCSR_BASE,
-	    DC21285_ARMCSR_VSIZE,		VM_PROT_READ|VM_PROT_WRITE,
-	    PTE_NOCACHE },
+	DEVMAP_ENTRY(DC21285_ARMCSR_VBASE,
+		     DC21285_ARMCSR_BASE,
+		     DC21285_ARMCSR_VSIZE),
 
 	/* Map 1MB for fast cache cleaning space */
-	{ DC21285_CACHE_FLUSH_VBASE,		DC21285_SA_CACHE_FLUSH_BASE,
-	    DC21285_CACHE_FLUSH_VSIZE,		VM_PROT_READ|VM_PROT_WRITE,
-	    PTE_CACHE },
+	DEVMAP_ENTRY(DC21285_CACHE_FLUSH_VBASE,
+		     DC21285_SA_CACHE_FLUSH_BASE,
+		     DC21285_CACHE_FLUSH_VSIZE),
 
 	/* Map 1MB for PCI IO space */
-	{ DC21285_PCI_IO_VBASE,			DC21285_PCI_IO_BASE,
-	    DC21285_PCI_IO_VSIZE,		VM_PROT_READ|VM_PROT_WRITE,
-	    PTE_NOCACHE },
+	DEVMAP_ENTRY(DC21285_PCI_IO_VBASE,
+		     DC21285_PCI_IO_BASE,
+		     DC21285_PCI_IO_VSIZE),
 
 	/* Map 1MB for PCI IACK space */
-	{ DC21285_PCI_IACK_VBASE,		DC21285_PCI_IACK_SPECIAL,
-	    DC21285_PCI_IACK_VSIZE,		VM_PROT_READ|VM_PROT_WRITE,
-	    PTE_NOCACHE },
+	DEVMAP_ENTRY(DC21285_PCI_IACK_VBASE,
+		     DC21285_PCI_IACK_SPECIAL,
+		     DC21285_PCI_IACK_VSIZE),
 
 	/* Map 16MB of type 1 PCI config access */
-	{ DC21285_PCI_TYPE_1_CONFIG_VBASE,	DC21285_PCI_TYPE_1_CONFIG,
-	    DC21285_PCI_TYPE_1_CONFIG_VSIZE,	VM_PROT_READ|VM_PROT_WRITE,
-	    PTE_NOCACHE },
+	DEVMAP_ENTRY(DC21285_PCI_TYPE_1_CONFIG_VBASE,
+		     DC21285_PCI_TYPE_1_CONFIG,
+		     DC21285_PCI_TYPE_1_CONFIG_VSIZE),
 
 	/* Map 16MB of type 0 PCI config access */
-	{ DC21285_PCI_TYPE_0_CONFIG_VBASE,	DC21285_PCI_TYPE_0_CONFIG,
-	    DC21285_PCI_TYPE_0_CONFIG_VSIZE,	VM_PROT_READ|VM_PROT_WRITE,
-	    PTE_NOCACHE },
+	DEVMAP_ENTRY(DC21285_PCI_TYPE_0_CONFIG_VBASE,
+		     DC21285_PCI_TYPE_0_CONFIG,
+		     DC21285_PCI_TYPE_0_CONFIG_VSIZE),
 
 	/* Map 1MB of 32 bit PCI address space for ISA MEM accesses via PCI */
-	{ DC21285_PCI_ISA_MEM_VBASE,		DC21285_PCI_MEM_BASE,
-	    DC21285_PCI_ISA_MEM_VSIZE,		VM_PROT_READ|VM_PROT_WRITE,
-	    PTE_NOCACHE },
+	DEVMAP_ENTRY(DC21285_PCI_ISA_MEM_VBASE,
+		     DC21285_PCI_MEM_BASE,
+		     DC21285_PCI_ISA_MEM_VSIZE),
 
-	{ 0, 0, 0, 0, 0 }
+	DEVMAP_ENTRY_END
 };
 
 #define MAX_PHYSMEM 4
@@ -314,14 +315,12 @@ initarm(void *arm_bootargs)
 #ifdef __HAVE_MM_MD_DIRECT_MAPPED_PHYS
 	const bool mapallmem_p = true;
 
-#ifndef PMAP_NEED_ALLOC_POOLPAGE
 	if (ram_size > KERNEL_VM_BASE - KERNEL_BASE) {
 		printf("%s: dropping RAM size from %luMB to %uMB\n",
 		    __func__, (unsigned long) (ram_size >> 20),
 		    (KERNEL_VM_BASE - KERNEL_BASE) >> 20);
 		ram_size = KERNEL_VM_BASE - KERNEL_BASE;
         }
-#endif
 #else
         const bool mapallmem_p = false;
 #endif

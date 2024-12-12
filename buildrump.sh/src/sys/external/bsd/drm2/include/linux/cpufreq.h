@@ -1,4 +1,4 @@
-/*	$NetBSD: cpufreq.h,v 1.2 2014/03/18 18:20:43 riastradh Exp $	*/
+/*	$NetBSD: cpufreq.h,v 1.4 2021/12/19 11:52:47 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -31,5 +31,33 @@
 
 #ifndef _LINUX_CPUFREQ_H_
 #define _LINUX_CPUFREQ_H_
+
+#include <sys/cpu.h>
+#include <sys/cpufreq.h>
+#include <sys/kmem.h>
+
+#include <machine/cpu_counter.h>
+
+struct cpufreq_policy {
+	struct {
+		unsigned int max_freq;
+	} cpuinfo;
+};
+
+static inline struct cpufreq_policy *
+cpufreq_cpu_get(int x)
+{
+	struct cpufreq_policy *policy = kmem_alloc(sizeof(*policy), KM_SLEEP);
+	policy->cpuinfo.max_freq = cpufreq_get(curcpu());
+	return policy;
+}
+
+static inline void
+cpufreq_cpu_put(struct cpufreq_policy *policy)
+{
+	kmem_free(policy, sizeof(*policy));
+}
+
+#define tsc_khz cpu_frequency(curcpu())
 
 #endif  /* _LINUX_CPUFREQ_H_ */

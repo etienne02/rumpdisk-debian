@@ -1,4 +1,4 @@
-/*	$NetBSD: gethnamaddr.c,v 1.93 2020/11/18 12:49:52 is Exp $	*/
+/*	$NetBSD: gethnamaddr.c,v 1.95 2023/08/10 20:38:00 mrg Exp $	*/
 
 /*
  * ++Copyright++ 1985, 1988, 1993
@@ -57,7 +57,7 @@
 static char sccsid[] = "@(#)gethostnamadr.c	8.1 (Berkeley) 6/4/93";
 static char rcsid[] = "Id: gethnamaddr.c,v 8.21 1997/06/01 20:34:37 vixie Exp ";
 #else
-__RCSID("$NetBSD: gethnamaddr.c,v 1.93 2020/11/18 12:49:52 is Exp $");
+__RCSID("$NetBSD: gethnamaddr.c,v 1.95 2023/08/10 20:38:00 mrg Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -110,21 +110,22 @@ __weak_alias(gethostent,_gethostent)
 
 #define addalias(d, s, arr, siz) do {			\
 	if (d >= &arr[siz]) {				\
+		ptrdiff_t _off = d - arr;		\
 		char **xptr = realloc(arr, (siz + 10) * sizeof(*arr)); \
 		if (xptr == NULL)			\
 			goto nospc;			\
-		d = xptr + (d - arr);			\
+		d = xptr + _off;			\
 		arr = xptr;				\
 		siz += 10;				\
 	}						\
 	*d++ = s;					\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define setup(arr, siz) do {				\
 	arr = malloc((siz = 10) * sizeof(*arr)); 	\
 	if (arr == NULL)				\
 		goto nospc;				\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 
 static const char AskedForGot[] =
@@ -201,13 +202,13 @@ debugprintf(const char *msg, res_state res, ...)
 		cp += (x); \
 		if (cp > eom) \
 			goto no_recovery; \
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 #define BOUNDS_CHECK(ptr, count) \
 	do { \
 		if ((ptr) + (count) > eom) \
 			goto no_recovery; \
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 static struct hostent *
 getanswer(const querybuf *answer, int anslen, const char *qname, int qtype,

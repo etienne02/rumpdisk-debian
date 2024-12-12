@@ -1,11 +1,11 @@
-# $NetBSD: Makefile,v 1.12 2019/12/19 19:19:28 macallan Exp $
+# $NetBSD: Makefile,v 1.15 2023/08/08 06:27:32 mrg Exp $
 
 .include <bsd.own.mk>
 
 TESTSDIR=	${TESTSBASE}/lib/libc/string
 DBG=-g
 
-COPTS.t_strcat.c+= ${GCC_NO_STRINGOP_TRUNCATION}
+COPTS.t_strcat.c+= ${CC_WNO_STRINGOP_TRUNCATION}
 
 TESTS_C+=	t_bm
 TESTS_C+=	t_memchr
@@ -15,6 +15,7 @@ TESTS_C+=	t_memset
 TESTS_C+=	t_popcount
 TESTS_C+=	t_strcat
 TESTS_C+=	t_strchr
+TESTS_C+=	t_strchrnul
 TESTS_C+=	t_strcmp
 TESTS_C+=	t_strcoll
 TESTS_C+=	t_strcpy
@@ -28,5 +29,8 @@ TESTS_C+=	t_strspn
 TESTS_C+=	t_swab
 
 WARNS=		4
+
+# Explicitly tries to test this case
+COPTS.t_strlen.c+=	${CC_WNO_STRINGOP_OVERREAD}
 
 .include <bsd.test.mk>

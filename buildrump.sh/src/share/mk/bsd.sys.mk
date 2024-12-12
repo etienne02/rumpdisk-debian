@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.sys.mk,v 1.306 2021/04/26 00:38:23 christos Exp $
+#	$NetBSD: bsd.sys.mk,v 1.316 2024/02/13 16:15:59 christos Exp $
 #
 # Build definitions used for NetBSD source tree builds.
 
@@ -21,6 +21,7 @@ error2:
 .if !empty(DESTDIR)
 CPPFLAGS+=	-Wp,-iremap,${DESTDIR}:
 REPROFLAGS+=	-fdebug-prefix-map=\$$DESTDIR=
+REPROFLAGS+=	-fmacro-prefix-map=\$$DESTDIR=
 .endif
 
 CPPFLAGS+=	-Wp,-fno-canonical-system-headers
@@ -28,7 +29,9 @@ CPPFLAGS+=	-Wp,-iremap,${NETBSDSRCDIR}:/usr/src
 CPPFLAGS+=	-Wp,-iremap,${X11SRCDIR}:/usr/xsrc
 
 REPROFLAGS+=	-fdebug-prefix-map=\$$NETBSDSRCDIR=/usr/src
+REPROFLAGS+=	-fmacro-prefix-map=\$$NETBSDSRCDIR=/usr/src
 REPROFLAGS+=	-fdebug-prefix-map=\$$X11SRCDIR=/usr/xsrc
+REPROFLAGS+=	-fmacro-prefix-map=\$$X11SRCDIR=/usr/xsrc
 .if defined(MAKEOBJDIRPREFIX)
 NETBSDOBJDIR=	${MAKEOBJDIRPREFIX}${NETBSDSRCDIR}
 .endif
@@ -36,6 +39,7 @@ NETBSDOBJDIR=	${MAKEOBJDIRPREFIX}${NETBSDSRCDIR}
 .if defined(NETBSDOBJDIR)
 .export NETBSDOBJDIR
 REPROFLAGS+=	-fdebug-prefix-map=\$$NETBSDOBJDIR=/usr/obj
+REPROFLAGS+=	-fmacro-prefix-map=\$$NETBSDOBJDIR=/usr/obj
 .endif
 
 LINTFLAGS+=	-R${NETBSDSRCDIR}=/usr/src -R${X11SRCDIR}=/usr/xsrc
@@ -53,7 +57,7 @@ CXXFLAGS+=	${REPROFLAGS}
 
 # NetBSD sources use C99 style, with some GCC extensions.
 # Coverity does not like -std=gnu99
-.if !defined(COVERITY_TOP_CONFIG)
+.if !defined(COVERITY_TOP_CONFIG) && empty(CFLAGS:M*-std=*)
 CFLAGS+=	${${ACTIVE_CC} == "clang":? -std=gnu99 :}
 CFLAGS+=	${${ACTIVE_CC} == "gcc":? -std=gnu99 :}
 CFLAGS+=	${${ACTIVE_CC} == "pcc":? -std=gnu99 :}
@@ -140,7 +144,8 @@ CFLAGS+=	-Wno-maybe-uninitialized
 .if ${MKRELRO:Uno} != "no"
 LDFLAGS+=	-Wl,-z,relro
 .endif
-.if ${MKRELRO:Uno} == "full"
+
+.if ${MKRELRO:Uno} == "full" && ${NOFULLRELRO:Uno} == "no"
 LDFLAGS+=	-Wl,-z,now
 .endif
 
@@ -162,7 +167,9 @@ CWARNFLAGS+=	${CWARNFLAGS.${ACTIVE_CC}}
 CPPFLAGS+=	${AUDIT:D-D__AUDIT__}
 _NOWERROR=	${defined(NOGCCERROR) || (${ACTIVE_CC} == "clang" && defined(NOCLANGERROR)):?yes:no}
 CFLAGS+=	${${_NOWERROR} == "no" :?-Werror:} ${CWARNFLAGS}
-LINTFLAGS+=	${DESTDIR:D-d ${DESTDIR}/usr/include}
+.if !empty(DESTDIR)
+LINTFLAGS+=	-d ${DESTDIR}
+.endif
 
 .if !defined(NOSSP) && (${USE_SSP:Uno} != "no") && (${BINDIR:Ux} != "/usr/mdec")
 .   if !defined(KERNSRCDIR) && !defined(KERN) # not for kernels / kern modules
@@ -172,7 +179,7 @@ CPPFLAGS+=	-D_FORTIFY_SOURCE=2
 COPTS+=	-fstack-protector -Wstack-protector 
 
 # GCC 4.8 on m68k erroneously does not protect functions with
-# variables needing special alignement, see
+# variables needing special alignment, see
 #	http://gcc.gnu.org/bugzilla/show_bug.cgi?id=59674
 # (the underlying issue for sh and vax may be different, needs more
 # investigation, symptoms are similar but for different sources)
@@ -271,8 +278,8 @@ STRIP?=		strip
 .c.ln:
 	${_MKTARGET_COMPILE}
 	${LINT} ${LINTFLAGS} ${LINTFLAGS.${.IMPSRC:T}} \
-	    ${CPPFLAGS:C/-([IDU])[  ]*/-\1/Wg:M-[IDU]*} \
-	    ${CPPFLAGS.${.IMPSRC:T}:C/-([IDU])[  ]*/-\1/Wg:M-[IDU]*} \
+	    ${CPPFLAGS:C/-([IDUW])[  ]*/-\1/Wg:M-[IDUW]*} \
+	    ${CPPFLAGS.${.IMPSRC:T}:C/-([IDUW])[  ]*/-\1/Wg:M-[IDUW]*} \
 	    -i ${.IMPSRC}
 
 # C++
@@ -344,7 +351,7 @@ OBJCOPYLIBFLAGS_EXTRA=-w -K '[$$][dx]' -K '[$$][dx]\.*'
 OBJCOPYLIBFLAGS_EXTRA=-w -K '[$$][adt]' -K '[$$][adt]\.*'
 .endif
 
-.if ${MKSTRIPSYM:Uyes} == "yes"
+.if ${MKSTRIPSYM} != "no"
 OBJCOPYLIBFLAGS?=${"${.TARGET:M*.po}" != "":?-X:-x} ${OBJCOPYLIBFLAGS_EXTRA}
 .else
 OBJCOPYLIBFLAGS?=-X ${OBJCOPYLIBFLAGS_EXTRA}

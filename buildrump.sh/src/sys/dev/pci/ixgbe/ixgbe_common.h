@@ -1,9 +1,9 @@
-/* $NetBSD: ixgbe_common.h,v 1.14 2019/06/27 05:55:40 msaitoh Exp $ */
+/* $NetBSD: ixgbe_common.h,v 1.18 2023/10/06 14:48:08 msaitoh Exp $ */
 
 /******************************************************************************
   SPDX-License-Identifier: BSD-3-Clause
 
-  Copyright (c) 2001-2017, Intel Corporation
+  Copyright (c) 2001-2020, Intel Corporation
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -45,12 +45,10 @@
 		IXGBE_WRITE_REG(hw, reg + 4, (u32) (value >> 32)); \
 	} while (0)
 #define IXGBE_REMOVED(a) (0)
-#if !defined(NO_READ_PBA_RAW) || !defined(NO_WRITE_PBA_RAW)
 struct ixgbe_pba {
 	u16 word[2];
 	u16 *pba_block;
 };
-#endif
 
 void ixgbe_dcb_get_rtrup2tc_generic(struct ixgbe_hw *hw, u8 *map);
 
@@ -58,7 +56,7 @@ u16 ixgbe_get_pcie_msix_count_generic(struct ixgbe_hw *hw);
 s32 ixgbe_init_ops_generic(struct ixgbe_hw *hw);
 s32 ixgbe_init_hw_generic(struct ixgbe_hw *hw);
 s32 ixgbe_start_hw_generic(struct ixgbe_hw *hw);
-s32 ixgbe_start_hw_gen2(struct ixgbe_hw *hw);
+void ixgbe_start_hw_gen2(struct ixgbe_hw *hw);
 s32 ixgbe_clear_hw_cntrs_generic(struct ixgbe_hw *hw);
 s32 ixgbe_read_pba_num_generic(struct ixgbe_hw *hw, u32 *pba_num);
 s32 ixgbe_read_pba_string_generic(struct ixgbe_hw *hw, u8 *pba_num,
@@ -123,7 +121,7 @@ s32 ixgbe_setup_fc_generic(struct ixgbe_hw *hw);
 s32 ixgbe_validate_mac_addr(u8 *mac_addr);
 s32 ixgbe_acquire_swfw_sync(struct ixgbe_hw *hw, u32 mask);
 void ixgbe_release_swfw_sync(struct ixgbe_hw *hw, u32 mask);
-s32 ixgbe_disable_pcie_master(struct ixgbe_hw *hw);
+s32 ixgbe_disable_pcie_primary(struct ixgbe_hw *hw);
 
 s32 prot_autoc_read_generic(struct ixgbe_hw *hw, bool *, u32 *reg_val);
 s32 prot_autoc_write_generic(struct ixgbe_hw *hw, u32 reg_val, bool locked);

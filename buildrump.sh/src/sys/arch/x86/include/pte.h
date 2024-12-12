@@ -1,4 +1,4 @@
-/*	$NetBSD: pte.h,v 1.5 2020/09/05 07:26:37 maxv Exp $	*/
+/*	$NetBSD: pte.h,v 1.7 2022/08/20 23:19:09 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -32,6 +32,10 @@
 #ifndef _X86_PTE_H
 #define _X86_PTE_H
 
+#ifndef _MACHINE_PTE_H_X86
+#error Use machine/pte.h, not x86/pte.h directly.
+#endif
+
 /* Cacheability bits when we are using PAT */
 #define PGC_WB		0			/* The default */
 #define PGC_WC		PTE_PWT			/* WT and CD is WC */
@@ -48,5 +52,24 @@
 #define PGEX_I		0x0010	/* exception during instruction fetch */
 #define PGEX_PK		0x0020	/* access disallowed by protection key */
 #define PGEX_SGX	0x8000	/* violation of sgx-specific access rights */
+
+/*
+ * pl*_pi: index in the ptp page for a pde mapping a VA.
+ * (pl*_i below is the index in the virtual array of all pdes per level)
+ */
+#define pl1_pi(VA)	(((VA_SIGN_POS(VA)) & L1_MASK) >> L1_SHIFT)
+#define pl2_pi(VA)	(((VA_SIGN_POS(VA)) & L2_MASK) >> L2_SHIFT)
+#define pl3_pi(VA)	(((VA_SIGN_POS(VA)) & L3_MASK) >> L3_SHIFT)
+#define pl4_pi(VA)	(((VA_SIGN_POS(VA)) & L4_MASK) >> L4_SHIFT)
+#define pl_pi(va, lvl) \
+        (((VA_SIGN_POS(va)) & ptp_masks[(lvl)-1]) >> ptp_shifts[(lvl)-1])
+
+/*
+ * pl*_i: generate index into pde/pte arrays in virtual space
+ */
+#define pl1_i(VA)	(((VA_SIGN_POS(VA)) & L1_FRAME) >> L1_SHIFT)
+#define pl2_i(VA)	(((VA_SIGN_POS(VA)) & L2_FRAME) >> L2_SHIFT)
+#define pl3_i(VA)	(((VA_SIGN_POS(VA)) & L3_FRAME) >> L3_SHIFT)
+#define pl4_i(VA)	(((VA_SIGN_POS(VA)) & L4_FRAME) >> L4_SHIFT)
 
 #endif /* _X86_PTE_H */

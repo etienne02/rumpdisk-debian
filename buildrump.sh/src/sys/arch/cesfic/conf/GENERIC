@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.75 2020/09/27 13:48:50 roy Exp $
+# $NetBSD: GENERIC,v 1.78 2023/02/12 14:50:38 abs Exp $
 #
 # GENERIC machine description file
 # 
@@ -65,12 +65,12 @@ file-system	PTYFS		# /dev/pts/N support
 #file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
-# Filesystem options
-options 	FIFO		# POSIX fifo support (in all filesystems)
+# File system options
 #options 	QUOTA		# legacy UFS quotas
 #options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	NFSSERVER	# Network filesystem server
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
 #options 	UFS_EXTATTR	# Extended attribute support for UFS1
+#options 	NFSSERVER	# Network File System server
 
 # Networking options
 options 	INET		# Internet protocols
@@ -134,5 +134,9 @@ pseudo-device	loop			# loopback network interface
 #pseudo-device	npf			# NPF packet filter
 pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	ksyms			# /dev/ksyms
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 include "dev/veriexec.config"
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/cesfic/conf/GENERIC.local"

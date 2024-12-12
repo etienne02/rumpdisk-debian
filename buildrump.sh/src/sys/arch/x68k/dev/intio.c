@@ -1,4 +1,4 @@
-/*	$NetBSD: intio.c,v 1.49 2021/08/07 16:19:07 thorpej Exp $	*/
+/*	$NetBSD: intio.c,v 1.52 2022/05/26 14:33:29 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: intio.c,v 1.49 2021/08/07 16:19:07 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: intio.c,v 1.52 2022/05/26 14:33:29 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -47,6 +47,7 @@ __KERNEL_RCSID(0, "$NetBSD: intio.c,v 1.49 2021/08/07 16:19:07 thorpej Exp $");
 
 #include <arch/x68k/dev/intiovar.h>
 
+#include "ioconf.h"
 
 /*
  * bus_space(9) interface
@@ -122,8 +123,6 @@ static void intio_alloc_system_ports(struct intio_softc*);
 
 CFATTACH_DECL_NEW(intio, sizeof(struct intio_softc),
     intio_match, intio_attach, NULL, NULL);
-
-extern struct cfdriver intio_cd;
 
 static int intio_attached;
 
@@ -420,7 +419,7 @@ _intio_bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
 	 * in memory below the 16M boundary.  On DMA reads,
 	 * DMA happens to the bounce buffers, and is copied into
 	 * the caller's buffer.  On writes, data is copied into
-	 * but bounce buffer, and the DMA happens from those
+	 * the bounce buffer, and the DMA happens from those
 	 * pages.  To software using the DMA mapping interface,
 	 * this looks simply like a data cache.
 	 *
@@ -445,7 +444,7 @@ _intio_bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
 	/*
 	 * Allocate our cookie.
 	 */
-	cookie = malloc(cookiesize, M_DMAMAP, 
+	cookie = malloc(cookiesize, M_DMAMAP,
 	    ((flags & BUS_DMA_NOWAIT) ? M_NOWAIT : M_WAITOK) | M_ZERO);
 	if (cookie == NULL) {
 		error = ENOMEM;

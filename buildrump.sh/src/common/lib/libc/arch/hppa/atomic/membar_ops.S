@@ -1,4 +1,4 @@
-/*	$NetBSD: membar_ops.S,v 1.1 2011/01/17 07:40:21 skrll Exp $	*/
+/*	$NetBSD: membar_ops.S,v 1.3 2022/04/09 23:32:51 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -31,11 +31,11 @@
 
 #include "atomic_op_asm.h"
 
-RCSID("$NetBSD: membar_ops.S,v 1.1 2011/01/17 07:40:21 skrll Exp $")
+RCSID("$NetBSD: membar_ops.S,v 1.3 2022/04/09 23:32:51 riastradh Exp $")
 
 	.text
 
-LEAF_ENTRY(_membar_consumer)
+LEAF_ENTRY(_membar_sync)
 	sync
 	nop
 	nop
@@ -44,24 +44,18 @@ LEAF_ENTRY(_membar_consumer)
 	nop
 	bv	%r0(%rp)
 	 nop
-EXIT(_membar_consumer)
+EXIT(_membar_sync)
+ATOMIC_OP_ALIAS(membar_sync,_membar_sync)
 
-LEAF_ENTRY(_membar_producer)
-	sync
-	nop
-	nop
-	nop
-	nop
-	nop
-	bv	%r0(%rp)
-	 nop
-EXIT(_membar_producer)
-
-ATOMIC_OP_ALIAS(membar_producer,_membar_producer)
-ATOMIC_OP_ALIAS(membar_consumer,_membar_consumer)
-ATOMIC_OP_ALIAS(membar_enter,_membar_consumer)
-STRONG_ALIAS(_membar_enter,_membar_consumer)
-ATOMIC_OP_ALIAS(membar_exit,_membar_producer)
-STRONG_ALIAS(_membar_exit,_membar_producer)
-ATOMIC_OP_ALIAS(membar_sync,_membar_producer)
-STRONG_ALIAS(_membar_sync,_membar_producer)
+ATOMIC_OP_ALIAS(membar_producer,_membar_sync)
+STRONG_ALIAS(_membar_producer,_membar_sync)
+ATOMIC_OP_ALIAS(membar_consumer,_membar_sync)
+STRONG_ALIAS(_membar_consumer,_membar_sync)
+ATOMIC_OP_ALIAS(membar_acquire,_membar_sync)
+STRONG_ALIAS(_membar_acquire,_membar_sync)
+ATOMIC_OP_ALIAS(membar_release,_membar_sync)
+STRONG_ALIAS(_membar_release,_membar_sync)
+ATOMIC_OP_ALIAS(membar_enter,_membar_sync)
+STRONG_ALIAS(_membar_enter,_membar_sync)
+ATOMIC_OP_ALIAS(membar_exit,_membar_sync)
+STRONG_ALIAS(_membar_exit,_membar_sync)

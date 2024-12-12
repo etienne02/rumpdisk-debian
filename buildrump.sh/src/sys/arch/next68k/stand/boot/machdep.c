@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.7 2007/12/24 15:46:45 perry Exp $	*/
+/*	$NetBSD: machdep.c,v 1.9 2023/02/12 08:25:09 tsutsui Exp $	*/
 /*
  * Copyright (c) 1998 Darrin Jewell
  * Copyright (c) 1994 Rolf Grossmann
@@ -35,11 +35,11 @@
 #include <stand.h>
 #include <next68k/next68k/nextrom.h>
 
+#include "samachdep.h"
+
 char *mg;
 
 #define	MON(type, off) (*(type *)((u_int) (mg) + off))
-
-extern int entry_point;
 
 #ifdef DEBUG
 int debug = 1;
@@ -86,7 +86,6 @@ putchar(int c)
 __dead void
 _rtt(void)
 {
-	extern __dead void _halt(void);
 
 	printf("Press any key to halt.\n");
 	getchar();
@@ -117,10 +116,10 @@ trap(struct trapframe *fp)
 	printf("Got unexpected trap: format=%x vector=%x sr=%x pc=%x\n",
 	       fp->fmt, fp->vec, fp->sr, fp->pc);
 	printf("dregs: %x %x %x %x %x %x %x %x\n",
-	       fp->dregs[0], fp->dregs[1], fp->dregs[2], fp->dregs[3], 
+	       fp->dregs[0], fp->dregs[1], fp->dregs[2], fp->dregs[3],
 	       fp->dregs[4], fp->dregs[5], fp->dregs[6], fp->dregs[7]);
 	printf("aregs: %x %x %x %x %x %x %x %x\n",
-	       fp->aregs[0], fp->aregs[1], fp->aregs[2], fp->aregs[3], 
+	       fp->aregs[0], fp->aregs[1], fp->aregs[2], fp->aregs[3],
 	       fp->aregs[4], fp->aregs[5], fp->aregs[6], fp->aregs[7]);
 	intrap = 0;
 #ifdef DEBUG

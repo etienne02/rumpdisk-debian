@@ -1,4 +1,4 @@
-/*	$NetBSD: vnode.h,v 1.297 2021/06/29 22:40:53 dholland Exp $	*/
+/*	$NetBSD: vnode.h,v 1.304 2022/10/26 23:40:30 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2020 The NetBSD Foundation, Inc.
@@ -179,7 +179,8 @@ struct vnode {
 	enum vtype	v_type;			/* -   vnode type */
 	enum vtagtype	v_tag;			/* -   type of underlying data */
 	void 		*v_data;		/* -   private data for fs */
-	struct klist	v_klist;		/* i   notes attached to vnode */
+	struct vnode_klist *v_klist;		/* i   kevent / knote info */
+
 	void		*v_segvguard;		/* e   for PAX_SEGVGUARD */
 };
 #define	v_mountedhere	v_un.vu_mountedhere
@@ -189,6 +190,19 @@ struct vnode {
 #define	v_ractx		v_un.vu_ractx
 
 typedef struct vnode vnode_t;
+
+/*
+ * Structure that encompasses the kevent state for a vnode.  This is
+ * carved out as a separate structure because some vnodes may share
+ * this state with one another.
+ *
+ * N.B. if two vnodes share a vnode_klist, then they must also share
+ * v_interlock.
+ */
+struct vnode_klist {
+	struct klist	vk_klist;	/* i   notes attached to vnode */
+	long		vk_interest;	/* i   what the notes are interested in */
+};
 #endif
 
 /*
@@ -201,7 +215,6 @@ typedef struct vnode vnode_t;
 #define	VV_ISTTY	0x00000004	/* vnode represents a tty */
 #define	VV_MAPPED	0x00000008	/* vnode might have user mappings */
 #define	VV_MPSAFE	0x00000010	/* file system code is MP safe */
-#define	VV_LOCKSWORK	0x00000020	/* FS supports locking discipline */
 
 /*
  * The second set are locked by vp->v_interlock.  VI_TEXT and VI_EXECMAP are
@@ -221,8 +234,8 @@ typedef struct vnode vnode_t;
 #define	VU_DIROP	0x01000000	/* LFS: involved in a directory op */
 
 #define	VNODE_FLAGBITS \
-    "\20\1ROOT\2SYSTEM\3ISTTY\4MAPPED\5MPSAFE\6LOCKSWORK\11TEXT\12EXECMAP" \
-    "\13WRMAP\14PAGES\17ONWORKLST\18DEADCHECK\31DIROP"
+    "\20\1ROOT\2SYSTEM\3ISTTY\4MAPPED\5MPSAFE\11TEXT\12EXECMAP" \
+    "\13WRMAP\14PAGES\17ONWORKLST\20DEADCHECK\31DIROP"
 
 #define	VSIZENOTSET	((voff_t)-1)
 
@@ -411,14 +424,33 @@ void vref(struct vnode *);
 
 #define	NULLVP	((struct vnode *)NULL)
 
-static __inline void
+/*
+ * Macro to determine kevent interest on a vnode.
+ */
+#define	_VN_KEVENT_INTEREST(vp, n)					\
+	(((vp)->v_klist->vk_interest & (n)) != 0)
+
+static inline bool
+VN_KEVENT_INTEREST(struct vnode *vp, long hint)
+{
+	mutex_enter(vp->v_interlock);
+	bool rv = _VN_KEVENT_INTEREST(vp, hint);
+	mutex_exit(vp->v_interlock);
+	return rv;
+}
+
+static inline void
 VN_KNOTE(struct vnode *vp, long hint)
 {
-
 	mutex_enter(vp->v_interlock);
-	KNOTE(&vp->v_klist, hint);
+	if (__predict_false(_VN_KEVENT_INTEREST(vp, hint))) {
+		knote(&vp->v_klist->vk_klist, hint);
+	}
 	mutex_exit(vp->v_interlock);
 }
+
+void	vn_knote_attach(struct vnode *, struct knote *);
+void	vn_knote_detach(struct vnode *, struct knote *);
 
 /*
  * Global vnode data.
@@ -475,6 +507,8 @@ struct vnodeop_desc {
 };
 
 #ifdef _KERNEL
+
+extern const struct vnodeop_desc * const vfs_op_descs[];
 
 /*
  * Union filesystem hook for vn_readdir().
@@ -558,7 +592,6 @@ struct vnode;
 void	vfs_vnode_sysinit(void);
 int 	bdevvp(dev_t, struct vnode **);
 int 	cdevvp(dev_t, struct vnode **);
-int	vaccess(enum vtype, mode_t, uid_t, gid_t, mode_t, kauth_cred_t);
 void 	vattr_null(struct vattr *);
 void	vdevgone(int, int, int, enum vtype);
 int	vfinddev(dev_t, enum vtype, struct vnode **);
@@ -578,6 +611,7 @@ int	vdead_check(struct vnode *, int);
 void	vrevoke(struct vnode *);
 void	vremfree(struct vnode *);
 void	vshareilock(struct vnode *, struct vnode *);
+void	vshareklist(struct vnode *, struct vnode *);
 int	vrefcnt(struct vnode *);
 int	vcache_get(struct mount *, const void *, size_t, struct vnode **);
 int	vcache_new(struct mount *, struct vnode *,
@@ -613,23 +647,6 @@ int	vn_fifo_bypass(void *);
 int	vn_bdev_open(dev_t, struct vnode **, struct lwp *);
 int	vn_bdev_openpath(struct pathbuf *pb, struct vnode **, struct lwp *);
 
-
-#ifdef DIAGNOSTIC
-static __inline bool
-vn_locked(struct vnode *_vp)
-{
-
-	return (_vp->v_vflag & VV_LOCKSWORK) == 0 ||
-	    VOP_ISLOCKED(_vp) == LK_EXCLUSIVE;
-}
-
-static __inline bool
-vn_anylocked(struct vnode *_vp)
-{
-
-	return (_vp->v_vflag & VV_LOCKSWORK) == 0 || VOP_ISLOCKED(_vp);
-}
-#endif
 
 /* initialise global vnode management */
 void	vntblinit(void);

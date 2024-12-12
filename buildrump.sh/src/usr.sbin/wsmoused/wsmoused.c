@@ -1,4 +1,4 @@
-/* $NetBSD: wsmoused.c,v 1.27 2021/09/01 06:10:06 mlelstv Exp $ */
+/* $NetBSD: wsmoused.c,v 1.29 2022/05/20 21:31:24 andvar Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2004 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
 #ifndef lint
 __COPYRIGHT("@(#) Copyright (c) 2002, 2003\
  The NetBSD Foundation, Inc.  All rights reserved.");
-__RCSID("$NetBSD: wsmoused.c,v 1.27 2021/09/01 06:10:06 mlelstv Exp $");
+__RCSID("$NetBSD: wsmoused.c,v 1.29 2022/05/20 21:31:24 andvar Exp $");
 #endif /* not lint */
 
 #include <sys/ioctl.h>
@@ -250,7 +250,7 @@ init_mouse(void)
 static void
 open_device(unsigned int secs)
 {
-	int version = WSMOUSE_EVENT_VERSION;
+	int status;
 
 	if (Mouse.m_devfd != -1)
 		return;
@@ -262,16 +262,44 @@ open_device(unsigned int secs)
 	if (Mouse.m_devfd == -1)
 		log_err(EXIT_FAILURE, "cannot open %s", Mouse.m_devname);
 
-	if (ioctl(Mouse.m_devfd, WSMOUSEIO_SETVERSION, &version) == -1)
+	const int version = WSMOUSE_EVENT_VERSION;
+	status = ioctl(Mouse.m_devfd, WSMOUSEIO_SETVERSION, &version);
+	if (status == -1)
 		log_err(EXIT_FAILURE, "cannot set version %s", Mouse.m_devname);
+
+
+	/*
+	 * Get calibration data for touch panel.  Not fatal if we can't.
+	 */
+	Mouse.m_doabs = 0;
+
+	unsigned int mouse_type = 0; /* defined WSMOUSE_TYPE_* start at 1 */
+	status = ioctl(Mouse.m_devfd, WSMOUSEIO_GTYPE, &mouse_type);
+	if (status == -1) {
+		log_warn("WSMOUSEIO_GTYPE");
+		return;
+	}
+
+	/* absolute position events make no sense for free-ranging mice */
+	if (mouse_type != WSMOUSE_TYPE_TPANEL)
+		return;
+
+	status = ioctl(Mouse.m_devfd, WSMOUSEIO_GCALIBCOORDS, &Mouse.m_calib);
+	if (status == -1) {
+		log_warn("WSMOUSEIO_GCALIBCOORDS");
+		return;
+	}
+
+	Mouse.m_doabs = 1;
 }
+
 
 /* --------------------------------------------------------------------- */
 
 /* Main program event loop.  This function polls the wscons status
  * device and the mouse device; whenever an event is received, the
- * appropiate callback is fired for all attached modes.  If the polls
- * times out (which only appens when the mouse is disabled), another
+ * appropriate callback is fired for all attached modes.  If the polls
+ * times out (which only happens when the mouse is disabled), another
  * callback is launched. */
 static void
 event_loop(void)

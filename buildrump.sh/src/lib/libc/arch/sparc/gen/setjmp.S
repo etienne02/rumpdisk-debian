@@ -1,4 +1,4 @@
-/*	$NetBSD: setjmp.S,v 1.12 2011/04/30 23:41:13 martin Exp $	*/
+/*	$NetBSD: setjmp.S,v 1.14 2023/10/11 09:12:21 skrll Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -40,7 +40,7 @@
 #if 0
 	.asciz "@(#)setjmp.s	8.1 (Berkeley) 6/4/93"
 #else
-	RCSID("$NetBSD: setjmp.S,v 1.12 2011/04/30 23:41:13 martin Exp $")
+	RCSID("$NetBSD: setjmp.S,v 1.14 2023/10/11 09:12:21 skrll Exp $")
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -56,6 +56,7 @@
  */
 
 #include "SYS.h"
+#include "assym.h"
 
 ENTRY(__setjmp14)
 	save	%sp, -CCFSZ, %sp
@@ -63,10 +64,10 @@ ENTRY(__setjmp14)
 	 * local vars on stack: struct sigstack foo @ offset 0x48
 	 * Note: sc_g1 is not used; sc_o0 is set in longjmp()
 	 */
-	mov	1, %o0		/* SIG_BLOCK */
+	mov	0, %o0		/* 0 - is ignored */
 	add	%i0, 32, %o2	/* build sigcontext sc.sc_mask */
 	call	_C_LABEL(__sigprocmask14)
-	 clr	%o1		/* sigprocmask(SIG_BLOCK, NULL, &sc.sc_mask) */
+	 clr	%o1		/* sigprocmask(0, NULL, &sc.sc_mask) */
 
 	add	%sp, 0x48, %o1	/* (foo being in arg dump area) */
 	call	_C_LABEL(__sigaltstack14)
@@ -74,15 +75,15 @@ ENTRY(__setjmp14)
 
 	ld	[%sp + 0x48 + 8], %o0	/* foo.ss_flags */
 	and	%o0, 1, %o1	/* onstack = foo.ss_flags & 1; */
-	st	%o1, [%i0 + 0]	/* sc.sc_onstack = current onstack; */
-	st	%fp, [%i0 + 8]	/* sc.sc_sp = (caller's) sp */
+	st	%o1, [%i0 + _SC_ONSTACK] /* sc.sc_onstack = current onstack; */
+	st	%fp, [%i0 + _SC_SP]	/* sc.sc_sp = (caller's) sp */
 	add	%i7, 8, %o0
-	st	%o0, [%i0 + 12]	/* sc.sc_pc = return_pc */
-	st	%g3, [%i0 + 16]	/* sc.sc_npc */
-	st	%g0, [%i0 + 20]	/* sc.sc_psr = (clean psr) */
-	st	%g2, [%i0 + 24]
-	st	%g4, [%i0 + 48]
-	st	%g7, [%i0 + 52]
+	st	%o0, [%i0 + _SC_PC]	/* sc.sc_pc = return_pc */
+	st	%g3, [%i0 + _SC_NPC]	/* sc.sc_npc */
+	st	%g0, [%i0 + _SC_PSR]	/* sc.sc_psr = (clean psr) */
+	st	%g2, [%i0 + _SC_G1]
+	st	%g4, [%i0 + _SIZEOF_SC + _JB_G4]
+	st	%g7, [%i0 + _SIZEOF_SC + _JB_G7]
 	ret			/* return 0 */
 	 restore	%g0, %g0, %o0
 

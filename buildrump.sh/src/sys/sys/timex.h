@@ -1,4 +1,4 @@
-/*	$NetBSD: timex.h,v 1.18 2009/04/05 19:59:26 christos Exp $	*/
+/*	$NetBSD: timex.h,v 1.20 2022/10/26 23:23:52 riastradh Exp $	*/
 
 /*-
  ***********************************************************************
@@ -186,7 +186,7 @@ f\17\1CLK\0=\0A\0=\1B\0"
 #define TIME_INS	1	/* insert leap second warning */
 #define TIME_DEL	2	/* delete leap second warning */
 #define TIME_OOP	3	/* leap second in progress */
-#define TIME_WAIT	4	/* leap second has occured */
+#define TIME_WAIT	4	/* leap second has occurred */
 #define TIME_ERROR	5	/* error (see status word) */
 
 /*
@@ -238,6 +238,7 @@ struct timex {
 };
 
 #ifdef _KERNEL
+
 #include <sys/mutex.h>
 
 void	ntp_update_second(int64_t *adjustment, time_t *newsec);
@@ -246,6 +247,9 @@ void	ntp_gettime(struct ntptimeval *);
 int ntp_timestatus(void);
 
 extern kmutex_t timecounter_lock;
+
+extern int64_t time_adjtime;
+
 #else /* !_KERNEL */
 
 __BEGIN_DECLS
@@ -254,6 +258,7 @@ int ntp_gettime(struct ntptimeval *) __RENAME(__ntp_gettime50);
 #endif
 int ntp_adjtime(struct timex *);
 __END_DECLS
+
 #endif /* _KERNEL */
 
 #endif /* _SYS_TIMEX_H_ */

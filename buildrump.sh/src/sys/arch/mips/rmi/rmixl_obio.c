@@ -1,4 +1,4 @@
-/*	$NetBSD: rmixl_obio.c,v 1.7 2021/08/07 16:18:59 thorpej Exp $	*/
+/*	$NetBSD: rmixl_obio.c,v 1.10 2022/09/29 07:00:47 skrll Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003 Wasabi Systems, Inc.
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rmixl_obio.c,v 1.7 2021/08/07 16:18:59 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rmixl_obio.c,v 1.10 2022/09/29 07:00:47 skrll Exp $");
 
 #include "locators.h"
 #include "pci.h"
@@ -50,7 +50,6 @@ __KERNEL_RCSID(0, "$NetBSD: rmixl_obio.c,v 1.7 2021/08/07 16:18:59 thorpej Exp $
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/extent.h>
-#include <sys/malloc.h>
 #include <sys/systm.h>
 
 #include <mips/int_fmtio.h>
@@ -192,7 +191,7 @@ obio_bus_init(struct obio_softc *sc)
 	/* dma space for addr < 4GB */
 	if (rcp->rc_32bit_dmat == NULL) {
 		error = bus_dmatag_subregion(rcp->rc_64bit_dmat,
-		    0, (bus_addr_t)1 << 32, &rcp->rc_32bit_dmat, 0);
+		    0, __MASK(32), &rcp->rc_32bit_dmat, 0);
 		if (error)
 			panic("%s: failed to create 32bit dma tag: %d",
 			    __func__, error);
@@ -201,7 +200,7 @@ obio_bus_init(struct obio_softc *sc)
 	/* dma space for addr < 512MB */
 	if (rcp->rc_29bit_dmat == NULL) {
 		error = bus_dmatag_subregion(rcp->rc_32bit_dmat,
-		    0, (bus_addr_t)1 << 29, &rcp->rc_29bit_dmat, 0);
+		    0, __MASK(29), &rcp->rc_29bit_dmat, 0);
 		if (error)
 			panic("%s: failed to create 29bit dma tag: %d",
 			    __func__, error);
@@ -242,8 +241,8 @@ rmixl_addr_error_init(void)
 	r |= ~(__BITS(19,16) | __BITS(10,9) | __BITS(7,5));
 	RMIXL_IOREG_WRITE(RMIXL_ADDR_ERR_DEVICE_MASK, r);
 
-	/* 
-	 * enable the address error interrupts 
+	/*
+	 * enable the address error interrupts
 	 * "upgrade" cache and CPU errors to A1
 	 */
 #define _ADDR_ERR_DEVSTAT_A1	(__BIT(8) | __BIT(1) | __BIT(0))
@@ -268,8 +267,8 @@ rmixl_addr_error_init(void)
 	r = RMIXL_IOREG_READ(RMIXL_ADDR_ERR_AERR1_CLEAR);
 	RMIXL_IOREG_WRITE(RMIXL_ADDR_ERR_AERR1_CLEAR, r);
 
-	/* 
-	 * enable the double bit error interrupts 
+	/*
+	 * enable the double bit error interrupts
 	 * (assume reserved bits, which are read-only,  are ignored)
 	 */
 	r = RMIXL_IOREG_READ(RMIXL_ADDR_ERR_BITERR_INT_EN);

@@ -1,4 +1,4 @@
-/*	$NetBSD: makefs.h,v 1.37 2021/04/03 14:10:56 simonb Exp $	*/
+/*	$nEtBSD: makefs.h,v 1.38 2022/04/09 10:05:35 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -49,6 +49,7 @@
 #define HAVE_FSTATVFS 1
 #endif
 
+#include <stdio.h>
 #include <sys/stat.h>
 #include <err.h>
 
@@ -57,7 +58,7 @@
  *	a component of the tree; contains a filename, a pointer to
  *	fsinode, optional symlink name, and tree pointers
  *
- * fsinode - 
+ * fsinode -
  *	equivalent to an inode, containing target file system inode number,
  *	refcount (nlink), and stat buffer
  *
@@ -88,7 +89,7 @@ enum fi_flags {
 };
 
 typedef struct {
-	uint32_t	 ino;		/* inode number used on target fs */
+	uint64_t	 ino;		/* inode number used on target fs */
 	uint32_t	 nlink;		/* number of links to this entry */
 	enum fi_flags	 flags;		/* flags used by fs specific code */
 	struct stat	 st;		/* stat entry */
@@ -179,6 +180,7 @@ void		apply_specfile(const char *, const char *, fsnode *, int);
 void		dump_fsnodes(fsnode *);
 const char *	inode_type(mode_t);
 int		set_option(const option_t *, const char *, char *, size_t);
+void		print_options(FILE *, const option_t *);
 int		set_option_var(const option_t *, const char *, const char *,
     char *, size_t);
 fsnode *	walk_dir(const char *, const char *, fsnode *, fsnode *, int,
@@ -238,6 +240,33 @@ extern	struct stat stampst;
 #define	DEBUG_APPLY_SPECENTRY		0x08000000
 #define	DEBUG_APPLY_SPECONLY		0x10000000
 
+#define DEBUG_STRINGS \
+	{ "time",	DEBUG_TIME }, \
+	{ "walk_dir",	DEBUG_WALK_DIR }, \
+	{ "walk_dir_node",	DEBUG_WALK_DIR_NODE }, \
+	{ "walk_dir_linkcheck",	DEBUG_WALK_DIR_LINKCHECK }, \
+	{ "dump_fsnodes",	DEBUG_DUMP_FSNODES }, \
+	{ "dump_fsnodes_verbose",	DEBUG_DUMP_FSNODES_VERBOSE }, \
+	{ "fs_parse_opts",	DEBUG_FS_PARSE_OPTS }, \
+	{ "fs_makefs",	DEBUG_FS_MAKEFS }, \
+	{ "fs_validate",	DEBUG_FS_VALIDATE }, \
+	{ "fs_create_image",	DEBUG_FS_CREATE_IMAGE }, \
+	{ "fs_size_dir",	DEBUG_FS_SIZE_DIR }, \
+	{ "fs_size_dir_node",	DEBUG_FS_SIZE_DIR_NODE }, \
+	{ "fs_size_dir_add_dirent",	DEBUG_FS_SIZE_DIR_ADD_DIRENT }, \
+	{ "fs_populate",	DEBUG_FS_POPULATE }, \
+	{ "fs_populate_dirbuf",	DEBUG_FS_POPULATE_DIRBUF }, \
+	{ "fs_populate_node",	DEBUG_FS_POPULATE_NODE }, \
+	{ "fs_write_file",	DEBUG_FS_WRITE_FILE }, \
+	{ "fs_write_file_block",	DEBUG_FS_WRITE_FILE_BLOCK }, \
+	{ "fs_make_dirbuf",	DEBUG_FS_MAKE_DIRBUF }, \
+	{ "fs_write_inode",	DEBUG_FS_WRITE_INODE }, \
+	{ "buf_bread",	DEBUG_BUF_BREAD }, \
+	{ "buf_bwrite",	DEBUG_BUF_BWRITE }, \
+	{ "buf_getblk",	DEBUG_BUF_GETBLK }, \
+	{ "apply_specfile",	DEBUG_APPLY_SPECFILE }, \
+	{ "apply_specentry",	DEBUG_APPLY_SPECENTRY }, \
+	{ "apply_speconly",	DEBUG_APPLY_SPECONLY },
 
 #define	TIMER_START(x)				\
 	if (debug & DEBUG_TIME)			\

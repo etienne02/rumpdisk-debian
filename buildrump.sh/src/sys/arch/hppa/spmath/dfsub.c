@@ -1,4 +1,4 @@
-/*	$NetBSD: dfsub.c,v 1.5 2012/02/04 17:03:09 skrll Exp $	*/
+/*	$NetBSD: dfsub.c,v 1.7 2023/07/31 20:48:04 andvar Exp $	*/
 
 /*	$OpenBSD: dfsub.c,v 1.4 2001/03/29 03:58:17 mickey Exp $	*/
 
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dfsub.c,v 1.5 2012/02/04 17:03:09 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dfsub.c,v 1.7 2023/07/31 20:48:04 andvar Exp $");
 
 #include "../spmath/float.h"
 #include "../spmath/dbl_float.h"
@@ -271,7 +271,7 @@ dbl_fsub(dbl_floating_point *leftptr, dbl_floating_point *rightptr,
 	    return(NOEXCEPTION);
 	    }
 	right_exponent = 1;	/* Set exponent to reflect different bias
-				 * with denomalized numbers. */
+				 * with denormalized numbers. */
 	}
     else
 	{
@@ -308,7 +308,7 @@ dbl_fsub(dbl_floating_point *leftptr, dbl_floating_point *rightptr,
 	if(Dbl_iszero_hidden(resultp1))
 	    {
 	    /* Handle normalization */
-	    /* A straight foward algorithm would now shift the result
+	    /* A straight forward algorithm would now shift the result
 	     * and extension left until the hidden bit becomes one.  Not
 	     * all of the extension bits need participate in the shift.
 	     * Only the two most significant bits (round and guard) are

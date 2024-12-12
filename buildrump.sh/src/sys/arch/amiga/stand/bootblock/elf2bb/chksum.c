@@ -1,4 +1,4 @@
-/* $NetBSD: chksum.c,v 1.5 2009/03/14 15:36:01 dsl Exp $ */
+/* $NetBSD: chksum.c,v 1.9 2022/04/25 14:45:26 rin Exp $ */
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -39,17 +39,17 @@
 
 #include "chksum.h"
 
-u_int32_t
-chksum(u_int32_t *block, int size)
+uint32_t
+chksum(uint32_t *block, int size)
 {
-	u_int32_t sum, lastsum;
+	uint32_t sum, lastsum;
 	int i;
 
 	sum = 0;
 
 	for (i=0; i<size; i++) {
 		lastsum = sum;
-		sum += htobe32(block[i]);
+		sum += be32toh(block[i]);
 		if (sum < lastsum)
 			++sum;
 	}
@@ -58,24 +58,24 @@ chksum(u_int32_t *block, int size)
 }
 
 #ifdef TESTSUM
-u_int32_t myblock[8192];
+uint32_t myblock[8192];
 
 int
 main(int argc, char *argb[]) {
 	int bbsize;
-	u_int32_t cks, cks1;
+	uint32_t cks, cks1;
 
-	bbsize=atol(argb[1]);
-	bbsize *= (512 / sizeof (u_int32_t));
+	bbsize = atol(argb[1]);
+	bbsize *= (512 / sizeof(uint32_t));
 
-	if (4*bbsize != read(0, myblock, sizeof(u_int32_t)*bbsize)) {
+	if (4 * bbsize != read(0, myblock, sizeof(uint32_t) * bbsize)) {
 		fprintf(stderr, "short read\n");
 		exit(1);
 	}
 	fprintf(stderr, "Cksum field = 0x%x, ", myblock[1]);
 	cks = chksum(myblock, bbsize);
 	fprintf(stderr, "cksum = 0x%x\n", cks);
-	myblock[1] += 0xFFFFFFFF - cks;
+	myblock[1] += 0xffffffff - cks;
 	fprintf(stderr, "New cksum field = 0x%x, ", myblock[1]);
 	cks1 = chksum(myblock, bbsize);
 	fprintf(stderr, "cksum = 0x%x\n", cks1);

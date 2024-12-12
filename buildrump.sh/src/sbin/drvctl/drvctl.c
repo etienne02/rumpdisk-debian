@@ -1,4 +1,4 @@
-/* $NetBSD: drvctl.c,v 1.21 2020/06/11 13:49:57 thorpej Exp $ */
+/* $NetBSD: drvctl.c,v 1.23 2024/11/03 10:43:26 rillig Exp $ */
 
 /*
  * Copyright (c) 2004
@@ -68,8 +68,6 @@ main(int argc, char **argv)
 	bool nflag = false, tflag = false;
 	int c, mode;
 	char *attr = 0;
-	extern char *optarg;
-	extern int optind;
 	int fd, res;
 	struct devpmargs paa = { .devname = "", .flags = 0 };
 	struct devdetachargs daa;
@@ -230,17 +228,20 @@ extract_property(prop_dictionary_t dict, const char *prop, bool nflag)
 		case PROP_TYPE_DICTIONARY:
 			obj = prop_dictionary_get(obj, cur);
 			if (obj == NULL)
-				exit(EXIT_FAILURE);
+				p = NULL;
 			break;
 		case PROP_TYPE_ARRAY:
 			ind = strtoul(cur, NULL, 0);
 			obj = prop_array_get(obj, ind);
 			if (obj == NULL)
-				exit(EXIT_FAILURE);
+				p = NULL;
 			break;
 		default:
-			errx(EXIT_FAILURE, "Select neither dict nor array with"
-			" `%s'", cur);
+			fprintf(stderr, "Select neither dict nor array with"
+			    " `%s'\n", cur);
+			obj = NULL;
+			p = NULL;
+			break;
 		}
 	}
 

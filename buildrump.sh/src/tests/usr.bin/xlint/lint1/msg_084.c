@@ -1,12 +1,18 @@
-/*	$NetBSD: msg_084.c,v 1.3 2021/01/31 11:12:07 rillig Exp $	*/
+/*	$NetBSD: msg_084.c,v 1.6 2023/08/26 10:43:53 rillig Exp $	*/
 # 3 "msg_084.c"
 
-// Test for message: ANSI C requires formal parameter before '...' [84]
+/* Test for message: C90 to C17 require formal parameter before '...' [84] */
 
-void only_ellipsis(...)		/* expect: 84 */
+/* lint1-flags: -sw -X 351 */
+
+/* expect+2: error: C90 to C17 require formal parameter before '...' [84] */
+void
+only_ellipsis(...)
 {
 }
 
-void ok_ellipsis(const char *fmt, ...)	/* expect: 231 */
+char
+ok_ellipsis(const char *fmt, ...)
 {
+	return fmt[0];
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: curses.h,v 1.130 2021/02/13 10:37:00 rillig Exp $	*/
+/*	$NetBSD: curses.h,v 1.133 2024/12/05 04:08:12 blymn Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -561,6 +561,7 @@ int	 echochar(const chtype);
 int	 erase(void);
 int	 getch(void);
 int	 getnstr(char *, int);
+int	 getscrreg(int *, int *);
 int	 getstr(char *);
 chtype	 inch(void);
 int	 inchnstr(chtype *, int);
@@ -652,7 +653,7 @@ int	 copywin(const WINDOW *, WINDOW *, int, int, int, int, int, int, int);
 int	 curs_set(int);
 int	 def_prog_mode(void);
 int	 def_shell_mode(void);
-int      define_key(char *, int);
+int      define_key(const char *, int);
 int	 delay_output(int);
 void     delscreen(SCREEN *);
 int	 delwin(WINDOW *);
@@ -719,7 +720,7 @@ int	 mvwprintw(WINDOW *, int, int, const char *, ...) __printflike(4, 5);
 int	 mvwscanw(WINDOW *, int, int, const char *, ...) __scanflike(4, 5);
 int	 napms(int);
 WINDOW	*newpad(int, int);
-SCREEN  *newterm(char *, FILE *, FILE *);
+SCREEN  *newterm(const char *, FILE *, FILE *);
 WINDOW	*newwin(int, int, int, int);
 int	 nl(void);
 attr_t	 no_color_attributes(void);
@@ -751,7 +752,7 @@ int	 savetty(void);
 int	 scanw(const char *, ...) __scanflike(1, 2);
 int	 scroll(WINDOW *);
 int	 scrollok(WINDOW *, bool);
-int	 setterm(char *);
+int	 setterm(const char *);
 int	 set_escdelay(int);
 int	 set_tabsize(int);
 SCREEN  *set_term(SCREEN *);
@@ -800,6 +801,7 @@ int	 wechochar(WINDOW *, const chtype);
 int	 werase(WINDOW *);
 int	 wgetch(WINDOW *);
 int	 wgetnstr(WINDOW *, char *, int);
+int	 wgetscrreg(WINDOW *, int *, int *);
 int	 wgetstr(WINDOW *, char *);
 int	 whline(WINDOW *, chtype, int);
 chtype	 winch(WINDOW *);

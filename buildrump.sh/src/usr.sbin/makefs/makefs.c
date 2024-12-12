@@ -1,4 +1,4 @@
-/*	$NetBSD: makefs.c,v 1.54 2021/04/03 14:10:56 simonb Exp $	*/
+/*	$NetBSD: makefs.c,v 1.59 2024/10/27 18:35:52 christos Exp $	*/
 
 /*
  * Copyright (c) 2001-2003 Wasabi Systems, Inc.
@@ -41,7 +41,7 @@
 
 #include <sys/cdefs.h>
 #if defined(__RCSID) && !defined(__lint)
-__RCSID("$NetBSD: makefs.c,v 1.54 2021/04/03 14:10:56 simonb Exp $");
+__RCSID("$NetBSD: makefs.c,v 1.59 2024/10/27 18:35:52 christos Exp $");
 #endif	/* !__lint */
 
 #include <assert.h>
@@ -89,9 +89,10 @@ u_int		debug;
 struct timespec	start_time;
 struct stat stampst;
 
-static	fstype_t *get_fstype(const char *);
+static fstype_t *get_fstype(const char *);
 static int get_tstamp(const char *, struct stat *);
-static	void	usage(fstype_t *, fsinfo_t *) __dead;
+static void usage(fstype_t *, fsinfo_t *) __dead;
+static u_int parse_debug(char *);
 
 int
 main(int argc, char *argv[])
@@ -100,14 +101,16 @@ main(int argc, char *argv[])
 	fstype_t	*fstype;
 	fsinfo_t	 fsoptions;
 	fsnode		*root;
-	int	 	 ch, i, len;
+	int	 	 ch, i;
+	size_t		 len;
 	char		*specfile;
 
 	setprogname(argv[0]);
 
 	debug = 0;
 	if ((fstype = get_fstype(DEFAULT_FSTYPE)) == NULL)
-		errx(1, "Unknown default fs type `%s'.", DEFAULT_FSTYPE);
+		errx(EXIT_FAILURE,
+		    "Unknown default fs type `%s'.", DEFAULT_FSTYPE);
 
 		/* set default fsoptions */
 	(void)memset(&fsoptions, 0, sizeof(fsoptions));
@@ -126,7 +129,7 @@ main(int argc, char *argv[])
 	start_time.tv_nsec = start.tv_usec * 1000;
 #endif
 	if (ch == -1)
-		err(1, "Unable to get system time");
+		err(EXIT_FAILURE, "Unable to get system time");
 
 
 	while ((ch = getopt(argc, argv, "B:b:d:f:F:LM:m:N:O:o:rs:S:t:T:xZ")) != -1) {
@@ -155,7 +158,7 @@ main(int argc, char *argv[])
 			len = strlen(optarg) - 1;
 			if (optarg[len] == '%') {
 				optarg[len] = '\0';
-				fsoptions.freeblockpc =
+				fsoptions.freeblockpc = (int)
 				    strsuftoll("free block percentage",
 					optarg, 0, 99);
 			} else {
@@ -166,14 +169,14 @@ main(int argc, char *argv[])
 			break;
 
 		case 'd':
-			debug = strtoll(optarg, NULL, 0);
+			debug = parse_debug(optarg);
 			break;
 
 		case 'f':
 			len = strlen(optarg) - 1;
 			if (optarg[len] == '%') {
 				optarg[len] = '\0';
-				fsoptions.freefilepc =
+				fsoptions.freefilepc = (int)
 				    strsuftoll("free file percentage",
 					optarg, 0, 99);
 			} else {
@@ -198,7 +201,7 @@ main(int argc, char *argv[])
 
 		case 'N':
 			if (! setup_getid(optarg))
-				errx(1,
+				errx(EXIT_FAILURE,
 			    "Unable to use user and group databases in `%s'",
 				    optarg);
 			break;
@@ -209,17 +212,17 @@ main(int argc, char *argv[])
 			break;
 
 		case 'O':
-			fsoptions.offset = 
+			fsoptions.offset =
 			    strsuftoll("offset", optarg, 0LL, LLONG_MAX);
 			break;
-			
+
 		case 'o':
 		{
 			char *p;
 
 			while ((p = strsep(&optarg, ",")) != NULL) {
 				if (*p == '\0')
-					errx(1, "Empty option");
+					errx(EXIT_FAILURE, "Empty option");
 				if (! fstype->parse_options(p, &fsoptions))
 					usage(fstype, &fsoptions);
 			}
@@ -247,18 +250,19 @@ main(int argc, char *argv[])
 				fstype->cleanup_options(&fsoptions);
 			fsoptions.fs_specific = NULL;
 			if ((fstype = get_fstype(optarg)) == NULL)
-				errx(1, "Unknown fs type `%s'.", optarg);
+				errx(EXIT_FAILURE,
+				    "Unknown fs type `%s'.", optarg);
 			fstype->prepare_options(&fsoptions);
 			break;
 
 		case 'T':
 			if (get_tstamp(optarg, &stampst) == -1)
-				errx(1, "Cannot get timestamp from `%s'",
-				    optarg);
+				errx(EXIT_FAILURE,
+				    "Cannot get timestamp from `%s'", optarg);
 			break;
 
 		case 'x':
-			fsoptions.onlyspec = 1;
+			fsoptions.onlyspec++;
 			break;
 
 		case 'Z':
@@ -286,7 +290,7 @@ main(int argc, char *argv[])
 
 	/* -x must be accompanied by -F */
 	if (fsoptions.onlyspec != 0 && specfile == NULL)
-		errx(1, "-x requires -F mtree-specfile.");
+		errx(EXIT_FAILURE, "-x requires -F mtree-specfile.");
 
 				/* walk the tree */
 	TIMER_START(start);
@@ -298,9 +302,9 @@ main(int argc, char *argv[])
 	for (i = 2; i < argc; i++) {
 		struct stat sb;
 		if (stat(argv[i], &sb) == -1)
-			err(1, "Can't stat `%s'", argv[i]);
+			err(EXIT_FAILURE, "Can't stat `%s'", argv[i]);
 		if (!S_ISDIR(sb.st_mode))
-			errx(1, "%s: not a directory", argv[i]);
+			errx(EXIT_FAILURE, "%s: not a directory", argv[i]);
 		TIMER_START(start);
 		root = walk_dir(argv[i], ".", NULL, root, fsoptions.replace,
 		    fsoptions.follow);
@@ -326,7 +330,7 @@ main(int argc, char *argv[])
 
 	free_fsnodes(root);
 
-	exit(0);
+	exit(EXIT_SUCCESS);
 	/* NOTREACHED */
 }
 
@@ -347,6 +351,45 @@ set_option(const option_t *options, const char *option, char *buf, size_t len)
 	retval = set_option_var(options, var, val, buf, len);
 	free(var);
 	return retval;
+}
+
+void
+print_options(FILE *fp, const option_t *options)
+{
+	for (size_t i = 0; options[i].name != NULL; i++) {
+		fprintf(fp, "%s=", options[i].name);
+		switch (options[i].type) {
+		case OPT_BOOL:
+			fputs(*(bool *)options[i].value ? "true\n" : "false\n",
+			    fp); 
+			break;
+		case OPT_STRARRAY:
+		case OPT_STRPTR:
+		case OPT_STRBUF:
+			fprintf(fp, "%s\n", *(const char **)options[i].value);
+			break;
+		case OPT_INT64:
+			fprintf(fp, "%" PRIu64 "\n",
+			    *(uint64_t *)options[i].value);
+			break;
+		case OPT_INT32:
+			fprintf(fp, "%" PRIu32 "\n",
+			    *(uint32_t *)options[i].value);
+			break;
+		case OPT_INT16:
+			fprintf(fp, "%" PRIu16 "\n",
+			    *(uint16_t *)options[i].value);
+			break;
+		case OPT_INT8:
+			fprintf(fp, "%" PRIu8 "\n",
+			    *(uint8_t *)options[i].value);
+			break;
+		default:
+			warnx("Unknown type %d in option %s", options[i].type,
+			    options[i].name);
+			return;
+		}
+	}
 }
 
 int
@@ -400,7 +443,7 @@ set_option_var(const option_t *options, const char *var, const char *val,
 			    val);
 			return 0;
 		}
-		return i;
+		return (int)i;
 	}
 	warnx("Unknown option `%s'", var);
 	return -1;
@@ -411,7 +454,7 @@ static fstype_t *
 get_fstype(const char *type)
 {
 	int i;
-	
+
 	for (i = 0; fstypes[i].type != NULL; i++)
 		if (strcmp(fstypes[i].type, type) == 0)
 			return (&fstypes[i]);
@@ -451,12 +494,19 @@ get_tstamp(const char *b, struct stat *st)
 	}
 
 	st->st_ino = 1;
-#if HAVE_STRUCT_STAT_BIRTHTIME 
+#if HAVE_STRUCT_STAT_BIRTHTIME
 	st->st_birthtime =
 #endif
 	st->st_mtime = st->st_ctime = st->st_atime = when;
 	return 0;
 }
+
+static struct {
+	const char *n;
+	u_int v;
+} nv[] = {
+	DEBUG_STRINGS
+};
 
 static void
 usage(fstype_t *fstype, fsinfo_t *fsoptions)
@@ -465,12 +515,16 @@ usage(fstype_t *fstype, fsinfo_t *fsoptions)
 
 	prog = getprogname();
 	fprintf(stderr,
-"Usage: %s [-rxZ] [-B endian] [-b free-blocks] [-d debug-mask]\n"
+"Usage: %s [-rxZ] [-B endian] [-b free-blocks] [-d debug-mask|comma-separated-option]\n"
 "\t[-F mtree-specfile] [-f free-files] [-M minimum-size] [-m maximum-size]\n"
 "\t[-N userdb-dir] [-O offset] [-o fs-options] [-S sector-size]\n"
 "\t[-s image-size] [-T <timestamp/file>] [-t fs-type]"
 " image-file directory [extra-directory ...]\n",
 	    prog);
+
+	fprintf(stderr, "\nDebugging options:\n");
+	for (size_t i = 0; i < __arraycount(nv); i++)
+		fprintf(stderr, "\t0x%8.8x\t%s\n", nv[i].v, nv[i].n);
 
 	if (fstype) {
 		size_t i;
@@ -483,5 +537,31 @@ usage(fstype_t *fstype, fsinfo_t *fsoptions)
 			    o[i].letter ? ',' : ' ',
 			    o[i].name, o[i].desc);
 	}
-	exit(1);
+	exit(EXIT_FAILURE);
 }
+
+
+static u_int
+parse_debug(char *str)
+{
+	char *ep;
+	u_int d;
+	size_t i;
+
+	errno = 0;
+	d = (u_int)strtoul(str, &ep, 0);
+	if (str != ep && !*ep && errno == 0)
+		return d;
+	d = 0;
+	for (char *a = strtok(str, ","); a != NULL; a = strtok(NULL, ",")) {
+		for (i = 0; i < __arraycount(nv); i++)
+			if (strcmp(nv[i].n, a) == 0) {
+				d |= nv[i].v;
+				break;
+			}
+		if (i == __arraycount(nv))
+			errx(EXIT_FAILURE, "Unknown debug option `%s'", a);
+	}
+	return d;
+}
+

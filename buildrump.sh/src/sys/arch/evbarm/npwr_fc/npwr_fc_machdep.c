@@ -1,4 +1,4 @@
-/*	$NetBSD: npwr_fc_machdep.c,v 1.29 2021/08/17 22:00:29 andvar Exp $	*/
+/*	$NetBSD: npwr_fc_machdep.c,v 1.33 2024/05/13 00:08:06 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003 Wasabi Systems, Inc.
@@ -73,7 +73,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: npwr_fc_machdep.c,v 1.29 2021/08/17 22:00:29 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: npwr_fc_machdep.c,v 1.33 2024/05/13 00:08:06 msaitoh Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -344,10 +344,6 @@ static const struct pmap_devmap iq80321_devmap[] = {
 vaddr_t
 initarm(void *arg)
 {
-	extern vaddr_t xscale_cache_clean_addr;
-#ifdef DIAGNOSTIC
-	extern vsize_t xscale_minidata_clean_size;
-#endif
 	int loop;
 	int loop1;
 	u_int l1pagetable;
@@ -384,7 +380,7 @@ initarm(void *arg)
 	 */
 
 	/*
-	 * Fetch the SDRAM start/size from the i80321 SDRAM configration
+	 * Fetch the SDRAM start/size from the i80321 SDRAM configuration
 	 * registers.
 	 */
 	i80321_sdram_bounds(&obio_bs_tag, VERDE_PMMR_BASE + VERDE_MCU_BASE,
@@ -422,7 +418,7 @@ initarm(void *arg)
 
 #ifdef VERBOSE_INIT_ARM
 	/* Tell the user about the memory */
-	printf("physmemory: %d pages at 0x%08lx -> 0x%08lx\n", physmem,
+	printf("physmemory: 0x%"PRIxPSIZE" pages at 0x%08lx -> 0x%08lx\n", physmem,
 	    physical_start, physical_end - 1);
 #endif
 
@@ -690,7 +686,7 @@ initarm(void *arg)
 	 * Until then we will use a handler that just panics but tells us
 	 * why.
 	 * Initialisation of the vectors will just panic on a data abort.
-	 * This just fills in a slighly better one.
+	 * This just fills in a slightly better one.
 	 */
 #ifdef VERBOSE_INIT_ARM
 	printf("vectors ");

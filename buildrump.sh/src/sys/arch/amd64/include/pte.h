@@ -1,4 +1,4 @@
-/*	$NetBSD: pte.h,v 1.14 2020/04/25 15:26:16 bouyer Exp $	*/
+/*	$NetBSD: pte.h,v 1.17 2022/08/21 09:12:43 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -68,9 +68,18 @@
 /*
  * Here we define the data types for PDEs and PTEs.
  */
+#include <sys/stdint.h>
 typedef uint64_t pd_entry_t;		/* PDE */
 typedef uint64_t pt_entry_t;		/* PTE */
 #endif
+
+/*
+ * Mask to get rid of the sign-extended part of addresses.
+ */
+#define VA_SIGN_MASK		0xffff000000000000
+#define VA_SIGN_NEG(va)		((va) | VA_SIGN_MASK)
+/* XXXfvdl this one's not right. */
+#define VA_SIGN_POS(va)		((va) & ~VA_SIGN_MASK)
 
 /*
  * Now we define various constants for playing with virtual addresses.
@@ -120,7 +129,9 @@ typedef uint64_t pt_entry_t;		/* PTE */
 #define PTE_FRAME	PTE_4KFRAME
 #define PTE_LGFRAME	PTE_2MFRAME
 
+#define	_MACHINE_PTE_H_X86
 #include <x86/pte.h>
+#undef	_MACHINE_PTE_H_X86
 
 #else   /*      !__x86_64__      */
 

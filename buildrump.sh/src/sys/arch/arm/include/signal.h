@@ -1,4 +1,4 @@
-/*	$NetBSD: signal.h,v 1.15 2018/04/01 04:35:04 ryo Exp $	*/
+/*	$NetBSD: signal.h,v 1.20 2021/10/30 19:54:58 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1994-1996 Mark Brinicombe.
@@ -55,6 +55,8 @@ typedef int sig_atomic_t;
 
 #if defined(__arm__)
 
+#define	__HAVE_STRUCT_SIGCONTEXT
+
 #if defined(_NETBSD_SOURCE)
 
 #ifndef _LOCORE
@@ -66,7 +68,7 @@ typedef int sig_atomic_t;
  * a non-standard exit is performed.
  */
 
-#if defined(__LIBC12_SOURCE__) || defined(_KERNEL)
+#if defined(_KERNEL)
 struct sigcontext13 {
 	int	sc_onstack;		/* sigstack state to restore */
 	int	sc_mask;		/* signal mask to restore (old style) */
@@ -90,8 +92,9 @@ struct sigcontext13 {
 	unsigned int sc_svc_lr;
 	unsigned int sc_pc;
 };
-#endif /* __LIBC12_SOURCE__ || _KERNEL */
+#endif /* _KERNEL */
 
+#if defined(_LIBC) || defined(_KERNEL)
 struct sigcontext {
 	int	sc_onstack;		/* sigstack state to restore */
 	int	__sc_mask13;		/* signal mask to restore (old style) */
@@ -114,9 +117,10 @@ struct sigcontext {
 	unsigned int sc_usr_lr;
 	unsigned int sc_svc_lr;
 	unsigned int sc_pc;
-	
+
 	sigset_t sc_mask;		/* signal mask to restore (new style) */
 };
+#endif /* _LIBC || _KERNEL */
 
 #endif /* !_LOCORE */
 

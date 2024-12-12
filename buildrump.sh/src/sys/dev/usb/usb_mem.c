@@ -1,4 +1,4 @@
-/*	$NetBSD: usb_mem.c,v 1.81 2021/05/27 10:44:29 jmcneill Exp $	*/
+/*	$NetBSD: usb_mem.c,v 1.84 2021/12/21 09:51:22 skrll Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: usb_mem.c,v 1.81 2021/05/27 10:44:29 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: usb_mem.c,v 1.84 2021/12/21 09:51:22 skrll Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -167,9 +167,8 @@ usb_block_allocmem(bus_dma_tag_t tag, size_t size, size_t align,
 	b->segs = kmem_alloc(b->nsegs * sizeof(*b->segs), KM_SLEEP);
 	b->nsegs_alloc = b->nsegs;
 
-	error = bus_dmamem_alloc(tag, b->size, align, 0,
-				 b->segs, b->nsegs,
-				 &b->nsegs, BUS_DMA_WAITOK);
+	error = bus_dmamem_alloc(tag, b->size, align, 0, b->segs, b->nsegs,
+	    &b->nsegs, BUS_DMA_WAITOK);
 	if (error)
 		goto free0;
 
@@ -178,13 +177,13 @@ usb_block_allocmem(bus_dma_tag_t tag, size_t size, size_t align,
 	if (error)
 		goto free1;
 
-	error = bus_dmamap_create(tag, b->size, b->nsegs, b->size,
-				  0, BUS_DMA_WAITOK, &b->map);
+	error = bus_dmamap_create(tag, b->size, b->nsegs, b->size, 0,
+	    BUS_DMA_WAITOK, &b->map);
 	if (error)
 		goto unmap;
 
 	error = bus_dmamap_load(tag, b->map, b->kaddr, b->size, NULL,
-				BUS_DMA_WAITOK);
+	    BUS_DMA_WAITOK);
 	if (error)
 		goto destroy;
 
@@ -211,7 +210,7 @@ usb_block_allocmem(bus_dma_tag_t tag, size_t size, size_t align,
 	kmem_free(b, sizeof(*b));
 	mutex_enter(&usb_blk_lock);
 
-	return USBD_NOMEM;
+	return error;
 }
 
 #if 0
@@ -263,10 +262,9 @@ usb_block_freemem(usb_dma_block_t *b)
 }
 
 int
-usb_allocmem(struct usbd_bus *bus, size_t size, size_t align, u_int flags,
+usb_allocmem(bus_dma_tag_t tag, size_t size, size_t align, u_int flags,
     usb_dma_t *p)
 {
-	bus_dma_tag_t tag = bus->ub_dmatag;
 	usbd_status err;
 	struct usb_frag_dma *f;
 	usb_dma_block_t *b;
@@ -346,7 +344,7 @@ usb_allocmem(struct usbd_bus *bus, size_t size, size_t align, u_int flags,
 }
 
 void
-usb_freemem(struct usbd_bus *bus, usb_dma_t *p)
+usb_freemem(usb_dma_t *p)
 {
 	struct usb_frag_dma *f;
 

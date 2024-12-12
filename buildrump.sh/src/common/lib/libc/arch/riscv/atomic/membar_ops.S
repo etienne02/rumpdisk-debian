@@ -1,4 +1,4 @@
-/*	$NetBSD: membar_ops.S,v 1.1 2014/09/19 17:36:24 matt Exp $	*/
+/*	$NetBSD: membar_ops.S,v 1.4 2022/04/09 23:32:52 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -38,8 +38,20 @@ END(_membar_sync)
 ATOMIC_OP_ALIAS(membar_sync,_membar_sync)
 CRT_ALIAS(__sync_synchronize,_membar_sync)
 
+ENTRY_NP(_membar_acquire)
+	fence	r,rw
+	ret
+END(_membar_acquire)
+ATOMIC_OP_ALIAS(membar_acquire,_membar_acquire)
+
+ENTRY_NP(_membar_release)
+	fence	rw,w
+	ret
+END(_membar_release)
+ATOMIC_OP_ALIAS(membar_release,_membar_release)
+
 ENTRY_NP(_membar_enter)
-	fence	w,rw
+	fence	rw,rw
 	ret
 END(_membar_enter)
 ATOMIC_OP_ALIAS(membar_enter,_membar_enter)

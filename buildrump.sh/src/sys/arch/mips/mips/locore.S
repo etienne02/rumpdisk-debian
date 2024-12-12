@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.228 2021/05/29 12:35:27 simonb Exp $	*/
+/*	$NetBSD: locore.S,v 1.231 2023/06/24 05:31:04 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -63,7 +63,7 @@
 #include <mips/trap.h>
 #include <mips/locore.h>
 
-RCSID("$NetBSD: locore.S,v 1.228 2021/05/29 12:35:27 simonb Exp $")
+RCSID("$NetBSD: locore.S,v 1.231 2023/06/24 05:31:04 msaitoh Exp $")
 
 #include "assym.h"
 
@@ -286,7 +286,28 @@ NESTED(cpu_switchto, CALLFRAME_SIZ, ra)
 
 	PTR_L	t2, L_CPU(MIPS_CURLWP)
 	nop					# patchable load delay slot
+
+	/*
+	 * Issue barriers to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
+	 */
+	SYNC_PRODUCER		/* XXX fixup to nop for uniprocessor boot */
 	PTR_S	MIPS_CURLWP, CPU_INFO_CURLWP(t2)
+	SYNC_DEKKER		/* XXX fixup to nop for uniprocessor boot */
 
 	/* Check for restartable atomic sequences (RAS) */
 	PTR_L	a0, L_PROC(MIPS_CURLWP)		# argument to ras_lookup
@@ -406,7 +427,15 @@ NESTED(softint_fast_dispatch, CALLFRAME_SIZ, ra)
 	move	MIPS_CURLWP, a0				# switch to softint lwp
 	PTR_L	s1, L_CPU(MIPS_CURLWP)			# get curcpu()
 	nop					# patchable load delay slot
+	SYNC_PRODUCER /* XXX fixup */	/* for mutex_enter; see cpu_switchto */
 	PTR_S	MIPS_CURLWP, CPU_INFO_CURLWP(s1)	#    ...
+	/*
+	 * No need for barrier after ci->ci_curlwp = softlwp -- when we
+	 * enter a softint lwp, it can't be holding any mutexes, so it
+	 * can't release any until after it has acquired them, so we
+	 * need not participate in the protocol with mutex_vector_enter
+	 * barriers here.
+	 */
 	move	s2, sp					# remember sp
 	move	s3, t0					# remember curpcb
 
@@ -417,7 +446,9 @@ NESTED(softint_fast_dispatch, CALLFRAME_SIZ, ra)
 
 	move	sp, s2					# restore stack
 	move	MIPS_CURLWP, s0				# restore curlwp
+	SYNC_PRODUCER /* XXX fixup */	/* for mutex_enter; see cpu_switchto */
 	PTR_S	MIPS_CURLWP, CPU_INFO_CURLWP(s1)	#    ....
+	SYNC_DEKKER /* XXX fixup */	/* for mutex_enter; see cpu_switchto */
 
 	REG_L	ra, CALLFRAME_RA(sp)		# load early since we use it
 
@@ -637,7 +668,7 @@ END(mips_cp0_status_write)
  * mips_fpu_trap --
  *
  *	Handle a floating point interrupt (r3k) or trap (r4k).
- *	the handlers are indentical, only the reporting mechanisms differ.
+ *	the handlers are identical, only the reporting mechanisms differ.
  *
  *	mips_fpu_intr(vaddr_t pc, struct trapframe *tf)
  *

@@ -1,4 +1,4 @@
-/* $NetBSD: params.h,v 1.11 2014/12/14 12:31:39 mlelstv Exp $ */
+/* $NetBSD: params.h,v 1.15 2024/05/12 18:02:16 christos Exp $ */
 
 /*-
  * Copyright (c) 2002, 2003 The NetBSD Foundation, Inc.
@@ -37,9 +37,16 @@
 struct keygen {
 	int		 kg_method;
 	size_t		 kg_iterations;
+	size_t		 kg_memory;		/* only used for Argon2 */
+	size_t		 kg_parallelism;	/* only used for Argon2 */
+	size_t		 kg_version;		/* only used for Argon2 */
 	bits_t		*kg_salt;
 	bits_t		*kg_key;
 	string_t	*kg_cmd;
+	string_t	*kg_sharedid;
+	int		 kg_sharedalg;
+	size_t		 kg_sharedlen;
+	bits_t		*kg_sharedinfo;
 	struct keygen	*next;
 };
 
@@ -63,6 +70,7 @@ struct params {
 #define KEYGEN_URANDOMKEY		0x4
 #define KEYGEN_PKCS5_PBKDF2_SHA1	0x5
 #define KEYGEN_SHELL_CMD		0x6
+#define KEYGEN_ARGON2ID			0x7
 
 /* verification methods */
 
@@ -73,6 +81,12 @@ struct params {
 #define VERIFY_REENTER		0x4
 #define VERIFY_MBR      	0x5
 #define VERIFY_GPT      	0x6
+#define VERIFY_ZFS      	0x7
+
+/* shared key derivation methods */
+
+#define	SHARED_ALG_UNKNOWN		0x0
+#define	SHARED_ALG_HKDF_HMAC_SHA256	0x1
 
 __BEGIN_DECLS
 struct params	*params_new(void);
@@ -99,6 +113,9 @@ struct keygen	*keygen_new(void);
 void		 keygen_free(struct keygen *);
 
 int		 keygen_filldefaults(struct keygen *, size_t);
+void		 keygen_stripstored(struct keygen **);
+int		 keygen_makeshared(struct keygen *);
+int		 keygen_tweakshared(struct keygen *);
 int		 keygen_verify(const struct keygen *);
 void		 keygen_addlist(struct keygen **, struct keygen *);
 
@@ -108,8 +125,12 @@ struct keygen	*keygen_method(string_t *);
 struct keygen	*keygen_set_method(struct keygen *, string_t *);
 struct keygen	*keygen_salt(bits_t *);
 struct keygen	*keygen_iterations(size_t);
+struct keygen	*keygen_memory(size_t);
+struct keygen	*keygen_parallelism(size_t);
+struct keygen	*keygen_version(size_t);
 struct keygen	*keygen_key(bits_t *);
 struct keygen	*keygen_cmd(string_t *);
+struct keygen	*keygen_shared(string_t *, string_t *, bits_t *);
 
 int		 keygen_fput(struct keygen *, int, FILE *);
 __END_DECLS

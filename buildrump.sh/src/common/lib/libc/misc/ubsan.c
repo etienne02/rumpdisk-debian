@@ -1,4 +1,4 @@
-/*	$NetBSD: ubsan.c,v 1.10 2020/03/08 21:35:03 kamil Exp $	*/
+/*	$NetBSD: ubsan.c,v 1.12 2023/12/07 07:10:44 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -38,9 +38,9 @@
 
 #include <sys/cdefs.h>
 #if defined(_KERNEL)
-__KERNEL_RCSID(0, "$NetBSD: ubsan.c,v 1.10 2020/03/08 21:35:03 kamil Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ubsan.c,v 1.12 2023/12/07 07:10:44 andvar Exp $");
 #else
-__RCSID("$NetBSD: ubsan.c,v 1.10 2020/03/08 21:35:03 kamil Exp $");
+__RCSID("$NetBSD: ubsan.c,v 1.12 2023/12/07 07:10:44 andvar Exp $");
 #endif
 
 #if defined(_KERNEL)
@@ -744,7 +744,7 @@ HandleAlignmentAssumption(bool isFatal, struct CAlignmentAssumptionData *pData, 
 	if (pData->mAssumptionLocation.mFilename != NULL) {
 		DeserializeLocation(szAssumptionLocation, LOCATION_MAXLEN,
 		    &pData->mAssumptionLocation);
-		Report(isFatal, "UBSan: Undefined Behavior in %s, alignment assumption of %#lx for pointer %#lx (offset %#lx), asumption made in %s\n",
+		Report(isFatal, "UBSan: Undefined Behavior in %s, alignment assumption of %#lx for pointer %#lx (offset %#lx), assumption made in %s\n",
 		    szLocation, ulAlignment, ulRealPointer, ulOffset,
 		    szAssumptionLocation);
 	} else {
@@ -1249,7 +1249,7 @@ __ubsan_get_current_report_data(const char **ppOutIssueKind, const char **ppOutM
 	 * interrupt handling etc).
 	 *
 	 * A proper solution would need probably a lock-free bounded queue built
-	 * with atomic operations with the property of miltiple consumers and
+	 * with atomic operations with the property of multiple consumers and
 	 * multiple producers. Maintaining and validating such code is not
 	 * worth the effort.
 	 *

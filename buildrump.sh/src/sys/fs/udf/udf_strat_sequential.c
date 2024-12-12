@@ -1,9 +1,9 @@
-/* $NetBSD: udf_strat_sequential.c,v 1.15 2016/05/24 09:55:57 reinoud Exp $ */
+/* $NetBSD: udf_strat_sequential.c,v 1.20 2023/06/27 09:58:50 reinoud Exp $ */
 
 /*
  * Copyright (c) 2006, 2008 Reinoud Zandijk
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -12,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
  * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -23,12 +23,12 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  */
 
 #include <sys/cdefs.h>
 #ifndef lint
-__KERNEL_RCSID(0, "$NetBSD: udf_strat_sequential.c,v 1.15 2016/05/24 09:55:57 reinoud Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udf_strat_sequential.c,v 1.20 2023/06/27 09:58:50 reinoud Exp $");
 #endif /* not lint */
 
 
@@ -85,7 +85,10 @@ struct strat_private {
 	kcondvar_t		 discstrat_cv;		/* to wait on       */
 	kmutex_t		 discstrat_mutex;	/* disc strategy    */
 
+	int			 thread_running;	/* thread control */
 	int			 run_thread;		/* thread control */
+	int			 thread_finished;	/* thread control */
+
 	int			 sync_req;		/* thread control */
 	int			 cur_queue;
 
@@ -118,7 +121,7 @@ udf_wr_nodedscr_callback(struct buf *buf)
 	/* XXX right flags to mark dirty again on error? */
 	if (buf->b_error) {
 		udf_node->i_flags |= IN_MODIFIED | IN_ACCESSED;
-		/* XXX TODO reshedule on error */
+		/* XXX TODO reschedule on error */
 	}
 
 	/* decrement outstanding_nodedscr */
@@ -127,7 +130,7 @@ udf_wr_nodedscr_callback(struct buf *buf)
 	if (udf_node->outstanding_nodedscr == 0) {
 		/* first unlock the node */
 		UDF_UNLOCK_NODE(udf_node, 0);
-		wakeup(&udf_node->outstanding_nodedscr);
+		cv_broadcast(&udf_node->node_lock);
 	}
 
 	putiobuf(buf);
@@ -205,7 +208,7 @@ udf_write_logvol_dscr_seq(struct udf_strat_args *args)
 	int error, vpart;
 
 	/*
-	 * we have to decide if we write it out sequential or at its fixed 
+	 * we have to decide if we write it out sequential or at its fixed
 	 * position by examining the partition its (to be) written on.
 	 */
 	vpart       = udf_rw16(udf_node->loc.loc.part_num);
@@ -234,7 +237,7 @@ out:
 	udf_node->outstanding_nodedscr--;
 	if (udf_node->outstanding_nodedscr == 0) {
 		UDF_UNLOCK_NODE(udf_node, 0);
-		wakeup(&udf_node->outstanding_nodedscr);
+		cv_broadcast(&udf_node->node_lock);
 	}
 
 	return error;
@@ -243,13 +246,13 @@ out:
 /* --------------------------------------------------------------------- */
 
 /*
- * Main file-system specific sheduler. Due to the nature of optical media
- * sheduling can't be performed in the traditional way. Most OS
+ * Main file-system specific scheduler. Due to the nature of optical media
+ * scheduling can't be performed in the traditional way. Most OS
  * implementations i've seen thus read or write a file atomically giving all
  * kinds of side effects.
  *
- * This implementation uses a kernel thread to shedule the queued requests in
- * such a way that is semi-optimal for optical media; this means aproximately
+ * This implementation uses a kernel thread to schedule the queued requests in
+ * such a way that is semi-optimal for optical media; this means approximately
  * (R*|(Wr*|Ws*))* since switching between reading and writing is expensive in
  * time.
  */
@@ -276,7 +279,7 @@ udf_queuebuf_seq(struct udf_strat_args *args)
 			queue = UDF_SHED_WRITING;
 	}
 
-	/* use our own sheduler lists for more complex sheduling */
+	/* use our own scheduler lists for more complex scheduling */
 	mutex_enter(&priv->discstrat_mutex);
 		bufq_put(priv->queues[queue], nestbuf);
 		vfs_timestamp(&priv->last_queued[queue]);
@@ -549,6 +552,8 @@ udf_doshedule(struct udf_mount *ump)
 	if (new_queue != priv->cur_queue) {
 		DPRINTF(SHEDULE, ("switching from %d to %d\n",
 			priv->cur_queue, new_queue));
+		if (new_queue == UDF_SHED_READING)
+			udf_mmc_synchronise_caches(ump);
 	}
 
 	priv->cur_queue = new_queue;
@@ -563,6 +568,10 @@ udf_discstrat_thread(void *arg)
 	int empty;
 
 	empty = 1;
+
+	priv->thread_running = 1;
+	cv_broadcast(&priv->discstrat_cv);
+
 	mutex_enter(&priv->discstrat_mutex);
 	while (priv->run_thread || !empty || priv->sync_req) {
 		/* process the current selected queue */
@@ -585,7 +594,10 @@ udf_discstrat_thread(void *arg)
 	}
 	mutex_exit(&priv->discstrat_mutex);
 
-	wakeup(&priv->run_thread);
+	priv->thread_running  = 0;
+	priv->thread_finished = 1;
+	cv_broadcast(&priv->discstrat_cv);
+
 	kthread_exit(0);
 	/* not reached */
 }
@@ -640,7 +652,7 @@ udf_discstrat_init_seq(struct udf_strat_args *args)
 	VOP_IOCTL(ump->devvp, DIOCSSTRATEGY, &dkstrat, FWRITE | FKIOCTL,
 		NOCRED);
 
-	/* initialise our internal sheduler */
+	/* initialise our internal scheduler */
 	priv->cur_queue = UDF_SHED_READING;
 	bufq_alloc(&priv->queues[UDF_SHED_READING], "disksort",
 		BUFQ_SORT_RAWBLOCK);
@@ -652,13 +664,22 @@ udf_discstrat_init_seq(struct udf_strat_args *args)
 	vfs_timestamp(&priv->last_queued[UDF_SHED_SEQWRITING]);
 
 	/* create our disk strategy thread */
-	priv->run_thread = 1;
-	priv->sync_req   = 0;
+	priv->thread_finished = 0;
+	priv->thread_running  = 0;
+	priv->run_thread      = 1;
+	priv->sync_req        = 0;
 	if (kthread_create(PRI_NONE, 0 /* KTHREAD_MPSAFE*/, NULL /* cpu_info*/,
 		udf_discstrat_thread, ump, &priv->queue_lwp,
 		"%s", "udf_rw")) {
 		panic("fork udf_rw");
 	}
+
+	/* wait for thread to spin up */
+	mutex_enter(&priv->discstrat_mutex);
+	while (!priv->thread_running) {
+		cv_timedwait(&priv->discstrat_cv, &priv->discstrat_mutex, hz);
+	}
+	mutex_exit(&priv->discstrat_mutex);
 }
 
 
@@ -667,19 +688,21 @@ udf_discstrat_finish_seq(struct udf_strat_args *args)
 {
 	struct udf_mount *ump = args->ump;
 	struct strat_private *priv = PRIV(ump);
-	int error;
 
 	if (ump == NULL)
 		return;
 
-	/* stop our sheduling thread */
+	/* stop our scheduling thread */
 	KASSERT(priv->run_thread == 1);
 	priv->run_thread = 0;
-	wakeup(priv->queue_lwp);
-	do {
-		error = tsleep(&priv->run_thread, PRIBIO+1,
-			"udfshedfin", hz);
-	} while (error);
+
+	mutex_enter(&priv->discstrat_mutex);
+	while (!priv->thread_finished) {
+		cv_broadcast(&priv->discstrat_cv);
+		cv_timedwait(&priv->discstrat_cv, &priv->discstrat_mutex, hz);
+	}
+	mutex_exit(&priv->discstrat_mutex);
+
 	/* kthread should be finished now */
 
 	/* set back old device strategy method */
@@ -710,5 +733,5 @@ struct udf_strategy udf_strat_sequential =
 	udf_discstrat_init_seq,
 	udf_discstrat_finish_seq
 };
-	
+
 

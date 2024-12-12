@@ -1,4 +1,4 @@
-/*	$NetBSD: spl.S,v 1.47 2020/08/29 07:16:03 maxv Exp $	*/
+/*	$NetBSD: spl.S,v 1.49 2023/03/01 08:38:50 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -83,10 +83,10 @@
  * int splraise(int s);
  */
 ENTRY(splraise)
-	movl	CPUVAR(ILEVEL),%eax
+	movzbl	CPUVAR(ILEVEL),%eax
 	cmpl	%edi,%eax
 	cmoval	%eax,%edi
-	movl	%edi,CPUVAR(ILEVEL)
+	movb	%dil,CPUVAR(ILEVEL)
 	KMSAN_INIT_RET(4)
 	ret
 END(splraise)
@@ -111,11 +111,25 @@ IDTVEC(softintr)
 	pushq	%r14
 	pushq	%r15
 
-	movl	$IPL_HIGH,CPUVAR(ILEVEL)
+	movb	$IPL_HIGH,CPUVAR(ILEVEL)
 	movq	CPUVAR(CURLWP),%r15
 	movq	IS_LWP(%rax),%rdi	/* switch to handler LWP */
 	movq	L_PCB(%rdi),%rdx
 	movq	L_PCB(%r15),%rcx
+	/*
+	 * Simple MOV to set curlwp to softlwp.  See below on ordering
+	 * required to restore softlwp like cpu_switchto.
+	 *
+	 * 1. Don't need store-before-store barrier because x86 is TSO.
+	 *
+	 * 2. Don't need store-before-load barrier because when we
+	 *    enter a softint lwp, it can't be holding any mutexes, so
+	 *    it can't release any until after it has acquired them, so
+	 *    we need not participate in the protocol with
+	 *    mutex_vector_enter barriers here.
+	 *
+	 * Hence no need for XCHG or barriers around MOV.
+	 */
 	movq	%rdi,CPUVAR(CURLWP)
 
 #ifdef KASAN
@@ -158,9 +172,31 @@ IDTVEC(softintr)
 	movq	PCB_RSP(%rcx),%rsp
 
 	/*
-	 * for non-interlocked mutex release to work safely the change
-	 * to ci_curlwp must not languish in the store buffer. therefore
-	 * we use XCHG and not MOV here.  see kern_mutex.c.
+	 * Use XCHG, not MOV, to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by the softint must be visible to
+	 *    other CPUs before we restore curlwp on this one,
+	 *    requiring store-before-store ordering.
+	 *
+	 *    (This is always guaranteed by the x86 memory model, TSO,
+	 *    but other architectures require a explicit barrier before
+	 *    the store to ci->ci_curlwp.)
+	 *
+	 * 2. Restoring curlwp must be visible on all other CPUs before
+	 *    any subsequent mutex_exit on this one can even test
+	 *    whether there might be waiters, requiring
+	 *    store-before-load ordering.
+	 *
+	 *    (This is the only ordering x86 TSO ever requires any kind
+	 *    of barrier for -- in this case, we take advantage of the
+	 *    sequential consistency implied by XCHG to obviate the
+	 *    need for MFENCE or something.)
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.  See also cpu_switchto.
 	 */
 	xchgq	%r15,CPUVAR(CURLWP)	/* restore curlwp */
 	popq	%r15			/* unwind switchframe */
@@ -188,7 +224,9 @@ END(softintr_ret)
  * Software interrupt registration.
  */
 ENTRY(softint_trigger)
-	orl	%edi,CPUVAR(IPENDING)	/* atomic on local cpu */
+	shlq	$8,%rdi			/* clear upper 8 bits */
+	shrq	$8,%rdi
+	orq	%rdi,CPUVAR(IPENDING)	/* atomic on local cpu */
 	ret
 END(softint_trigger)
 
@@ -198,7 +236,7 @@ END(softint_trigger)
  * Handles preemption interrupts via Xspllower().
  */
 IDTVEC(recurse_preempt)
-	movl	$IPL_PREEMPT,CPUVAR(ILEVEL)
+	movb	$IPL_PREEMPT,CPUVAR(ILEVEL)
 	STI(di)
 	xorq	%rdi,%rdi
 	KMSAN_INIT_ARG(8)
@@ -213,7 +251,7 @@ IDTVEC_END(recurse_preempt)
  * Handles preemption interrupts via Xdoreti().
  */
 IDTVEC(resume_preempt)
-	movl	$IPL_PREEMPT,CPUVAR(ILEVEL)
+	movb	$IPL_PREEMPT,CPUVAR(ILEVEL)
 	STI(ax)
 	testq	$SEL_RPL,TF_CS(%rsp)
 	jnz	1f
@@ -230,34 +268,32 @@ IDTVEC_END(resume_preempt)
 
 /*
  * void spllower(int s);
- *
- * For cmpxchg8b, edx/ecx are the high words and eax/ebx the low.
- *
- * edx : eax = old level / old ipending
- * ecx : ebx = new level / old ipending
  */
 ENTRY(spllower)
-	movl	CPUVAR(ILEVEL),%edx
-	movq	%rbx,%r8
+	movzbl	CPUVAR(ILEVEL),%edx
 	cmpl	%edx,%edi			/* new level is lower? */
 	jae	1f
+	xorq	%rcx,%rcx			/* rcx: ci_ipending mask */
+	notq	%rcx
+	shrq	$8,%rcx
+	movq	%rdi,%r9			/* r9: shifted new level */
+	shlq	$56,%r9
 0:
-	movl	CPUVAR(IPENDING),%eax
-	movl	%edi,%ecx
-	testl	%eax,CPUVAR(IUNMASK)(,%rcx,4)/* deferred interrupts? */
-	movl	%eax,%ebx
+	movq	CPUVAR(IPENDING),%rax
+	testq	%rax,CPUVAR(IUNMASK)(,%rdi,8)	/* deferred interrupts? */
 	/*
 	 * On the P4 this jump is cheaper than patching in junk
 	 * using cmov.  Is cmpxchg expensive if it fails?
 	 */
 	jnz	2f
-	cmpxchg8b CPUVAR(ISTATE)		/* swap in new ilevel */
+	movq	%rax,%r8
+	andq	%rcx,%r8
+	orq	%r9,%r8
+	cmpxchgq %r8,CPUVAR(ISTATE)		/* swap in new ilevel */
 	jnz	0b
 1:
-	movq	%r8,%rbx
 	ret
 2:
-	movq	%r8,%rbx
 	jmp	_C_LABEL(Xspllower)
 END(spllower)
 
@@ -286,16 +322,16 @@ IDTVEC(spllower)
 	leaq	1f(%rip),%r13		/* address to resume loop at */
 1:
 	movl	%ebx,%eax		/* get cpl */
-	movl	CPUVAR(IUNMASK)(,%rax,4),%eax
+	movq	CPUVAR(IUNMASK)(,%rax,8),%rax
 	CLI(si)
-	andl	CPUVAR(IPENDING),%eax	/* any non-masked bits left? */
+	andq	CPUVAR(IPENDING),%rax	/* any non-masked bits left? */
 	jz	2f
-	bsrl	%eax,%eax
-	btrl	%eax,CPUVAR(IPENDING)
+	bsrq	%rax,%rax
+	btrq	%rax,CPUVAR(IPENDING)
 	movq	CPUVAR(ISOURCES)(,%rax,8),%rax
 	jmp	*IS_RECURSE(%rax)
 2:
-	movl	%ebx,CPUVAR(ILEVEL)
+	movb	%bl,CPUVAR(ILEVEL)
 	STI(si)
 	popq	%r12
 	popq	%r13
@@ -318,16 +354,16 @@ IDTVEC(doreti)
 	leaq	1f(%rip),%r13
 1:
 	movl    %ebx,%eax
-	movl	CPUVAR(IUNMASK)(,%rax,4),%eax
+	movq	CPUVAR(IUNMASK)(,%rax,8),%rax
 	CLI(si)
-	andl	CPUVAR(IPENDING),%eax
+	andq	CPUVAR(IPENDING),%rax
 	jz	2f
-	bsrl	%eax,%eax		/* slow, but not worth optimizing */
-	btrl	%eax,CPUVAR(IPENDING)
+	bsrq	%rax,%rax		/* slow, but not worth optimizing */
+	btrq	%rax,CPUVAR(IPENDING)
 	movq	CPUVAR(ISOURCES)(,%rax,8),%rax
 	jmp	*IS_RESUME(%rax)
 2:	/* Check for ASTs on exit to user mode. */
-	movl	%ebx,CPUVAR(ILEVEL)
+	movb	%bl,CPUVAR(ILEVEL)
 5:
 	testb	$SEL_RPL,TF_CS(%rsp)
 	jz	6f

@@ -1,4 +1,4 @@
-/*	$NetBSD: audiotest.c,v 1.15 2021/08/21 09:59:46 andvar Exp $	*/
+/*	$NetBSD: audiotest.c,v 1.32 2023/12/11 09:26:08 mlelstv Exp $	*/
 
 /*
  * Copyright (C) 2019 Tetsuya Isaki. All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: audiotest.c,v 1.15 2021/08/21 09:59:46 andvar Exp $");
+__RCSID("$NetBSD: audiotest.c,v 1.32 2023/12/11 09:26:08 mlelstv Exp $");
 
 #include <errno.h>
 #include <fcntl.h>
@@ -52,6 +52,9 @@ __RCSID("$NetBSD: audiotest.c,v 1.15 2021/08/21 09:59:46 andvar Exp $");
 #include <rump/rump.h>
 #include <rump/rump_syscalls.h>
 #endif
+
+/* this internal driver option is not exported to userland */
+#define AUDIO_SUPPORT_LINEAR24
 
 #if !defined(AUDIO_ENCODING_SLINEAR_NE)
 #if BYTE_ORDER == LITTLE_ENDIAN
@@ -1062,7 +1065,7 @@ void *debug_mmap(int line, void *ptr, size_t len, int prot, int flags, int fd,
 #define ADDFLAG(buf, var, name)	do {				\
 	if (((var) & (name)))					\
 		n = strlcat(buf, "|" #name, sizeof(buf));	\
-		var &= ~(name);					\
+	(var) &= ~(name);					\
 } while (0)
 
 	n = 0;
@@ -1382,6 +1385,7 @@ void test_open_multiuser(bool);
 void test_rdwr_fallback(int, bool, bool);
 void test_rdwr_two(int, int);
 void test_mmap_mode(int, int);
+void test_mmap_len(size_t, off_t, int);
 void test_poll_mode(int, int, int);
 void test_poll_in_open(const char *);
 void test_kqueue_mode(int, int, int);
@@ -1395,6 +1399,11 @@ int getenc_make_table(int, int[][5]);
 void xp_getenc(int[][5], int, int, int, struct audio_prinfo *);
 void getenc_check_encodings(int, int[][5]);
 void test_AUDIO_ERROR(int);
+void test_AUDIO_GETIOFFS_one(int);
+void test_AUDIO_GETOOFFS_one(int);
+void test_AUDIO_GETOOFFS_wrap(int);
+void test_AUDIO_GETOOFFS_flush(int);
+void test_AUDIO_GETOOFFS_set(int);
 void test_audioctl_open_1(int, int);
 void test_audioctl_open_2(int, int);
 void try_audioctl_open_multiuser(const char *, const char *);
@@ -2238,7 +2247,7 @@ DEF(rept_read)
 /*
  * Opening with O_RDWR on half-duplex hardware falls back to O_WRONLY.
  * expwrite: expected to be able to play.
- * expread : expected to be able to recored.
+ * expread : expected to be able to record.
  */
 void
 test_rdwr_fallback(int openmode, bool expwrite, bool expread)
@@ -2302,8 +2311,8 @@ DEF(rdwr_fallback_RDWR) {
 }
 
 /*
- * On full-duplex hardware, the second descriptor's readablity/writability
- * is not depend on the first descriptor('s open mode).
+ * On full-duplex hardware, the second descriptor's readability/writability
+ * does not depend on the first descriptor's open mode.
  * On half-duplex hardware, it depends on the first descriptor's open mode.
  */
 void
@@ -2683,20 +2692,25 @@ DEF(mmap_mode_RDWR_READWRITE)	{ test_mmap_mode(O_RDWR, PROT_READWRITE); }
 
 /*
  * Check mmap()'s length and offset.
+ *
+ * Actual len and offset cannot be determined before open.  So that,
+ * pass pre-defined constant as argument, and convert it after open.
  */
-DEF(mmap_len)
+#define LS	(100)	/* lsize     */
+#define LS1	(101)	/* lsize + 1 */
+void
+test_mmap_len(size_t len, off_t offset, int exp)
 {
 	struct audio_info ai;
 	int fd;
 	int r;
-	size_t len;
-	off_t offset;
+	size_t plen;
 	void *ptr;
 	int bufsize;
 	int pagesize;
 	int lsize;
 
-	TEST("mmap_len");
+	TEST("mmap_len(%zd, %jd, %d)", len, offset, exp);
 	if ((props & AUDIO_PROP_MMAP) == 0) {
 		XP_SKIP("This test is only for mmap-able device");
 		return;
@@ -2708,8 +2722,8 @@ DEF(mmap_len)
 	}
 #endif
 
-	len = sizeof(pagesize);
-	r = SYSCTLBYNAME("hw.pagesize", &pagesize, &len, NULL, 0);
+	plen = sizeof(pagesize);
+	r = SYSCTLBYNAME("hw.pagesize", &pagesize, &plen, NULL, 0);
 	REQUIRED_SYS_EQ(0, r);
 
 	fd = OPEN(devaudio, O_WRONLY);
@@ -2725,49 +2739,32 @@ DEF(mmap_len)
 	 * I'm not sure.
 	 */
 	lsize = roundup2(bufsize, pagesize);
-	struct {
-		size_t len;
-		off_t offset;
-		int exp;
-	} table[] = {
-		/* len offset	expected */
 
-		{ 0,	0,	0 },		/* len is 0  */
-		{ 1,	0,	0 },		/* len is smaller than lsize */
-		{ lsize, 0,	0 },		/* len is the same as lsize */
-		{ lsize + 1, 0,	EOVERFLOW },	/* len is larger */
+	/* Here, lsize can be assigned */
+	if (len == LS) {
+		len = lsize;
+	} else if (len == LS1) {
+		len = lsize + 1;
+	}
+	if (offset == LS) {
+		offset = lsize;
+	} else if (offset == LS1) {
+		offset = lsize + 1;
+	}
 
-		{ 0, -1,	EINVAL },	/* offset is negative */
-		{ 0, lsize,	0 },		/* pointless param but ok */
-		{ 0, lsize + 1,	EOVERFLOW },	/* exceed */
-		{ 1, lsize,	EOVERFLOW },	/* exceed */
+	ptr = MMAP(NULL, len, PROT_WRITE, MAP_FILE, fd, offset);
+	if (exp == 0) {
+		XP_SYS_PTR(0, ptr);
+	} else {
+		/* NetBSD8 introduces EOVERFLOW */
+		if (netbsd < 8 && exp == EOVERFLOW)
+			exp = EINVAL;
+		XP_SYS_PTR(exp, ptr);
+	}
 
-		/*
-		 * When you treat offset as 32bit, offset will be 0
-		 * and thus it incorrectly succeeds.
-		 */
-		{ lsize,	1ULL<<32,	EOVERFLOW },
-	};
-
-	for (int i = 0; i < (int)__arraycount(table); i++) {
-		len = table[i].len;
-		offset = table[i].offset;
-		int exp = table[i].exp;
-
-		ptr = MMAP(NULL, len, PROT_WRITE, MAP_FILE, fd, offset);
-		if (exp == 0) {
-			XP_SYS_PTR(0, ptr);
-		} else {
-			/* NetBSD8 introduces EOVERFLOW */
-			if (netbsd < 8 && exp == EOVERFLOW)
-				exp = EINVAL;
-			XP_SYS_PTR(exp, ptr);
-		}
-
-		if (ptr != MAP_FAILED) {
-			r = MUNMAP(ptr, len);
-			XP_SYS_EQ(0, r);
-		}
+	if (ptr != MAP_FAILED) {
+		r = MUNMAP(ptr, len);
+		XP_SYS_EQ(0, r);
 	}
 
 	r = CLOSE(fd);
@@ -2775,6 +2772,21 @@ DEF(mmap_len)
 
 	reset_after_mmap();
 }
+#define f(l, o, e)	test_mmap_len(l, o, e)
+DEF(mmap_len_0)	{ f(0,   0,   EINVAL); }	/* len is 0 */
+DEF(mmap_len_1)	{ f(1,   0,   0); }		/* len is smaller than lsize */
+DEF(mmap_len_2)	{ f(LS,  0,   0); }		/* len is the same as lsize */
+DEF(mmap_len_3)	{ f(LS1, 0,   EOVERFLOW); }	/* len is larger */
+DEF(mmap_len_4)	{ f(0,   -1,  EINVAL); }	/* offset is negative */
+DEF(mmap_len_5)	{ f(0,   LS,  EINVAL); }	/* len is 0 */
+DEF(mmap_len_6)	{ f(0,   LS1, EINVAL); }	/* len is 0 */
+DEF(mmap_len_7)	{ f(1,   LS,  EOVERFLOW); }	/* exceed */
+/*
+ * When you treat the offset as 32bit, offset will be 0 and thus it
+ * incorrectly succeeds.
+ */
+DEF(mmap_len_8)	{ f(LS, 1ULL << 32, EOVERFLOW); }
+#undef f
 
 /*
  * mmap() the same descriptor twice.
@@ -3116,7 +3128,7 @@ DEF(poll_out_hiwat)
 
 /*
  * Unpause from buffer full, POLLOUT should raise.
- * XXX poll(2) on NetBSD7 is really incomplete and wierd.  I don't test it.
+ * XXX poll(2) on NetBSD7 is really incomplete and weird.  I don't test it.
  */
 DEF(poll_out_unpause)
 {
@@ -4199,7 +4211,7 @@ DEF(FIOASYNC_reset)
 }
 
 /*
- * Whether SIGIO is emitted on plyaback.
+ * Whether SIGIO is emitted on playback.
  * XXX I don't understand conditions that NetBSD7 emits signal.
  */
 DEF(FIOASYNC_play_signal)
@@ -4643,7 +4655,7 @@ DEF(AUDIO_SETFD_RDWR)
 		XP_SYS_EQ(0, r);
 	}
 
-	/* When obtains it, it retuns half/full-duplex as is */
+	/* When obtains it, it returns half/full-duplex as is */
 	n = 0;
 	r = IOCTL(fd, AUDIO_GETFD, &n, "");
 	XP_SYS_EQ(0, r);
@@ -5078,7 +5090,7 @@ test_AUDIO_SETINFO_params_set(int openmode, int aimode, int pause)
 #define f(a,b,c) test_AUDIO_SETINFO_params_set(a, b, c)
 DEF(AUDIO_SETINFO_params_set_RDONLY_0)	{ f(O_RDONLY, 0, 0); }
 DEF(AUDIO_SETINFO_params_set_RDONLY_1)	{ f(O_RDONLY, 0, 1); }
-/* On RDONLY, ai.mode is not changable
+/* On RDONLY, ai.mode is not changeable
  *  AUDIO_SETINFO_params_set_RDONLY_2)	{ f(O_RDONLY, 1, 0); }
  *  AUDIO_SETINFO_params_set_RDONLY_3)	{ f(O_RDONLY, 1, 1); }
  */
@@ -5369,7 +5381,7 @@ DEF(AUDIO_SETINFO_sample_rate_0)
 		 * On NetBSD7,8 this will block system call and you will not
 		 * even be able to shutdown...
 		 */
-		XP_SKIP("This will cause an infinate loop in the kernel");
+		XP_SKIP("This will cause an infinite loop in the kernel");
 		return;
 	}
 
@@ -5474,7 +5486,7 @@ test_AUDIO_SETINFO_pause(int openmode, int aimode, int param)
 }
 DEF(AUDIO_SETINFO_pause_RDONLY_0) { test_AUDIO_SETINFO_pause(O_RDONLY, 0, 0); }
 DEF(AUDIO_SETINFO_pause_RDONLY_1) { test_AUDIO_SETINFO_pause(O_RDONLY, 0, 1); }
-/* On RDONLY, ai.mode is not changable
+/* On RDONLY, ai.mode is not changeable
  *  AUDIO_SETINFO_pause_RDONLY_2) { test_AUDIO_SETINFO_pause(O_RDONLY, 1, 0); }
  *  AUDIO_SETINFO_pause_RDONLY_3) { test_AUDIO_SETINFO_pause(O_RDONLY, 1, 1); }
  */
@@ -5861,6 +5873,102 @@ DEF(AUDIO_SETINFO_gain_balance)
 	XP_SYS_EQ(0, r);
 }
 
+/*
+ * Changing track formats after mmap should fail.
+ */
+DEF(AUDIO_SETINFO_mmap_enc)
+{
+	struct audio_info ai;
+	void *ptr;
+	int fd;
+	int r;
+
+	TEST("AUDIO_SETINFO_mmap");
+
+#if !defined(NO_RUMP)
+	if (use_rump) {
+		XP_SKIP("rump doesn't support mmap");
+		return;
+	}
+#endif
+
+	fd = OPEN(devaudio, O_WRONLY);
+	REQUIRED_SYS_OK(fd);
+
+	ptr = MMAP(NULL, 1, PROT_WRITE, MAP_FILE, fd, 0);
+	XP_SYS_PTR(0, ptr);
+
+	/*
+	 * SETINFO after mmap should fail.
+	 * NetBSD9 changes errno.
+	 */
+	AUDIO_INITINFO(&ai);
+	ai.play.channels = 2;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "channels=2");
+	if (netbsd < 9) {
+		XP_SYS_NG(EINVAL, r);
+	} else {
+		XP_SYS_NG(EIO, r);
+	}
+
+	r = CLOSE(fd);
+	XP_SYS_EQ(0, r);
+
+	reset_after_mmap();
+}
+
+/*
+ * Even after mmap, changing pause should succeed.
+ */
+DEF(AUDIO_SETINFO_mmap_pause)
+{
+	struct audio_info ai;
+	void *ptr;
+	int fd;
+	int r;
+
+	TEST("AUDIO_SETINFO_mmap");
+
+#if !defined(NO_RUMP)
+	if (use_rump) {
+		XP_SKIP("rump doesn't support mmap");
+		return;
+	}
+#endif
+
+	fd = OPEN(devaudio, O_WRONLY);
+	REQUIRED_SYS_OK(fd);
+
+	ptr = MMAP(NULL, 1, PROT_WRITE, MAP_FILE, fd, 0);
+	XP_SYS_PTR(0, ptr);
+
+	/* SETINFO after mmap should fail */
+	AUDIO_INITINFO(&ai);
+	ai.play.pause = 1;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "set pause");
+	XP_SYS_EQ(0, r);
+
+	AUDIO_INITINFO(&ai);
+	r = IOCTL(fd, AUDIO_GETBUFINFO, &ai, "get pause");
+	XP_SYS_EQ(0, r);
+
+	XP_EQ(1, ai.play.pause);
+
+	/*
+	 * Unpause before close.  Unless, subsequent audioplay(1) which use
+	 * /dev/sound by default will pause...
+	 */
+	AUDIO_INITINFO(&ai);
+	ai.play.pause = 0;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "reset pause");
+	XP_SYS_EQ(0, r);
+
+	r = CLOSE(fd);
+	XP_SYS_EQ(0, r);
+
+	reset_after_mmap();
+}
+
 #define NENC	(AUDIO_ENCODING_AC3 + 1)
 #define NPREC	(5)
 /*
@@ -5929,7 +6037,7 @@ getenc_make_table(int fd, int expected[][5])
 	 *   (e.g., encoding=AUDIO_ENCODING_PCM8, precision=16) but
 	 *   it's due to historical reasons.
 	 * - It's incomplete for NetBSD7 and NetBSD8.  I don't really
-	 *   understand thier rule...  This is just memo, not specification.
+	 *   understand their rule...  This is just memo, not specification.
 	 */
 #define SET(x) do {	\
 	if ((x) == 0)	\
@@ -6072,7 +6180,7 @@ DEF(AUDIO_GETENC_range)
 	memset(&expected, 0, sizeof(expected));
 	i = getenc_make_table(fd, expected);
 
-	/* When error has occured, the next index should also occur error */
+	/* When error has occurred, the next index should also occur error */
 	ae.index = i + 1;
 	r = IOCTL(fd, AUDIO_GETENC, &ae, "index=%d", ae.index);
 	XP_SYS_NG(EINVAL, r);
@@ -6173,6 +6281,553 @@ test_AUDIO_ERROR(int openmode)
 DEF(AUDIO_ERROR_RDONLY)	{ test_AUDIO_ERROR(O_RDONLY); }
 DEF(AUDIO_ERROR_WRONLY)	{ test_AUDIO_ERROR(O_WRONLY); }
 DEF(AUDIO_ERROR_RDWR)	{ test_AUDIO_ERROR(O_RDWR); }
+
+/*
+ * AUDIO_GETIOFFS at least one block.
+ */
+void
+test_AUDIO_GETIOFFS_one(int openmode)
+{
+	struct audio_info ai;
+	audio_offset_t o;
+	int fd;
+	int r;
+	u_int blocksize;
+	u_int blk_ms;
+
+	TEST("AUDIO_GETIOFFS_one_%s", openmode_str[openmode] + 2);
+	if (mode2aumode(openmode) == 0) {
+		XP_SKIP("Operation not allowed on this hardware property");
+		return;
+	}
+
+	fd = OPEN(devaudio, openmode);
+	REQUIRED_SYS_OK(fd);
+
+#if 0
+	/*
+	 * On NetBSD7/8, native encodings and emulated encodings behave
+	 * differently.  But it's hard to identify which encoding is native.
+	 * If you try other encodings, edit these parameters manually.
+	 */
+	AUDIO_INITINFO(&ai);
+	ai.record.encoding = AUDIO_ENCODING_SLINEAR_NE;
+	ai.record.precision = 16;
+	ai.record.channels = 2;
+	ai.record.sample_rate = 48000;
+	/* ai.blocksize is shared by play and record, so set both the same. */
+	*ai.play = *ai.record;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "");
+	REQUIRED_SYS_EQ(0, r);
+#endif
+
+	/* Get blocksize to calc blk_ms. */
+	r = IOCTL(fd, AUDIO_GETBUFINFO, &ai, "");
+	REQUIRED_SYS_EQ(0, r);
+	blocksize = ai.blocksize;
+	if (netbsd < 9) {
+		blk_ms = 0;
+	} else {
+		/* On NetBSD9, blocktime can always be calculated. */
+		blk_ms = blocksize * 1000 /
+		    (ai.play.precision / 8 * ai.play.channels *
+		     ai.play.sample_rate);
+	}
+	if (blk_ms == 0)
+		blk_ms = 50;
+	DPRINTF("  > blocksize=%u, estimated blk_ms=%u\n", blocksize, blk_ms);
+
+	/*
+	 * Even when just opened, recording counters will start.
+	 * Wait a moment, about one block time.
+	 */
+	usleep(blk_ms * 1000);
+
+	r = IOCTL(fd, AUDIO_GETIOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	if (mode2rec(openmode)) {
+		/*
+		 * It's difficult to know exact values.
+		 * But at least these should not be zero.
+		 */
+		DPRINTF("  > %d: samples=%u deltablks=%u offset=%u\n",
+		    __LINE__, o.samples, o.deltablks, o.offset);
+		XP_NE(0, o.samples);
+		XP_NE(0, o.deltablks);
+		XP_NE(0, o.offset);
+	} else {
+		/* All are zero on playback track. */
+		XP_EQ(0, o.samples);
+		XP_EQ(0, o.deltablks);
+		XP_EQ(0, o.offset);
+	}
+
+	r = CLOSE(fd);
+	XP_SYS_EQ(0, r);
+}
+DEF(AUDIO_GETIOFFS_one_RDONLY) { test_AUDIO_GETIOFFS_one(O_RDONLY); }
+DEF(AUDIO_GETIOFFS_one_WRONLY) { test_AUDIO_GETIOFFS_one(O_WRONLY); }
+DEF(AUDIO_GETIOFFS_one_RDWR)   { test_AUDIO_GETIOFFS_one(O_RDWR); }
+
+/*
+ * AUDIO_GETOOFFS for one block.
+ */
+void
+test_AUDIO_GETOOFFS_one(int openmode)
+{
+	struct audio_info ai;
+	audio_offset_t o;
+	char *buf;
+	int fd;
+	int r;
+	u_int blocksize;
+	u_int initial_offset;
+	u_int blk_ms;
+
+	TEST("AUDIO_GETOOFFS_one_%s", openmode_str[openmode] + 2);
+	if (mode2aumode(openmode) == 0) {
+		XP_SKIP("Operation not allowed on this hardware property");
+		return;
+	}
+
+	fd = OPEN(devaudio, openmode);
+	REQUIRED_SYS_OK(fd);
+
+#if 0
+	/*
+	 * On NetBSD7/8, native encodings and emulated encodings behave
+	 * differently.  But it's hard to identify which encoding is native.
+	 * If you try other encodings, edit these parameters manually.
+	 */
+	AUDIO_INITINFO(&ai);
+	ai.play.encoding = AUDIO_ENCODING_SLINEAR_NE;
+	ai.play.precision = 16;
+	ai.play.channels = 2;
+	ai.play.sample_rate = 48000;
+	/* ai.blocksize is shared by play and record, so set both the same. */
+	*ai.record = *ai.play;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "slinear16/2ch/48000");
+	REQUIRED_SYS_EQ(0, r);
+#endif
+
+	/* Get blocksize to calc blk_ms. */
+	r = IOCTL(fd, AUDIO_GETBUFINFO, &ai, "");
+	REQUIRED_SYS_EQ(0, r);
+	blocksize = ai.blocksize;
+	if (netbsd < 9) {
+		blk_ms = 0;
+	} else {
+		/* On NetBSD9, blocktime can always be calculated. */
+		blk_ms = blocksize * 1000 /
+		    (ai.play.precision / 8 * ai.play.channels *
+		     ai.play.sample_rate);
+	}
+	if (blk_ms == 0)
+		blk_ms = 50;
+	DPRINTF("  > blocksize=%u, estimated blk_ms=%u\n", blocksize, blk_ms);
+
+	buf = (char *)malloc(blocksize);
+	REQUIRED_IF(buf != NULL);
+	memset(buf, 0xff, blocksize);
+
+	/*
+	 * On NetBSD7, .offset starts from one block.  What is the block??
+	 * On NetBSD9, .offset starts from zero.
+	 */
+	if (netbsd < 9) {
+		initial_offset = blocksize;
+	} else {
+		initial_offset = 0;
+	}
+
+	/* When just opened, all are zero. */
+	r = IOCTL(fd, AUDIO_GETOOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	XP_EQ(0, o.samples);
+	XP_EQ(0, o.deltablks);
+	XP_EQ(initial_offset, o.offset);
+
+	/* Even if wait (at least) one block, these remain unchanged. */
+	usleep(blk_ms * 1000);
+	r = IOCTL(fd, AUDIO_GETOOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	XP_EQ(0, o.samples);
+	XP_EQ(0, o.deltablks);
+	XP_EQ(initial_offset, o.offset);
+
+	/* Write one block. */
+	r = WRITE(fd, buf, blocksize);
+	if (mode2play(openmode)) {
+		XP_SYS_EQ(blocksize, r);
+	} else {
+		XP_SYS_NG(EBADF, r);
+	}
+	r = IOCTL(fd, AUDIO_DRAIN, NULL, "");
+	REQUIRED_SYS_EQ(0, r);
+
+	r = IOCTL(fd, AUDIO_GETOOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	if (mode2play(openmode)) {
+		/* All advance one block. */
+		XP_EQ(blocksize, o.samples);
+		XP_EQ(1, o.deltablks);
+		XP_EQ(initial_offset + blocksize, o.offset);
+	} else {
+		/*
+		 * All are zero on non-play track.
+		 * On NetBSD7, the rec track has play buffer, too.
+		 */
+		XP_EQ(0, o.samples);
+		XP_EQ(0, o.deltablks);
+		XP_EQ(initial_offset, o.offset);
+	}
+
+	r = CLOSE(fd);
+	XP_SYS_EQ(0, r);
+
+	free(buf);
+}
+DEF(AUDIO_GETOOFFS_one_RDONLY) { test_AUDIO_GETOOFFS_one(O_RDONLY); }
+DEF(AUDIO_GETOOFFS_one_WRONLY) { test_AUDIO_GETOOFFS_one(O_WRONLY); }
+DEF(AUDIO_GETOOFFS_one_RDWR)   { test_AUDIO_GETOOFFS_one(O_RDWR); }
+
+/*
+ * AUDIO_GETOOFFS when wrap around buffer.
+ */
+void
+test_AUDIO_GETOOFFS_wrap(int openmode)
+{
+	struct audio_info ai;
+	audio_offset_t o;
+	char *buf;
+	int fd;
+	int r;
+	u_int blocksize;
+	u_int buffer_size;
+	u_int initial_offset;
+	u_int nblks;
+
+	TEST("AUDIO_GETOOFFS_wrap_%s", openmode_str[openmode] + 2);
+	if (mode2aumode(openmode) == 0) {
+		XP_SKIP("Operation not allowed on this hardware property");
+		return;
+	}
+
+	fd = OPEN(devaudio, openmode);
+	REQUIRED_SYS_OK(fd);
+
+#if 1
+	/* To save test time, use larger format if possible. */
+	AUDIO_INITINFO(&ai);
+	ai.play.encoding = AUDIO_ENCODING_SLINEAR_NE;
+	ai.play.precision = 16;
+	ai.play.channels = 2;
+	ai.play.sample_rate = 48000;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "slinear16/2/48000");
+	if (r != 0)
+#endif
+	{
+		/*
+		 * If it cannot be set, use common format instead.
+		 * May be happened on NetBSD7/8.
+		 */
+		AUDIO_INITINFO(&ai);
+		ai.play.encoding = AUDIO_ENCODING_ULAW;
+		ai.play.precision = 8;
+		ai.play.channels = 1;
+		ai.play.sample_rate = 8000;
+		r = IOCTL(fd, AUDIO_SETINFO, &ai, "ulaw/1/8000");
+	}
+	REQUIRED_SYS_EQ(0, r);
+
+	/* Get buffer_size and blocksize. */
+	r = IOCTL(fd, AUDIO_GETBUFINFO, &ai, "");
+	REQUIRED_SYS_EQ(0, r);
+	buffer_size = ai.play.buffer_size;
+	blocksize = ai.blocksize;
+	nblks = buffer_size / blocksize;
+	DPRINTF("  > buffer_size=%u blocksize=%u nblks=%u\n",
+	    buffer_size, blocksize, nblks);
+
+	buf = (char *)malloc(buffer_size);
+	REQUIRED_IF(buf != NULL);
+	memset(buf, 0xff, buffer_size);
+
+	/*
+	 * On NetBSD7, .offset starts from one block.  What is the block??
+	 * On NetBSD9, .offset starts from zero.
+	 */
+	if (netbsd < 9) {
+		initial_offset = blocksize;
+	} else {
+		initial_offset = 0;
+	}
+
+	/* Write full buffer. */
+	r = WRITE(fd, buf, buffer_size);
+	if (mode2play(openmode)) {
+		XP_SYS_EQ(buffer_size, r);
+
+		/* Then, wait. */
+		r = IOCTL(fd, AUDIO_DRAIN, NULL, "");
+		REQUIRED_SYS_EQ(0, r);
+	} else {
+		XP_SYS_NG(EBADF, r);
+	}
+
+	/*
+	 * .deltablks is number of blocks since last checked.
+	 * .offset is wrapped around to zero.
+	 */
+	r = IOCTL(fd, AUDIO_GETOOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	if (mode2play(openmode)) {
+		/*
+		 * On NetBSD7, samples may be blocksize * nblks or buffer_size
+		 * depending on native/emulated encoding.
+		 * On NetBSD9, samples is always equal to buffer_size.
+		 */
+		if (buffer_size != blocksize * nblks &&
+		    o.samples == blocksize * nblks) {
+			DPRINTF("  > %d: samples(%u) == blocksize * nblks\n",
+			    __LINE__, o.samples);
+		} else {
+			XP_EQ(buffer_size, o.samples);
+		}
+		XP_EQ(nblks, o.deltablks);
+		XP_EQ(initial_offset, o.offset);
+	} else {
+		/*
+		 * On non-play track, it silently succeeds with zero.
+		 * But on NetBSD7, RDONLY descriptor also has play buffer.
+		 */
+		XP_EQ(0, o.samples);
+		XP_EQ(0, o.deltablks);
+		XP_EQ(initial_offset, o.offset);
+	}
+
+	r = CLOSE(fd);
+	XP_SYS_EQ(0, r);
+
+	free(buf);
+}
+DEF(AUDIO_GETOOFFS_wrap_RDONLY) { test_AUDIO_GETOOFFS_wrap(O_RDONLY); }
+DEF(AUDIO_GETOOFFS_wrap_WRONLY) { test_AUDIO_GETOOFFS_wrap(O_WRONLY); }
+DEF(AUDIO_GETOOFFS_wrap_RDWR)   { test_AUDIO_GETOOFFS_wrap(O_RDWR); }
+
+/*
+ * Check whether AUDIO_FLUSH clears AUDIO_GETOOFFS.
+ */
+void
+test_AUDIO_GETOOFFS_flush(int openmode)
+{
+	struct audio_info ai;
+	audio_offset_t o;
+	char *buf;
+	int fd;
+	int r;
+	u_int initial_offset;
+	u_int last_offset;
+
+	TEST("AUDIO_GETOOFFS_flush_%s", openmode_str[openmode] + 2);
+	if (mode2aumode(openmode) == 0) {
+		XP_SKIP("Operation not allowed on this hardware property");
+		return;
+	}
+
+	fd = OPEN(devaudio, openmode);
+	REQUIRED_SYS_OK(fd);
+
+#if 0
+	/* On NetBSD7/8, native encoding changes buffer behavior. */
+	AUDIO_INITINFO(&ai);
+	ai.play.encoding = AUDIO_ENCODING_SLINEAR_NE;
+	ai.play.precision = 16;
+	ai.play.channels = 2;
+	ai.play.sample_rate = 48000;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "");
+	REQUIRED_SYS_EQ(0, r);
+#endif
+
+	/* Get blocksize. */
+	r = IOCTL(fd, AUDIO_GETBUFINFO, &ai, "");
+	REQUIRED_SYS_EQ(0, r);
+
+	buf = (char *)malloc(ai.blocksize);
+	REQUIRED_IF(buf != NULL);
+	memset(buf, 0xff, ai.blocksize);
+
+	/*
+	 * On NetBSD7, .offset starts from one block.  What is the block??
+	 * On NetBSD9, .offset starts from zero.
+	 */
+	if (netbsd < 9) {
+		initial_offset = ai.blocksize;
+	} else {
+		initial_offset = 0;
+	}
+
+	/* Write one block. */
+	r = WRITE(fd, buf, ai.blocksize);
+	if (mode2play(openmode)) {
+		XP_SYS_EQ(ai.blocksize, r);
+	} else {
+		XP_SYS_NG(EBADF, r);
+	}
+	r = IOCTL(fd, AUDIO_DRAIN, NULL, "");
+	XP_SYS_EQ(0, r);
+
+	/* Obtain once. */
+	r = IOCTL(fd, AUDIO_GETOOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	if (mode2play(openmode)) {
+		XP_EQ(ai.blocksize, o.samples);
+		XP_EQ(1, o.deltablks);
+		XP_EQ(initial_offset + ai.blocksize, o.offset);
+	} else {
+		/*
+		 * On non-play track, it silently succeeds with zero.
+		 * But on NetBSD7, RDONLY descriptor also has play buffer.
+		 */
+		XP_EQ(0, o.samples);
+		XP_EQ(0, o.deltablks);
+		XP_EQ(initial_offset, o.offset);
+	}
+
+	/* Write one more block to advance .offset. */
+	r = WRITE(fd, buf, ai.blocksize);
+	if (mode2play(openmode)) {
+		XP_SYS_EQ(ai.blocksize, r);
+	} else {
+		XP_SYS_NG(EBADF, r);
+	}
+	r = IOCTL(fd, AUDIO_DRAIN, NULL, "");
+	XP_SYS_EQ(0, r);
+
+	/* If offset remains unchanged, this is expected offset. */
+	last_offset = initial_offset + ai.blocksize * 2;
+
+	/* Then, flush. */
+	r = IOCTL(fd, AUDIO_FLUSH, NULL, "");
+	REQUIRED_SYS_EQ(0, r);
+
+	/* All should be cleared. */
+	r = IOCTL(fd, AUDIO_GETOOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	XP_EQ(0, o.samples);
+	XP_EQ(0, o.deltablks);
+	if (mode2play(openmode)) {
+		/*
+		 * On NetBSD7,
+		 * offset is cleared if native encodings(?), but remains
+		 * unchanged if emulated encodings(?).  Looks a bug.
+		 * On NetBSD9, it should always be cleared.
+		 */
+		if (netbsd < 9 && o.offset == last_offset) {
+			DPRINTF("  > %d: offset(%u) == last_offset\n",
+			    __LINE__, o.offset);
+		} else {
+			XP_EQ(initial_offset, o.offset);
+		}
+	} else {
+		XP_EQ(initial_offset, o.offset);
+	}
+
+	r = CLOSE(fd);
+	XP_SYS_EQ(0, r);
+
+	free(buf);
+}
+DEF(AUDIO_GETOOFFS_flush_RDONLY) { test_AUDIO_GETOOFFS_flush(O_RDONLY); }
+DEF(AUDIO_GETOOFFS_flush_WRONLY) { test_AUDIO_GETOOFFS_flush(O_WRONLY); }
+DEF(AUDIO_GETOOFFS_flush_RDWR)   { test_AUDIO_GETOOFFS_flush(O_RDWR); }
+
+/*
+ * Check whether AUDIO_SETINFO(encoding) clears AUDIO_GETOOFFS.
+ */
+void
+test_AUDIO_GETOOFFS_set(int openmode)
+{
+	struct audio_info ai;
+	audio_offset_t o;
+	char *buf;
+	int fd;
+	int r;
+	u_int initial_offset;
+
+	TEST("AUDIO_GETOOFFS_set_%s", openmode_str[openmode] + 2);
+	if (mode2aumode(openmode) == 0) {
+		XP_SKIP("Operation not allowed on this hardware property");
+		return;
+	}
+
+	fd = OPEN(devaudio, openmode);
+	REQUIRED_SYS_OK(fd);
+
+	/* Get blocksize. */
+	r = IOCTL(fd, AUDIO_GETBUFINFO, &ai, "");
+	XP_SYS_EQ(0, r);
+
+	buf = (char *)malloc(ai.blocksize);
+	REQUIRED_IF(buf != NULL);
+	memset(buf, 0xff, ai.blocksize);
+
+	/*
+	 * On NetBSD7, .offset starts from one block.  What is the block??
+	 * On NetBSD9, .offset starts from zero.
+	 */
+	if (netbsd < 9) {
+		initial_offset = ai.blocksize;
+	} else {
+		initial_offset = 0;
+	}
+
+	/* Write one block. */
+	r = WRITE(fd, buf, ai.blocksize);
+	if (mode2play(openmode)) {
+		XP_SYS_EQ(ai.blocksize, r);
+	} else {
+		XP_SYS_NG(EBADF, r);
+	}
+	r = IOCTL(fd, AUDIO_DRAIN, NULL, "");
+	XP_SYS_EQ(0, r);
+
+	/*
+	 * Then, change encoding.
+	 * If we fail to change it, we cannot continue.  This may happen
+	 * on NetBSD7/8.
+	 */
+	AUDIO_INITINFO(&ai);
+	ai.play.encoding = AUDIO_ENCODING_SLINEAR_NE;
+	ai.play.precision = 16;
+	ai.play.channels = 2;
+	ai.play.sample_rate = 48000;
+	r = IOCTL(fd, AUDIO_SETINFO, &ai, "slinear16/2ch/48000");
+	REQUIRED_SYS_EQ(0, r);
+
+	r = IOCTL(fd, AUDIO_GETBUFINFO, &ai, "");
+	REQUIRED_SYS_EQ(0, r);
+	if (netbsd < 9) {
+		initial_offset = ai.blocksize;
+	} else {
+		initial_offset = 0;
+	}
+
+	/* Clear counters? */
+	r = IOCTL(fd, AUDIO_GETOOFFS, &o, "");
+	XP_SYS_EQ(0, r);
+	XP_EQ(0, o.samples);
+	XP_EQ(0, o.deltablks);
+	XP_EQ(initial_offset, o.offset);
+
+	r = CLOSE(fd);
+	XP_SYS_EQ(0, r);
+
+	free(buf);
+}
+DEF(AUDIO_GETOOFFS_set_RDONLY) { test_AUDIO_GETOOFFS_set(O_RDONLY); }
+DEF(AUDIO_GETOOFFS_set_WRONLY) { test_AUDIO_GETOOFFS_set(O_WRONLY); }
+DEF(AUDIO_GETOOFFS_set_RDWR)   { test_AUDIO_GETOOFFS_set(O_RDWR); }
 
 /*
  * /dev/audioctl can always be opened while /dev/audio is open.
@@ -6550,21 +7205,29 @@ struct testentry testtable[] = {
 	ENT(drain_incomplete),
 	ENT(drain_pause),
 	ENT(drain_onrec),
-/**/	ENT(mmap_mode_RDONLY_NONE),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_RDONLY_READ),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_RDONLY_WRITE),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_RDONLY_READWRITE),// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_WRONLY_NONE),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_WRONLY_READ),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_WRONLY_WRITE),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_WRONLY_READWRITE),// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_RDWR_NONE),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_RDWR_READ),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_RDWR_WRITE),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_mode_RDWR_READWRITE),	// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_len),			// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_twice),		// XXX rump doesn't supprot mmap
-/**/	ENT(mmap_multi),		// XXX rump doesn't supprot mmap
+/**/	ENT(mmap_mode_RDONLY_NONE),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_RDONLY_READ),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_RDONLY_WRITE),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_RDONLY_READWRITE),// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_WRONLY_NONE),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_WRONLY_READ),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_WRONLY_WRITE),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_WRONLY_READWRITE),// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_RDWR_NONE),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_RDWR_READ),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_RDWR_WRITE),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_mode_RDWR_READWRITE),	// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_0),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_1),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_2),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_3),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_4),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_5),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_6),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_7),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_len_8),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_twice),		// XXX rump doesn't support mmap
+/**/	ENT(mmap_multi),		// XXX rump doesn't support mmap
 	ENT(poll_mode_RDONLY_IN),
 	ENT(poll_mode_RDONLY_OUT),
 	ENT(poll_mode_RDONLY_INOUT),
@@ -6657,11 +7320,28 @@ struct testentry testtable[] = {
 	ENT(AUDIO_SETINFO_pause_RDWR_3),
 	ENT(AUDIO_SETINFO_gain),
 	ENT(AUDIO_SETINFO_gain_balance),
+/**/	ENT(AUDIO_SETINFO_mmap_enc),	// XXX rump doesn't support mmap
+/**/	ENT(AUDIO_SETINFO_mmap_pause),	// XXX rump doesn't support mmap
 	ENT(AUDIO_GETENC_range),
 	ENT(AUDIO_GETENC_error),
 	ENT(AUDIO_ERROR_RDONLY),
 	ENT(AUDIO_ERROR_WRONLY),
 	ENT(AUDIO_ERROR_RDWR),
+	ENT(AUDIO_GETIOFFS_one_RDONLY),
+	ENT(AUDIO_GETIOFFS_one_WRONLY),
+	ENT(AUDIO_GETIOFFS_one_RDWR),
+	ENT(AUDIO_GETOOFFS_one_RDONLY),
+	ENT(AUDIO_GETOOFFS_one_WRONLY),
+	ENT(AUDIO_GETOOFFS_one_RDWR),
+	ENT(AUDIO_GETOOFFS_wrap_RDONLY),
+	ENT(AUDIO_GETOOFFS_wrap_WRONLY),
+	ENT(AUDIO_GETOOFFS_wrap_RDWR),
+	ENT(AUDIO_GETOOFFS_flush_RDONLY),
+	ENT(AUDIO_GETOOFFS_flush_WRONLY),
+	ENT(AUDIO_GETOOFFS_flush_RDWR),
+	ENT(AUDIO_GETOOFFS_set_RDONLY),
+	ENT(AUDIO_GETOOFFS_set_WRONLY),
+	ENT(AUDIO_GETOOFFS_set_RDWR),
 	ENT(audioctl_open_1_RDONLY_RDONLY),
 	ENT(audioctl_open_1_RDONLY_RWONLY),
 	ENT(audioctl_open_1_RDONLY_RDWR),

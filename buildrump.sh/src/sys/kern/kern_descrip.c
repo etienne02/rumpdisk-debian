@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_descrip.c,v 1.251 2021/06/29 22:40:53 dholland Exp $	*/
+/*	$NetBSD: kern_descrip.c,v 1.264 2024/11/10 00:11:43 kre Exp $	*/
 
 /*-
- * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2009, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_descrip.c,v 1.251 2021/06/29 22:40:53 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_descrip.c,v 1.264 2024/11/10 00:11:43 kre Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -106,12 +106,11 @@ kmutex_t		filelist_lock	__cacheline_aligned;
 
 static pool_cache_t	filedesc_cache	__read_mostly;
 static pool_cache_t	file_cache	__read_mostly;
-static pool_cache_t	fdfile_cache	__read_mostly;
 
 static int	file_ctor(void *, void *, int);
 static void	file_dtor(void *, void *);
-static int	fdfile_ctor(void *, void *, int);
-static void	fdfile_dtor(void *, void *);
+static void	fdfile_ctor(fdfile_t *);
+static void	fdfile_dtor(fdfile_t *);
 static int	filedesc_ctor(void *, void *, int);
 static void	filedesc_dtor(void *, void *);
 static int	filedescopen(dev_t, int, int, lwp_t *);
@@ -156,11 +155,6 @@ fd_sys_init(void)
 	file_cache = pool_cache_init(sizeof(file_t), coherency_unit, 0,
 	    0, "file", NULL, IPL_NONE, file_ctor, file_dtor, NULL);
 	KASSERT(file_cache != NULL);
-
-	fdfile_cache = pool_cache_init(sizeof(fdfile_t), coherency_unit, 0,
-	    PR_LARGECACHE, "fdfile", NULL, IPL_NONE, fdfile_ctor, fdfile_dtor,
-	    NULL);
-	KASSERT(fdfile_cache != NULL);
 
 	filedesc_cache = pool_cache_init(sizeof(filedesc_t), coherency_unit,
 	    0, 0, "filedesc", NULL, IPL_NONE, filedesc_ctor, filedesc_dtor,
@@ -392,11 +386,44 @@ fd_getfile(unsigned fd)
 		 * Multi threaded: issue a memory barrier to ensure that we
 		 * acquire the file pointer _after_ adding a reference.  If
 		 * no memory barrier, we could fetch a stale pointer.
+		 *
+		 * In particular, we must coordinate the following four
+		 * memory operations:
+		 *
+		 *	A. fd_close store ff->ff_file = NULL
+		 *	B. fd_close refcnt = atomic_dec_uint_nv(&ff->ff_refcnt)
+		 *	C. fd_getfile atomic_inc_uint(&ff->ff_refcnt)
+		 *	D. fd_getfile load fp = ff->ff_file
+		 *
+		 * If the order is D;A;B;C:
+		 *
+		 *	1. D: fp = ff->ff_file
+		 *	2. A: ff->ff_file = NULL
+		 *	3. B: refcnt = atomic_dec_uint_nv(&ff->ff_refcnt)
+		 *	4. C: atomic_inc_uint(&ff->ff_refcnt)
+		 *
+		 * then fd_close determines that there are no more
+		 * references and decides to free fp immediately, at
+		 * the same that fd_getfile ends up with an fp that's
+		 * about to be freed.  *boom*
+		 *
+		 * By making B a release operation in fd_close, and by
+		 * making C an acquire operation in fd_getfile, since
+		 * they are atomic operations on the same object, which
+		 * has a total modification order, we guarantee either:
+		 *
+		 *	- B happens before C.  Then since A is
+		 *	  sequenced before B in fd_close, and C is
+		 *	  sequenced before D in fd_getfile, we
+		 *	  guarantee A happens before D, so fd_getfile
+		 *	  reads a null fp and safely fails.
+		 *
+		 *	- C happens before B.  Then fd_getfile may read
+		 *	  null or nonnull, but either way, fd_close
+		 *	  will safely wait for references to drain.
 		 */
 		atomic_inc_uint(&ff->ff_refcnt);
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-		membar_enter();
-#endif
+		membar_acquire();
 	}
 
 	/*
@@ -450,9 +477,7 @@ fd_putfile(unsigned fd)
 	 * the file after it has been freed or recycled by another
 	 * CPU.
 	 */
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-	membar_exit();
-#endif
+	membar_release();
 
 	/*
 	 * Be optimistic and start out with the assumption that no other
@@ -602,6 +627,7 @@ fd_close(unsigned fd)
 		 * waiting for other users of the file to drain.  Release
 		 * our reference, and wake up the closer.
 		 */
+		membar_release();
 		atomic_dec_uint(&ff->ff_refcnt);
 		cv_broadcast(&ff->ff_closing);
 		mutex_exit(&fdp->fd_lock);
@@ -621,7 +647,7 @@ fd_close(unsigned fd)
 	 * will prevent them from adding additional uses to this file
 	 * while we are closing it.
 	 */
-	ff->ff_file = NULL;
+	atomic_store_relaxed(&ff->ff_file, NULL);
 	ff->ff_exclose = false;
 
 	/*
@@ -636,10 +662,9 @@ fd_close(unsigned fd)
 		refcnt = --(ff->ff_refcnt);
 	} else {
 		/* Multi threaded. */
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-		membar_producer();
-#endif
+		membar_release();
 		refcnt = atomic_dec_uint_nv(&ff->ff_refcnt);
+		membar_acquire();
 	}
 	if (__predict_false(refcnt != 0)) {
 		/*
@@ -696,14 +721,14 @@ fd_close(unsigned fd)
 	 * If the descriptor was in a message, POSIX-style locks
 	 * aren't passed with the descriptor.
 	 */
-	if (__predict_false((p->p_flag & PK_ADVLOCK) != 0 &&
-	    fp->f_type == DTYPE_VNODE)) {
+	if (__predict_false((p->p_flag & PK_ADVLOCK) != 0) &&
+	    fp->f_ops->fo_advlock != NULL) {
 		lf.l_whence = SEEK_SET;
 		lf.l_start = 0;
 		lf.l_len = 0;
 		lf.l_type = F_UNLCK;
 		mutex_exit(&fdp->fd_lock);
-		(void)VOP_ADVLOCK(fp->f_vnode, p, F_UNLCK, &lf, F_POSIX);
+		(void)(*fp->f_ops->fo_advlock)(fp, p, F_UNLCK, &lf, F_POSIX);
 		mutex_enter(&fdp->fd_lock);
 	}
 
@@ -722,7 +747,6 @@ int
 fd_dup(file_t *fp, int minfd, int *newp, bool exclose)
 {
 	proc_t *p = curproc;
-	fdtab_t *dt;
 	int error;
 
 	while ((error = fd_alloc(p, minfd, newp)) != 0) {
@@ -732,8 +756,7 @@ fd_dup(file_t *fp, int minfd, int *newp, bool exclose)
 		fd_tryexpand(p);
 	}
 
-	dt = atomic_load_consume(&curlwp->l_fd->fd_dt);
-	dt->dt_ff[*newp]->ff_exclose = exclose;
+	fd_set_exclose(curlwp, *newp, exclose);
 	fd_affix(p, fp, *newp);
 	return 0;
 }
@@ -757,7 +780,8 @@ fd_dup2(file_t *fp, unsigned newfd, int flags)
 	while (newfd >= atomic_load_consume(&fdp->fd_dt)->dt_nfiles) {
 		fd_tryexpand(curproc);
 	}
-	ff = pool_cache_get(fdfile_cache, PR_WAITOK);
+	ff = kmem_alloc(sizeof(*ff), KM_SLEEP);
+	fdfile_ctor(ff);
 
 	/*
 	 * If there is already a file open, close it.  If the file is
@@ -788,12 +812,13 @@ fd_dup2(file_t *fp, unsigned newfd, int flags)
 	fd_used(fdp, newfd);
 	mutex_exit(&fdp->fd_lock);
 
-	dt->dt_ff[newfd]->ff_exclose = (flags & O_CLOEXEC) != 0;
+	fd_set_exclose(curlwp, newfd, (flags & O_CLOEXEC) != 0);
 	fp->f_flag |= flags & (FNONBLOCK|FNOSIGPIPE);
 	/* Slot is now allocated.  Insert copy of the file. */
 	fd_affix(curproc, fp, newfd);
 	if (ff != NULL) {
-		pool_cache_put(fdfile_cache, ff);
+		cv_destroy(&ff->ff_closing);
+		kmem_free(ff, sizeof(*ff));
 	}
 	return 0;
 }
@@ -821,12 +846,14 @@ closef(file_t *fp)
 	mutex_exit(&fp->f_lock);
 
 	/* We held the last reference - release locks, close and free. */
-	if ((fp->f_flag & FHASLOCK) && fp->f_type == DTYPE_VNODE) {
+	if (fp->f_ops->fo_advlock == NULL) {
+		KASSERT((fp->f_flag & FHASLOCK) == 0);
+	} else if (fp->f_flag & FHASLOCK) {
 		lf.l_whence = SEEK_SET;
 		lf.l_start = 0;
 		lf.l_len = 0;
 		lf.l_type = F_UNLCK;
-		(void)VOP_ADVLOCK(fp->f_vnode, fp, F_UNLCK, &lf, F_FLOCK);
+		(void)(*fp->f_ops->fo_advlock)(fp, fp, F_UNLCK, &lf, F_FLOCK);
 	}
 	if (fp->f_ops != NULL) {
 		error = (*fp->f_ops->fo_close)(fp);
@@ -842,6 +869,8 @@ closef(file_t *fp)
 
 /*
  * Allocate a file descriptor for the process.
+ *
+ * Future idea for experimentation: replace all of this with radixtree.
  */
 int
 fd_alloc(proc_t *p, int want, int *result)
@@ -863,6 +892,7 @@ fd_alloc(proc_t *p, int want, int *result)
 	KASSERT(dt->dt_ff[0] == (fdfile_t *)fdp->fd_dfdfile[0]);
 	lim = uimin((int)p->p_rlimit[RLIMIT_NOFILE].rlim_cur, maxfiles);
 	last = uimin(dt->dt_nfiles, lim);
+
 	for (;;) {
 		if ((i = want) < fdp->fd_freefile)
 			i = fdp->fd_freefile;
@@ -887,7 +917,8 @@ fd_alloc(proc_t *p, int want, int *result)
 		}
 		if (dt->dt_ff[i] == NULL) {
 			KASSERT(i >= NDFDFILE);
-			dt->dt_ff[i] = pool_cache_get(fdfile_cache, PR_WAITOK);
+			dt->dt_ff[i] = kmem_alloc(sizeof(fdfile_t), KM_SLEEP);
+			fdfile_ctor(dt->dt_ff[i]);
 		}
 		KASSERT(dt->dt_ff[i]->ff_file == NULL);
 		fd_used(fdp, i);
@@ -1106,8 +1137,7 @@ fd_allocfile(file_t **resultfp, int *resultfd)
 	cred = curlwp->l_cred;
 	if (__predict_false(cred != fp->f_cred)) {
 		kauth_cred_free(fp->f_cred);
-		kauth_cred_hold(cred);
-		fp->f_cred = cred;
+		fp->f_cred = kauth_cred_hold(cred);
 	}
 
 	/*
@@ -1146,12 +1176,6 @@ fd_affix(proc_t *p, file_t *fp, unsigned fd)
 
 	/*
 	 * Insert the new file into the descriptor slot.
-	 *
-	 * The memory barriers provided by lock activity in this routine
-	 * ensure that any updates to the file structure become globally
-	 * visible before the file becomes visible to other LWPs in the
-	 * current process; otherwise we would set ff->ff_file with
-	 * atomic_store_release(&ff->ff_file, fp) at the bottom.
 	 */
 	fdp = p->p_fd;
 	dt = atomic_load_consume(&fdp->fd_dt);
@@ -1164,7 +1188,7 @@ fd_affix(proc_t *p, file_t *fp, unsigned fd)
 	KASSERT(fd >= NDFDFILE || ff == (fdfile_t *)fdp->fd_dfdfile[fd]);
 
 	/* No need to lock in order to make file initially visible. */
-	ff->ff_file = fp;
+	atomic_store_release(&ff->ff_file, fp);
 }
 
 /*
@@ -1199,12 +1223,18 @@ fd_abort(proc_t *p, file_t *fp, unsigned fd)
 static int
 file_ctor(void *arg, void *obj, int flags)
 {
+	/*
+	 * It's easy to exhaust the open file limit on a system with many
+	 * CPUs due to caching.  Allow a bit of leeway to reduce the element
+	 * of surprise.
+	 */
+	u_int slop = PCG_NOBJECTS_NORMAL * (ncpu - 1);
 	file_t *fp = obj;
 
 	memset(fp, 0, sizeof(*fp));
 
 	mutex_enter(&filelist_lock);
-	if (__predict_false(nfiles >= maxfiles)) {
+	if (__predict_false(nfiles >= slop + maxfiles)) {
 		mutex_exit(&filelist_lock);
 		tablefull("file", "increase kern.maxfiles or MAXFILES");
 		return ENFILE;
@@ -1212,8 +1242,7 @@ file_ctor(void *arg, void *obj, int flags)
 	nfiles++;
 	LIST_INSERT_HEAD(&filehead, fp, f_list);
 	mutex_init(&fp->f_lock, MUTEX_DEFAULT, IPL_NONE);
-	fp->f_cred = curlwp->l_cred;
-	kauth_cred_hold(fp->f_cred);
+	fp->f_cred = kauth_cred_hold(curlwp->l_cred);
 	mutex_exit(&filelist_lock);
 
 	return 0;
@@ -1234,21 +1263,17 @@ file_dtor(void *arg, void *obj)
 	mutex_destroy(&fp->f_lock);
 }
 
-static int
-fdfile_ctor(void *arg, void *obj, int flags)
+static void
+fdfile_ctor(fdfile_t *ff)
 {
-	fdfile_t *ff = obj;
 
 	memset(ff, 0, sizeof(*ff));
 	cv_init(&ff->ff_closing, "fdclose");
-
-	return 0;
 }
 
 static void
-fdfile_dtor(void *arg, void *obj)
+fdfile_dtor(fdfile_t *ff)
 {
-	fdfile_t *ff = obj;
 
 	cv_destroy(&ff->ff_closing);
 }
@@ -1334,8 +1359,7 @@ filedesc_ctor(void *arg, void *obj, int flag)
 
 	CTASSERT(sizeof(fdp->fd_dfdfile[0]) >= sizeof(fdfile_t));
 	for (i = 0, ffp = fdp->fd_dt->dt_ff; i < NDFDFILE; i++, ffp++) {
-		*ffp = (fdfile_t *)fdp->fd_dfdfile[i];
-		(void)fdfile_ctor(NULL, fdp->fd_dfdfile[i], PR_WAITOK);
+		fdfile_ctor(*ffp = (fdfile_t *)fdp->fd_dfdfile[i]);
 	}
 
 	return 0;
@@ -1348,7 +1372,7 @@ filedesc_dtor(void *arg, void *obj)
 	int i;
 
 	for (i = 0; i < NDFDFILE; i++) {
-		fdfile_dtor(NULL, fdp->fd_dfdfile[i]);
+		fdfile_dtor((fdfile_t *)fdp->fd_dfdfile[i]);
 	}
 
 	mutex_destroy(&fdp->fd_lock);
@@ -1483,7 +1507,8 @@ fd_copy(void)
 
 		/* Allocate an fdfile_t to represent it. */
 		if (i >= NDFDFILE) {
-			ff2 = pool_cache_get(fdfile_cache, PR_WAITOK);
+			ff2 = kmem_alloc(sizeof(*ff2), KM_SLEEP);
+			fdfile_ctor(ff2);
 			*nffp = ff2;
 		} else {
 			ff2 = newdt->dt_ff[i];
@@ -1531,11 +1556,10 @@ fd_free(void)
 	KASSERT(fdp->fd_dtbuiltin.dt_nfiles == NDFILE);
 	KASSERT(fdp->fd_dtbuiltin.dt_link == NULL);
 
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-	membar_exit();
-#endif
+	membar_release();
 	if (atomic_dec_uint_nv(&fdp->fd_refcnt) > 0)
 		return;
+	membar_acquire();
 
 	/*
 	 * Close any files that the process holds open.
@@ -1573,7 +1597,8 @@ fd_free(void)
 		KASSERT(!ff->ff_exclose);
 		KASSERT(!ff->ff_allocated);
 		if (fd >= NDFDFILE) {
-			pool_cache_put(fdfile_cache, ff);
+			cv_destroy(&ff->ff_closing);
+			kmem_free(ff, sizeof(*ff));
 			dt->dt_ff[fd] = NULL;
 		}
 	}
@@ -1781,7 +1806,7 @@ fsetown(pid_t *pgid, u_long cmd, const void *data)
 	pid_t id = *(const pid_t *)data;
 	int error;
 
-	if (id == INT_MIN)
+	if (id <= INT_MIN)
 		return EINVAL;
 
 	switch (cmd) {
@@ -1830,6 +1855,7 @@ fgetown(pid_t pgid, u_long cmd, void *data)
 
 	switch (cmd) {
 	case TIOCGPGRP:
+		KASSERT(pgid > INT_MIN);
 		*(int *)data = -pgid;
 		break;
 	default:
@@ -1869,7 +1895,7 @@ fownsignal(pid_t pgid, int signo, int code, int band, void *fdescdata)
 	} else {
 		struct pgrp *pgrp;
 
-		KASSERT(pgid < 0);
+		KASSERT(pgid < 0 && pgid > INT_MIN);
 		pgrp = pgrp_find(-pgid);
 		if (pgrp != NULL) {
 			kpgsignal(pgrp, &ksi, fdescdata, 0);
@@ -1882,14 +1908,9 @@ int
 fd_clone(file_t *fp, unsigned fd, int flag, const struct fileops *fops,
 	 void *data)
 {
-	fdfile_t *ff;
-	filedesc_t *fdp;
 
 	fp->f_flag = flag & FMASK;
-	fdp = curproc->p_fd;
-	ff = atomic_load_consume(&fdp->fd_dt)->dt_ff[fd];
-	KASSERT(ff != NULL);
-	ff->ff_exclose = (flag & O_CLOEXEC) != 0;
+	fd_set_exclose(curlwp, fd, (flag & O_CLOEXEC) != 0);
 	fp->f_type = DTYPE_MISC;
 	fp->f_ops = fops;
 	fp->f_data = data;

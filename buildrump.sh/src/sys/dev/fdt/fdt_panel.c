@@ -1,4 +1,4 @@
-/* $NetBSD: fdt_panel.c,v 1.3 2021/01/27 03:10:21 thorpej Exp $ */
+/* $NetBSD: fdt_panel.c,v 1.6 2021/12/19 11:01:10 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2019 Jonathan A. Kollasch <jakllsch@kollasch.net>
@@ -27,25 +27,26 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fdt_panel.c,v 1.3 2021/01/27 03:10:21 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fdt_panel.c,v 1.6 2021/12/19 11:01:10 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/device.h>
-#include <sys/systm.h>
 #include <sys/gpio.h>
+#include <sys/systm.h>
 
-#include <dev/fdt/fdtvar.h>
 #include <dev/fdt/fdt_port.h>
+#include <dev/fdt/fdtvar.h>
 
 #include <dev/i2c/ddcvar.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_panel.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_panel.h>
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "simple-panel" },
+	{ .compat = "boe,nv140fhmn49" },
 	DEVICE_COMPAT_EOL
 };
 
@@ -157,7 +158,7 @@ panel_fdt_attach(device_t parent, device_t self, void *aux)
 	sc->sc_ports.dp_ep_get_data = panel_fdt_ep_get_data;
 	fdt_ports_register(&sc->sc_ports, self, phandle, EP_DRM_PANEL);
 
-	drm_panel_init(&sc->sc_panel);
+	drm_panel_init(&sc->sc_panel, self, &panel_fdt_funcs, DRM_MODE_CONNECTOR_DPI);
 	sc->sc_panel.funcs = &panel_fdt_funcs;
 
 	drm_panel_add(&sc->sc_panel);

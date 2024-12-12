@@ -1,4 +1,4 @@
-/*	$NetBSD: dead_vfsops.c,v 1.9 2019/01/01 10:06:54 hannken Exp $	*/
+/*	$NetBSD: dead_vfsops.c,v 1.13 2022/10/26 23:39:43 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,20 +30,19 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dead_vfsops.c,v 1.9 2019/01/01 10:06:54 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dead_vfsops.c,v 1.13 2022/10/26 23:39:43 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/vnode.h>
 #include <sys/mount.h>
 
+#include <miscfs/deadfs/deadfs.h>
 #include <miscfs/specfs/specdev.h>
 
 VFS_PROTOS(dead);
 
 static void dead_panic(void);
-
-extern const struct vnodeopv_desc dead_vnodeop_opv_desc;
 
 static const struct vnodeopv_desc * const dead_vnodeopv_descs[] = {
 	&dead_vnodeop_opv_desc,
@@ -60,13 +59,13 @@ struct vfsops dead_vfsops = {
 	.vfs_unmount = (void *)dead_panic,
 	.vfs_root = (void *)dead_panic,
 	.vfs_quotactl = (void *)dead_panic,
-	.vfs_statvfs = (void *)dead_panic,
+	.vfs_statvfs = (void *)eopnotsupp,
 	.vfs_sync = (void *)dead_panic,
 	.vfs_vget = (void *)dead_panic,
 	.vfs_loadvnode = (void *)dead_panic,
 	.vfs_newvnode = dead_newvnode,
 	.vfs_fhtovp = (void *)dead_panic,
-	.vfs_vptofh = (void *)dead_panic,
+	.vfs_vptofh = (void *)eopnotsupp,
 	.vfs_init = (void *)dead_panic,
 	.vfs_reinit = (void *)dead_panic,
 	.vfs_done = (void *)dead_panic,

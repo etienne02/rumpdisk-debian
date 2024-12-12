@@ -1,4 +1,4 @@
-/*	$NetBSD: video.h,v 1.7 2009/10/20 19:10:11 snj Exp $	*/
+/*	$NetBSD: video.h,v 1.10 2023/03/25 21:51:12 andvar Exp $	*/
 
 /*
  * Copyright (c) 1995 Leo Weppelman.
@@ -41,7 +41,7 @@ struct video {
     volatile	u_short	vd_st_rgb[16];	/* RGB for simultaneous colors	(ST)*/
     volatile	u_char	vd_st_res;	/* ST resolution		    */
     volatile	char	vd_fill1;	/* filler			    */
-    volatile	u_short	vd_tt_res;	/* TT-resultion mode		    */
+    volatile	u_short	vd_tt_res;	/* TT-resolution mode		    */
     volatile	u_char  vd_ste_hscroll;	/* MEGA STe hor bitwise scroll	    */
     volatile	u_short vd_fal_res;	/* Falcon resolution		    */
     volatile	char    vd_fill2[23];
@@ -112,12 +112,12 @@ struct video {
 #define	RES_TTMID	0x0400	/* 640x480, 16 colors			*/
 #define	RES_TTHIGH	0x0600	/* 1280x960, monochrome			*/
 #define	RES_TTLOW	0x0700	/* 320x480,  256 colors			*/
-#define TT_PALLET	0x000f	/* Pallette number			*/
+#define TT_PALLET	0x000f	/* Palette number			*/
 #define	TT_HYMONO	0x8000	/* Hyper mono mode			*/
 #define	TT_SHOLD	0x1000	/* Sample/hold mode			*/
 
 /* The falcon video modes */
-#define RES_FALAUTO	0	/* Falcon resolution dedected at boot	*/
+#define RES_FALAUTO	0	/* Falcon resolution detected at boot	*/
 #define RES_VGA2	1	/* 640x480,   2 colors			*/
 #define RES_VGA4	2	/* 640x480,   4 colors			*/
 #define RES_VGA16	3	/* 640x480,  16 colors			*/

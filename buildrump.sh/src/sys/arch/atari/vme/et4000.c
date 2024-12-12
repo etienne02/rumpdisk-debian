@@ -1,4 +1,4 @@
-/*	$NetBSD: et4000.c,v 1.26 2014/07/25 08:10:32 dholland Exp $	*/
+/*	$NetBSD: et4000.c,v 1.29 2023/12/20 00:40:43 thorpej Exp $	*/
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -45,12 +45,11 @@
 */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: et4000.c,v 1.26 2014/07/25 08:10:32 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: et4000.c,v 1.29 2023/12/20 00:40:43 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/ioctl.h>
 #include <sys/queue.h>
-#include <sys/malloc.h>
 #include <sys/device.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
@@ -130,12 +129,12 @@ struct et4k_softc {
 CFATTACH_DECL_NEW(et4k, sizeof(struct et4k_softc),
     et4k_vme_match, et4k_vme_attach, NULL, NULL);
 
-dev_type_open(et4kopen);
-dev_type_close(et4kclose);
-dev_type_read(et4kread);
-dev_type_write(et4kwrite);
-dev_type_ioctl(et4kioctl);
-dev_type_mmap(et4kmmap);
+static dev_type_open(et4kopen);
+static dev_type_close(et4kclose);
+static dev_type_read(et4kread);
+static dev_type_write(et4kwrite);
+static dev_type_ioctl(et4kioctl);
+static dev_type_mmap(et4kmmap);
 
 const struct cdevsw et4k_cdevsw = {
 	.d_open = et4kopen,
@@ -156,7 +155,7 @@ const struct cdevsw et4k_cdevsw = {
  * Look for a ET4000 (Crazy Dots) card on the VME bus.  We might
  * match Spektrum cards too (untested).
  */
-int 
+int
 et4k_vme_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct vme_attach_args *va = aux;
@@ -199,8 +198,8 @@ et4k_probe_addresses(struct vme_attach_args *va)
 			return 0;
 		}
 		if (bus_space_map(memt, vat.va_maddr, vat.va_msize,
-			  	  BUS_SPACE_MAP_LINEAR|BUS_SPACE_MAP_CACHEABLE,
-			  	  &memh)) {
+				  BUS_SPACE_MAP_LINEAR|BUS_SPACE_MAP_CACHEABLE,
+				  &memh)) {
 			bus_space_unmap(iot, ioh, vat.va_iosize);
 			printf("%s: cannot map memory area\n", __func__);
 			return 0;
@@ -468,7 +467,7 @@ et4kmmap(dev_t dev, off_t offset, int prot)
 
 	sc = device_lookup_private(&et4k_cd, minor(dev));
 
-	/* 
+	/*
 	 * control registers
 	 * mapped from offset 0x0 to REG_MAPPABLE
 	 */
@@ -492,7 +491,7 @@ et4kmmap(dev_t dev, off_t offset, int prot)
 	return -1;
 }
 
-int 
+int
 et4kon(dev_t dev)
 {
 	struct et4k_softc *sc;
@@ -505,7 +504,7 @@ et4kon(dev_t dev)
 	return 0;
 }
 
-int 
+int
 et4koff(dev_t dev)
 {
 

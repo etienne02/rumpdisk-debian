@@ -1,4 +1,4 @@
-/*	$NetBSD: scsi_1185.c,v 1.23 2016/07/21 19:49:58 christos Exp $	*/
+/*	$NetBSD: scsi_1185.c,v 1.27 2024/07/05 20:19:43 andvar Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -53,7 +53,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scsi_1185.c,v 1.23 2016/07/21 19:49:58 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scsi_1185.c,v 1.27 2024/07/05 20:19:43 andvar Exp $");
 
 #define	__INTR_PRIVATE
 #include <sys/param.h>
@@ -116,10 +116,9 @@ __KERNEL_RCSID(0, "$NetBSD: scsi_1185.c,v 1.23 2016/07/21 19:49:58 christos Exp 
 #define	splscsi splsc
 
 #if defined(__mips__) && defined(CPU_SINGLE)
-#define nops(x)		{ int __i; for (__i = 0; __i < (x); __i++) ; }
-#define	DMAC_WAIT0	;
+#define	DMAC_WAIT0	__nothing
 #else
-#define	DMAC_WAIT0	DMAC_WAIT
+#define	DMAC_WAIT0	DMAC_WAIT	/* see MODIFY HISTORY comment above */
 #endif
 
 #ifdef DMAC_MAP_INIT
@@ -288,7 +287,7 @@ sc_send(struct sc_scb *scb, int chan, int ie)
 	if (p[0] == SCOP_RESET && p[1] == SCOP_RESET) {
 		/*
 		 * SCSI bus reset command procedure
-		 *	(vender unique by Sony Corp.)
+		 *	(vendor unique by Sony Corp.)
 		 */
 #ifdef SCSI_1185AQ
 		if (sc_idenr & 0x08)
@@ -451,7 +450,7 @@ scintr_loop:
 
 	if (sc->int_stat2 & R3_SRST) {
 		/*
-		 * RST signal is drived
+		 * RST signal is derived
 		 */
 		sc->int_stat2 &= ~R3_SRST;
 		scsi_softreset(sc);
@@ -1646,7 +1645,7 @@ print_scsi_stat(struct sc_softc *sc)
 }
 
 /*
- *	return 0 if it was done.  Or retun TRUE if it is busy.
+ *	return 0 if it was done.  Or return TRUE if it is busy.
  */
 int
 sc_busy(struct sc_softc *sc, int chan)

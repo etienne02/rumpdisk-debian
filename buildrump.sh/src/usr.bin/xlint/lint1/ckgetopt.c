@@ -1,4 +1,4 @@
-/* $NetBSD: ckgetopt.c,v 1.11 2021/08/22 22:15:07 rillig Exp $ */
+/* $NetBSD: ckgetopt.c,v 1.27 2024/03/19 23:19:03 rillig Exp $ */
 
 /*-
  * Copyright (c) 2021 The NetBSD Foundation, Inc.
@@ -34,8 +34,8 @@
 #endif
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: ckgetopt.c,v 1.11 2021/08/22 22:15:07 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: ckgetopt.c,v 1.27 2024/03/19 23:19:03 rillig Exp $");
 #endif
 
 #include <stdbool.h>
@@ -51,7 +51,7 @@ __RCSID("$NetBSD: ckgetopt.c,v 1.11 2021/08/22 22:15:07 rillig Exp $");
  */
 
 static struct {
-	/*
+	/*-
 	 * 0	means outside a while loop with a getopt call.
 	 * 1	means directly inside a while loop with a getopt call.
 	 * > 1	means in a nested while loop; this is used for finishing the
@@ -61,8 +61,8 @@ static struct {
 
 	/*
 	 * The options string from the getopt call.  Whenever an option is
-	 * handled by a case label, it is set to ' '.  In the end, only ' '
-	 * and ':' should remain.
+	 * handled by a case label, it is set to ' '.  In the end, only ' ' and
+	 * ':' should remain.
 	 */
 	pos_t options_pos;
 	char *options;
@@ -75,59 +75,61 @@ static struct {
 	int switch_level;
 } ck;
 
-#define NEED(cond) \
-	do {				\
-		if (!(cond))		\
-			return false;	\
-	} while (false)
-
-/* Return whether tn has the form 'getopt(argc, argv, "literal") != -1'. */
+/* Return whether tn has the form '(c = getopt(argc, argv, "str")) != -1'. */
 static bool
 is_getopt_condition(const tnode_t *tn, char **out_options)
 {
-	NEED(tn != NULL);
-	NEED(tn->tn_op == NE);
-	NEED(tn->tn_left->tn_op == ASSIGN);
+	const function_call *call;
+	const tnode_t *last_arg;
+	const buffer *str;
 
-	const tnode_t *call = tn->tn_left->tn_right;
-	NEED(call->tn_op == CALL);
-	NEED(call->tn_left->tn_op == ADDR);
-	NEED(call->tn_left->tn_left->tn_op == NAME);
-	NEED(strcmp(call->tn_left->tn_left->tn_sym->s_name, "getopt") == 0);
+	if (tn != NULL
+	    && tn->tn_op == NE
 
-	NEED(call->tn_right->tn_op == PUSH);
+	    && tn->u.ops.right->tn_op == CON
+	    && tn->u.ops.right->u.value.v_tspec == INT
+	    && tn->u.ops.right->u.value.u.integer == -1
 
-	const tnode_t *last_arg = call->tn_right->tn_left;
-	NEED(last_arg->tn_op == CVT);
-	NEED(last_arg->tn_left->tn_op == ADDR);
-	NEED(last_arg->tn_left->tn_left->tn_op == STRING);
-	NEED(last_arg->tn_left->tn_left->tn_string->st_tspec == CHAR);
-
-	*out_options = xstrdup(
-	    (const char *)last_arg->tn_left->tn_left->tn_string->st_cp);
-	return true;
+	    && tn->u.ops.left->tn_op == ASSIGN
+	    && tn->u.ops.left->u.ops.right->tn_op == CALL
+	    && (call = tn->u.ops.left->u.ops.right->u.call)->func->tn_op == ADDR
+	    && call->func->u.ops.left->tn_op == NAME
+	    && strcmp(call->func->u.ops.left->u.sym->s_name, "getopt") == 0
+	    && call->args_len == 3
+	    && (last_arg = call->args[2]) != NULL
+	    && last_arg->tn_op == CVT
+	    && last_arg->u.ops.left->tn_op == ADDR
+	    && last_arg->u.ops.left->u.ops.left->tn_op == STRING
+	    && (str = last_arg->u.ops.left->u.ops.left->u.str_literals)->data != NULL) {
+		buffer buf;
+		buf_init(&buf);
+		quoted_iterator it = { .end = 0 };
+		while (quoted_next(str, &it))
+			buf_add_char(&buf, (char)it.value);
+		*out_options = buf.data;
+		return true;
+	}
+	return false;
 }
 
 static void
 check_unlisted_option(char opt)
 {
-	lint_assert(ck.options != NULL);
+	if (opt == ':' && ck.options[0] != ':')
+		goto warn;
 
 	char *optptr = strchr(ck.options, opt);
 	if (optptr != NULL)
 		*optptr = ' ';
-	else if (opt != '?') {
+	else if (opt != '?')
+	warn:
 		/* option '%c' should be listed in the options string */
 		warning(339, opt);
-		return;
-	}
 }
 
 static void
 check_unhandled_option(void)
 {
-	lint_assert(ck.options != NULL);
-
 	for (const char *opt = ck.options; *opt != '\0'; opt++) {
 		if (*opt == ' ' || *opt == ':')
 			continue;

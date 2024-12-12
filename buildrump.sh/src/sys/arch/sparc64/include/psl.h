@@ -1,4 +1,4 @@
-/*	$NetBSD: psl.h,v 1.61 2019/11/13 10:06:38 nakayama Exp $ */
+/*	$NetBSD: psl.h,v 1.65 2024/04/07 17:08:00 rillig Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -73,9 +73,6 @@
 #define PSR_BITS "\20\16EC\15EF\10S\7PS\6ET"
 
 /* Interesting spl()s */
-#define PIL_SCSI	3
-#define PIL_FDSOFT	4
-#define PIL_AUSOFT	4
 #define PIL_BIO		5
 #define PIL_VIDEO	5
 #define PIL_TTY		6
@@ -132,7 +129,11 @@
 #define PSTATE_IE	0x002	/* interrupt enable */
 #define PSTATE_AG	0x001	/* enable alternate globals */
 
-#define PSTATE_BITS "\20\14IG\13MG\12CLE\11TLE\10\7MM\6RED\5PEF\4AM\3PRIV\2IE\1AG"
+#define PSTATE_BITS "\177\020"						\
+	"b\013IG\0"	"b\012MG\0"	"b\011CLE\0"	"b\010TLE\0"	\
+			"F\006\002\0"	":\000MM_TSO\0"	":\001MM_PSO\0"	\
+	":\002MM_RMO\0"	"*?\0"		"b\005RED\0"	"b\004PEF\0"	\
+	"b\003AM\0"	"b\002PRIV\0"	"b\001IE\0"	"b\000AG\0"
 
 
 /*
@@ -281,6 +282,14 @@
 /* 64-byte alignment -- this seems the best place to put this. */
 #define SPARC64_BLOCK_SIZE	64
 #define SPARC64_BLOCK_ALIGN	0x3f
+
+
+#if (defined(_KERNEL) || defined(_KMEMUSER)) && !defined(_LOCORE)
+typedef uint8_t ipl_t;
+typedef struct {
+	ipl_t _ipl;
+} ipl_cookie_t;
+#endif /* _KERNEL|_KMEMUSER&!_LOCORE */
 
 #if defined(_KERNEL) && !defined(_LOCORE)
 
@@ -454,7 +463,7 @@ static __inline int name##X(const char* file, int line) \
 #else
 #define SPLPRINT(x)	
 #define	SPL(name, newpil) \
-static __inline int name(void) \
+static __inline __always_inline int name(void) \
 { \
 	int oldpil; \
 	__asm volatile("rdpr %%pil,%0" : "=r" (oldpil)); \
@@ -463,7 +472,7 @@ static __inline int name(void) \
 }
 /* A non-priority-decreasing version of SPL */
 #define	SPLHOLD(name, newpil) \
-static __inline int name(void) \
+static __inline __always_inline int name(void) \
 { \
 	int oldpil; \
 	__asm volatile("rdpr %%pil,%0" : "=r" (oldpil)); \
@@ -473,11 +482,6 @@ static __inline int name(void) \
 	return (oldpil); \
 }
 #endif
-
-typedef uint8_t ipl_t;
-typedef struct {
-	ipl_t _ipl;
-} ipl_cookie_t;
 
 static __inline ipl_cookie_t
 makeiplcookie(ipl_t ipl)
@@ -511,12 +515,6 @@ SPLHOLD(splsoftint, 1)
 
 SPLHOLD(splsoftserial, 4)
 
-/* audio software interrupts are at software level 4 */
-SPLHOLD(splausoft, PIL_AUSOFT)
-
-/* floppy software interrupts are at software level 4 too */
-SPLHOLD(splfdsoft, PIL_FDSOFT)
-
 /*
  * Memory allocation (must be as high as highest network, tty, or disk device)
  */
@@ -547,7 +545,7 @@ SPLHOLD(splhigh, PIL_HIGH)
 
 static __inline void splxX(int newpil, const char *file, int line)
 #else
-static __inline void splx(int newpil)
+static __inline __always_inline void splx(int newpil)
 #endif
 {
 #ifdef SPLDEBUG

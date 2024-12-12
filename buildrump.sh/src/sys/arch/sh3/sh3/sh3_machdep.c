@@ -1,4 +1,4 @@
-/*	$NetBSD: sh3_machdep.c,v 1.110 2020/06/11 19:20:45 ad Exp $	*/
+/*	$NetBSD: sh3_machdep.c,v 1.113 2023/12/20 15:34:45 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2002 The NetBSD Foundation, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sh3_machdep.c,v 1.110 2020/06/11 19:20:45 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sh3_machdep.c,v 1.113 2023/12/20 15:34:45 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -79,7 +79,6 @@ __KERNEL_RCSID(0, "$NetBSD: sh3_machdep.c,v 1.110 2020/06/11 19:20:45 ad Exp $")
 #include <sys/buf.h>
 #include <sys/exec.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
@@ -162,7 +161,7 @@ sh_cpu_init(int arch, int product)
 	/* Hardclock, RTC initialize. */
 	machine_clock_init();
 
-	/* ICU initiailze. */
+	/* ICU initialize. */
 	curcpu()->ci_idepth = -1;
 	intc_init();
 
@@ -334,7 +333,7 @@ void *
 getframe(const struct lwp *l, int sig, int *onstack)
 {
 	const struct proc *p = l->l_proc;
-	const struct sigaltstack *sigstk= &l->l_sigstk;
+	const stack_t *sigstk = &l->l_sigstk;
 
 	/* Do we need to jump onto the signal stack? */
 	*onstack = (sigstk->ss_flags & (SS_DISABLE | SS_ONSTACK)) == 0

@@ -1,4 +1,4 @@
-/* $NetBSD: mpii.c,v 1.29 2021/08/07 16:19:14 thorpej Exp $ */
+/* $NetBSD: mpii.c,v 1.31 2024/02/04 20:50:30 andvar Exp $ */
 /*	$OpenBSD: mpii.c,v 1.115 2018/08/14 05:22:21 jmatthew Exp $	*/
 /*
  * Copyright (c) 2010, 2012 Mike Belopuhov
@@ -20,7 +20,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mpii.c,v 1.29 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mpii.c,v 1.31 2024/02/04 20:50:30 andvar Exp $");
 
 #include "bio.h"
 
@@ -3204,7 +3204,6 @@ mpii_scsi_cmd_done(struct mpii_ccb *ccb)
 	}
 
 	KASSERT(xs->error == XS_NOERROR);
-	KASSERT(xs->resid == xs->datalen);
 	KASSERT(xs->status == SCSI_OK);
 
 	if (ccb->ccb_rcb == NULL) {
@@ -3264,7 +3263,6 @@ mpii_scsi_cmd_done(struct mpii_ccb *ccb)
 			break;
 
 		case MPII_SCSIIO_STATUS_CHECK_COND:
-			xs->resid = 0;
 			xs->error = XS_SENSE;
 			break;
 
@@ -3687,7 +3685,7 @@ mpii_bio_hs(struct mpii_softc *sc, struct bioc_disk *bd, int nvdsk,
 			/*
 			 * diskid comparison is based on the idea that all
 			 * disks are counted by the bio(4) in sequence, thus
-			 * substracting the number of disks in the volume
+			 * subtracting the number of disks in the volume
 			 * from the diskid yields us a "relative" hotspare
 			 * number, which is good enough for us.
 			 */

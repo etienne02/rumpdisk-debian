@@ -1,4 +1,4 @@
-/*	$NetBSD: pthread_specific.c,v 1.26 2013/03/21 16:49:12 christos Exp $	*/
+/*	$NetBSD: pthread_specific.c,v 1.28 2022/04/10 10:38:33 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2007 The NetBSD Foundation, Inc.
@@ -30,7 +30,10 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: pthread_specific.c,v 1.26 2013/03/21 16:49:12 christos Exp $");
+__RCSID("$NetBSD: pthread_specific.c,v 1.28 2022/04/10 10:38:33 riastradh Exp $");
+
+/* Need to use libc-private names for atomic operations. */
+#include "../../common/lib/libc/atomic/atomic_op_namespace.h"
 
 /* Functions and structures dealing with thread-specific data */
 
@@ -61,10 +64,10 @@ pthread_setspecific(pthread_key_t key, const void *value)
 
 	self = pthread__self();
 	/*
-	 * We can't win here on constness. Having been given a 
+	 * We can't win here on constness. Having been given a
 	 * "const void *", we can only assign it to other const void *,
 	 * and return it from functions that are const void *, without
-	 * generating a warning. 
+	 * generating a warning.
 	 */
 	return pthread__add_specific(self, key, value);
 }

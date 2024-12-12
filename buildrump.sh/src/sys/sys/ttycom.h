@@ -1,4 +1,4 @@
-/*	$NetBSD: ttycom.h,v 1.21 2017/10/25 06:32:59 kre Exp $	*/
+/*	$NetBSD: ttycom.h,v 1.23 2024/10/30 15:56:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1990, 1993, 1994
@@ -59,6 +59,12 @@ struct winsize {
 };
 #endif /* !_POSIX_SYS_TTYCOM_H_ */
 
+#include <sys/featuretest.h>
+
+/*
+ * XXX This is revolting -- should not depend on order of includes via
+ * _SYS_IOCTL_H_.
+ */
 #if defined(_NETBSD_SOURCE) || defined(_SYS_IOCTL_H_)
 
 #ifndef	_NETBSD_SYS_TTYCOM_H_
@@ -158,9 +164,6 @@ typedef char linedn_t[TTLINEDNAMELEN];
 #define		TIOCFLAG_CDTRCTS	0x10	/* set cdtrcts on open */
 #define	TIOCDCDTIMESTAMP _IOR('t', 88, struct timeval) /* get timestamp of last
 						 * Cd rise, stamp next rise */
-
-#define	TIOCRCVFRAME	_IOW('t', 69, struct mbuf *)/* data frame received */
-#define	TIOCXMTFRAME	_IOW('t', 68, struct mbuf *)/* data frame transmit */
 
 #define TIOCPTMGET 	 _IOR('t', 70, struct ptmget)	/* get ptys */
 #define TIOCGRANTPT 	 _IO('t', 71) 			/* grantpt(3) */

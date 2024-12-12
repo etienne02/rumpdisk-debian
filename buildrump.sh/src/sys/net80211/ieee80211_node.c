@@ -1,4 +1,4 @@
-/*	$NetBSD: ieee80211_node.c,v 1.81 2020/11/30 05:33:32 msaitoh Exp $	*/
+/*	$NetBSD: ieee80211_node.c,v 1.84 2024/07/05 04:31:53 rin Exp $	*/
 
 /*
  * Copyright (c) 2001 Atsushi Onoe
@@ -37,7 +37,7 @@
 __FBSDID("$FreeBSD: src/sys/net80211/ieee80211_node.c,v 1.65 2005/08/13 17:50:21 sam Exp $");
 #endif
 #ifdef __NetBSD__
-__KERNEL_RCSID(0, "$NetBSD: ieee80211_node.c,v 1.81 2020/11/30 05:33:32 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ieee80211_node.c,v 1.84 2024/07/05 04:31:53 rin Exp $");
 #endif
 
 #ifdef _KERNEL_OPT
@@ -115,7 +115,7 @@ ieee80211_node_attach(struct ieee80211com *ic)
 	ic->ic_node_cleanup = node_cleanup;
 	ic->ic_node_getrssi = node_getrssi;
 
-	/* default station inactivity timer setings */
+	/* default station inactivity timer settings */
 	ic->ic_inact_init = IEEE80211_INACT_INIT;
 	ic->ic_inact_auth = IEEE80211_INACT_AUTH;
 	ic->ic_inact_run = IEEE80211_INACT_RUN;
@@ -364,7 +364,7 @@ ieee80211_next_scan(struct ieee80211com *ic)
 }
 
 /*
- * Probe the curent channel, if allowed, while scanning.
+ * Probe the current channel, if allowed, while scanning.
  * If the channel is not marked passive-only then send
  * a probe request immediately.  Otherwise mark state and
  * listen for beacons on the channel; if we receive something
@@ -1000,10 +1000,8 @@ node_cleanup(struct ieee80211_node *ni)
 	 * XXX does this leave us open to inheriting old state?
 	 */
 	for (i = 0; i < N(ni->ni_rxfrag); i++) {
-		if (ni->ni_rxfrag[i] != NULL) {
-			m_freem(ni->ni_rxfrag[i]);
-			ni->ni_rxfrag[i] = NULL;
-		}
+		m_freem(ni->ni_rxfrag[i]);
+		ni->ni_rxfrag[i] = NULL;
 	}
 
 	/*

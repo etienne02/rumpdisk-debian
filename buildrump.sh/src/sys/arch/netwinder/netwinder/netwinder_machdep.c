@@ -1,4 +1,4 @@
-/*	$NetBSD: netwinder_machdep.c,v 1.91 2021/08/17 22:00:30 andvar Exp $	*/
+/*	$NetBSD: netwinder_machdep.c,v 1.93 2024/02/21 23:23:06 andvar Exp $	*/
 
 /*
  * Copyright (c) 1997,1998 Mark Brinicombe.
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netwinder_machdep.c,v 1.91 2021/08/17 22:00:30 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netwinder_machdep.c,v 1.93 2024/02/21 23:23:06 andvar Exp $");
 
 #include "opt_ddb.h"
 
@@ -472,8 +472,8 @@ initarm(void *arg)
 	physmem = (physical_end - physical_start) / PAGE_SIZE;
 
 	/* Tell the user about the memory */
-	printf("physmemory: %"PRIxPSIZE" pages at 0x%08lx -> 0x%08lx\n", physmem,
-	    physical_start, physical_end - 1);
+	printf("physmemory: 0x%"PRIxPSIZE" pages at 0x%08lx -> 0x%08lx\n",
+	    physmem, physical_start, physical_end - 1);
 
 	/*
 	 * Okay, we need to allocate some fixed page tables to get the
@@ -557,7 +557,7 @@ initarm(void *arg)
 #endif
 
 	/*
-	 * Now we start consturction of the L1 page table
+	 * Now we start construction of the L1 page table
 	 * We start by mapping the L2 page tables into the L1.
 	 * This means that we can replace L1 mappings later on if necessary
 	 */
@@ -947,7 +947,7 @@ nw_footbridge_mem_bs_map(void *t, bus_addr_t bpa, bus_size_t size, int cacheable
 {
 	bus_addr_t startpa, endpa;
 
-	/* Round the allocation to page boundries */
+	/* Round the allocation to page boundaries */
 	startpa = trunc_page(bpa);
 	endpa = round_page(bpa + size);
 

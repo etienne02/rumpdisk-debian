@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_256.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_256.c,v 1.4 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_256.c"
 
 // Test for message: unterminated comment [256]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+typedef int dummy;
+
+/* expect+2: error: unterminated comment [256] */
+/* This comment never ends.

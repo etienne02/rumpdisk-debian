@@ -1,4 +1,4 @@
-/*	$NetBSD: qd.c,v 1.58 2020/12/18 02:41:35 thorpej Exp $	*/
+/*	$NetBSD: qd.c,v 1.62 2023/08/01 21:26:28 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1988 Regents of the University of California.
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: qd.c,v 1.58 2020/12/18 02:41:35 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: qd.c,v 1.62 2023/08/01 21:26:28 andvar Exp $");
 
 #include "opt_ddb.h"
 
@@ -145,7 +145,7 @@ struct	qd_softc {
 
 /*
  * reference to an array of "uba_device" structures built by the auto
- * configuration program.  The uba_device structure decribes the device
+ * configuration program.  The uba_device structure describes the device
  * sufficiently for the driver to talk to it.  The auto configuration code
  * fills in the uba_device structures (located in ioconf.c) from user
  * maintained info.
@@ -195,8 +195,8 @@ struct DMAreq_header *DMAheader[NQD];  /* DMA buffer header pntrs */
 /*
  * The driver assists a client in scroll operations by loading dragon
  * registers from an interrupt service routine.	The loading is done using
- * parameters found in memory shrade between the driver and its client.
- * The scroll parameter structures are ALL loacted in the same memory page
+ * parameters found in memory shared between the driver and its client.
+ * The scroll parameter structures are ALL located in the same memory page
  * for reasons of memory economy.
  */
 char scroll_shared[2 * 512];	/* reserve space for scroll structs */
@@ -661,7 +661,7 @@ qd_match(device_t parent, cfdata_t match, void *aux)
 
 		if (!qd0cninited) {
 			/*
-			 * qd0 has not been initiallized as the console.
+			 * qd0 has not been initialized as the console.
 			 * We need to do some initialization now
 			 *
 			 * XXX
@@ -691,7 +691,7 @@ qd_match(device_t parent, cfdata_t match, void *aux)
 	* (ADDER) and xx8 (DUART).  Therefore, we take three
 	* vectors from the vector pool, and then continue
 	* to take them until we get a xx0 HEX vector.  The
-	* pool provides vectors in contiguous decending
+	* pool provides vectors in contiguous descending
 	* order.
 	*/
 
@@ -824,7 +824,7 @@ qdopen(dev_t dev, int flag, int mode, struct proc *p)
 			qdopened[unit] = 1;
 		qdflags[unit].inuse |= GRAPHIC_DEV;  /* graphics dev is open */
 		/*
-		 * enble kbd & mouse intrpts in DUART mask reg
+		 * enable kbd & mouse intrpts in DUART mask reg
 		 */
 		qdflags[unit].duart_imask |= 0x22;
 		duart->imask = qdflags[unit].duart_imask;
@@ -1581,14 +1581,14 @@ filt_qdwrite(struct knote *kn, long hint)
 }
 
 static const struct filterops qdread_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_qdrdetach,
 	.f_event = filt_qdread,
 };
 
 static const struct filterops qdwrite_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_qdrdetach,
 	.f_event = filt_qdwrite,
@@ -2816,7 +2816,7 @@ GET_TBUTTON:
 
 				/*
 				* Test for cntrl characters. If set, see if the character
-				* is elligible to become a control character. */
+				* is eligible to become a control character. */
 
 			default:
 
@@ -3167,7 +3167,7 @@ LOOP:
 
 		/*
 		* Test for cntrl characters. If set, see if the character
-		* is elligible to become a control character.
+		* is eligible to become a control character.
 		*/
 	default:
 
@@ -3390,7 +3390,7 @@ setup_dragon(int unit)
 	adder->sync_phase_adj = 0x0100;
 	adder->x_scan_conf = 0x00C8;
 	/*
-	 * got a bug in secound pass ADDER! lets take care of it
+	 * got a bug in second pass ADDER! lets take care of it
 	 *
 	 * normally, just use the code in the following bug fix code, but to
 	 * make repeated demos look pretty, load the registers as if there was

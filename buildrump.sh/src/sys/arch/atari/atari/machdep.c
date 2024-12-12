@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.184 2021/01/03 17:42:10 thorpej Exp $	*/
+/*	$NetBSD: machdep.c,v 1.191 2024/03/05 14:15:29 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.184 2021/01/03 17:42:10 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.191 2024/03/05 14:15:29 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_compat_netbsd.h"
@@ -71,6 +71,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.184 2021/01/03 17:42:10 thorpej Exp $"
 #include <sys/exec_aout.h>
 #include <sys/cpu.h>
 #include <sys/exec_elf.h>
+#include <sys/bus.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -175,7 +176,6 @@ consinit(void)
 void
 cpu_startup(void)
 {
-	extern int iomem_malloc_safe;
 	char pbuf[9];
 #ifdef DEBUG
 	extern int pmapdebug;
@@ -213,11 +213,6 @@ cpu_startup(void)
 #endif
 	format_bytes(pbuf, sizeof(pbuf), ptoa(uvm_availmem(false)));
 	printf("avail memory = %s\n", pbuf);
-
-	/*
-	 * Alloc extent allocation to use malloc
-	 */
-	iomem_malloc_safe = 1;
 }
 
 /*
@@ -256,22 +251,22 @@ identifycpu(void)
 	case CPU_68060:
 		__asm(".word 0x4e7a,0x0808;"
 		    "movl %%d0,%0" : "=d"(pcr) : : "d0");
-		snprintf(cputxt, sizeof(cputxt), "68%s060 rev.%d",
+		snprintf(cputxt, sizeof(cputxt), "MC68%s060 rev.%d",
 		    pcr & 0x10000 ? "LC/EC" : "", (pcr >> 8) & 0xff);
 		cpu = cputxt;
 		mmu = "/MMU";
 		break;
 	case CPU_68040:
-		cpu = "m68040";
+		cpu = "MC68040";
 		mmu = "/MMU";
 		break;
 	case CPU_68030:
-		cpu = "m68030";
+		cpu = "MC68030";
 		mmu = "/MMU";
 		break;
 	default: /* XXX */
-		cpu = "m68020";
-		mmu = " m68851 MMU";
+		cpu = "MC68020";
+		mmu = " MC68851 MMU";
 	}
 	cpu_setmodel("%s (%s CPU%s%sFPU)", mach, cpu, mmu, fpu);
 	printf("%s\n", cpu_getmodel());
@@ -301,17 +296,9 @@ static int waittime = -1;
 static void
 bootsync(void)
 {
-
 	if (waittime < 0) {
 		waittime = 0;
-
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 }
 
@@ -440,7 +427,10 @@ dumpsys(void)
 
 #if defined(DDB) || defined(PANICWAIT)
 	printf("Do you want to dump memory? [y]");
-	cnputc(i = cngetc());
+	cnpollc(1);
+	i = cngetc();
+	cnpollc(0);
+	cnputc(i);
 	switch (i) {
 	case 'n':
 	case 'N':
@@ -653,7 +643,7 @@ add_sicallback(void (*function)(void *, void *), void *rock1, void *rock2)
 	 * happen immediately, or after returning to a safe enough level.
 	 *
 	 * XXX:
-	 * According to <machine/scu.h> and lev1intr() hander in locore.s,
+	 * According to <machine/scu.h> and lev1intr() handler in locore.s,
 	 * at least _ATARIHW_ machines (ATARITT and HADES?) seem to have
 	 * some hardware support which can initiate real hardware interrupt
 	 * at ipl 1 for software interrupt. But as per <machine/mtpr.h>,
@@ -797,7 +787,7 @@ module_init_md(void)
  * Currently the only source of NMI interrupts on the Milan is the PLX9080.
  * On access errors to the PCI bus, an NMI is generated. This NMI is shorted
  * in locore in case of a PCI config cycle to a non-existing address to allow
- * for probes. On other occaisions, it ShouldNotHappen(TM).
+ * for probes. On other occasions, it ShouldNotHappen(TM).
  * Note: The handler in locore clears the errors, to make further PCI access
  * possible.
  */

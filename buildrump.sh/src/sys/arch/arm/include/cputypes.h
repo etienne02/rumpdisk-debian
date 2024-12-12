@@ -1,4 +1,4 @@
-/*	$NetBSD: cputypes.h,v 1.14 2021/08/30 22:57:33 jmcneill Exp $	*/
+/*	$NetBSD: cputypes.h,v 1.19 2024/12/09 21:52:52 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Ben Harris
@@ -50,6 +50,7 @@
 #define CPU_ID_BROADCOM		0x42000000 /* 'B' */
 #define CPU_ID_CAVIUM		0x43000000 /* 'C' */
 #define CPU_ID_DEC		0x44000000 /* 'D' */
+#define CPU_ID_FUJITSU		0x46000000 /* 'F' */
 #define CPU_ID_INFINEON		0x49000000 /* 'I' */
 #define CPU_ID_MOTOROLA		0x4d000000 /* 'M' */
 #define CPU_ID_NVIDIA		0x4e000000 /* 'N' */
@@ -61,6 +62,7 @@
 #define CPU_ID_APPLE		0x61000000 /* 'a' */
 #define CPU_ID_FARADAY		0x66000000 /* 'f' */
 #define CPU_ID_INTEL		0x69000000 /* 'i' */
+#define CPU_ID_AMPERE		0xc0000000 /* 'À' */
 
 /* How to decide what format the CPUID is in. */
 #define CPU_ID_ISOLD(x)		(((x) & 0x0000f000) == 0x00000000)
@@ -176,6 +178,9 @@
 #define CPU_ID_NEOVERSEN1R3	0x413fd0c0
 #define CPU_ID_NEOVERSEE1R1	0x411fd4a0
 #define CPU_ID_CORTEXA77R0	0x410fd0d0
+#define CPU_ID_NEOVERSEV1R1	0x411fd400
+#define CPU_ID_CORTEXA710R2	0x412fd470
+#define CPU_ID_NEOVERSEN2R0	0x410fd490
 
 #define CPU_ID_CORTEX_P(n)	((n & 0xff0fe000) == 0x410fc000)
 #define CPU_ID_CORTEX_A5_P(n)	((n & 0xff0ff0f0) == 0x410fc050)
@@ -207,6 +212,30 @@
 #define CPU_ID_THUNDERX81XXRX	0x43000a20
 #define CPU_ID_THUNDERX83XXRX	0x43000a30
 #define CPU_ID_THUNDERX2RX	0x43000af0
+
+#define CPU_ID_A64FX		0x460f0010
+
+#define CPU_ID_AMPERE1		0xc00fac30
+#define CPU_ID_AMPERE1A		0xc00fac40
+
+#define CPU_ID_ORYON		0x510f0010
+#define CPU_ID_ORYON_P(n)	((n & 0xff0ffff0) == CPU_ID_ORYON)
+
+/*
+ * Chip-specific errata. These defines are intended to be
+ * booleans used within if statements. When an appropriate
+ * kernel option is disabled, these defines must be defined
+ * as 0 to allow the compiler to remove a dead code thus
+ * produce better optimized kernel image.
+ */
+/*
+ * Vendor:	Cavium
+ * Chip:	ThunderX
+ * Revision(s):	Pass 1.0, Pass 1.1
+ */
+#define	CPU_ID_ERRATA_CAVIUM_THUNDERX_1_1_P(n)		\
+    (((n) & 0xfff0ffff) == CPU_ID_THUNDERXP1d0 ||	\
+     ((n) & 0xfff0ffff) == CPU_ID_THUNDERXP1d1)
 
 #define CPU_ID_APPLE_M1_ICESTORM	0x61000220
 #define CPU_ID_APPLE_M1_FIRESTORM	0x61000230

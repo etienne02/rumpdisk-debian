@@ -1,4 +1,4 @@
-/*	$NetBSD: slab.h,v 1.1 2018/08/27 15:45:06 riastradh Exp $	*/
+/*	$NetBSD: slab.h,v 1.13 2021/12/22 18:04:53 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -33,18 +33,23 @@
 #define _LINUX_SLAB_H_
 
 #include <sys/kmem.h>
-#include <sys/malloc.h>
 
 #include <machine/limits.h>
 
 #include <uvm/uvm_extern.h>	/* For PAGE_SIZE.  */
 
 #include <linux/gfp.h>
+#include <linux/overflow.h>
+#include <linux/rcupdate.h>
 
-/* XXX Should use kmem, but Linux kfree doesn't take the size.  */
+#define	ARCH_KMALLOC_MINALIGN	4 /* XXX ??? */
+
+struct linux_malloc {
+	size_t	lm_size;
+} __aligned(ALIGNBYTES + 1);
 
 static inline int
-linux_gfp_to_malloc(gfp_t gfp)
+linux_gfp_to_kmem(gfp_t gfp)
 {
 	int flags = 0;
 
@@ -59,7 +64,6 @@ linux_gfp_to_malloc(gfp_t gfp)
 	}
 
 	if (ISSET(gfp, __GFP_ZERO)) {
-		flags |= M_ZERO;
 		gfp &= ~__GFP_ZERO;
 	}
 
@@ -68,35 +72,47 @@ linux_gfp_to_malloc(gfp_t gfp)
 	 * rather than allocate memory without respecting parameters we
 	 * don't understand.
 	 */
-	KASSERT((gfp == GFP_ATOMIC) ||
+	KASSERT((gfp == GFP_ATOMIC) || (gfp == GFP_NOWAIT) ||
 	    ((gfp & ~__GFP_WAIT) == (GFP_KERNEL & ~__GFP_WAIT)));
 
 	if (ISSET(gfp, __GFP_WAIT)) {
-		flags |= M_WAITOK;
+		flags |= KM_SLEEP;
 		gfp &= ~__GFP_WAIT;
 	} else {
-		flags |= M_NOWAIT;
+		flags |= KM_NOSLEEP;
 	}
 
 	return flags;
 }
 
 /*
- * XXX vmalloc and kmalloc both use malloc(9).  If you change this, be
- * sure to update vmalloc in <linux/vmalloc.h> and kvfree in
- * <linux/mm.h>.
+ * XXX vmalloc and kmalloc both use this.  If you change that, be sure
+ * to update vmalloc in <linux/vmalloc.h> and kvfree in <linux/mm.h>.
  */
 
 static inline void *
 kmalloc(size_t size, gfp_t gfp)
 {
-	return malloc(size, M_TEMP, linux_gfp_to_malloc(gfp));
+	struct linux_malloc *lm;
+	int kmflags = linux_gfp_to_kmem(gfp);
+
+	KASSERTMSG(size < SIZE_MAX - sizeof(*lm), "size=%zu", size);
+
+	if (gfp & __GFP_ZERO)
+		lm = kmem_intr_zalloc(sizeof(*lm) + size, kmflags);
+	else
+		lm = kmem_intr_alloc(sizeof(*lm) + size, kmflags);
+	if (lm == NULL)
+		return NULL;
+
+	lm->lm_size = size;
+	return lm + 1;
 }
 
 static inline void *
 kzalloc(size_t size, gfp_t gfp)
 {
-	return malloc(size, M_TEMP, (linux_gfp_to_malloc(gfp) | M_ZERO));
+	return kmalloc(size, gfp | __GFP_ZERO);
 }
 
 static inline void *
@@ -104,7 +120,7 @@ kmalloc_array(size_t n, size_t size, gfp_t gfp)
 {
 	if ((size != 0) && (n > (SIZE_MAX / size)))
 		return NULL;
-	return malloc((n * size), M_TEMP, linux_gfp_to_malloc(gfp));
+	return kmalloc(n * size, gfp);
 }
 
 static inline void *
@@ -116,22 +132,46 @@ kcalloc(size_t n, size_t size, gfp_t gfp)
 static inline void *
 krealloc(void *ptr, size_t size, gfp_t gfp)
 {
-	return realloc(ptr, size, M_TEMP, linux_gfp_to_malloc(gfp));
+	struct linux_malloc *olm, *nlm;
+	int kmflags = linux_gfp_to_kmem(gfp);
+
+	if (gfp & __GFP_ZERO)
+		nlm = kmem_intr_zalloc(sizeof(*nlm) + size, kmflags);
+	else
+		nlm = kmem_intr_alloc(sizeof(*nlm) + size, kmflags);
+	if (nlm == NULL)
+		return NULL;
+
+	nlm->lm_size = size;
+	if (ptr) {
+		olm = (struct linux_malloc *)ptr - 1;
+		memcpy(nlm + 1, olm + 1, MIN(nlm->lm_size, olm->lm_size));
+		kmem_intr_free(olm, sizeof(*olm) + olm->lm_size);
+	}
+	return nlm + 1;
 }
 
 static inline void
 kfree(void *ptr)
 {
-	if (ptr != NULL)
-		free(ptr, M_TEMP);
+	struct linux_malloc *lm;
+
+	if (ptr == NULL)
+		return;
+
+	lm = (struct linux_malloc *)ptr - 1;
+	kmem_intr_free(lm, sizeof(*lm) + lm->lm_size);
 }
 
-#define	SLAB_HWCACHE_ALIGN	1
+#define	SLAB_HWCACHE_ALIGN	__BIT(0)
+#define	SLAB_RECLAIM_ACCOUNT	__BIT(1)
+#define	SLAB_TYPESAFE_BY_RCU	__BIT(2)
 
 struct kmem_cache {
 	pool_cache_t	kc_pool_cache;
 	size_t		kc_size;
 	void		(*kc_ctor)(void *);
+	void		(*kc_dtor)(void *);
 };
 
 static int
@@ -145,23 +185,49 @@ kmem_cache_ctor(void *cookie, void *ptr, int flags __unused)
 	return 0;
 }
 
+static void
+kmem_cache_dtor(void *cookie, void *ptr)
+{
+	struct kmem_cache *const kc = cookie;
+
+	if (kc->kc_dtor)
+		(*kc->kc_dtor)(ptr);
+}
+
+/* XXX extension */
+static inline struct kmem_cache *
+kmem_cache_create_dtor(const char *name, size_t size, size_t align,
+    unsigned long flags, void (*ctor)(void *), void (*dtor)(void *))
+{
+	struct kmem_cache *kc;
+	int pcflags = 0;
+
+	if (ISSET(flags, SLAB_HWCACHE_ALIGN))
+		align = roundup(MAX(1, align), CACHE_LINE_SIZE);
+	if (ISSET(flags, SLAB_TYPESAFE_BY_RCU))
+		pcflags |= PR_PSERIALIZE;
+
+	kc = kmem_alloc(sizeof(*kc), KM_SLEEP);
+	kc->kc_pool_cache = pool_cache_init(size, align, 0, pcflags, name, NULL,
+	    IPL_VM, &kmem_cache_ctor, dtor != NULL ? &kmem_cache_dtor : NULL,
+	    kc);
+	kc->kc_size = size;
+	kc->kc_ctor = ctor;
+	kc->kc_dtor = dtor;
+
+	return kc;
+}
+
 static inline struct kmem_cache *
 kmem_cache_create(const char *name, size_t size, size_t align,
     unsigned long flags, void (*ctor)(void *))
 {
-	struct kmem_cache *kc;
-
-	if (ISSET(flags, SLAB_HWCACHE_ALIGN))
-		align = roundup(MAX(1, align), CACHE_LINE_SIZE);
-
-	kc = kmem_alloc(sizeof(*kc), KM_SLEEP);
-	kc->kc_pool_cache = pool_cache_init(size, align, 0, 0, name, NULL,
-	    IPL_NONE, &kmem_cache_ctor, NULL, kc);
-	kc->kc_size = size;
-	kc->kc_ctor = ctor;
-
-	return kc;
+	return kmem_cache_create_dtor(name, size, align, flags, ctor, NULL);
 }
+
+#define	KMEM_CACHE(T, F)						      \
+	kmem_cache_create(#T, sizeof(struct T), __alignof__(struct T),	      \
+	    (F), NULL)
 
 static inline void
 kmem_cache_destroy(struct kmem_cache *kc)
@@ -178,9 +244,9 @@ kmem_cache_alloc(struct kmem_cache *kc, gfp_t gfp)
 	void *ptr;
 
 	if (gfp & __GFP_WAIT)
-		flags |= PR_NOWAIT;
-	else
 		flags |= PR_WAITOK;
+	else
+		flags |= PR_NOWAIT;
 
 	ptr = pool_cache_get(kc->kc_pool_cache, flags);
 	if (ptr == NULL)
@@ -204,6 +270,13 @@ kmem_cache_free(struct kmem_cache *kc, void *ptr)
 {
 
 	pool_cache_put(kc->kc_pool_cache, ptr);
+}
+
+static inline void
+kmem_cache_shrink(struct kmem_cache *kc)
+{
+
+	pool_cache_reclaim(kc->kc_pool_cache);
 }
 
 #endif  /* _LINUX_SLAB_H_ */

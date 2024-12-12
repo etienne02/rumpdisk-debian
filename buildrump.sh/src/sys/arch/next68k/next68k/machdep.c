@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.115 2020/06/11 19:20:44 ad Exp $	*/
+/*	$NetBSD: machdep.c,v 1.122 2024/03/05 14:15:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1998 Darrin B. Jewell
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.115 2020/06/11 19:20:44 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.122 2024/03/05 14:15:33 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -56,7 +56,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.115 2020/06/11 19:20:44 ad Exp $");
 #include <sys/conf.h>
 #include <sys/file.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <sys/ioctl.h>
@@ -124,7 +123,7 @@ extern char *esym;
 /* the following is used externally (sysctl_hw) */
 char	machine[] = MACHINE;	/* from <machine/param.h> */
 
-/* Our exported CPU info; we can have only one. */  
+/* Our exported CPU info; we can have only one. */
 struct cpu_info cpu_info_store;
 
 struct vm_map *phys_map = NULL;
@@ -168,6 +167,17 @@ phys_seg_list_t phys_seg_list[VM_PHYSSEG_MAX];
 phys_ram_seg_t mem_clusters[VM_PHYSSEG_MAX];
 int	mem_cluster_cnt;
 
+/*
+ * On the 68020/68030, the value of delay_divisor is roughly
+ * 2048 / cpuspeed (where cpuspeed is in MHz).
+ *
+ * On the 68040/68060(?), the value of delay_divisor is roughly
+ * 759 / cpuspeed (where cpuspeed is in MHz).
+ * XXX -- is the above formula correct?
+ */
+int	cpuspeed = 33;		  /* relative cpu speed; XXX skewed on 68040 */
+int	delay_divisor = 759 / 33;  /* delay constant; assume fastest 33 MHz */
+
 /****************************************************************/
 
 /*
@@ -207,9 +217,6 @@ next68k_init(void)
 				BOOT_FLAG(*p, boothowto);
 		}
 	}
-
-	/* Calibrate the delay loop. */
-	next68k_calibrate_delay();
 
 	/*
 	 * Initialize error message buffer (at end of core).
@@ -256,8 +263,6 @@ consinit(void)
 		}
 
 		init = 1;
-	} else {
-		next68k_calibrate_delay();
 	}
 }
 
@@ -315,24 +320,31 @@ cpu_startup(void)
 void
 identifycpu(void)
 {
-	const char *mc, *mmu_str, *fpu_str, *cache_str;
+	const char *cpu_str, *mmu_str, *fpu_str, *cache_str;
+	extern int turbo;
 
 	/*
 	 * ...and the CPU type.
 	 */
 	switch (cputype) {
 	case CPU_68040:
-		mc = "40";
+		cpu_str = "MC68040";
+		cpuspeed = turbo ? 33 : 25;
+		delay_divisor = 759 / cpuspeed;
 		break;
 	case CPU_68030:
-		mc = "30";
+		cpu_str = "MC68030";
+		cpuspeed = 25;
+		delay_divisor = 2048 / cpuspeed;
 		break;
+#if 0
 	case CPU_68020:
-		mc = "20";
+		cpu_str = "MC68020";
 		break;
+#endif
 	default:
 		printf("\nunknown cputype %d\n", cputype);
-		goto lose;
+		panic("startup");
 	}
 
 	/*
@@ -343,14 +355,13 @@ identifycpu(void)
 	case MMU_68030:
 		mmu_str = "+MMU";
 		break;
+#if 0
 	case MMU_68851:
 		mmu_str = ", MC68851 MMU";
 		break;
-	case MMU_HP:
-		mmu_str = ", HP MMU";
-		break;
+#endif
 	default:
-		printf("MC680%s: unknown MMU type %d\n", mc, mmutype);
+		printf("%s: unknown MMU type %d\n", cpu_str, mmutype);
 		panic("startup");
 	}
 
@@ -365,7 +376,7 @@ identifycpu(void)
 		fpu_str = ", MC68882 FPU";
 		break;
 	case FPU_68881:
-		fpu_str = ", MHz MC68881 FPU";
+		fpu_str = ", MC68881 FPU";
 		break;
 	default:
 		fpu_str = ", unknown FPU";
@@ -376,30 +387,11 @@ identifycpu(void)
 	 */
 	if (cputype == CPU_68040)
 		cache_str = ", 4k on-chip physical I/D caches";
-	else {
-#if defined(ENABLE_HP_CODE)
-		switch (ectype) {
-		case EC_VIRT:
-			cache_str = ", virtual-address cache";
-			break;
-		case EC_PHYS:
-			cache_str = ", physical-address cache";
-			break;
-		default:
-			cache_str = "";
-			break;
-		}
-#else
+	else
 		cache_str = "";
-#endif
-	}
 
-	cpu_setmodel("NeXT/MC680%s CPU%s%s%s", mc, mmu_str, fpu_str, cache_str);
+	cpu_setmodel("NeXT/%s CPU%s%s%s", cpu_str, mmu_str, fpu_str, cache_str);
 	printf("%s\n", cpu_getmodel());
-
-	return;
- lose:
-	panic("startup");
 }
 
 /*
@@ -446,11 +438,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */
@@ -469,7 +456,9 @@ cpu_reboot(int howto, char *bootstr)
 #if defined(PANICWAIT) && !defined(DDB)
 	if ((howto & RB_HALT) == 0 && panicstr) {
 		printf("hit any key to reboot...\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 		printf("\n");
 	}
 #endif
@@ -530,7 +519,7 @@ cpu_init_kcore_hdr(void)
 	/*
 	 * Initialize pointer to kernel segment table.
 	 */
-	m->sysseg_pa = (u_int32_t)(pmap_kernel()->pm_stpa);
+	m->sysseg_pa = (uint32_t)(pmap_kernel()->pm_stpa);
 
 	/*
 	 * Initialize relocation value such that:
@@ -542,7 +531,7 @@ cpu_init_kcore_hdr(void)
 	/*
 	 * Define the end of the relocatable range.
 	 */
-	m->relocend = (u_int32_t)end;
+	m->relocend = (uint32_t)end;
 
 	/*
 	 * The next68k has multiple memory segments.
@@ -596,7 +585,7 @@ cpu_dump(int (*dump)(dev_t, daddr_t, void *, size_t), daddr_t *blknop)
 /*
  * These variables are needed by /sbin/savecore
  */
-u_int32_t dumpmag = 0x8fca0101;	/* magic number */
+uint32_t dumpmag = 0x8fca0101;	/* magic number */
 int	dumpsize = 0;		/* pages */
 long	dumplo = 0;		/* blocks */
 
@@ -815,7 +804,7 @@ nmihand(void *frame)
 #endif /* DDB */
 
 	INTR_ENABLE(NEXT_I_NMI);
-  
+
 	innmihand = 0;
 
 	return 0;
@@ -825,7 +814,7 @@ nmihand(void *frame)
 /*
  * cpu_exec_aout_makecmds():
  *	CPU-dependent a.out format hook for execve().
- * 
+ *
  * Determine of the given exec package refers to something which we
  * understand and, if so, set up the vmcmds for it.
  */

@@ -1,4 +1,4 @@
-/*	$NetBSD: oea_machdep.c,v 1.82 2021/02/27 01:16:52 thorpej Exp $	*/
+/*	$NetBSD: oea_machdep.c,v 1.85 2024/01/20 00:18:19 jmcneill Exp $	*/
 
 /*
  * Copyright (C) 2002 Matt Thomas
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: oea_machdep.c,v 1.82 2021/02/27 01:16:52 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: oea_machdep.c,v 1.85 2024/01/20 00:18:19 jmcneill Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altivec.h"
@@ -420,7 +420,7 @@ oea_init(void (*handler)(void))
 	/*
 	 * If we are on a MPC601 processor, we need to zap any tlbsync
 	 * instructions into sync.  This differs from the above in
-	 * examing all kernel text, as opposed to just the exception handling.
+	 * examining all kernel text, as opposed to just the exception handling.
 	 * We sync the icache on every instruction found since there are
 	 * only very few of them.
 	 */
@@ -787,7 +787,7 @@ oea_batinit(paddr_t pa, ...)
 	 */
 
 	/*
-	 * Add any I/O BATs specificed;
+	 * Add any I/O BATs specified;
 	 */
 	va_start(ap, pa);
 	while (pa != 0) {
@@ -1064,7 +1064,7 @@ mapiodev(paddr_t pa, psize_t len, bool prefetchable)
 
 	for (; len > 0; len -= PAGE_SIZE) {
 		pmap_kenter_pa(taddr, faddr, VM_PROT_READ | VM_PROT_WRITE,
-		    (prefetchable ? PMAP_MD_PREFETCHABLE : PMAP_NOCACHE));
+		    PMAP_NOCACHE | (prefetchable ? PMAP_MD_PREFETCHABLE : 0));
 		faddr += PAGE_SIZE;
 		taddr += PAGE_SIZE;
 	}

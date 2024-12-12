@@ -1,4 +1,4 @@
-/* $NetBSD: if_aumac.c,v 1.49 2020/09/29 02:58:52 msaitoh Exp $ */
+/* $NetBSD: if_aumac.c,v 1.53 2024/06/29 12:11:11 riastradh Exp $ */
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -46,7 +46,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_aumac.c,v 1.49 2020/09/29 02:58:52 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_aumac.c,v 1.53 2024/06/29 12:11:11 riastradh Exp $");
 
 
 
@@ -60,7 +60,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_aumac.c,v 1.49 2020/09/29 02:58:52 msaitoh Exp $"
 #include <sys/ioctl.h>
 #include <sys/kernel.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/socket.h>
 
 #include <uvm/uvm.h>		/* for PAGE_SIZE */
@@ -395,7 +394,7 @@ aumac_start(struct ifnet *ifp)
 	struct mbuf *m;
 	int nexttx;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	/*
@@ -411,8 +410,7 @@ aumac_start(struct ifnet *ifp)
 
 		/* Get a spare descriptor. */
 		if (sc->sc_txfree == 0) {
-			/* No more slots left; notify upper layer. */
-			ifp->if_flags |= IFF_OACTIVE;
+			/* No more slots left. */
 			AUMAC_EVCNT_INCR(&sc->sc_ev_txstall);
 			return;
 		}
@@ -568,18 +566,20 @@ aumac_txintr(struct aumac_softc *sc)
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (stat & TX_STAT_FA) {
 			/* XXX STATS */
-			if_statinc_ref(nsr, if_oerrors);
-		} else
-			if_statinc_ref(nsr, if_opackets);
+			if_statinc_ref(ifp, nsr, if_oerrors);
+		} else {
+			if_statinc_ref(ifp, nsr, if_opackets);
+		}
 
-		if (stat & TX_STAT_EC)
-			if_statadd_ref(nsr, if_collisions, 16);
-		else if (TX_STAT_CC(stat))
-			if_statadd_ref(nsr, if_collisions, TX_STAT_CC(stat));
+		if (stat & TX_STAT_EC) {
+			if_statadd_ref(ifp, nsr, if_collisions, 16);
+		} else if (TX_STAT_CC(stat)) {
+			if_statadd_ref(ifp, nsr, if_collisions,
+			    TX_STAT_CC(stat));
+		}
 		IF_STAT_PUTREF(ifp);
 
 		sc->sc_txfree++;
-		ifp->if_flags &= ~IFF_OACTIVE;
 
 		/* Try to queue more packets. */
 		if_schedule_deferred_start(ifp);
@@ -637,7 +637,7 @@ aumac_rxintr(struct aumac_softc *sc)
 	 * Missed frames are a semi-frequent occurrence with this hardware,
 	 * and reporting of them just makes everything run slower and fills
 	 * the system log.  Be silent.
-	 * 
+	 *
 	 * Additionally, this missed bit indicates an error with the previous
 	 * packet, and not with this one!  So PRINTERR is definitely wrong
 	 * here.
@@ -810,7 +810,6 @@ aumac_init(struct ifnet *ifp)
 
 	/* ...all done! */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	au_intr_enable(sc->sc_irq);
 out:
@@ -844,7 +843,7 @@ aumac_stop(struct ifnet *ifp, int disable)
 	au_intr_disable(sc->sc_irq);
 
 	/* Mark the interface as down and cancel the watchdog timer. */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 }
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.48 2021/08/17 22:00:31 andvar Exp $	*/
+/*	$NetBSD: machdep.c,v 1.55 2024/05/13 00:08:06 msaitoh Exp $	*/
 /*	$OpenBSD: zaurus_machdep.c,v 1.25 2006/06/20 18:24:04 todd Exp $	*/
 
 /*
@@ -107,7 +107,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.48 2021/08/17 22:00:31 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.55 2024/05/13 00:08:06 msaitoh Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -371,11 +371,6 @@ cpu_reboot(int howto, char *bootstr)
 	 */
 	if (!(howto & RB_NOSYNC)) {
 		bootsync();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Wait 3s */
@@ -484,76 +479,60 @@ read_ttb(void)
  * registers segment-aligned and segment-rounded in order to avoid
  * using the 2nd page tables.
  */
-#define	_A(a)	((a) & ~L1_S_OFFSET)
-#define	_S(s)	(((s) + L1_S_SIZE - 1) & ~(L1_S_SIZE-1))
-
 static const struct pmap_devmap zaurus_devmap[] = {
-    {
+    DEVMAP_ENTRY(
 	    ZAURUS_GPIO_VBASE,
-	    _A(PXA2X0_GPIO_BASE),
-	    _S(PXA2X0_GPIO_SIZE),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    PXA2X0_GPIO_BASE,
+	    PXA2X0_GPIO_SIZE
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_CLKMAN_VBASE,
-	    _A(PXA2X0_CLKMAN_BASE),
-	    _S(PXA2X0_CLKMAN_SIZE),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    PXA2X0_CLKMAN_BASE,
+	    PXA2X0_CLKMAN_SIZE
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_INTCTL_VBASE,
-	    _A(PXA2X0_INTCTL_BASE),
-	    _S(PXA2X0_INTCTL_SIZE),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    PXA2X0_INTCTL_BASE,
+	    PXA2X0_INTCTL_SIZE
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_MEMCTL_VBASE,
-	    _A(PXA2X0_MEMCTL_BASE),
-	    _S(PXA2X0_MEMCTL_SIZE),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    PXA2X0_MEMCTL_BASE,
+	    PXA2X0_MEMCTL_SIZE
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_SCOOP0_VBASE,
-	    _A(C3000_SCOOP0_BASE),
-	    _S(SCOOP_SIZE),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    C3000_SCOOP0_BASE,
+	    SCOOP_SIZE
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_SCOOP1_VBASE,
-	    _A(C3000_SCOOP1_BASE),
-	    _S(SCOOP_SIZE),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    C3000_SCOOP1_BASE,
+	    SCOOP_SIZE
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_FFUART_VBASE,
-	    _A(PXA2X0_FFUART_BASE),
-	    _S(4 * COM_NPORTS),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    PXA2X0_FFUART_BASE,
+	    4 * COM_NPORTS
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_BTUART_VBASE,
-	    _A(PXA2X0_BTUART_BASE),
-	    _S(4 * COM_NPORTS),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    PXA2X0_BTUART_BASE,
+	    4 * COM_NPORTS
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_STUART_VBASE,
-	    _A(PXA2X0_STUART_BASE),
-	    _S(4 * COM_NPORTS),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
-    {
+	    PXA2X0_STUART_BASE,
+	    4 * COM_NPORTS
+    ),
+    DEVMAP_ENTRY(
 	    ZAURUS_POWMAN_VBASE,
-	    _A(PXA2X0_POWMAN_BASE),
-	    _S(PXA2X0_POWMAN_SIZE),
-	    VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-    },
+	    PXA2X0_POWMAN_BASE,
+	    PXA2X0_POWMAN_SIZE
+    ),
 
-    {0, 0, 0, 0, 0,}
+    DEVMAP_ENTRY_END
 };
-
-#undef	_A
-#undef	_S
 
 void green_on(int virt);
 void
@@ -636,10 +615,6 @@ hw_isc1000(void)
 vaddr_t
 initarm(void *arg)
 {
-#if defined(DIAGNOSTIC) || defined(VERBOSE_INIT_ARM)
-	extern vsize_t xscale_minidata_clean_size; /* used in KASSERT */
-#endif
-	extern vaddr_t xscale_cache_clean_addr;
 	extern char KERNEL_BASE_phys[], KERNEL_BASE_virt[];
 	int loop;
 	int loop1;
@@ -694,9 +669,6 @@ initarm(void *arg)
 		boothowto = RB_AUTOBOOT;
 	}
 	*magicaddr = 0xdeadbeef;
-#ifdef RAMDISK_HOOKS
-        boothowto |= RB_DFLTROOT;
-#endif /* RAMDISK_HOOKS */
 	if (boothowto & RB_MD1) {
 		/* serial console */
 		console = "ffuart";
@@ -791,7 +763,7 @@ initarm(void *arg)
 	 * array.
 	 *
 	 * The kernel page directory must be on a 16K boundary.  The page
-	 * tables must be on 4K bounaries.  What we do is allocate the
+	 * tables must be on 4K boundaries.  What we do is allocate the
 	 * page directory on the first 16K boundary that we encounter, and
 	 * the page tables on 4K boundaries otherwise.  Since we allocate
 	 * at least 3 L2 page tables, we are guaranteed to encounter at
@@ -856,7 +828,9 @@ initarm(void *arg)
 	valloc_pages(kernelstack, UPAGES);
 
 	/* Allocate enough pages for cleaning the Mini-Data cache. */
+#ifdef DIAGNOSTIC
 	KASSERT(xscale_minidata_clean_size <= PAGE_SIZE);
+#endif
 	valloc_pages(minidataclean, 1);
 
 #ifdef KLOADER
@@ -1116,7 +1090,7 @@ initarm(void *arg)
 	 * Until then we will use a handler that just panics but tells us
 	 * why.
 	 * Initialisation of the vectors will just panic on a data abort.
-	 * This just fills in a slighly better one.
+	 * This just fills in a slightly better one.
 	 */
 #ifdef VERBOSE_INIT_ARM
 	printf("vectors ");

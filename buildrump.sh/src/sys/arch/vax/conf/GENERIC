@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.214 2020/09/27 13:48:54 roy Exp $
+# $NetBSD: GENERIC,v 1.220 2024/06/29 07:12:47 rin Exp $
 #
 # GENERIC machine description file
 # 
@@ -22,7 +22,7 @@ include 	"arch/vax/conf/std.vax"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"GENERIC-$Revision: 1.214 $"
+#ident 		"GENERIC-$Revision: 1.220 $"
 
 # Here are all different supported CPU types listed.
 #options 	VAX8800		# VAX 8500, 8530, 8550, 8700, 8800
@@ -36,7 +36,7 @@ options 	VAX650		# MV III, 3300, 3400, 3500, 3600, 3800, 3900
 options 	VAX660		# VAX 4000/200
 options 	VAX670		# VAX 4000/300
 options 	VAX680		# VAX 4000/[45]00
-options 	VAX410		# VS 2000
+options 	VAX410		# VS 2000, VS 3100/m30,m38,m40,m48
 options 	VAX43		# VS 3100/76
 options 	VAX46		# VS 4000/60
 options 	VAX48		# VS 4000 VLC
@@ -100,19 +100,22 @@ file-system 	UMAPFS
 file-system 	UNION
 file-system 	CD9660
 file-system	PTYFS		# /dev/pts/N support
+file-system	PUFFS		# Userspace file systems (e.g. ntfs-3g & sshfs)
 file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
+# File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independent support
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
+options 	UFS_EXTATTR	# Extended attribute support for UFS1
 options 	WAPBL		# File system journaling support
-#options	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER
+#options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
+options 	NFSSERVER	# Network File System server
 options 	NFS_BOOT_BOOTP,NFS_BOOT_DHCP	# Use bootp <> dhcp
 options 	NFS_BOOT_BOOTPARAM	# Use the Sun way for netbooting.
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
-options 	UFS_EXTATTR	# Extended attribute support for UFS1
 
 # WS console uses VT100 terminal emulation
 options 	WSEMUL_VT100
@@ -183,6 +186,7 @@ si1		at vsbus0 csr 0x200c0180 # VS2000/3100 SCSI-ctlr
 asc0		at vsbus0 csr 0x200c0080 # VS4000/60 (or VLC) SCSI-ctlr
 asc0		at vsbus0 csr 0x26000080 # VS4000/90 and 4000/10x SCSI-ctlr
 smg0		at vsbus0 csr 0x200f0000 # Small monochrome display ctlr.
+gpx0		at vsbus0 csr 0x3c000000 # VS3100 GPX display option
 #clr0		at vsbus0 csr 0x30000000 # 4- or 8-bitplans color graphics
 spx0		at vsbus0 csr 0x38000000 # Low Cost SPX on VS4000/90.
 lcg0		at vsbus0 csr 0x21801000 # VS4000/60 (or VLC) graphics
@@ -269,6 +273,7 @@ uk*		at scsibus? target? lun?
 
 # VAXstation graphics support
 wsdisplay*	at smg0
+wsdisplay*	at gpx0
 wsdisplay*	at spx0
 wsdisplay*	at lcg0
 #wsdisplay*	at clr0
@@ -278,6 +283,11 @@ lkkbd0		at dz0 line 0
 wskbd*		at lkkbd? console ?
 lkms0		at dz0 line 1
 wsmouse*	at lkms?
+
+pseudo-device	crypto			# /dev/crypto device
+pseudo-device	swcrypto		# software crypto implementation
+
+pseudo-device	putter			# for puffs and pud
 
 #
 # accept filters
@@ -322,5 +332,9 @@ pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	drvctl			# user control of drive subsystem
 pseudo-device	ksyms			# /dev/ksyms
 pseudo-device	wsmux			# mouse & keyboard multiplexor
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 include "dev/veriexec.config"
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/vax/conf/GENERIC.local"

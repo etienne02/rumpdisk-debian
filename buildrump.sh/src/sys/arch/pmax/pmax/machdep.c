@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.254 2020/09/28 01:20:29 simonb Exp $	*/
+/*	$NetBSD: machdep.c,v 1.256 2024/03/05 14:15:34 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.254 2020/09/28 01:20:29 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.256 2024/03/05 14:15:34 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_modular.h"
@@ -128,7 +128,7 @@ extern struct consdev promcd;		/* XXX */
 
 /*
  * Do all the stuff that locore normally does before calling main().
- * The first 4 argments are passed by PROM monitor, and remaining two
+ * The first 4 arguments are passed by PROM monitor, and remaining two
  * are built on temporary stack by our boot loader (or in reg if N32/N64).
  */
 void
@@ -438,12 +438,6 @@ cpu_reboot(int howto, char *bootstr)
 		 * Synchronize the disks....
 		 */
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */

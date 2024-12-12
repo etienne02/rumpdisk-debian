@@ -1,9 +1,11 @@
-/*	$NetBSD: msg_067.c,v 1.4 2021/07/13 22:01:34 rillig Exp $	*/
+/*	$NetBSD: msg_067.c,v 1.6 2023/03/28 14:44:34 rillig Exp $	*/
 # 3 "msg_067.c"
 
 // Test for message: cannot return incomplete type [67]
 
-/* expect+1: warning: struct incomplete never defined [233] */
+/* lint1-extra-flags: -X 351 */
+
+/* expect+1: warning: struct 'incomplete' never defined [233] */
 struct incomplete;
 
 struct incomplete function_declaration(void);

@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_sysctl.c,v 1.266 2020/08/27 14:11:57 riastradh Exp $	*/
+/*	$NetBSD: kern_sysctl.c,v 1.271 2024/09/08 09:36:51 rillig Exp $	*/
 
 /*-
  * Copyright (c) 2003, 2007, 2008 The NetBSD Foundation, Inc.
@@ -70,7 +70,7 @@
 #define __COMPAT_SYSCTL
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_sysctl.c,v 1.266 2020/08/27 14:11:57 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_sysctl.c,v 1.271 2024/09/08 09:36:51 rillig Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_defcorename.h"
@@ -203,7 +203,7 @@ sysctl_copyout(struct lwp *l, const void *kaddr, void *uaddr, size_t len)
 	} else {
 		error = kcopy(kaddr, uaddr, len);
 	}
-	
+
 	return error;
 }
 
@@ -983,7 +983,7 @@ sysctl_create(SYSCTLFN_ARGS)
 		break;
 	case CTLTYPE_BOOL:
 		/*
-		 * since an bool is an bool, if the size is not given or
+		 * since a bool is a bool, if the size is not given or
 		 * is wrong, we can "intuit" it.
 		 */
 		if (sz != 0 && sz != sizeof(bool))
@@ -1228,9 +1228,16 @@ int
 sysctl_create(SYSCTLFN_ARGS)
 {
 	const struct sysctlnode *node;
-	int k, rc, ni, nl = namelen + (name - oname);
+	int k, v, rc, ni, nl = namelen + (name - oname);
+	struct sysctlnode nnode;
 
-	node = newp;
+	if (newp == NULL)
+		return EINVAL;
+	int error = sysctl_cvt_in(l, &v, newp, newlen, &nnode);
+	if (error)
+		return error;
+
+	node = &nnode;
 
 	printf("namelen %d (", nl);
 	for (ni = 0; ni < nl - 1; ni++)
@@ -2147,7 +2154,7 @@ sysctl_createv(struct sysctllog **log, int cflags,
 				/*
 				 * allow first caller to *set* a
 				 * description actually to set it
-				 * 
+				 *
 				 * discard const here so we can attach
 				 * the description
 				 */
@@ -2510,9 +2517,9 @@ sysctl_teardown(struct sysctllog **logp)
 	memset(&node, 0, sizeof(node));
 
 	while (log->log_left < log->log_size) {
-		KASSERT((log->log_left + 3 < log->log_size) &&
-			(log->log_left + log->log_num[log->log_left + 2] <=
-			 log->log_size));
+		KASSERT(log->log_left + 3 < log->log_size);
+		KASSERT(log->log_left + log->log_num[log->log_left + 2] <=
+		    log->log_size);
 		v = log->log_num[log->log_left++];
 		t = log->log_num[log->log_left++];
 		namelen = log->log_num[log->log_left++];
@@ -2836,9 +2843,15 @@ random_address_init(void)
 }
 
 void
-hash_value(void *d, size_t ds, const void *s, size_t ss)
+hash_value_ensure_initialized(void)
 {
 
 	RUN_ONCE(&random_inithook, random_address_init);
+}
+
+void
+hash_value(void *d, size_t ds, const void *s, size_t ss)
+{
+
 	blake2s(d, ds, address_key, sizeof(address_key), s, ss);
 }

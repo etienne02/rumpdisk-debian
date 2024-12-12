@@ -1,4 +1,4 @@
-/*	$NetBSD: if_vr.c,v 1.135 2021/07/24 22:30:59 andvar Exp $	*/
+/*	$NetBSD: if_vr.c,v 1.138 2024/06/29 12:11:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999 The NetBSD Foundation, Inc.
@@ -97,7 +97,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_vr.c,v 1.135 2021/07/24 22:30:59 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_vr.c,v 1.138 2024/06/29 12:11:12 riastradh Exp $");
 
 
 
@@ -106,7 +106,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_vr.c,v 1.135 2021/07/24 22:30:59 andvar Exp $");
 #include <sys/callout.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/device.h>
@@ -839,8 +838,6 @@ vr_txeof(struct vr_softc *sc)
 	uint32_t txstat;
 	int i, j;
 
-	ifp->if_flags &= ~IFF_OACTIVE;
-
 	/*
 	 * Go through our tx list and free mbufs for those
 	 * frames that have been transmitted.
@@ -884,16 +881,16 @@ vr_txeof(struct vr_softc *sc)
 
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (txstat & VR_TXSTAT_ERRSUM) {
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 			if (txstat & VR_TXSTAT_DEFER)
-				if_statinc_ref(nsr, if_collisions);
+				if_statinc_ref(ifp, nsr, if_collisions);
 			if (txstat & VR_TXSTAT_LATECOLL)
-				if_statinc_ref(nsr, if_collisions);
+				if_statinc_ref(ifp, nsr, if_collisions);
 		}
 
-		if_statadd_ref(nsr, if_collisions,
+		if_statadd_ref(ifp, nsr, if_collisions,
 		    (txstat & VR_TXSTAT_COLLCNT) >> 3);
-		if_statinc_ref(nsr, if_opackets);
+		if_statinc_ref(ifp, nsr, if_opackets);
 		IF_STAT_PUTREF(ifp);
 	}
 
@@ -1012,7 +1009,7 @@ vr_start(struct ifnet *ifp)
 	struct vr_descsoft *ds;
 	int error, firsttx, nexttx, opending;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 	if (sc->vr_link == false)
 		return;
@@ -1136,11 +1133,6 @@ vr_start(struct ifnet *ifp)
 		/* Advance the tx pointer. */
 		sc->vr_txpending++;
 		sc->vr_txlast = nexttx;
-	}
-
-	if (sc->vr_txpending == VR_NTXDESC) {
-		/* No more slots left; notify upper layer. */
-		ifp->if_flags |= IFF_OACTIVE;
 	}
 
 	if (sc->vr_txpending != opending) {
@@ -1280,7 +1272,6 @@ vr_init(struct ifnet *ifp)
 	CSR_WRITE_2(sc, VR_IMR, VR_INTRS);
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	/* Start one second timer. */
 	callout_schedule(&sc->vr_tick_ch, hz);
@@ -1427,7 +1418,7 @@ vr_stop(struct ifnet *ifp, int disable)
 	/*
 	 * Mark the interface down and cancel the watchdog timer.
 	 */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 
 	if (disable)

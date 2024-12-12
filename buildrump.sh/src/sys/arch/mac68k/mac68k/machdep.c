@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.362 2021/04/28 02:28:05 rin Exp $	*/
+/*	$NetBSD: machdep.c,v 1.370 2024/09/14 21:02:46 nat Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -74,7 +74,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.362 2021/04/28 02:28:05 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.370 2024/09/14 21:02:46 nat Exp $");
 
 #include "opt_adb.h"
 #include "opt_compat_netbsd.h"
@@ -122,6 +122,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.362 2021/04/28 02:28:05 rin Exp $");
 #include <sys/cpu.h>
 
 #include <m68k/cacheops.h>
+#include <m68k/mmu_40.h>
 
 #include <machine/db_machdep.h>
 #include <ddb/db_sym.h>
@@ -155,6 +156,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.362 2021/04/28 02:28:05 rin Exp $");
 #if NMACFB > 0
 #include <mac68k/dev/macfbvar.h>
 #endif
+#include <mac68k/dev/pm_direct.h>
 #include <mac68k/dev/zs_cons.h>
 
 #include "ksyms.h"
@@ -395,7 +397,7 @@ cpu_startup(void)
 
 	vers = mac68k_machine.booter_version;
 	if (vers < CURRENTBOOTERVER) {
-		/* fix older booters with indicies, not versions */
+		/* fix older booters with indices, not versions */
 		if (vers < 100)
 			vers += 99;
 
@@ -492,6 +494,11 @@ cpu_reboot(int howto, char *bootstr)
 		adb_poweroff();
 #endif
 		/*
+		 * Try to shutdown via the power manager (PowerBooks mainly).
+		 */
+		pm_poweroff();
+
+		/*
 		 * RB_POWERDOWN implies RB_HALT... fall into it...
 		 */
 	}
@@ -500,7 +507,9 @@ cpu_reboot(int howto, char *bootstr)
 		printf("\n");
 		printf("The operating system has halted.\n");
 		printf("Please press any key to reboot.\n\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 	}
 
 	/* Map the last physical page VA = PA for doboot() */
@@ -844,7 +853,7 @@ cpu_exec_aout_makecmds(struct lwp *l, struct exec_package *epp)
 #ifdef COMPAT_NOMID
 	/* Check to see if MID == 0. */
 	if (((struct exec *)epp->ep_hdr)->a_midmag == ZMAGIC)
-		return exec_aout_prep_oldzmagic(l->l_proc, epp);
+		return exec_aout_prep_oldzmagic(l, epp);
 #endif
 
 	return error;
@@ -1097,7 +1106,7 @@ getenv(const char *str)
  * is the same for all machines which use that ROM.  The offset addresses of
  * the machine-specific routines is generally different for each machine.
  * The machine-specific routines currently used by NetBSD/mac68k include:
- *       ADB_interrupt, PM_interrpt, ADBBase+130_interrupt,
+ *       ADB_interrupt, PM_interrupt, ADBBase+130_interrupt,
  *       PMgrOp, jClkNoMem, Egret, InitEgret, and ADBReInit_JTBL
  *
  * It is possible that the routine at "jClkNoMem" is a common routine, but
@@ -2255,15 +2264,15 @@ get_physical(u_int addr, u_long * phys)
 
 	if (mmutype == MMU_68040) {
 		ph = ptest040((void *)addr, FC_SUPERD);
-		if ((ph & MMU40_RES) == 0) {
+		if ((ph & MMUSR40_R) == 0) {
 			ph = ptest040((void *)addr, FC_USERD);
-			if ((ph & MMU40_RES) == 0)
+			if ((ph & MMUSR40_R) == 0)
 				return 0;
 		}
-		if ((ph & MMU40_TTR) != 0)
+		if ((ph & MMUSR40_T) != 0)
 			ph = addr;
 
-		mask = (macos_tc & 0x4000) ? 0x00001fff : 0x00000fff;
+		mask = (macos_tc & TCR40_P) ? 0x00001fff : 0x00000fff;
 		ph &= (~mask);
 	} else {
 		switch (get_pte(addr, pte, &psr)) {
@@ -2614,6 +2623,10 @@ get_mapping(void)
 			    mac68k_video.mv_len, mac68k_video.mv_len);
 		}
 	}
+	/* mv_len sanity check */
+	int reqsize = mac68k_video.mv_height * mac68k_video.mv_stride;
+	if (mac68k_video.mv_len < reqsize)
+		mac68k_video.mv_len = reqsize;
 
 	return load_addr;	/* Return physical address of logical 0 */
 }

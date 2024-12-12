@@ -1,4 +1,4 @@
-/*	$NetBSD: mount.h,v 1.237 2021/02/04 21:07:06 jdolecek Exp $	*/
+/*	$NetBSD: mount.h,v 1.241 2023/04/22 14:30:54 hannken Exp $	*/
 
 /*
  * Copyright (c) 1989, 1991, 1993
@@ -141,7 +141,6 @@ struct mount {
 	struct vfsops	*mnt_op;		/* operations on fs */
 	struct vnode	*mnt_vnodecovered;	/* vnode we mounted on */
 	struct mount	*mnt_lower;		/* fs mounted on */
-	void		*mnt_transinfo;		/* for FS-internal use */
 	void		*mnt_data;		/* private data */
 	kmutex_t	*mnt_renamelock;	/* per-fs rename lock */
 	int		mnt_flag;		/* flags */
@@ -393,6 +392,7 @@ int 	vfs_busy(struct mount *);
 int 	vfs_trybusy(struct mount *);
 int	vfs_rootmountalloc(const char *, const char *, struct mount **);
 void	vfs_unbusy(struct mount *);
+int	vfs_set_lowermount(struct mount *, struct mount *);
 int	vfs_attach(struct vfsops *);
 int	vfs_detach(struct vfsops *);
 void	vfs_reinit(void);
@@ -438,6 +438,9 @@ extern time_t	metadelay;
 void	vfs_syncer_add_to_worklist(struct mount *);
 void	vfs_syncer_remove_from_worklist(struct mount *);
 
+extern int vfs_magiclinks;
+extern int vfs_timestamp_precision;
+
 extern	struct vfsops *vfssw[];			/* filesystem type table */
 extern	int nvfssw;
 extern	kmutex_t vfs_list_lock;
@@ -450,6 +453,7 @@ int	dounmount(struct mount *, int, struct lwp *);
 int	do_sys_mount(struct lwp *, const char *, enum uio_seg, const char *,
 	    int, void *, enum uio_seg, size_t, register_t *);
 void	vfsinit(void);
+void	vfs_evfilt_fs_init(void);
 void	vfs_opv_init(const struct vnodeopv_desc * const *);
 void	vfs_opv_free(const struct vnodeopv_desc * const *);
 #ifdef DEBUG

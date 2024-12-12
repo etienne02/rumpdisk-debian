@@ -1,4 +1,4 @@
-/* $NetBSD: lunafb.c,v 1.43 2021/08/07 16:18:57 thorpej Exp $ */
+/* $NetBSD: lunafb.c,v 1.49 2022/10/03 17:42:35 tsutsui Exp $ */
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: lunafb.c,v 1.43 2021/08/07 16:18:57 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lunafb.c,v 1.49 2022/10/03 17:42:35 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -76,6 +76,8 @@ struct bt458 {
 
 #define	OMFB_RFCNT	BMAP_RFCNT	/* video h-origin/v-origin */
 #define	OMFB_RAMDAC	BMAP_PALLET2	/* Bt454/Bt458 RAMDAC */
+#define	OMFB_FB_WADDR	(BMAP_BMP + 8)	/* common bitmap plane */
+#define	OMFB_FB_RADDR	(BMAP_BMAP0 + 8)/* bitmap plane #0 */
 
 #define	OMFB_SIZE	(BMAP_FN0 - BMAP_BMP + PAGE_SIZE)
 
@@ -253,7 +255,7 @@ omfbioctl(void *v, void *vs, u_long cmd, void *data, int flag, struct lwp *l)
 		wsd_fbip->width = dc->dc_wid;
 		wsd_fbip->depth = dc->dc_depth;
 		wsd_fbip->cmsize = dc->dc_cmsize;
-#undef fbt
+#undef wsd_fbip
 		return 0;
 
 	case WSDISPLAYIO_LINEBYTES:
@@ -322,20 +324,24 @@ static int
 omgetcmap(struct omfb_softc *sc, struct wsdisplay_cmap *p)
 {
 	u_int index = p->index, count = p->count;
-	int cmsize, error;
+	u_int cmsize;
+	int error;
 
 	cmsize = sc->sc_dc->dc_cmsize;
 	if (index >= cmsize || count > cmsize - index)
 		return EINVAL;
 
 	error = copyout(&sc->sc_dc->dc_cmap.r[index], p->red, count);
-	if (error)
+	if (error != 0)
 		return error;
 	error = copyout(&sc->sc_dc->dc_cmap.g[index], p->green, count);
-	if (error)
+	if (error != 0)
 		return error;
 	error = copyout(&sc->sc_dc->dc_cmap.b[index], p->blue, count);
-	return error;
+	if (error != 0)
+		return error;
+
+	return 0;
 }
 
 static int
@@ -343,20 +349,22 @@ omsetcmap(struct omfb_softc *sc, struct wsdisplay_cmap *p)
 {
 	struct hwcmap cmap;
 	u_int index = p->index, count = p->count;
-	int cmsize, i, error;
+	u_int cmsize;
+	int i, error;
 
 	cmsize = sc->sc_dc->dc_cmsize;
+
 	if (index >= cmsize || count > cmsize - index)
 		return EINVAL;
 
 	error = copyin(p->red, &cmap.r[index], count);
-	if (error)
+	if (error != 0)
 		return error;
 	error = copyin(p->green, &cmap.g[index], count);
-	if (error)
+	if (error != 0)
 		return error;
 	error = copyin(p->blue, &cmap.b[index], count);
-	if (error)
+	if (error != 0)
 		return error;
 
 	memcpy(&sc->sc_dc->dc_cmap.r[index], &cmap.r[index], count);
@@ -430,7 +438,7 @@ omfb_resetcmap(struct om_hwdevconfig *dc)
 		ndac->bt_addr = 0x05;
 		ndac->bt_ctrl = 0x00; /* all planes have non-blink */
 		ndac->bt_addr = 0x06;
-		ndac->bt_ctrl = 0x40; /* pallete enabled, ovly plane disabled */
+		ndac->bt_ctrl = 0x40; /* palette enabled, ovly plane disabled */
 		ndac->bt_addr = 0x07;
 		ndac->bt_ctrl = 0x00; /* no test mode */
 
@@ -495,7 +503,7 @@ omfb_getdevconfig(paddr_t paddr, struct om_hwdevconfig *dc)
 	ri = &dc->dc_ri;
 	ri->ri_width = dc->dc_wid;
 	ri->ri_height = dc->dc_ht;
-	ri->ri_depth = 1;       /* since planes are independently addressed */
+	ri->ri_depth = dc->dc_depth;
 	ri->ri_stride = dc->dc_rowbytes;
 	ri->ri_bits = (void *)dc->dc_videobase;
 	ri->ri_flg = RI_CENTER;

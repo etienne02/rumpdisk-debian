@@ -1,4 +1,4 @@
-/*	$NetBSD: exec.h,v 1.159 2020/01/23 10:05:44 ad Exp $	*/
+/*	$NetBSD: exec.h,v 1.162 2023/08/01 21:26:28 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -215,7 +215,7 @@ struct exec_package {
 	void	*ep_emul_arg;		/* emulation argument */
 	const struct	execsw *ep_esch;/* execsw entry */
 	struct vnode *ep_emul_root;     /* base of emulation filesystem */
-	struct vnode *ep_interp;        /* vnode of (elf) interpeter */
+	struct vnode *ep_interp;        /* vnode of (elf) interpreter */
 	uint32_t ep_pax_flags;		/* pax flags */
 	void	(*ep_emul_arg_free)(void *);
 					/* free ep_emul_arg */
@@ -248,7 +248,7 @@ struct exec_vmcmd {
 };
 
 /*
- * funtions used either by execve() or the various CPU-dependent execve()
+ * functions used either by execve() or the various CPU-dependent execve()
  * hooks.
  */
 vaddr_t	exec_vm_minaddr		(vaddr_t);
@@ -289,6 +289,8 @@ int	cpu_coredump32(struct lwp *, struct coredump_iostate *, struct core32 *);
 
 int	exec_add(struct execsw *, int);
 int	exec_remove(struct execsw *, int);
+int	exec_sigcode_alloc(const struct emul *);
+void	exec_sigcode_free(const struct emul *);
 
 void	new_vmcmd(struct exec_vmcmd_set *,
 		    int (*)(struct lwp *, struct exec_vmcmd *),

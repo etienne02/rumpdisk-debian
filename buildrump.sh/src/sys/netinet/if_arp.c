@@ -1,4 +1,4 @@
-/*	$NetBSD: if_arp.c,v 1.307 2021/02/19 14:51:59 christos Exp $	*/
+/*	$NetBSD: if_arp.c,v 1.317 2024/11/13 09:25:52 roy Exp $	*/
 
 /*
  * Copyright (c) 1998, 2000, 2008 The NetBSD Foundation, Inc.
@@ -68,7 +68,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_arp.c,v 1.307 2021/02/19 14:51:59 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_arp.c,v 1.317 2024/11/13 09:25:52 roy Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
@@ -196,13 +196,9 @@ static void arp_dad_start(struct ifaddr *);
 static void arp_dad_stop(struct ifaddr *);
 static void arp_dad_duplicated(struct ifaddr *, const struct sockaddr_dl *);
 
-struct ifqueue arpintrq = {
-	.ifq_head = NULL,
-	.ifq_tail = NULL,
-	.ifq_len = 0,
-	.ifq_maxlen = 50,
-	.ifq_drops = 0,
-};
+#define	ARP_MAXQLEN	50
+pktqueue_t *		arp_pktq		__read_mostly;
+
 static int useloopback = 1;	/* use loopback interface for local traffic */
 
 static percpu_t *arpstat_percpu;
@@ -269,9 +265,11 @@ void
 arp_init(void)
 {
 
+	arp_pktq = pktq_create(ARP_MAXQLEN, arpintr, NULL);
+	KASSERT(arp_pktq != NULL);
+
 	sysctl_net_inet_arp_setup(NULL);
 	arpstat_percpu = percpu_alloc(sizeof(uint64_t) * ARP_NSTATS);
-	IFQ_LOCK_INIT(&arpintrq);
 
 #ifdef MBUFTRACE
 	MOWNER_ATTACH(&arpdomain.dom_mowner);
@@ -517,7 +515,7 @@ arprequest(struct ifnet *ifp,
 	struct mbuf *m;
 	struct arphdr *ah;
 	struct sockaddr sa;
-	uint64_t *arps;
+	net_stat_ref_t arps;
 
 	KASSERT(sip != NULL);
 	KASSERT(tip != NULL);
@@ -563,8 +561,8 @@ arprequest(struct ifnet *ifp,
 	sa.sa_family = AF_ARP;
 	sa.sa_len = 2;
 	arps = ARP_STAT_GETREF();
-	arps[ARP_STAT_SNDTOTAL]++;
-	arps[ARP_STAT_SENDREQUEST]++;
+	_NET_STATINC_REF(arps, ARP_STAT_SNDTOTAL);
+	_NET_STATINC_REF(arps, ARP_STAT_SENDREQUEST);
 	ARP_STAT_PUTREF();
 	if_output_lock(ifp, ifp, m, &sa, NULL);
 }
@@ -678,7 +676,7 @@ bad:
  * then the protocol-specific routine is called.
  */
 void
-arpintr(void)
+arpintr(void *arg __unused)
 {
 	struct mbuf *m;
 	struct arphdr *ar;
@@ -688,13 +686,7 @@ arpintr(void)
 	bool badhrd;
 
 	SOFTNET_KERNEL_LOCK_UNLESS_NET_MPSAFE();
-	for (;;) {
-
-		IFQ_LOCK(&arpintrq);
-		IF_DEQUEUE(&arpintrq, m);
-		IFQ_UNLOCK(&arpintrq);
-		if (m == NULL)
-			goto out;
+	while ((m = pktq_dequeue(arp_pktq)) != NULL) {
 		if ((m->m_flags & M_PKTHDR) == 0)
 			panic("arpintr");
 
@@ -753,8 +745,6 @@ badlen:
 free:
 		m_freem(m);
 	}
-
-out:
 	SOFTNET_KERNEL_UNLOCK_UNLESS_NET_MPSAFE();
 	return; /* XXX gcc */
 }
@@ -789,7 +779,7 @@ in_arpinput(struct mbuf *m)
 	struct in_addr isaddr, itaddr, myaddr;
 	int op, rt_cmd, new_state = 0;
 	void *tha;
-	uint64_t *arps;
+	net_stat_ref_t arps;
 	struct psref psref, psref_ia;
 	int s;
 	char ipbuf[INET_ADDRSTRLEN];
@@ -803,6 +793,8 @@ in_arpinput(struct mbuf *m)
 	if (ah->ar_pln != sizeof(struct in_addr))
 		goto out;
 
+	/* RFC5227 2.4 says any of the host's own interface addresses
+	 * are not conflicting ARP packets. */
 	ifp = if_get_bylla(ar_sha(ah), ah->ar_hln, &psref);
 	if (ifp) {
 		/* it's from me, ignore it. */
@@ -934,14 +926,28 @@ again:
 	 */
 	if (in_nullhost(isaddr))
 		ARP_STATINC(ARP_STAT_RCVZEROSPA);
-	else if (in_hosteq(isaddr, myaddr))
+	else if (in_hosteq(isaddr, myaddr)) {
 		ARP_STATINC(ARP_STAT_RCVLOCALSPA);
+		/* This is the original behavior prior to supporting IPv4 DAD */
+		if (!ip_dad_enabled()) {
+			char llabuf[LLA_ADDRSTRLEN];
+			log(LOG_ERR,
+			    "duplicate IP address %s sent from link address %s\n",
+			    IN_PRINT(ipbuf, &isaddr),
+			    lla_snprintf(llabuf, sizeof(llabuf), ar_sha(ah),
+			                 ah->ar_hln));
+			itaddr = myaddr;
+			goto reply;
+		}
+	}
 
 	if (in_nullhost(itaddr))
 		ARP_STATINC(ARP_STAT_RCVZEROTPA);
 
 	/*
 	 * DAD check, RFC 5227.
+	 * ARP sender hardware address must match the interface
+	 * address of the interface sending the packet.
 	 * Collision on sender address is always a duplicate.
 	 * Collision on target address is only a duplicate
 	 * IF the sender address is the null host (ie a DAD probe)
@@ -949,19 +955,25 @@ again:
 	 * AND our address is either tentative or duplicated
 	 * If it was unicast then it's a valid Unicast Poll from RFC 1122.
 	 */
-	if (do_dad &&
+	if (ip_dad_enabled() && do_dad &&
 	    (in_hosteq(isaddr, myaddr) ||
 	    (in_nullhost(isaddr) && in_hosteq(itaddr, myaddr) &&
 	     m->m_flags & M_BCAST &&
 	     ia->ia4_flags & (IN_IFF_TENTATIVE | IN_IFF_DUPLICATED))))
 	{
-		struct sockaddr_dl sdl, *sdlp;
+		struct m_tag *mtag;
 
-		sdlp = sockaddr_dl_init(&sdl, sizeof(sdl),
-		    ifp->if_index, ifp->if_type,
-		    NULL, 0, ar_sha(ah), ah->ar_hln);
-		arp_dad_duplicated((struct ifaddr *)ia, sdlp);
-		goto out;
+		mtag = m_tag_find(m, PACKET_TAG_ETHERNET_SRC);
+		if (mtag == NULL || (ah->ar_hln == ETHER_ADDR_LEN &&
+		    memcmp(mtag + 1, ar_sha(ah), ah->ar_hln) == 0)) {
+			struct sockaddr_dl sdl, *sdlp;
+
+			sdlp = sockaddr_dl_init(&sdl, sizeof(sdl),
+			    ifp->if_index, ifp->if_type,
+			    NULL, 0, ar_sha(ah), ah->ar_hln);
+			arp_dad_duplicated((struct ifaddr *)ia, sdlp);
+			goto out;
+		}
 	}
 
 	/*
@@ -1024,6 +1036,17 @@ again:
 			/* This was a solicited ARP reply. */
 			la->ln_byhint = 0;
 			new_state = ND_LLINFO_REACHABLE;
+		} else if (op == ARPOP_REQUEST &&
+		           (la->ln_state == ND_LLINFO_NOSTATE ||
+			    la->ln_state == ND_LLINFO_INCOMPLETE)) {
+			/*
+			 * If an ARP request comes but there is no entry
+			 * and a new one has been created or an entry exists
+			 * but incomplete, make it stale to allow to send
+			 * packets to the requester without an ARP resolution.
+			 */
+			la->ln_byhint = 0;
+			new_state = ND_LLINFO_STALE;
 		}
 		rt_cmd = la->la_flags & LLE_VALID ? 0 : RTM_ADD;
 	}
@@ -1168,8 +1191,8 @@ reply:
 	sa.sa_family = AF_ARP;
 	sa.sa_len = 2;
 	arps = ARP_STAT_GETREF();
-	arps[ARP_STAT_SNDTOTAL]++;
-	arps[ARP_STAT_SNDREPLY]++;
+	_NET_STATINC_REF(arps, ARP_STAT_SNDTOTAL);
+	_NET_STATINC_REF(arps, ARP_STAT_SNDREPLY);
 	ARP_STAT_PUTREF();
 	if_output_lock(ifp, ifp, m, &sa, NULL);
 	if (rcvif != NULL)
@@ -1357,8 +1380,8 @@ arp_llinfo_output(struct ifnet *ifp, __unused const union l3addr *daddr,
 		if (sip.s_addr == INADDR_ANY) {
 			char ipbuf[INET_ADDRSTRLEN];
 
-			log(LOG_DEBUG, "source can't be "
-			    "determined: dst=%s\n",
+			log(LOG_DEBUG, "%s: source can't be "
+			    "determined: dst=%s\n", __func__,
 			    IN_PRINT(ipbuf, &tip));
 			return;
 		}

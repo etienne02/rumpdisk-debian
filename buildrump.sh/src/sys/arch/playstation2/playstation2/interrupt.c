@@ -1,4 +1,4 @@
-/*	$NetBSD: interrupt.c,v 1.17 2021/06/05 21:38:37 christos Exp $	*/
+/*	$NetBSD: interrupt.c,v 1.20 2023/12/20 15:29:06 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: interrupt.c,v 1.17 2021/06/05 21:38:37 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: interrupt.c,v 1.20 2023/12/20 15:29:06 thorpej Exp $");
 
 #include "debug_playstation2.h"
 #if defined INTR_DEBUG && !defined GSFB_DEBUG_MONITOR
@@ -35,7 +35,6 @@ __KERNEL_RCSID(0, "$NetBSD: interrupt.c,v 1.17 2021/06/05 21:38:37 christos Exp 
 #endif
 
 #include <sys/param.h>
-#include <sys/malloc.h>
 
 #include <uvm/uvm_extern.h>	/* uvmexp.intrs */
 
@@ -89,7 +88,7 @@ interrupt_init_bootstrap(void)
 	for (i = 0; i < _IPL_N; i++)
 		__icu_mask[i] = 0xffffffff;
 
-	/* initialize EE embeded device */
+	/* initialize EE embedded device */
 	timer_init();
 
 	/* clear all pending interrupt and disable all */
@@ -271,7 +270,7 @@ _debug_print_intr(const char *ident)
 
 	__gsfb_print(0,
 	    "CLOCK %-5lld SBUS %-5lld DMAC %-5lld "
-
+	    "SR=%08x PC=%08x cpl=%08x intc=%08x dmac=%08x\n",
 	    _playstation2_evcnt.clock.ev_count,
 	    _playstation2_evcnt.sbus.ev_count,
 	    _playstation2_evcnt.dmac.ev_count,
@@ -279,7 +278,7 @@ _debug_print_intr(const char *ident)
 	    md_imask,
 	    (_reg_read_4(I_MASK_REG) << 16) |
 	    (_reg_read_4(I_STAT_REG) & 0x0000ffff),
-	    _reg_read_4(D_STAT_REG), sched_whichqs);
+	    _reg_read_4(D_STAT_REG));
 }
 #endif /* INTR_DEBUG */
 

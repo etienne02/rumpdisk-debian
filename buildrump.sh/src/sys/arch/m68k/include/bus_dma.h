@@ -1,7 +1,7 @@
-/* $NetBSD: bus_dma.h,v 1.12 2011/06/30 20:09:32 wiz Exp $ */
+/* $NetBSD: bus_dma.h,v 1.14 2023/09/26 12:46:30 tsutsui Exp $ */
 
 /*
- * This file was extracted from from alpha/include/bus.h
+ * This file was extracted from alpha/include/bus.h
  * and should probably be resynced when needed.
  * Darrin B. Jewell <dbj@NetBSD.org> Sat Jul 31 06:11:33 UTC 1999
  * original cvs id: NetBSD: bus.h,v 1.29 1999/06/18 04:49:24 cgd Exp
@@ -193,7 +193,7 @@ struct m68k_bus_dma_tag {
 #define	bus_dmamem_mmap(t, sg, n, o, p, f)			\
 	(*(t)->_dmamem_mmap)((t), (sg), (n), (o), (p), (f))
 
-#define bus_dmatag_subregion(t, mna, mxa, nt, f) EOPNOTSUPP       
+#define bus_dmatag_subregion(t, mna, mxa, nt, f) EOPNOTSUPP
 #define bus_dmatag_destroy(t)
 
 /*

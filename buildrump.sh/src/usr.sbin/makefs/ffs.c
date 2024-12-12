@@ -1,4 +1,4 @@
-/*	$NetBSD: ffs.c,v 1.70 2017/12/16 23:08:40 christos Exp $	*/
+/*	$NetBSD: ffs.c,v 1.76 2024/06/17 23:53:42 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -71,7 +71,7 @@
 
 #include <sys/cdefs.h>
 #if defined(__RCSID) && !defined(__lint)
-__RCSID("$NetBSD: ffs.c,v 1.70 2017/12/16 23:08:40 christos Exp $");
+__RCSID("$NetBSD: ffs.c,v 1.76 2024/06/17 23:53:42 riastradh Exp $");
 #endif	/* !__lint */
 
 #include <sys/param.h>
@@ -149,7 +149,7 @@ static  void	*ffs_build_dinode2(struct ufs2_dinode *, dirbuf_t *, fsnode *,
 
 
 
-	/* publically visible functions */
+	/* publicly visible functions */
 void
 ffs_prep_opts(fsinfo_t *fsopts)
 {
@@ -180,6 +180,8 @@ ffs_prep_opts(fsinfo_t *fsopts)
 	      0, 0, "Optimization (time|space)" },
 	    { 'l', "label", ffs_opts->label, OPT_STRARRAY,
 	      1, sizeof(ffs_opts->label), "UFS label" },
+	    { 'e', "extattr", &ffs_opts->extattr, OPT_INT32,
+	      0, 1, "extattr support" },
 	    { .name = NULL }
 	};
 
@@ -194,6 +196,7 @@ ffs_prep_opts(fsinfo_t *fsopts)
 	ffs_opts->avgfilesize= -1;
 	ffs_opts->avgfpdir= -1;
 	ffs_opts->version = 1;
+	ffs_opts->extattr = 1;
 
 	fsopts->fs_specific = ffs_opts;
 	fsopts->fs_options = copy_opts(ffs_options);
@@ -273,7 +276,7 @@ ffs_makefs(const char *image, const char *dir, fsnode *root, fsinfo_t *fsopts)
 		/* create image */
 	TIMER_START(start);
 	if (ffs_create_image(image, fsopts) == -1)
-		errx(1, "Image file `%s' not created.", image);
+		errx(EXIT_FAILURE, "Image file `%s' not created.", image);
 	TIMER_RESULTS(start, "ffs_create_image");
 
 	fsopts->curinode = UFS_ROOTINO;
@@ -285,7 +288,7 @@ ffs_makefs(const char *image, const char *dir, fsnode *root, fsinfo_t *fsopts)
 	printf("Populating `%s'\n", image);
 	TIMER_START(start);
 	if (! ffs_populate_dir(dir, root, fsopts))
-		errx(1, "Image file `%s' not populated.", image);
+		errx(EXIT_FAILURE, "Image file `%s' not populated.", image);
 	TIMER_RESULTS(start, "ffs_populate_dir");
 
 		/* ensure no outstanding buffers remain */
@@ -303,7 +306,7 @@ ffs_makefs(const char *image, const char *dir, fsnode *root, fsinfo_t *fsopts)
 		/* write out superblock; image is now complete */
 	ffs_write_superblock(fsopts->superblock, fsopts);
 	if (close(fsopts->fd) == -1)
-		err(1, "Closing `%s'", image);
+		err(EXIT_FAILURE, "Closing `%s'", image);
 	fsopts->fd = -1;
 	printf("Image `%s' complete\n", image);
 }
@@ -387,11 +390,11 @@ ffs_validate(const char *dir, fsnode *root, fsinfo_t *fsopts)
 		/* add space needed to store inodes, x3 for blockmaps, etc */
 	if (ffs_opts->version == 1)
 		fsopts->size += ncg * DINODE1_SIZE *
-		    roundup(fsopts->inodes / ncg, 
+		    roundup(fsopts->inodes / ncg,
 			ffs_opts->bsize / DINODE1_SIZE);
 	else
 		fsopts->size += ncg * DINODE2_SIZE *
-		    roundup(fsopts->inodes / ncg, 
+		    roundup(fsopts->inodes / ncg,
 			ffs_opts->bsize / DINODE2_SIZE);
 
 		/* add minfree */
@@ -420,7 +423,8 @@ ffs_validate(const char *dir, fsnode *root, fsinfo_t *fsopts)
 	}
 		/* now check calculated sizes vs requested sizes */
 	if (fsopts->maxsize > 0 && fsopts->size > fsopts->maxsize) {
-		errx(1, "`%s' size of %lld is larger than the maxsize of %lld.",
+		errx(EXIT_FAILURE,
+		    "`%s' size of %lld is larger than the maxsize of %lld.",
 		    dir, (long long)fsopts->size, (long long)fsopts->maxsize);
 	}
 }
@@ -808,7 +812,7 @@ ffs_populate_dir(const char *dir, fsnode *root, fsinfo_t *fsopts)
 
 		if ((size_t)snprintf(path, sizeof(path), "%s/%s/%s", cur->root,
 		    cur->path, cur->name) >= sizeof(path))
-			errx(1, "Pathname too long.");
+			errx(EXIT_FAILURE, "Pathname too long.");
 
 		if (cur->child != NULL)
 			continue;		/* child creates own inode */
@@ -822,8 +826,8 @@ ffs_populate_dir(const char *dir, fsnode *root, fsinfo_t *fsopts)
 			    root, fsopts);
 
 		if (debug & DEBUG_FS_POPULATE_NODE) {
-			printf("ffs_populate_dir: writing ino %d, %s",
-			    cur->inode->ino, inode_type(cur->type));
+			printf("ffs_populate_dir: writing ino %lld, %s",
+			    (long long)cur->inode->ino, inode_type(cur->type));
 			if (cur->inode->nlink > 1)
 				printf(", nlink %d", cur->inode->nlink);
 			putchar('\n');
@@ -849,7 +853,7 @@ ffs_populate_dir(const char *dir, fsnode *root, fsinfo_t *fsopts)
 			continue;
 		if ((size_t)snprintf(path, sizeof(path), "%s/%s", dir,
 		    cur->name) >= sizeof(path))
-			errx(1, "Pathname too long.");
+			errx(EXIT_FAILURE, "Pathname too long.");
 		if (! ffs_populate_dir(path, cur->child, fsopts))
 			return (0);
 	}
@@ -953,7 +957,7 @@ ffs_write_file(union dinode *din, uint32_t ino, void *buf, fsinfo_t *fsopts)
 		errno = ffs_balloc(&in, offset, chunk, &bp);
  bad_ffs_write_file:
 		if (errno != 0)
-			err(1,
+			err(EXIT_FAILURE,
 			    "Writing inode %d (%s), bytes %lld + %lld",
 			    ino,
 			    isfile ? (char *)buf :
@@ -966,7 +970,7 @@ ffs_write_file(union dinode *din, uint32_t ino, void *buf, fsinfo_t *fsopts)
 		if (!isfile)
 			p += chunk;
 	}
-  
+
  write_inode_and_leave:
 	ffs_write_inode(&in.i_din, in.i_number, fsopts);
 
@@ -1064,7 +1068,7 @@ ffs_write_inode(union dinode *dp, uint32_t ino, const fsinfo_t *fsopts)
 	struct ufs2_dinode *dp2, *dip;
 	struct cg	*cgp;
 	struct fs	*fs;
-	int		cg, cgino, i;
+	uint32_t	cg, cgino, i;
 	daddr_t		d;
 	char		sbbuf[FFS_MAXBSIZE];
 	uint32_t	initediblk;
@@ -1086,7 +1090,8 @@ ffs_write_inode(union dinode *dp, uint32_t ino, const fsinfo_t *fsopts)
 	    fsopts);
 	cgp = (struct cg *)sbbuf;
 	if (!cg_chkmagic(cgp, fsopts->needswap))
-		errx(1, "ffs_write_inode: cg %d: bad magic number", cg);
+		errx(EXIT_FAILURE,
+		    "ffs_write_inode: cg %d: bad magic number", cg);
 
 	assert (isclr(cg_inosused(cgp, fsopts->needswap), cgino));
 
@@ -1095,10 +1100,10 @@ ffs_write_inode(union dinode *dp, uint32_t ino, const fsinfo_t *fsopts)
 	dp2 = (struct ufs2_dinode *)buf;
 
 	if (fs->fs_cstotal.cs_nifree == 0)
-		errx(1, "ffs_write_inode: fs out of inodes for ino %u",
-		    ino);
+		errx(EXIT_FAILURE,
+		    "ffs_write_inode: fs out of inodes for ino %u", ino);
 	if (fs->fs_cs(fs, cg).cs_nifree == 0)
-		errx(1,
+		errx(EXIT_FAILURE,
 		    "ffs_write_inode: cg %d out of inodes for ino %u",
 		    cg, ino);
 	setbit(cg_inosused(cgp, fsopts->needswap), cgino);
@@ -1108,7 +1113,7 @@ ffs_write_inode(union dinode *dp, uint32_t ino, const fsinfo_t *fsopts)
 	if (S_ISDIR(DIP(dp, mode))) {
 		ufs_add32(cgp->cg_cs.cs_ndir, 1, fsopts->needswap);
 		fs->fs_cstotal.cs_ndir++;
-		fs->fs_cs(fs, cg).cs_ndir++; 
+		fs->fs_cs(fs, cg).cs_ndir++;
 	}
 
 	/*
@@ -1163,5 +1168,5 @@ panic(const char *fmt, ...)
 	va_start(ap, fmt);
 	vwarnx(fmt, ap);
 	va_end(ap);
-	exit(1);
+	exit(EXIT_FAILURE);
 }

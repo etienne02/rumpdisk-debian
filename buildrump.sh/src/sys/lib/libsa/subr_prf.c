@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_prf.c,v 1.29 2020/06/06 15:45:47 thorpej Exp $	*/
+/*	$NetBSD: subr_prf.c,v 1.31 2024/08/31 07:12:57 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1993
@@ -197,8 +197,11 @@ reswitch:
 			lflag |= SIGN;
 			goto reswitch;
 		case '0':
-			lflag |= ZEROPAD;
-			goto reswitch;
+			if (width == 0) {
+				lflag |= ZEROPAD;
+				goto reswitch;
+			}
+			/* FALLTHROUGH */
 		case '1': case '2': case '3': case '4': case '5':
 		case '6': case '7': case '8': case '9':
 			for (;;) {
@@ -209,6 +212,7 @@ reswitch:
 					break;
 				++fmt;
 			}
+			goto reswitch;
 #endif
 		case 'l':
 #ifdef LIBSA_PRINTF_LONGLONG_SUPPORT

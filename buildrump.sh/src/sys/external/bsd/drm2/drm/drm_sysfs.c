@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_sysfs.c,v 1.4 2018/08/27 07:00:09 riastradh Exp $	*/
+/*	$NetBSD: drm_sysfs.c,v 1.9 2021/12/19 12:30:31 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,23 +30,33 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_sysfs.c,v 1.4 2018/08/27 07:00:09 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_sysfs.c,v 1.9 2021/12/19 12:30:31 riastradh Exp $");
 
-#include <drm/drmP.h>
-#include <drm/drm_internal.h>
+#include <drm/drm_device.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_sysfs.h>
+
+#include "../dist/drm/drm_internal.h"
 
 int
-drm_sysfs_connector_add(struct drm_connector *connector __unused)
+drm_sysfs_connector_add(struct drm_connector *connector)
 {
+	connector->kdev = connector->dev->dev; /* XXX */
 	return 0;
 }
 
 void
-drm_sysfs_connector_remove(struct drm_connector *connector __unused)
+drm_sysfs_connector_remove(struct drm_connector *connector)
 {
 }
 
 void
-drm_sysfs_hotplug_event(struct drm_device *dev __unused)
+drm_sysfs_hotplug_event(struct drm_device *dev)
+{
+}
+
+void
+drm_sysfs_connector_status_event(struct drm_connector *connector,
+    struct drm_property *prop)
 {
 }

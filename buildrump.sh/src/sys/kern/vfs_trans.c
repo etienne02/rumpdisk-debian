@@ -1,4 +1,4 @@
-/*	$NetBSD: vfs_trans.c,v 1.63 2020/05/17 19:34:07 ad Exp $	*/
+/*	$NetBSD: vfs_trans.c,v 1.73 2024/12/07 02:27:38 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_trans.c,v 1.63 2020/05/17 19:34:07 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_trans.c,v 1.73 2024/12/07 02:27:38 riastradh Exp $");
 
 /*
  * File system transaction operations.
@@ -41,18 +41,25 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_trans.c,v 1.63 2020/05/17 19:34:07 ad Exp $");
 #endif
 
 #include <sys/param.h>
-#include <sys/systm.h>
+#include <sys/types.h>
+
 #include <sys/atomic.h>
 #include <sys/buf.h>
+#include <sys/fstrans.h>
+#include <sys/hash.h>
 #include <sys/kmem.h>
 #include <sys/mount.h>
-#include <sys/pserialize.h>
-#include <sys/vnode.h>
-#include <sys/fstrans.h>
-#include <sys/proc.h>
 #include <sys/pool.h>
+#include <sys/proc.h>
+#include <sys/pserialize.h>
+#include <sys/sdt.h>
+#include <sys/systm.h>
+#include <sys/vnode.h>
 
+#include <miscfs/deadfs/deadfs.h>
 #include <miscfs/specfs/specdev.h>
+
+#define FSTRANS_MOUNT_HASHSIZE	32
 
 enum fstrans_lock_type {
 	FSTRANS_LAZY,			/* Granted while not suspended */
@@ -81,10 +88,13 @@ struct fstrans_mount_info {
 	unsigned int fmi_ref_cnt;
 	bool fmi_gone;
 	bool fmi_cow_change;
+	SLIST_ENTRY(fstrans_mount_info) fmi_hash;
 	LIST_HEAD(, fscow_handler) fmi_cow_handler;
 	struct mount *fmi_mount;
+	struct fstrans_mount_info *fmi_lower_info;
 	struct lwp *fmi_owner;
 };
+SLIST_HEAD(fstrans_mount_hashhead, fstrans_mount_info);
 
 static kmutex_t vfs_suspend_lock	/* Serialize suspensions. */
     __cacheline_aligned;
@@ -97,8 +107,12 @@ static LIST_HEAD(fstrans_lwp_head, fstrans_lwp_info) fstrans_fli_head;
 					/* List of all fstrans_lwp_info. */
 static pool_cache_t fstrans_lwp_cache;	/* Cache of fstrans_lwp_info. */
 
+static u_long fstrans_mount_hashmask;
+static struct fstrans_mount_hashhead *fstrans_mount_hashtab;
 static int fstrans_gone_count;		/* Number of fstrans_mount_info gone. */
 
+static inline uint32_t fstrans_mount_hash(struct mount *);
+static inline struct fstrans_mount_info *fstrans_mount_get(struct mount *);
 static void fstrans_mount_dtor(struct fstrans_mount_info *);
 static void fstrans_clear_lwp_info(void);
 static inline struct fstrans_lwp_info *
@@ -113,72 +127,6 @@ static bool state_change_done(const struct fstrans_mount_info *);
 static bool cow_state_change_done(const struct fstrans_mount_info *);
 static void cow_change_enter(struct fstrans_mount_info *);
 static void cow_change_done(struct fstrans_mount_info *);
-
-extern struct mount *dead_rootmount;
-
-#if defined(DIAGNOSTIC)
-
-struct fstrans_debug_mount {
-	struct mount *fdm_mount;
-	SLIST_ENTRY(fstrans_debug_mount) fdm_list;
-};
-
-static SLIST_HEAD(, fstrans_debug_mount) fstrans_debug_mount_head =
-    SLIST_HEAD_INITIALIZER(fstrans_debug_mount_head);
-
-static void
-fstrans_debug_mount(struct mount *mp)
-{
-	struct fstrans_debug_mount *fdm, *new;
-
-	KASSERT(mutex_owned(&fstrans_lock));
-
-	mutex_exit(&fstrans_lock);
-	new = kmem_alloc(sizeof(*new), KM_SLEEP);
-	new->fdm_mount = mp;
-	mutex_enter(&fstrans_lock);
-
-	SLIST_FOREACH(fdm, &fstrans_debug_mount_head, fdm_list)
-		KASSERT(fdm->fdm_mount != mp);
-	SLIST_INSERT_HEAD(&fstrans_debug_mount_head, new, fdm_list);
-}
-
-static void
-fstrans_debug_unmount(struct mount *mp)
-{
-	struct fstrans_debug_mount *fdm;
-
-	KASSERT(mutex_owned(&fstrans_lock));
-
-	SLIST_FOREACH(fdm, &fstrans_debug_mount_head, fdm_list)
-		if (fdm->fdm_mount == mp)
-			break;
-	KASSERT(fdm != NULL);
-	SLIST_REMOVE(&fstrans_debug_mount_head, fdm,
-	    fstrans_debug_mount, fdm_list);
-	kmem_free(fdm, sizeof(*fdm));
-}
-
-static void
-fstrans_debug_validate_mount(struct mount *mp)
-{
-	struct fstrans_debug_mount *fdm;
-
-	KASSERT(mutex_owned(&fstrans_lock));
-
-	SLIST_FOREACH(fdm, &fstrans_debug_mount_head, fdm_list)
-		if (fdm->fdm_mount == mp)
-			break;
-	KASSERTMSG(fdm != NULL, "mount %p invalid", mp);
-}
-
-#else /* defined(DIAGNOSTIC) */
-
-#define fstrans_debug_mount(mp)
-#define fstrans_debug_unmount(mp)
-#define fstrans_debug_validate_mount(mp)
-
-#endif  /* defined(DIAGNOSTIC) */
 
 /*
  * Initialize.
@@ -197,6 +145,8 @@ fstrans_init(void)
 	    coherency_unit, 0, 0, "fstlwp", NULL, IPL_NONE,
 	    fstrans_lwp_pcc, fstrans_lwp_pcd, NULL);
 	KASSERT(fstrans_lwp_cache != NULL);
+	fstrans_mount_hashtab = hashinit(FSTRANS_MOUNT_HASHSIZE, HASH_SLIST,
+	    true, &fstrans_mount_hashmask);
 }
 
 /*
@@ -265,6 +215,54 @@ fstrans_lwp_dtor(lwp_t *l)
 }
 
 /*
+ * mount pointer to hash
+ */
+static inline uint32_t
+fstrans_mount_hash(struct mount *mp)
+{
+
+	return hash32_buf(&mp, sizeof(mp), HASH32_BUF_INIT) &
+	    fstrans_mount_hashmask;
+}
+
+/*
+ * retrieve fstrans_mount_info by mount or NULL
+ */
+static inline struct fstrans_mount_info *
+fstrans_mount_get(struct mount *mp)
+{
+	uint32_t indx;
+	struct fstrans_mount_info *fmi, *fmi_lower;
+
+	KASSERT(mutex_owned(&fstrans_lock));
+
+	indx = fstrans_mount_hash(mp);
+	SLIST_FOREACH(fmi, &fstrans_mount_hashtab[indx], fmi_hash) {
+		if (fmi->fmi_mount == mp) {
+			if (__predict_false(mp->mnt_lower != NULL &&
+			    fmi->fmi_lower_info == NULL)) {
+				/*
+				 * Intern the lower/lowest mount into
+				 * this mount info on first lookup.
+				 */
+				KASSERT(fmi->fmi_ref_cnt == 1);
+
+				fmi_lower = fstrans_mount_get(mp->mnt_lower);
+				if (fmi_lower && fmi_lower->fmi_lower_info)
+					fmi_lower = fmi_lower->fmi_lower_info;
+				if (fmi_lower == NULL)
+					return NULL;
+				fmi->fmi_lower_info = fmi_lower;
+				fmi->fmi_lower_info->fmi_ref_cnt += 1;
+			}
+			return fmi;
+		}
+	}
+
+	return NULL;
+}
+
+/*
  * Dereference mount state.
  */
 static void
@@ -283,8 +281,13 @@ fstrans_mount_dtor(struct fstrans_mount_info *fmi)
 	KASSERT(LIST_FIRST(&fmi->fmi_cow_handler) == NULL);
 	KASSERT(fmi->fmi_owner == NULL);
 
+	if (fmi->fmi_lower_info)
+		fstrans_mount_dtor(fmi->fmi_lower_info);
+
 	KASSERT(fstrans_gone_count > 0);
 	fstrans_gone_count -= 1;
+
+	KASSERT(fmi->fmi_mount->mnt_lower == NULL);
 
 	kmem_free(fmi->fmi_mount, sizeof(*fmi->fmi_mount));
 	kmem_free(fmi, sizeof(*fmi));
@@ -296,7 +299,10 @@ fstrans_mount_dtor(struct fstrans_mount_info *fmi)
 int
 fstrans_mount(struct mount *mp)
 {
+	uint32_t indx;
 	struct fstrans_mount_info *newfmi;
+
+	indx = fstrans_mount_hash(mp);
 
 	newfmi = kmem_alloc(sizeof(*newfmi), KM_SLEEP);
 	newfmi->fmi_state = FSTRANS_NORMAL;
@@ -305,11 +311,11 @@ fstrans_mount(struct mount *mp)
 	LIST_INIT(&newfmi->fmi_cow_handler);
 	newfmi->fmi_cow_change = false;
 	newfmi->fmi_mount = mp;
+	newfmi->fmi_lower_info = NULL;
 	newfmi->fmi_owner = NULL;
 
 	mutex_enter(&fstrans_lock);
-	mp->mnt_transinfo = newfmi;
-	fstrans_debug_mount(mp);
+	SLIST_INSERT_HEAD(&fstrans_mount_hashtab[indx], newfmi, fmi_hash);
 	mutex_exit(&fstrans_lock);
 
 	return 0;
@@ -321,14 +327,17 @@ fstrans_mount(struct mount *mp)
 void
 fstrans_unmount(struct mount *mp)
 {
-	struct fstrans_mount_info *fmi = mp->mnt_transinfo;
+	uint32_t indx;
+	struct fstrans_mount_info *fmi;
 
-	KASSERT(fmi != NULL);
+	indx = fstrans_mount_hash(mp);
 
 	mutex_enter(&fstrans_lock);
-	fstrans_debug_unmount(mp);
+	fmi = fstrans_mount_get(mp);
+	KASSERT(fmi != NULL);
 	fmi->fmi_gone = true;
-	mp->mnt_transinfo = NULL;
+	SLIST_REMOVE(&fstrans_mount_hashtab[indx],
+	    fmi, fstrans_mount_info, fmi_hash);
 	fstrans_gone_count += 1;
 	fstrans_mount_dtor(fmi);
 	mutex_exit(&fstrans_lock);
@@ -390,12 +399,38 @@ fstrans_clear_lwp_info(void)
 static struct fstrans_lwp_info *
 fstrans_alloc_lwp_info(struct mount *mp)
 {
-	struct fstrans_lwp_info *fli;
+	struct fstrans_lwp_info *fli, *fli_lower;
 	struct fstrans_mount_info *fmi;
 
 	for (fli = curlwp->l_fstrans; fli; fli = fli->fli_succ) {
 		if (fli->fli_mount == mp)
 			return fli;
+	}
+
+	/*
+	 * Lookup mount info and get lower mount per lwp info.
+	 */
+	mutex_enter(&fstrans_lock);
+	fmi = fstrans_mount_get(mp);
+	if (fmi == NULL) {
+		mutex_exit(&fstrans_lock);
+		return NULL;
+	}
+	fmi->fmi_ref_cnt += 1;
+	mutex_exit(&fstrans_lock);
+
+	if (fmi->fmi_lower_info) {
+		fli_lower =
+		    fstrans_alloc_lwp_info(fmi->fmi_lower_info->fmi_mount);
+		if (fli_lower == NULL) {
+			mutex_enter(&fstrans_lock);
+			fstrans_mount_dtor(fmi);
+			mutex_exit(&fstrans_lock);
+
+			return NULL;
+		}
+	} else {
+		fli_lower = NULL;
 	}
 
 	/*
@@ -409,28 +444,20 @@ fstrans_alloc_lwp_info(struct mount *mp)
 	KASSERT(fli->fli_alias == NULL);
 	KASSERT(fli->fli_mountinfo == NULL);
 	KASSERT(fli->fli_self == NULL);
+
+	/*
+	 * Attach the mount info and alias.
+	 */
+
+	fli->fli_self = curlwp;
+	fli->fli_mount = mp;
+	fli->fli_mountinfo = fmi;
+
 	fli->fli_succ = curlwp->l_fstrans;
 	curlwp->l_fstrans = fli;
 
-	/*
-	 * Attach the entry to the mount if its mnt_transinfo is valid.
-	 */
-
-	mutex_enter(&fstrans_lock);
-	fli->fli_self = curlwp;
-	fstrans_debug_validate_mount(mp);
-	fmi = mp->mnt_transinfo;
-	KASSERT(fmi != NULL);
-	fli->fli_mount = mp;
-	fli->fli_mountinfo = fmi;
-	fmi->fmi_ref_cnt += 1;
-	do {
-		mp = mp->mnt_lower;
-	} while (mp && mp->mnt_lower);
-	mutex_exit(&fstrans_lock);
-
-	if (mp) {
-		fli->fli_alias = fstrans_alloc_lwp_info(mp);
+	if (fli_lower) {
+		fli->fli_alias = fli_lower;
 		fli->fli_alias->fli_alias_cnt++;
 		fli = fli->fli_alias;
 	}
@@ -451,8 +478,8 @@ fstrans_get_lwp_info(struct mount *mp, bool do_alloc)
 	 */
 	for (fli = curlwp->l_fstrans; fli; fli = fli->fli_succ) {
 		if (fli->fli_mount == mp) {
-			KASSERT((mp->mnt_lower == NULL) ==
-			    (fli->fli_alias == NULL));
+			KASSERT(mp->mnt_lower == NULL ||
+			    fli->fli_alias != NULL);
 			if (fli->fli_alias != NULL)
 				fli = fli->fli_alias;
 			break;
@@ -462,9 +489,6 @@ fstrans_get_lwp_info(struct mount *mp, bool do_alloc)
 	if (do_alloc) {
 		if (__predict_false(fli == NULL))
 			fli = fstrans_alloc_lwp_info(mp);
-		KASSERT(fli != NULL && !fli->fli_mountinfo->fmi_gone);
-	} else {
-		KASSERT(fli != NULL);
 	}
 
 	return fli;
@@ -499,14 +523,11 @@ _fstrans_start(struct mount *mp, enum fstrans_lock_type lock_type, int wait)
 	struct fstrans_lwp_info *fli;
 	struct fstrans_mount_info *fmi;
 
-#ifndef FSTRANS_DEAD_ENABLED
-	if (mp == dead_rootmount)
-		return 0;
-#endif
-
 	ASSERT_SLEEPABLE();
 
 	fli = fstrans_get_lwp_info(mp, true);
+	if (fli == NULL)
+		return 0;
 	fmi = fli->fli_mountinfo;
 
 	if (fli->fli_trans_cnt > 0) {
@@ -526,7 +547,7 @@ _fstrans_start(struct mount *mp, enum fstrans_lock_type lock_type, int wait)
 	pserialize_read_exit(s);
 
 	if (! wait)
-		return EBUSY;
+		return SET_ERROR(EBUSY);
 
 	mutex_enter(&fstrans_lock);
 	while (! grant_lock(fmi, lock_type))
@@ -573,12 +594,9 @@ fstrans_done(struct mount *mp)
 	struct fstrans_lwp_info *fli;
 	struct fstrans_mount_info *fmi;
 
-#ifndef FSTRANS_DEAD_ENABLED
-	if (mp == dead_rootmount)
-		return;
-#endif
-
 	fli = fstrans_get_lwp_info(mp, false);
+	if (fli == NULL)
+		return;
 	fmi = fli->fli_mountinfo;
 	KASSERT(fli->fli_trans_cnt > 0);
 
@@ -617,7 +635,9 @@ fstrans_held(struct mount *mp)
 
 	KASSERT(mp != dead_rootmount);
 
-	fli = fstrans_get_lwp_info(mp, true);
+	fli = fstrans_get_lwp_info(mp, false);
+	if (fli == NULL)
+		return 0;
 	fmi = fli->fli_mountinfo;
 
 	return (fli->fli_trans_cnt > 0 || fmi->fmi_owner == curlwp);
@@ -634,7 +654,9 @@ fstrans_is_owner(struct mount *mp)
 
 	KASSERT(mp != dead_rootmount);
 
-	fli = fstrans_get_lwp_info(mp, true);
+	fli = fstrans_get_lwp_info(mp, false);
+	if (fli == NULL)
+		return 0;
 	fmi = fli->fli_mountinfo;
 
 	return (fmi->fmi_owner == curlwp);
@@ -680,6 +702,8 @@ fstrans_setstate(struct mount *mp, enum fstrans_state new_state)
 	KASSERT(mp != dead_rootmount);
 
 	fli = fstrans_get_lwp_info(mp, true);
+	if (fli == NULL)
+		return SET_ERROR(ENOENT);
 	fmi = fli->fli_mountinfo;
 	old_state = fmi->fmi_state;
 	if (old_state == new_state)
@@ -729,6 +753,7 @@ fstrans_getstate(struct mount *mp)
 	KASSERT(mp != dead_rootmount);
 
 	fli = fstrans_get_lwp_info(mp, true);
+	KASSERT(fli != NULL);
 	fmi = fli->fli_mountinfo;
 
 	return fmi->fmi_state;
@@ -744,21 +769,29 @@ vfs_suspend(struct mount *mp, int nowait)
 	int error;
 
 	if (mp == dead_rootmount)
-		return EOPNOTSUPP;
+		return SET_ERROR(EOPNOTSUPP);
 
 	fli = fstrans_get_lwp_info(mp, true);
-	mp = fli->fli_mount;
+	if (fli == NULL)
+		return SET_ERROR(ENOENT);
 
 	if (nowait) {
 		if (!mutex_tryenter(&vfs_suspend_lock))
-			return EWOULDBLOCK;
+			return SET_ERROR(EWOULDBLOCK);
 	} else
 		mutex_enter(&vfs_suspend_lock);
 
-	if ((error = VFS_SUSPENDCTL(mp, SUSPEND_SUSPEND)) != 0)
+	if ((error = VFS_SUSPENDCTL(fli->fli_mount, SUSPEND_SUSPEND)) != 0) {
 		mutex_exit(&vfs_suspend_lock);
+		return error;
+	}
 
-	return error;
+	if ((mp->mnt_iflag & IMNT_GONE) != 0) {
+		vfs_resume(mp);
+		return SET_ERROR(ENOENT);
+	}
+
+	return 0;
 }
 
 /*
@@ -777,7 +810,6 @@ vfs_resume(struct mount *mp)
 	VFS_SUSPENDCTL(mp, SUSPEND_RESUME);
 	mutex_exit(&vfs_suspend_lock);
 }
-
 
 /*
  * True, if no thread is running a cow handler.
@@ -858,7 +890,7 @@ fscow_establish(struct mount *mp, int (*func)(void *, struct buf *, bool),
 	KASSERT(mp != dead_rootmount);
 
 	mutex_enter(&fstrans_lock);
-	fmi = mp->mnt_transinfo;
+	fmi = fstrans_mount_get(mp);
 	KASSERT(fmi != NULL);
 	fmi->fmi_ref_cnt += 1;
 	mutex_exit(&fstrans_lock);
@@ -886,8 +918,10 @@ fscow_disestablish(struct mount *mp, int (*func)(void *, struct buf *, bool),
 
 	KASSERT(mp != dead_rootmount);
 
-	fmi = mp->mnt_transinfo;
+	mutex_enter(&fstrans_lock);
+	fmi = fstrans_mount_get(mp);
 	KASSERT(fmi != NULL);
+	mutex_exit(&fstrans_lock);
 
 	cow_change_enter(fmi);
 	LIST_FOREACH(hp, &fmi->fmi_cow_handler, ch_list)
@@ -900,7 +934,7 @@ fscow_disestablish(struct mount *mp, int (*func)(void *, struct buf *, bool),
 	fstrans_mount_dtor(fmi);
 	cow_change_done(fmi);
 
-	return hp ? 0 : EINVAL;
+	return hp ? 0 : SET_ERROR(EINVAL);
 }
 
 /*
@@ -934,6 +968,7 @@ fscow_run(struct buf *bp, bool data_valid)
 	}
 
 	fli = fstrans_get_lwp_info(mp, true);
+	KASSERT(fli != NULL);
 	fmi = fli->fli_mountinfo;
 
 	/*
@@ -963,8 +998,8 @@ fscow_run(struct buf *bp, bool data_valid)
 	LIST_FOREACH(hp, &fmi->fmi_cow_handler, ch_list)
 		if ((error = (*hp->ch_func)(hp->ch_arg, bp, data_valid)) != 0)
 			break;
- 	if (error == 0)
- 		bp->b_flags |= B_COWDONE;
+	if (error == 0)
+		bp->b_flags |= B_COWDONE;
 
 	/*
 	 * Check if other threads want to change the list.
@@ -1051,9 +1086,14 @@ fstrans_print_lwp(struct proc *p, struct lwp *l, int verbose)
 static void
 fstrans_print_mount(struct mount *mp, int verbose)
 {
+	uint32_t indx;
 	struct fstrans_mount_info *fmi;
 
-	fmi = mp->mnt_transinfo;
+	indx = fstrans_mount_hash(mp);
+	SLIST_FOREACH(fmi, &fstrans_mount_hashtab[indx], fmi_hash)
+		if (fmi->fmi_mount == mp)
+			break;
+
 	if (!verbose && (fmi == NULL || fmi->fmi_state == FSTRANS_NORMAL))
 		return;
 

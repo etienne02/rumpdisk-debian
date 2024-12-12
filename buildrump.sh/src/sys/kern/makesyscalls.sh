@@ -1,4 +1,4 @@
-#	$NetBSD: makesyscalls.sh,v 1.185 2021/04/14 02:45:40 christos Exp $
+#	$NetBSD: makesyscalls.sh,v 1.187 2023/07/28 18:19:01 christos Exp $
 #
 # Copyright (c) 1994, 1996, 2000 Christopher G. Demetriou
 # All rights reserved.
@@ -58,7 +58,7 @@ esac
 #	nsysent		the size of the sysent table
 #	sys_nosys	[optional] name of function called for unsupported
 #			syscalls, if not sys_nosys()
-#       maxsysargs	[optiona] the maximum number or arguments
+#       maxsysargs	[optional] the maximum number or arguments
 #	rumpcalls	???
 #	rumpcallshdr	???
 #	rumpsysmap	???
@@ -419,6 +419,7 @@ NR == 1 {
 	uncompattypes["struct timeval50"] = "struct timeval";
 	uncompattypes["struct timespec50"] = "struct timespec";
 	uncompattypes["struct stat30"] = "struct stat";
+	uncompattypes["struct kevent100"] = "struct kevent";
 
 	next
 }

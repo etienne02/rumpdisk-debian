@@ -1,4 +1,4 @@
-/*	$NetBSD: compat_16_machdep.c,v 1.20 2020/07/06 09:34:18 rin Exp $	*/
+/*	$NetBSD: compat_16_machdep.c,v 1.26 2024/06/19 15:19:22 rin Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: compat_16_machdep.c,v 1.20 2020/07/06 09:34:18 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: compat_16_machdep.c,v 1.26 2024/06/19 15:19:22 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altivec.h"
@@ -52,12 +52,36 @@ __KERNEL_RCSID(0, "$NetBSD: compat_16_machdep.c,v 1.20 2020/07/06 09:34:18 rin E
 #include <compat/sys/signal.h>
 #include <compat/sys/signalvar.h>
 
+#include <powerpc/frame.h>
 #include <powerpc/pcb.h>
 #include <powerpc/psl.h>
 #include <powerpc/fpu.h>
 #if defined(ALTIVEC) || defined(PPC_HAVE_SPE)
 #include <powerpc/altivec.h>
 #endif
+
+#ifdef _LP64
+
+/*
+ * COMPAT_16 is useful only with COMPAT_NETBSD32.
+ */
+void
+sendsig_sigcontext(const ksiginfo_t *ksi, const sigset_t *mask)
+{
+
+	printf("sendsig_sigcontext: illegal\n");
+	sigexit(curlwp, SIGILL);
+}
+
+int
+compat_16_sys___sigreturn14(struct lwp *l,
+    const struct compat_16_sys___sigreturn14_args *uap, register_t *retval)
+{
+
+	return ENOSYS;
+}
+
+#else
 
 /*
  * Send a signal to process.
@@ -104,7 +128,12 @@ sendsig_sigcontext(const ksiginfo_t *ksi, const sigset_t *mask)
 	utf->srr1 |= pcb->pcb_flags & (PCB_FE0|PCB_FE1);
 #endif
 #if defined(ALTIVEC) || defined(PPC_HAVE_SPE)
-	utf->srr1 |= vec_used_p(l) ? PSL_VEC : 0;
+	/*
+	 * We can't round-trip the vector unit registers with a
+	 * sigcontext, so at least get them saved into the PCB.
+	 * XXX vec_save_to_mcontext() has a special hack for this.
+	 */
+	vec_save_to_mcontext(l, NULL, NULL);
 #endif
 #ifdef PPC_OEA
 	utf->vrsave = tf->tf_vrsave;
@@ -134,7 +163,7 @@ sendsig_sigcontext(const ksiginfo_t *ksi, const sigset_t *mask)
 	if (error != 0) {
 		/*
 		 * Process has trashed its stack; give it an illegal
-		 * instructoin to halt it in its tracks.
+		 * instruction to halt it in its tracks.
 		 */
 		sigexit(l, SIGILL);
 		/* NOTREACHED */
@@ -146,7 +175,7 @@ sendsig_sigcontext(const ksiginfo_t *ksi, const sigset_t *mask)
 	 */
 	switch (ps->sa_sigdesc[sig].sd_vers) {
 #if 1 /* COMPAT_16 */
-	case 0:		/* legacy on-stack sigtramp */
+	case __SIGTRAMP_SIGCODE_VERSION:	/* legacy on-stack sigtramp */
 		tf->tf_fixreg[1] = (register_t)fp;
 		tf->tf_lr = (register_t)catcher;
 		tf->tf_fixreg[3] = (register_t)sig;
@@ -156,7 +185,7 @@ sendsig_sigcontext(const ksiginfo_t *ksi, const sigset_t *mask)
 		break;
 #endif /* COMPAT_16 */
 
-	case 1:
+	case __SIGTRAMP_SIGCONTEXT_VERSION:
 		tf->tf_fixreg[1] = (register_t)fp;
 		tf->tf_lr = (register_t)catcher;
 		tf->tf_fixreg[3] = (register_t)sig;
@@ -193,7 +222,7 @@ compat_16_sys___sigreturn14(struct lwp *l,
 	/*
 	 * The trampoline hands us the context.
 	 * It is unsafe to keep track of it ourselves, in the event that a
-	 * program jumps out of a signal hander.
+	 * program jumps out of a signal handler.
 	 */
 	if ((error = copyin(SCARG(uap, sigcntxp), &sc, sizeof sc)) != 0)
 		return (error);
@@ -221,6 +250,15 @@ compat_16_sys___sigreturn14(struct lwp *l,
 	pcb->pcb_flags &= ~(PCB_FE0|PCB_FE1);
 	pcb->pcb_flags |= utf->srr1 & (PCB_FE0|PCB_FE1);
 #endif
+#if defined(ALTIVEC) || defined(PPC_HAVE_SPE)
+	/*
+	 * We can't round-trip the vector unit registers with a
+	 * sigcontext, so at least force them to get reloaded from
+	 * the PCB (we saved them into the PCB in sendsig_sigcontext()).
+	 * XXX vec_restore_from_mcontext() has a special hack for this.
+	 */
+	vec_restore_from_mcontext(l, NULL);
+#endif
 #ifdef PPC_OEA
 	tf->tf_vrsave = utf->vrsave;
 	tf->tf_mq = utf->mq;
@@ -238,3 +276,5 @@ compat_16_sys___sigreturn14(struct lwp *l,
 
 	return (EJUSTRETURN);
 }
+
+#endif /* !_LP64 */

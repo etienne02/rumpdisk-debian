@@ -1,4 +1,4 @@
-/* $NetBSD: machdep.c,v 1.106 2020/06/11 19:20:44 ad Exp $ */
+/* $NetBSD: machdep.c,v 1.112 2024/03/05 14:15:32 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.106 2020/06/11 19:20:44 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.112 2024/03/05 14:15:32 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -49,7 +49,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.106 2020/06/11 19:20:44 ad Exp $");
 #include <sys/conf.h>
 #include <sys/file.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <sys/ioctl.h>
@@ -84,7 +83,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.106 2020/06/11 19:20:44 ad Exp $");
 #include <machine/pte.h>
 #include <machine/kcore.h>	/* XXX should be pulled in by sys/kcore.h */
 
-#include <luna68k/dev/syscn.h>
+#include <luna68k/dev/siottyvar.h>
 
 #include <dev/cons.h>
 #include <dev/mm.h>
@@ -136,7 +135,6 @@ cpu_kcore_hdr_t cpu_kcore_hdr;
 int	machtype;	/* model: 1 for LUNA-1, 2 for LUNA-2 */
 int	sysconsole;	/* console: 0 for ttya, 1 for video */
 
-extern struct consdev syscons;
 extern void omfb_cnattach(void);
 extern void ws_cnattach(void);
 
@@ -166,7 +164,7 @@ luna68k_init(void)
 
 	/* initialize cn_tab for early console */
 #if 1
-	cn_tab = &syscons;
+	cn_tab = &siottycons;
 #else
 	cn_tab = &romcons;
 #endif
@@ -224,7 +222,7 @@ luna68k_init(void)
 	 *
 	 * 'bootarg' on LUNA-II has "<args of x command>" only.
 	 *
-	 * NetBSD/luna68k cares only the first argment; any of "sda".
+	 * NetBSD/luna68k cares only the first argument; any of "sda".
 	 */
 	bootarg[63] = '\0';
 	for (cp = bootarg; *cp != '\0'; cp++) {
@@ -248,9 +246,10 @@ void
 consinit(void)
 {
 
-	if (sysconsole == 0)
-		syscninit(0);
-	else {
+	if (sysconsole == 0) {
+		cn_tab = &siottycons;
+		(*cn_tab->cn_init)(cn_tab);
+	} else {
 		omfb_cnattach();
 		ws_cnattach();
 	}
@@ -439,11 +438,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */
@@ -472,7 +466,9 @@ haltsys:
 	}
 	if (howto & RB_HALT) {
 		printf("System halted.	Hit any key to reboot.\n\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 	}
 
 	printf("rebooting...\n");
@@ -820,14 +816,7 @@ luna68k_abort(const char *cp)
 int
 cpu_exec_aout_makecmds(struct lwp *l, struct exec_package *epp)
 {
-	int error = ENOEXEC;
-#ifdef COMPAT_SUNOS
-	extern sunos_exec_aout_makecmds(struct proc *, struct exec_package *);
-
-	if ((error = sunos_exec_aout_makecmds(l->l_proc, epp)) == 0)
-		return 0;
-#endif
-	return error;
+	return ENOEXEC;
 }
 
 #ifdef MODULAR

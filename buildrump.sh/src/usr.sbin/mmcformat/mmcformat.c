@@ -1,9 +1,9 @@
-/* $NetBSD: mmcformat.c,v 1.6 2019/12/26 04:53:12 msaitoh Exp $ */
+/* $NetBSD: mmcformat.c,v 1.9 2023/04/04 20:28:01 rillig Exp $ */
 
 /*
  * Copyright (c) 2006, 2008 Reinoud Zandijk
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -12,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
  * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -23,27 +23,30 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  */
 
-#include <stdio.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <strings.h>
-#include <assert.h>
-#include <limits.h>
+#include <sys/cdefs.h>
+__RCSID("$NetBSD: mmcformat.c,v 1.9 2023/04/04 20:28:01 rillig Exp $");
+
 #include <sys/types.h>
 #include <sys/time.h>
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <unistd.h>
 
 #include "uscsilib.h"
 
 
 /* globals */
-struct uscsi_dev dev;
+static struct uscsi_dev dev;
 extern int scsilib_verbose;
 
 /* #define DEBUG(a) {a;} */
@@ -96,7 +99,7 @@ uscsi_waitop(struct uscsi_dev *mydev)
 	bzero(buffer, sizeof(buffer));
 
 	/*
-	 * not be to unpatient... give the drive some time to start or it
+	 * not be to impatient... give the drive some time to start or it
 	 * might break off
 	 */
 
@@ -155,7 +158,7 @@ print_mmc_profile(int profile)
 
 	switch (profile) {
 	case 0x00 : return "Unknown[0] profile";
-	case 0x01 : return "Non removeable disc";
+	case 0x01 : return "Non removable disc";
 	case 0x02 : return "Removable disc";
 	case 0x03 : return "Magneto Optical with sector erase";
 	case 0x04 : return "Magneto Optical write once";
@@ -313,7 +316,7 @@ get_format_capabilities(struct uscsi_dev *mydev, uint8_t *buf, uint32_t *len)
 
 static void
 print_format(int format_tp, uint32_t num_blks, uint32_t param,
-	int dscr_type, int verbose, int *supported) 
+	int dscr_type, int verbose, int *supported)
 {
 	char const *format_str, *nblks_str, *param_str, *user_spec;
 
@@ -350,38 +353,38 @@ print_format(int format_tp, uint32_t num_blks, uint32_t param,
 	/* 0x06 - 0x0f reserved */
 	case  0x10 :
 		format_str = "CD-RW/DVD-RW full packet format";
-		nblks_str  = "adressable blocks";
+		nblks_str  = "addressable blocks";
 		param_str  = "fixed packet size/ECC blocksize in sectors";
 		user_spec  = "'-F -p [-b blockingnr]'";
 		break;
 	case  0x11 :
 		format_str = "CD-RW/DVD-RW grow session";
-		nblks_str  = "adressable blocks";
+		nblks_str  = "addressable blocks";
 		param_str  = "fixed packet size/ECC blocksize in sectors";
 		user_spec  = "'-G'";
 		break;
 	case  0x12 :
 		format_str = "CD-RW/DVD-RW add session";
-		nblks_str  = "adressable blocks";
+		nblks_str  = "addressable blocks";
 		param_str  = "maximum fixed packet size/ECC blocksize "
 			     "in sectors";
 		*supported = 0;
 		break;
 	case  0x13 :
 		format_str = "DVD-RW max growth of last complete session";
-		nblks_str  = "adressable blocks";
+		nblks_str  = "addressable blocks";
 		param_str  = "ECC blocksize in sectors";
 		user_spec  = "'-G'";
 		break;
 	case  0x14 :
 		format_str = "DVD-RW quick grow last session";
-		nblks_str  = "adressable blocks";
+		nblks_str  = "addressable blocks";
 		param_str  = "ECC blocksize in sectors";
 		*supported = 0;
 		break;
 	case  0x15 :
 		format_str = "DVD-RW quick full format";
-		nblks_str  = "adressable blocks";
+		nblks_str  = "addressable blocks";
 		param_str  = "ECC blocksize in sectors";
 		*supported = 0;
 		break;
@@ -474,7 +477,7 @@ process_format_caps(uint8_t *buf, int list_length, int verbose,
 	bzero(allow,  255);
 	bzero(blks,   255*4);
 	bzero(params, 255*4);
-	
+
 	fcd = buf + 4;
 	list_length -= 4;		/* strip header */
 
@@ -569,7 +572,7 @@ uscsi_format_cdrw_mode7(struct uscsi_dev *mydev, uint32_t blocks)
 
 static int
 uscsi_format_disc(struct uscsi_dev *mydev, int immed, int format_type,
-	uint32_t blocks, uint32_t param, int certification, int cmplist) 
+	uint32_t blocks, uint32_t param, int certification, int cmplist)
 {
 	scsicmd cmd;
 	struct uscsi_sense sense;
@@ -680,11 +683,6 @@ usage(char *program)
 	);
 	return 1;
 }
-
-
-extern char	*optarg;
-extern int	 optind;
-extern int	 optreset;
 
 
 int
@@ -1080,4 +1078,3 @@ main(int argc, char *argv[])
 
 	return error;
 }
-

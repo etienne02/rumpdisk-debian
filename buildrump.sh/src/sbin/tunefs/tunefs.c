@@ -1,4 +1,4 @@
-/*	$NetBSD: tunefs.c,v 1.54 2020/11/26 02:06:01 dholland Exp $	*/
+/*	$NetBSD: tunefs.c,v 1.58 2023/01/07 19:41:30 chs Exp $	*/
 
 /*
  * Copyright (c) 1983, 1993
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1983, 1993\
 #if 0
 static char sccsid[] = "@(#)tunefs.c	8.3 (Berkeley) 5/3/95";
 #else
-__RCSID("$NetBSD: tunefs.c,v 1.54 2020/11/26 02:06:01 dholland Exp $");
+__RCSID("$NetBSD: tunefs.c,v 1.58 2023/01/07 19:41:30 chs Exp $");
 #endif
 #endif /* not lint */
 
@@ -62,6 +62,7 @@ __RCSID("$NetBSD: tunefs.c,v 1.54 2020/11/26 02:06:01 dholland Exp $");
 #include <fcntl.h>
 #include <fstab.h>
 #include <paths.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +82,7 @@ int	fi;
 long	dev_bsize = 512;
 int	needswap = 0;
 int	is_ufs2 = 0;
+int	extattr = 0;
 off_t	sblockloc;
 int	userquota = 0;
 int	groupquota = 0;
@@ -102,11 +104,12 @@ __dead static	void	usage(void);
 int
 main(int argc, char *argv[])
 {
-	int		i, ch, aflag, pflag, Aflag, Fflag, Nflag, openflags;
+	int		ch, aflag, pflag, Aflag, Fflag, Nflag, openflags;
 	const char	*special, *chg[2];
 	char		device[MAXPATHLEN];
 	int		maxbpg, minfree, optim, secsize;
-	int		avgfilesize, avgfpdir, active;
+	uint32_t	i, avgfilesize, avgfpdir;
+	bool		active;
 	long long	logfilesize;
 	int		secshift, fsbtodb;
 	const char  	*avalue, *pvalue, *name;
@@ -240,7 +243,7 @@ main(int argc, char *argv[])
 	getsb(&sblock, special);
 
 #define CHANGEVAL(old, new, type, suffix) do				\
-	if ((new) != -1) {						\
+	if ((uint32_t)(new) != (uint32_t)-1) {				\
 		if ((new) == (old))					\
 			warnx("%s remains unchanged at %d%s",		\
 			    (type), (old), (suffix));			\
@@ -359,23 +362,25 @@ main(int argc, char *argv[])
 	 * be cleared by kernel or fsck.
 	 */
 	if (aflag) {
-		name = "ACLs";
+		name = "NFSv4 ACLs";
 		if (strcmp(avalue, "enable") == 0) {
-			if (sblock.fs_flags & FS_ACLS) {
+			if (is_ufs2 && !extattr) {
+				warnx("%s not supported by this fs", name);
+			} else if (sblock.fs_flags & FS_NFS4ACLS) {
 				warnx("%s remains unchanged as enabled", name);
 			} else if (sblock.fs_flags & FS_POSIX1EACLS) {
 				warnx("%s and POSIX.1e ACLs are mutually "
 				    "exclusive", name);
 			} else {
-				sblock.fs_flags |= FS_ACLS;
+				sblock.fs_flags |= FS_NFS4ACLS;
 				printf("%s set\n", name);
 			}
 		} else if (strcmp(avalue, "disable") == 0) {
-			if ((~sblock.fs_flags & FS_ACLS) == FS_ACLS) {
+			if ((~sblock.fs_flags & FS_NFS4ACLS) == FS_NFS4ACLS) {
 				warnx("%s remains unchanged as disabled",
 				    name);
 			} else {
-				sblock.fs_flags &= ~FS_ACLS;
+				sblock.fs_flags &= ~FS_NFS4ACLS;
 				printf("%s cleared\n", name);
 			}
  		}
@@ -384,9 +389,11 @@ main(int argc, char *argv[])
 	if (pflag) {
 		name = "POSIX1e ACLs";
 		if (strcmp(pvalue, "enable") == 0) {
-			if (sblock.fs_flags & FS_POSIX1EACLS) {
+			if (is_ufs2 && !extattr) {
+				warnx("%s not supported by this fs", name);
+			} else if (sblock.fs_flags & FS_POSIX1EACLS) {
 				warnx("%s remains unchanged as enabled", name);
-			} else if (sblock.fs_flags & FS_ACLS) {
+			} else if (sblock.fs_flags & FS_NFS4ACLS) {
 				warnx("%s and ACLs are mutually "
 				    "exclusive", name);
 			} else {
@@ -434,8 +441,8 @@ main(int argc, char *argv[])
 		}
 		printf("\tPOSIX.1e ACLs %s\n",
 		    (sblock.fs_flags & FS_POSIX1EACLS) ? "enabled" : "disabled");
-		printf("\tACLs %s\n",
-		    (sblock.fs_flags & FS_ACLS) ? "enabled" : "disabled");
+		printf("\tNFS4 ACLs %s\n",
+		    (sblock.fs_flags & FS_NFS4ACLS) ? "enabled" : "disabled");
 		printf("%s: no changes made\n", getprogname());
 		return 0;
 	}
@@ -657,11 +664,17 @@ getsb(struct fs *fs, const char *file)
 			errx(5, "cannot find filesystem superblock");
 		bread(sblock_try[i] / dev_bsize, (char *)fs, SBLOCKSIZE, file);
 		switch(fs->fs_magic) {
+		case FS_UFS2EA_MAGIC:
+			extattr = 1;
+			/*FALLTHROUGH*/
 		case FS_UFS2_MAGIC:
 			is_ufs2 = 1;
 			/*FALLTHROUGH*/
 		case FS_UFS1_MAGIC:
 			break;
+		case FS_UFS2EA_MAGIC_SWAPPED:
+			extattr = 1;
+			/*FALLTHROUGH*/
 		case FS_UFS2_MAGIC_SWAPPED:
 			is_ufs2 = 1;
 			/*FALLTHROUGH*/

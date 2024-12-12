@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.113 2020/03/25 17:06:19 jdolecek Exp $
+# $NetBSD: GENERIC,v 1.118 2024/01/29 18:27:12 christos Exp $
 #
 # GENERIC machine description file
 #
@@ -130,10 +130,9 @@ file-system	PTYFS		# /dev/pts/N support
 # File system options
 #options 	FFS_EI		# FFS Endian Independent support
 options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
 #options 	UFS_EXTATTR	# Extended attribute support for UFS1
 options 	WAPBL		# File system journaling support
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
 
 # Networking options
 options 	INET		# IP + ICMP + TCP + UDP
@@ -291,6 +290,7 @@ atabus1 at wdc1 channel ?		# PC Card slot
 wd*	at atabus? drive ? flags 0x0000
 
 # PCMCIA network interfaces
+#ep*	at pcmcia0 function ?		# 3Com EtherLink III Ethernet
 mbe*	at pcmcia0 function ?		# MB8696x based Ethernet
 ne*	at pcmcia0 function ?		# NE2000-compatible Ethernet
 wi*	at pcmcia0 function ?		# Lucent/Intersil WaveLan IEEE (802.11)
@@ -298,6 +298,7 @@ wi*	at pcmcia0 function ?		# Lucent/Intersil WaveLan IEEE (802.11)
 # MII/PHY support
 lxtphy*	at mii? phy ?			# Level One LXT-970 PHYs
 nsphyter* at mii? phy ?			# NS83843 PHYs
+#tqphy* at mii? phy?			# TDK Semiconductor PHYs
 ukphy*	at mii? phy ?			# generic unknown PHYs
 
 # PCMCIA Serial Devices
@@ -360,6 +361,7 @@ pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	ksyms			# kernel symbol table interface
 pseudo-device	bcsp			# BlueCore Serial Protocol
 pseudo-device	btuart			# Bluetooth HCI UART (H4)
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 # a pseudo device needed for Coda	# also needs CODA (above)
 #pseudo-device	vcoda			# coda minicache <-> venus comm.
@@ -371,3 +373,6 @@ pseudo-device	wsmux			# mouse & keyboard multiplexor
 #wskbd* at hpf1275a? mux 1
 
 include "dev/veriexec.config"
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/hpcsh/conf/GENERIC.local"

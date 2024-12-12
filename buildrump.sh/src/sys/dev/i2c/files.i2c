@@ -1,4 +1,4 @@
-#	$NetBSD: files.i2c,v 1.116 2021/07/27 20:23:41 macallan Exp $
+#	$NetBSD: files.i2c,v 1.129 2024/12/09 22:05:17 jmcneill Exp $
 
 obsolete defflag	opt_i2cbus.h		I2C_SCAN
 define	i2cbus { }
@@ -106,7 +106,7 @@ device	lmtemp: sysmon_envsys
 attach	lmtemp at iic
 file	dev/i2c/lm75.c				lmtemp
 
-# IST-AG Humidity and Teperature sensor (P14)
+# IST-AG Humidity and Temperature sensor (P14)
 device	hythygtemp: sysmon_envsys
 attach	hythygtemp at iic
 file	dev/i2c/hytp14.c			hythygtemp
@@ -203,6 +203,10 @@ device	tps65217reg: tps65217pmic
 attach	tps65217pmic at iic
 attach	tps65217reg at tps65217pmic
 file	dev/i2c/tps65217pmic.c 		tps65217pmic	needs-flag
+
+# Microchip MCP23008 / MCP23017 I/O Expander
+attach	mcpgpio at iic with mcpgpio_i2c
+file	dev/i2c/mcp23xxxgpio_i2c.c	mcpgpio_i2c
 
 # Microchip MCP980x
 device	mcp980x: sysmon_envsys
@@ -320,19 +324,24 @@ file	dev/i2c/asms.c				asms
 define  ihidbus {[ reportid = -1 ]}
 
 # HID root device for multiple report IDs
-device  ihidev: hid, ihidbus
+device  ihidev: hid, ihidbus, gpio
 attach  ihidev at iic
 file    dev/i2c/ihidev.c			ihidev
 
-#HID mice
+# HID mice
 device	ims: hid, hidms, wsmousedev
 attach	ims at ihidbus
 file	dev/i2c/ims.c				ims
 
-#HID multitouch
+# HID multitouch
 device	imt: hid, hidmt, wsmousedev
 attach	imt at ihidbus
 file	dev/i2c/imt.c				imt
+
+# HID keyboard
+device	ikbd: hid, hidkbd, wskbddev
+attach	ikbd at ihidbus
+file	dev/i2c/ikbd.c				ikbd
 
 # Taos TSL256x ambient light sensor
 device	tsllux: sysmon_envsys
@@ -364,6 +373,7 @@ file	dev/i2c/ssdfb_i2c.c			ssdfb_iic
 device	anxedp: edid, videomode, drmkms, drmkms_i2c
 attach	anxedp at iic
 file	dev/i2c/anxedp.c			anxedp
+makeoptions	anxedp	"CPPFLAGS.anxedp"+="${CPPFLAGS.drmkms}"
 
 # NXP PCA954x / PCA984x I2C switch / mux controllers
 device	pcaiicmux: i2cbus, i2cmux
@@ -384,6 +394,7 @@ file	dev/i2c/twl4030.c			twl
 device	tdahdmi: edid, videomode, drmkms, drmkms_i2c
 attach	tdahdmi at iic
 file	dev/i2c/tda19988.c			tdahdmi
+makeoptions	tdahdmi	"CPPFLAGS.tdahdmi"+="${CPPFLAGS.drmkms}"
 
 # Everest Semi ES8316 Low Power Audio CODEC
 device	es8316ac
@@ -395,6 +406,22 @@ device	cwfg: sysmon_envsys
 attach	cwfg at iic
 file	dev/i2c/cwfg.c				cwfg
 
+# Sensirion SHT30/SHT31/SHT35 Temperature and Humidity sensor
+device sht3xtemp
+attach sht3xtemp at iic
+file dev/i2c/sht3x.c				sht3xtemp
+
+# Sensirion SHT40/SHT41/SHT45 Temperature and Humidity sensor
+device sht4xtemp
+attach sht4xtemp at iic
+file dev/i2c/sht4x.c				sht4xtemp
+
+# Sensirion SGP40 MOx gas sensor
+device sgp40mox
+attach sgp40mox at iic
+file dev/i2c/sgp40.c				sgp40mox
+file dev/i2c/sensirion_voc_algorithm.c		sgp40mox
+
 # Philips PCA955x GPIO
 device	pcagpio: leds
 attach	pcagpio at iic
@@ -404,3 +431,21 @@ file	dev/i2c/pcagpio.c			pcagpio
 device	pcf8574io: leds, sysmon_envsys
 attach	pcf8574io at iic
 file	dev/i2c/pcf8574.c			pcf8574io
+
+# Sparkfun Serial motor controller
+attach  scmd at iic with scmdi2c
+file	dev/i2c/scmdi2c.c			scmdi2c
+
+# Aosong AHT20 Temperature and Humidity sensor
+device aht20temp
+attach aht20temp at iic
+file dev/i2c/aht20.c				aht20temp
+
+# Bosch Sensortec BMP280/BME280 Temperature, Humidity and Pressure sensor
+attach	bmx280thp at iic with bmx280thpi2c
+file dev/i2c/bmx280thpi2c.c			bmx280thpi2c
+
+# Maxim DS2482-100 and DS2482-800 I2C to Onewire bridge
+device ds2482ow: onewirebus
+attach ds2482ow at iic
+file dev/i2c/ds2482ow.c				ds2482ow

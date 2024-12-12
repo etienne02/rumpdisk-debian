@@ -1,4 +1,5 @@
-/*	$NetBSD: x86emu.c,v 1.10 2014/08/04 21:41:44 joerg Exp $	*/
+
+/*	$NetBSD: x86emu.c,v 1.14 2022/11/01 19:45:35 andvar Exp $	*/
 
 /****************************************************************************
 *
@@ -174,7 +175,7 @@ static uint32_t	pop_long (struct X86EMU *);
 
 /****************************************************************************
 REMARKS:
-Handles any pending asychronous interrupts.
+Handles any pending asynchronous interrupts.
 ****************************************************************************/
 static void
 x86emu_intr_dispatch(struct X86EMU *emu, uint8_t intno)
@@ -380,7 +381,7 @@ no segment override. Address modes such as -3[BP] or 10[BP+SI] all refer to
 addresses relative to SS (ie: on the stack). So, at the minimum, all
 decodings of addressing modes would have to set/clear a bit describing
 whether the access is relative to DS or SS.  That is the function of the
-cpu-state-varible emu->x86.mode. There are several potential states:
+cpu-state-variable emu->x86.mode. There are several potential states:
 
 	repe prefix seen  (handled elsewhere)
 	repne prefix seen  (ditto)
@@ -392,7 +393,7 @@ cpu-state-varible emu->x86.mode. There are several potential states:
 	gs segment override
 	ss segment override
 
-	ds/ss select (in absense of override)
+	ds/ss select (in absence of override)
 
 Each of the above 7 items are handled with a bit in the mode field.
 ****************************************************************************/
@@ -6407,7 +6408,7 @@ neg_byte(struct X86EMU *emu, uint8_t s)
 	CONDITIONAL_SET_FLAG(res & 0x80, F_SF);
 	CONDITIONAL_SET_FLAG(PARITY(res), F_PF);
 	/* calculate the borrow chain --- modified such that d=0.
-	 * substitutiing d=0 into     bc= res&(~d|s)|(~d&s); (the one used for
+	 * substituting d=0 into     bc= res&(~d|s)|(~d&s); (the one used for
 	 * sub) and simplifying, since ~d=0xff..., ~d|s == 0xffff..., and
 	 * res&0xfff... == res.  Similarly ~d&s == s.  So the simplified
 	 * result is: */
@@ -6433,7 +6434,7 @@ neg_word(struct X86EMU *emu, uint16_t s)
 	CONDITIONAL_SET_FLAG(PARITY(res & 0xff), F_PF);
 
 	/* calculate the borrow chain --- modified such that d=0.
-	 * substitutiing d=0 into     bc= res&(~d|s)|(~d&s); (the one used for
+	 * substituting d=0 into     bc= res&(~d|s)|(~d&s); (the one used for
 	 * sub) and simplifying, since ~d=0xff..., ~d|s == 0xffff..., and
 	 * res&0xfff... == res.  Similarly ~d&s == s.  So the simplified
 	 * result is: */
@@ -6459,7 +6460,7 @@ neg_long(struct X86EMU *emu, uint32_t s)
 	CONDITIONAL_SET_FLAG(PARITY(res & 0xff), F_PF);
 
 	/* calculate the borrow chain --- modified such that d=0.
-	 * substitutiing d=0 into     bc= res&(~d|s)|(~d&s); (the one used for
+	 * substituting d=0 into     bc= res&(~d|s)|(~d&s); (the one used for
 	 * sub) and simplifying, since ~d=0xff..., ~d|s == 0xffff..., and
 	 * res&0xfff... == res.  Similarly ~d&s == s.  So the simplified
 	 * result is: */

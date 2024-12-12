@@ -1,4 +1,4 @@
-/* $NetBSD: lock.h,v 1.31 2021/04/03 14:56:13 thorpej Exp $ */
+/* $NetBSD: lock.h,v 1.33 2022/02/13 13:42:30 riastradh Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999, 2000 The NetBSD Foundation, Inc.
@@ -69,12 +69,7 @@ static __inline void
 __cpu_simple_lock_init(__cpu_simple_lock_t *alp)
 {
 
-	__asm volatile(
-		"# BEGIN __cpu_simple_lock_init\n"
-		"	stl	$31, %0		\n"
-		"	mb			\n"
-		"	# END __cpu_simple_lock_init"
-		: "=m" (*alp));
+	*alp = __SIMPLELOCK_UNLOCKED;
 }
 
 static __inline void
@@ -106,7 +101,7 @@ __cpu_simple_lock(__cpu_simple_lock_t *alp)
 		"	# END __cpu_simple_lock\n"
 		: "=&r" (t0), "=m" (*alp)
 		: "i" (__SIMPLELOCK_LOCKED), "m" (*alp)
-		: "memory");
+		: "cc", "memory");
 }
 
 static __inline int
@@ -131,7 +126,7 @@ __cpu_simple_lock_try(__cpu_simple_lock_t *alp)
 		"	# END __cpu_simple_lock_try"
 		: "=&r" (t0), "=r" (v0), "=m" (*alp)
 		: "i" (__SIMPLELOCK_LOCKED), "m" (*alp)
-		: "memory");
+		: "cc", "memory");
 
 	return (v0 != 0);
 }
@@ -145,7 +140,9 @@ __cpu_simple_unlock(__cpu_simple_lock_t *alp)
 		"	mb			\n"
 		"	stl	$31, %0		\n"
 		"	# END __cpu_simple_unlock"
-		: "=m" (*alp));
+		: "=m" (*alp)
+		: /* no inputs */
+		: "memory");
 }
 
 #if defined(MULTIPROCESSOR)

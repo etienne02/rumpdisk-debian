@@ -1,4 +1,4 @@
-/*	$NetBSD: mii.c,v 1.57 2021/08/07 16:19:13 thorpej Exp $	*/
+/*	$NetBSD: mii.c,v 1.59 2024/02/08 20:11:55 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2000, 2020 The NetBSD Foundation, Inc.
@@ -31,12 +31,12 @@
  */
 
 /*
- * MII bus layer, glues MII-capable network interface drivers to sharable
+ * MII bus layer, glues MII-capable network interface drivers to shareable
  * PHY drivers.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mii.c,v 1.57 2021/08/07 16:19:13 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mii.c,v 1.59 2024/02/08 20:11:55 andvar Exp $");
 
 #define	__IFMEDIA_PRIVATE
 
@@ -179,7 +179,10 @@ mii_attach(device_t parent, struct mii_data *mii, int capmask,
 					.locators = locs)));
 		if (child) {
 			/* Link it up in the parent's MII data. */
-			callout_init(&child->mii_nway_ch, 0);
+			if (child->mii_flags & MIIF_AUTOTSLEEP)
+				cv_init(&child->mii_nway_cv, "miiauto");
+			else
+				callout_init(&child->mii_nway_ch, 0);
 			mii_lock(mii);
 			LIST_INSERT_HEAD(&mii->mii_phys, child, mii_list);
 			child->mii_offset = offset;

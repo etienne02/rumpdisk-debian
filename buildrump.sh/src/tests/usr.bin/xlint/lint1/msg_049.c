@@ -1,14 +1,9 @@
-/*	$NetBSD: msg_049.c,v 1.3 2021/08/27 20:16:50 rillig Exp $	*/
+/*	$NetBSD: msg_049.c,v 1.6 2023/03/28 14:44:34 rillig Exp $	*/
 # 3 "msg_049.c"
 
-/* Test for message: anonymous struct/union members is a C9X feature [49] */
+/* Test for message: anonymous struct/union members is a C11 feature [49] */
 
-/* lint1-flags: -sw */
-
-/*
- * FIXME: C99 does not allow anonymous struct/union members, that's a GCC
- * extension that got incorporated into C11.
- */
+/* lint1-flags: -Sw -X 351 */
 
 struct {
 	unsigned int flag: 1;
@@ -23,5 +18,5 @@ struct {
 		int int_value;
 		void *pointer_value;
 	};
-	/* expect-1: warning: anonymous struct/union members is a C9X feature [49] */
+	/* expect-1: warning: anonymous struct/union members is a C11 feature [49] */
 } s;

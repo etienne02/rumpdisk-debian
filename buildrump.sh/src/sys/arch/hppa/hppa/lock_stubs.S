@@ -1,4 +1,4 @@
-/*	$NetBSD: lock_stubs.S,v 1.27 2019/04/15 20:45:08 skrll Exp $	*/
+/*	$NetBSD: lock_stubs.S,v 1.29 2022/05/19 06:41:45 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007 The NetBSD Foundation, Inc.
@@ -119,7 +119,7 @@ LEAF_ENTRY(mutex_enter)
 
 	/*
 	 * It might be a spin lock (c.f. MUTEX_SPIN_FLAG) or might be
-	 * already owned.  We short circut the request and go straight
+	 * already owned.  We short circuit the request and go straight
 	 * into mutex_vector_enter() if the owners field is not 'unowned'.
 	 */
 
@@ -155,8 +155,8 @@ mutex_enter_crit_start:
 	GET_CURLWP(%t2)
 
 	bv	%r0(%rp)
-mutex_enter_crit_end:
 	 stw	%t2, MTX_OWNER(%arg0)
+mutex_enter_crit_end:
 EXIT(mutex_enter)
 
 #endif	/* !LOCKDEBUG */
@@ -171,8 +171,8 @@ _lock_cas_ras_start:
 	ldw	0(%arg0),%t1
 	comb,<>	%arg1, %t1, 1f
 	 copy	%t1,%ret0
-_lock_cas_ras_end:
 	stw	%arg2,0(%arg0)
+_lock_cas_ras_end:
 	copy	%arg1,%ret0
 1:
 	bv,n	%r0(%rp)

@@ -1,4 +1,4 @@
-/*	$NetBSD: radeondrmkmsfb.c,v 1.13 2019/11/06 07:31:20 mrg Exp $	*/
+/*	$NetBSD: radeondrmkmsfb.c,v 1.17 2022/07/18 23:34:03 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -31,12 +31,11 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: radeondrmkmsfb.c,v 1.13 2019/11/06 07:31:20 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radeondrmkmsfb.c,v 1.17 2022/07/18 23:34:03 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/device.h>
 
-#include <drm/drmP.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drmfb.h>
 #include <drm/drmfb_pci.h>
@@ -51,7 +50,6 @@ struct radeonfb_softc {
 	device_t			sc_dev;
 	struct radeonfb_attach_args	sc_rfa;
 	struct radeon_task		sc_attach_task;
-	bool				sc_scheduled:1;
 	bool				sc_attached:1;
 };
 
@@ -86,29 +84,17 @@ radeonfb_attach(device_t parent, device_t self, void *aux)
 {
 	struct radeonfb_softc *const sc = device_private(self);
 	const struct radeonfb_attach_args *const rfa = aux;
-	int error;
 
 	sc->sc_dev = self;
 	sc->sc_rfa = *rfa;
-	sc->sc_scheduled = false;
 	sc->sc_attached = false;
 
 	aprint_naive("\n");
 	aprint_normal("\n");
 
 	radeon_task_init(&sc->sc_attach_task, &radeonfb_attach_task);
-	error = radeon_task_schedule(parent, &sc->sc_attach_task);
-	if (error) {
-		aprint_error_dev(self, "failed to schedule mode set: %d\n",
-		    error);
-		goto fail0;
-	}
-	sc->sc_scheduled = true;
-
-	/* Success!  */
-	return;
-
-fail0:	return;
+	radeon_task_schedule(parent, &sc->sc_attach_task);
+	config_pending_incr(self);
 }
 
 static int
@@ -116,9 +102,6 @@ radeonfb_detach(device_t self, int flags)
 {
 	struct radeonfb_softc *const sc = device_private(self);
 	int error;
-
-	if (sc->sc_scheduled)
-		return EBUSY;
 
 	if (sc->sc_attached) {
 		pmf_device_deregister(self);
@@ -151,20 +134,19 @@ radeonfb_attach_task(struct radeon_task *task)
 	};
 	int error;
 
-	KASSERT(sc->sc_scheduled);
-
-
 	error = drmfb_attach(&sc->sc_drmfb, &da);
 	if (error) {
 		aprint_error_dev(sc->sc_dev, "failed to attach drmfb: %d\n",
 		    error);
-		return;
+		goto out;
 	}
 	if (!pmf_device_register1(sc->sc_dev, NULL, NULL, &radeonfb_shutdown))
 		aprint_error_dev(sc->sc_dev,
 		    "failed to register shutdown handler\n");
 
 	sc->sc_attached = true;
+out:
+	config_pending_decr(sc->sc_dev);
 }
 
 static bool
@@ -182,9 +164,7 @@ radeonfb_drmfb_mmapfb(struct drmfb_softc *drmfb, off_t offset, int prot)
 	    struct radeonfb_softc, sc_drmfb);
 	struct drm_fb_helper *const helper = sc->sc_rfa.rfa_fb_helper;
 	struct drm_framebuffer *const fb = helper->fb;
-	struct radeon_framebuffer *const rfb = container_of(fb,
-	    struct radeon_framebuffer, base);
-	struct drm_gem_object *const gobj = rfb->obj;
+	struct drm_gem_object *const gobj = fb->obj[0];
 	struct radeon_bo *const rbo = gem_to_radeon_bo(gobj);
 	int flags = 0;
 

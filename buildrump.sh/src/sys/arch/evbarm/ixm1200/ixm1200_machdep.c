@@ -1,4 +1,4 @@
-/*	$NetBSD: ixm1200_machdep.c,v 1.66 2021/08/17 22:00:28 andvar Exp $ */
+/*	$NetBSD: ixm1200_machdep.c,v 1.68 2023/08/03 08:16:31 mrg Exp $ */
 
 /*
  * Copyright (c) 2002, 2003
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ixm1200_machdep.c,v 1.66 2021/08/17 22:00:28 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ixm1200_machdep.c,v 1.68 2023/08/03 08:16:31 mrg Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -263,48 +263,32 @@ cpu_reboot(int howto, char *bootstr)
 /* Static device mappings. */
 static const struct pmap_devmap ixm1200_devmap[] = {
 	/* StrongARM System and Peripheral Registers */
-	{
+	DEVMAP_ENTRY(
 		IXP12X0_SYS_VBASE,
 		IXP12X0_SYS_HWBASE,
-		IXP12X0_SYS_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		IXP12X0_SYS_SIZE
+	),
 	/* PCI Registers Accessible Through StrongARM Core */
-	{
+	DEVMAP_ENTRY(
 		IXP12X0_PCI_VBASE, IXP12X0_PCI_HWBASE,
-		IXP12X0_PCI_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		IXP12X0_PCI_SIZE
+	),
 	/* PCI Registers Accessible Through I/O Cycle Access */
-	{
+	DEVMAP_ENTRY(
 		IXP12X0_PCI_IO_VBASE, IXP12X0_PCI_IO_HWBASE,
-		IXP12X0_PCI_IO_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		IXP12X0_PCI_IO_SIZE
+	),
 	/* PCI Type0 Configuration Space */
-	{
+	DEVMAP_ENTRY(
 		IXP12X0_PCI_TYPE0_VBASE, IXP12X0_PCI_TYPE0_HWBASE,
-		IXP12X0_PCI_TYPE0_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		IXP12X0_PCI_TYPE0_SIZE
+	),
 	/* PCI Type1 Configuration Space */
-	{
+	DEVMAP_ENTRY(
 		IXP12X0_PCI_TYPE1_VBASE, IXP12X0_PCI_TYPE1_HWBASE,
-		IXP12X0_PCI_TYPE1_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
-	{
-		0,
-		0,
-		0,
-		0,
-		0
-	},
+		IXP12X0_PCI_TYPE1_SIZE
+	),
+	DEVMAP_ENTRY_END
 };
 
 /*
@@ -360,7 +344,14 @@ initarm(void *arg)
 
 #if NKSYMS || defined(DDB) || defined(MODULAR)
         if (! memcmp(&end, "\177ELF", 4)) {
+/*
+ * XXXGCC12.
+ * This accesses beyond what "int end" technically supplies.
+ */
+#pragma GCC push_options
+#pragma GCC diagnostic ignored "-Warray-bounds"
                 sh = (Elf_Shdr *)((char *)&end + ((Elf_Ehdr *)&end)->e_shoff);
+#pragma GCC pop_options
                 loop = ((Elf_Ehdr *)&end)->e_shnum;
                 for(; loop; loop--, sh++)
                         if (sh->sh_offset > 0 &&

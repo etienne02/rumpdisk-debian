@@ -1,4 +1,4 @@
-/*	$NetBSD: msg.mi.pl,v 1.35 2020/11/04 14:29:40 martin Exp $	*/
+/*	$NetBSD: msg.mi.pl,v 1.49 2024/04/25 11:25:08 hannken Exp $	*/
 /*	Based on english version: */
 /*	NetBSD: msg.mi.pl,v 1.36 2004/04/17 18:55:35 atatat Exp       */
 
@@ -138,6 +138,8 @@ message ask_disk
 message Available_disks
 {Dostepne dyski}
 
+message Available_wedges	{Existing "wedges"}
+
 message heads
 {glowice}
 
@@ -145,7 +147,7 @@ message sectors
 {sektory}
 
 message mountpoint
-{punkt montowania (lub 'zaden')}
+{punkt montowania (lub '-')}
 
 message cylname
 {cyl}
@@ -284,6 +286,8 @@ message cvtscheme_keep		{zostaw (uzyj tylko czesci dysku)}
 message cvtscheme_delete	{skasuj (wszystkie dane beda utracone!)}
 message cvtscheme_convert	{uzyj innego typu tablicy partycji}
 message cvtscheme_abort		{anuluj}
+message cvtscheme_error
+{Could not convert all partitions}
 
 /* Called with:				Example
  *  $0 = device name			wd0
@@ -611,6 +615,12 @@ message net_defroute
 message net_media
 {Typ interfejsu sieciowego}
 
+message net_ssid
+{Wi-Fi SSID?}
+
+message net_passphrase
+{Wi-Fi passphrase?}
+
 message netok
 {Ponizej sa wartosci, ktore wprowadziles.
 
@@ -796,12 +806,18 @@ message cur_distsets
 }
 
 message cur_distsets_header
-{Pakiet dystrybucyjny             Uzyc?
---------------------------------- -----
+{Pakiet dystrybucyjny                       Uzyc?
+------------------------------------------- -----
 }
 
 message set_base
 {Base}
+
+message set_base32
+{Baza dla kompatybilno?ci 32-bitowej}
+
+message set_base64
+{Baza dla kompatybilno?ci 32-bitowej}
 
 message set_system
 {System (/etc)}
@@ -815,8 +831,14 @@ message set_dtb
 message set_games
 {Gry}
 
+message set_gpufw
+{Graphics driver firmware}
+
 message set_man_pages
 {Strony Podrecznika}
+
+message set_man_pages_html
+{Strony Podrecznika (HTML)}
 
 message set_misc
 {Inne}
@@ -871,6 +893,12 @@ message set_xsrc
 
 message set_debug
 {Symbole debugowania}
+
+message set_debug32
+{Symbole debugowania (32-bit)}
+
+message set_debug64
+{Symbole debugowania (64-bit)}
 
 message set_xdebug
 {Symbole debugowania X11}
@@ -954,6 +982,12 @@ message rootpw
 {Haslo root'a w nowo zainstalowanym systemie nie zostalo jeszcze ustawione,
 i dlatego jest puste. Czy chcesz teraz ustawic haslo dla root'a?}
 
+message force_rootpw
+{The root password of the newly installed system has not yet been
+initialized. 
+ 
+If you do not want to set a password, enter an empty line.}
+
 message rootsh
 {Mozesz teraz wybrac, ktorej powloki ma uzywac uzytkownik root. Domyslnie
 jest to /bin/sh, ale moze preferujesz inna.}
@@ -1018,6 +1052,12 @@ message Set_Sizes {Ustaw rozmiary partycji NetBSD}
 message Use_Default_Parts {Uzyj domyslnych rozmiarow partycji}
 
 /* Called with:				Example
+ *  $0 = partitioning name		Master Boot Record (MBR)
+ *  $1 = short version of $0		MBR
+ */
+message Use_Empty_Parts {Manually define partitions}
+
+/* Called with:				Example
  *  $0 = current partitioning name	Master Boot Record (MBR)
  *  $1 = short version of $0		MBR
  */
@@ -1051,6 +1091,7 @@ message Host {Host}
 message Base_dir {Katalog}
 message Set_dir_src {Katalog pakietow binarych}
 message Set_dir_bin {Katalog pkgsrc}
+message Dist_postfix {Rozszerzenie pliku}
 message Xfer_dir {Katalog z plikami pobranymi}
 message transfer_method {Sposob pobierania}
 message User {Uzytkownik}
@@ -1179,6 +1220,7 @@ message failed {Nie powiodlo sie}
 message askfsmountadv {Punkt montowania (lub "raid", "cgd" albo "lvm")?}
 message partman {Partycje rozszerzone}
 message editpart {Edytuj partycje}
+message selectwedge {Preconfigured "wedges" dk(4)}
 
 message fremove {USUN}
 message remove {Usun}
@@ -1306,7 +1348,9 @@ message Too_large {Zbyt duza wartosc!}
 message free_space_line {Miejsce od $0..$1 $3 (rozmiar $2 $3)\n}
 
 message	fs_type_ffsv2	{FFSv2}
+message	fs_type_ffsv2ea	{FFSv2ea}
 message	fs_type_ffs	{FFS}
+message	fs_type_efi_sp	{EFI system partition}
 message fs_type_ext2old	{Linux Ext2 (old)}
 message	other_fs_type	{Inny typ}
 
@@ -1460,3 +1504,8 @@ message clone_target_hdr
 message clone_target_disp		{cloned partition(s)}
 message clone_src_done
 {Source selection OK, proceed to target selection}
+
+message network_ok
+{Your network seems to work fine. 
+Should we skip the configuration 
+and just use the network as-is?}

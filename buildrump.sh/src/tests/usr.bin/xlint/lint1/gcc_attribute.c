@@ -1,4 +1,4 @@
-/*	$NetBSD: gcc_attribute.c,v 1.10 2021/07/15 21:00:05 rillig Exp $	*/
+/*	$NetBSD: gcc_attribute.c,v 1.13 2023/03/28 14:44:34 rillig Exp $	*/
 # 3 "gcc_attribute.c"
 
 /*
@@ -7,6 +7,8 @@
  *
  * https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html
  */
+
+/* lint1-extra-flags: -X 351 */
 
 void __attribute__((noinline))
 do_not_inline(void)
@@ -29,7 +31,10 @@ function_nonnull_list(void *, const void *, int);
 void __attribute__((nonnull(1, 2)))
 function_nonnull_list(void *, const void *, int);
 
-/* expect+1: syntax error 'unknown_attribute' */
+/*
+ * Unknown attributes are skipped, as lint does not have a list of all known
+ * GCC attributes.
+ */
 void __attribute__((unknown_attribute))
 function_with_unknown_attribute(void);
 
@@ -125,5 +130,5 @@ __attribute__((deprecated("d5")))
  */
 int const_function(int) __attribute__((const));
 /* cover 'gcc_attribute_spec: T_QUAL' */
-/* expect+1: syntax error 'volatile' [249] */
+/* expect+1: error: syntax error 'volatile' [249] */
 int volatile_function(int) __attribute__((volatile));

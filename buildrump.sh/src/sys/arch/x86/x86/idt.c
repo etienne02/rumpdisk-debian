@@ -1,4 +1,4 @@
-/*	$NetBSD: idt.c,v 1.14 2020/07/14 15:59:21 para Exp $	*/
+/*	$NetBSD: idt.c,v 1.17 2022/08/20 23:48:51 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2000, 2009 The NetBSD Foundation, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: idt.c,v 1.14 2020/07/14 15:59:21 para Exp $");
+__KERNEL_RCSID(0, "$NetBSD: idt.c,v 1.17 2022/08/20 23:48:51 riastradh Exp $");
 
 #include "opt_pcpu_idt.h"
 
@@ -77,6 +77,7 @@ __KERNEL_RCSID(0, "$NetBSD: idt.c,v 1.14 2020/07/14 15:59:21 para Exp $");
 
 #include <uvm/uvm.h>
 
+#include <machine/pmap_private.h>
 #include <machine/segments.h>
 
 /*
@@ -170,15 +171,23 @@ idt_vec_alloc(struct idt_vec *iv, int low, int high)
 
 	KASSERT(mutex_owned(&cpu_lock) || !mp_online);
 
+	if (low < 0 || high >= __arraycount(iv->iv_allocmap))
+		return -1;
+
 	for (vec = low; vec <= high; vec++) {
-		if (idt_allocmap[vec] == 0) {
-			/* idt_vec_free() can be unlocked, so membar. */
-			membar_sync();
-			idt_allocmap[vec] = 1;
+		/* pairs with atomic_store_release in idt_vec_free */
+		if (atomic_load_acquire(&idt_allocmap[vec]) == 0) {
+			/*
+			 * No ordering needed here (`relaxed') because
+			 * access to free entries is serialized by
+			 * cpu_lock or single-threaded operation.
+			 */
+			atomic_store_relaxed(&idt_allocmap[vec], 1);
 			return vec;
 		}
 	}
-	return 0;
+
+	return -1;
 }
 
 void
@@ -189,7 +198,7 @@ idt_vec_reserve(struct idt_vec *iv, int vec)
 	KASSERT(mutex_owned(&cpu_lock) || !mp_online);
 
 	result = idt_vec_alloc(iv, vec, vec);
-	if (result != vec) {
+	if (result < 0) {
 		panic("%s: failed to reserve vec %d", __func__, vec);
 	}
 }
@@ -200,7 +209,8 @@ idt_vec_set(struct idt_vec *iv, int vec, void (*function)(void))
 	idt_descriptor_t *idt;
 	char *idt_allocmap __diagused = iv->iv_allocmap;
 
-	KASSERT(idt_allocmap[vec] == 1);
+	KASSERT(atomic_load_relaxed(&idt_allocmap[vec]) == 1);
+
 	idt = iv->iv_idt;
 	set_idtgate(&idt[vec], function, 0, SDT_SYS386IGT, SEL_KPL,
 	       GSEL(GCODE_SEL, SEL_KPL));
@@ -215,9 +225,12 @@ idt_vec_free(struct idt_vec *iv, int vec)
 	idt_descriptor_t *idt;
 	char *idt_allocmap = iv->iv_allocmap;
 
+	KASSERT(atomic_load_relaxed(&idt_allocmap[vec]) == 1);
+
 	idt = iv->iv_idt;
 	unset_idtgate(&idt[vec]);
-	idt_allocmap[vec] = 0;
+	/* pairs with atomic_load_acquire in idt_vec_alloc */
+	atomic_store_release(&idt_allocmap[vec], 0);
 }
 
 bool

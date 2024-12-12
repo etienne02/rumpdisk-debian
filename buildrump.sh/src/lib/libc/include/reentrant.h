@@ -1,4 +1,4 @@
-/*	$NetBSD: reentrant.h,v 1.20 2017/02/08 18:00:37 christos Exp $	*/
+/*	$NetBSD: reentrant.h,v 1.22 2024/08/27 13:43:02 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 2003 The NetBSD Foundation, Inc.
@@ -49,7 +49,7 @@
  * One approach for thread safety is to provide discrete versions of the
  * library: one thread safe, the other not.  The disadvantage of this is
  * that libc is rather large, and two copies of a library which are 99%+
- * identical is not an efficent use of resources.
+ * identical is not an efficient use of resources.
  * 
  * Another approach is to provide a single thread safe library.  However,
  * it should not add significant run time or code size overhead to non-
@@ -90,6 +90,9 @@
  * pthread library, and the real function in the pthread library if it
  * is.
  */
+
+#ifndef	_LIBC_REENTRANT_H_
+#define	_LIBC_REENTRANT_H_
 
 #include <pthread.h>
 #include <signal.h>
@@ -326,3 +329,5 @@ thr_once(once_t *once_control, void (*routine)(void))
 #define	FUNLOCKFILE(fp) __nothing
 
 #endif /* _REENTRANT */
+
+#endif	/* _LIBC_REENTRANT_H_ */

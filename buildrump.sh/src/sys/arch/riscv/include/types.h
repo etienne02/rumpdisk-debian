@@ -1,4 +1,4 @@
-/* $NetBSD: types.h,v 1.12 2021/05/03 20:07:57 skrll Exp $ */
+/* $NetBSD: types.h,v 1.19 2024/11/23 18:13:04 skrll Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -38,6 +38,9 @@
 
 #if defined(_KERNEL) || defined(_KMEMUSER) || defined(_KERNTYPES) || defined(_STANDALONE)
 
+/* XLEN is the native base integer ISA width */
+#define	XLEN		(sizeof(long) * NBBY)
+
 typedef __uint64_t	paddr_t;
 typedef __uint64_t	psize_t;
 #define	PRIxPADDR	PRIx64
@@ -63,12 +66,12 @@ typedef signed int register32_t;
 typedef unsigned int uregister32_t;
 #define	PRIxREGISTER32	"x"
 
-typedef unsigned short	tlb_asid_t;
+typedef unsigned int tlb_asid_t;
 #endif
 
 #if defined(_KERNEL)
 typedef struct label_t {	/* Used by setjmp & longjmp */
-        register_t lb_reg[16];	/* */
+	register_t lb_reg[16];	/* */
 	__uint32_t lb_sr;
 } label_t;
 #endif
@@ -87,15 +90,21 @@ typedef __int32_t	__register_t;
 #define	__HAVE_COMPAT_NETBSD32
 #define	__HAVE_CPU_COUNTER
 #define	__HAVE_CPU_DATA_FIRST
-#define	__HAVE_FAST_SOFTINTS
+#define	__HAVE_CPU_LWP_SETPRIVATE
+#if 0
+#define	__HAVE_FAST_SOFTINTS		// Not yet
+#endif
 #define	__HAVE_MM_MD_DIRECT_MAPPED_PHYS
-//#define	__HAVE_NEW_STYLE_BUS_H
-#define	__HAVE_NO_BUS_DMA
+#define	__HAVE_MM_MD_KERNACC
+#define	__HAVE_NEW_STYLE_BUS_H
 #define	__HAVE_SYSCALL_INTERN
 #define	__HAVE_TLS_VARIANT_I
+#define	__HAVE_UCAS_FULL
 /* XXX temporary */
 #define	__HAVE_UNLOCKED_PMAP
 #define	__HAVE___LWP_GETPRIVATE_FAST
+#define	__HAVE___LWP_GETTCB_FAST
+#define	__HAVE___LWP_SETTCB
 
 #ifdef __LP64
 #define	__HAVE_ATOMIC64_OPS

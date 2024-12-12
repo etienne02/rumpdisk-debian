@@ -1,4 +1,4 @@
-/*	$NetBSD: disklabel.h,v 1.125 2021/05/17 08:50:36 mrg Exp $	*/
+/*	$NetBSD: disklabel.h,v 1.128 2024/04/10 20:00:12 andvar Exp $	*/
 
 /*
  * Copyright (c) 1987, 1988, 1993
@@ -127,7 +127,7 @@ struct	partition {		/* the partition table */
  * padding at the end, but that would have been confusing (although that
  * is what actually happens), because the partitions structure is supposed
  * to be variable size and putting a padding uint32_t would be weird.
- * Unfornately mips32 and i386 align uint64_t standalone at an 8 byte
+ * Unfortunately mips32 and i386 align uint64_t standalone at an 8 byte
  * boundary, but in structures at a 4 byte boundary so matt's
  * change did not affect them.
  *
@@ -399,7 +399,7 @@ x(MINIXFS3,29, "MINIX FSv3", NULL,   NULL)    /* MINIX file system v3 */ \
 x(VMKCORE, 30, "VMware vmkcore", NULL, NULL)  /* VMware vmkcore */ \
 x(VMFS,    31, "VMware VMFS", NULL,  NULL)    /* VMware VMFS */ \
 x(VMWRESV, 32, "VMware Reserved", NULL, NULL) /* VMware reserved */ \
-x(ZFS,     33, "ZFS",        NULL,   NULL)    /* ZFS */
+x(ZFS,     33, "ZFS",        NULL,   "zfs")   /* ZFS */
 
 
 #ifndef _LOCORE
@@ -509,6 +509,7 @@ const char *convertdisklabel(struct disklabel *, void (*)(struct buf *),
 int	 bounds_check_with_label(struct disk *, struct buf *, int);
 int	 bounds_check_with_mediasize(struct buf *, int, uint64_t);
 const char *getfstypename(int);
+int	disklabel_dev_unit(dev_t);
 #endif
 #endif /* _LOCORE */
 

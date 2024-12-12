@@ -1,4 +1,4 @@
-/*	$NetBSD: if_stge.c,v 1.87 2020/07/02 09:02:04 msaitoh Exp $	*/
+/*	$NetBSD: if_stge.c,v 1.93 2024/07/05 04:31:51 rin Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -35,14 +35,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_stge.c,v 1.87 2020/07/02 09:02:04 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_stge.c,v 1.93 2024/07/05 04:31:51 rin Exp $");
 
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -450,7 +449,7 @@ stge_attach(device_t parent, device_t self, void *aux)
 	if (pci_dma64_available(pa)) {
 		if (bus_dmatag_subregion(pa->pa_dmat64,
 					 0,
-					 (bus_addr_t)(FRAG_ADDR_MASK + 1ULL),
+					 (bus_addr_t)FRAG_ADDR_MASK,
 					 &sc->sc_dmat,
 					 BUS_DMA_WAITOK) != 0) {
 			aprint_error_dev(self,
@@ -881,7 +880,7 @@ stge_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we
+		 * didn't fit in the allotted number of segments, or we
 		 * were short on resources.  For the too-many-segments
 		 * case, we simply report an error and drop the packet,
 		 * since we can't sanely copy a jumbo packet to a single
@@ -1279,8 +1278,7 @@ stge_rxintr(struct stge_softc *sc)
 			STGE_INIT_RXDESC(sc, i);
 			if ((status & RFD_FrameEnd) == 0)
 				sc->sc_rxdiscard = 1;
-			if (sc->sc_rxhead != NULL)
-				m_freem(sc->sc_rxhead);
+			m_freem(sc->sc_rxhead);
 			STGE_RXCHAIN_RESET(sc);
 			continue;
 		}
@@ -1448,20 +1446,20 @@ stge_stats_update(struct stge_softc *sc)
 
 	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 
-	if_statadd_ref(nsr, if_ierrors,
+	if_statadd_ref(ifp, nsr, if_ierrors,
 	    (u_int) CSR_READ_2(sc, STGE_FramesLostRxErrors));
 
 	(void) CSR_READ_4(sc, STGE_OctetXmtdOk);
 
-	if_statadd_ref(nsr, if_opackets,
+	if_statadd_ref(ifp, nsr, if_opackets,
 	    CSR_READ_4(sc, STGE_FramesXmtdOk));
 
-	if_statadd_ref(nsr, if_collisions,
+	if_statadd_ref(ifp, nsr, if_collisions,
 	    CSR_READ_4(sc, STGE_LateCollisions) +
 	    CSR_READ_4(sc, STGE_MultiColFrames) +
 	    CSR_READ_4(sc, STGE_SingleColFrames));
 
-	if_statadd_ref(nsr, if_oerrors,
+	if_statadd_ref(ifp, nsr, if_oerrors,
 	    (u_int) CSR_READ_2(sc, STGE_FramesAbortXSColls) +
 	    (u_int) CSR_READ_2(sc, STGE_FramesWEXDeferal));
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: signal.h,v 1.57 2019/01/08 17:35:42 joerg Exp $	*/
+/*	$NetBSD: signal.h,v 1.60 2024/09/09 21:19:54 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -66,7 +66,7 @@ int signalnumber(const char *);
 #if defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE) || \
     defined(_NETBSD_SOURCE)
 int	kill(pid_t, int);
-int	__libc_sigaction14(int, const struct sigaction * __restrict,
+int	__sigaction_siginfo(int, const struct sigaction * __restrict,
 	    struct sigaction * __restrict);
 
 #if (_POSIX_C_SOURCE - 0L) >= 199506L || (_XOPEN_SOURCE - 0) >= 500 || \
@@ -83,7 +83,7 @@ int	__libc_thr_sigsetmask(int, const sigset_t * __restrict,
 
 #ifndef __LIBC12_SOURCE__
 int	sigaction(int, const struct sigaction * __restrict,
-    struct sigaction * __restrict) __RENAME(__sigaction14);
+	    struct sigaction * __restrict) __RENAME(__sigaction_siginfo);
 int	sigaddset(sigset_t *, int) __RENAME(__sigaddset14);
 int	sigdelset(sigset_t *, int) __RENAME(__sigdelset14);
 int	sigemptyset(sigset_t *) __RENAME(__sigemptyset14);
@@ -91,7 +91,7 @@ int	sigfillset(sigset_t *) __RENAME(__sigfillset14);
 int	sigismember(const sigset_t *, int) __RENAME(__sigismember14);
 int	sigpending(sigset_t *) __RENAME(__sigpending14);
 int	sigprocmask(int, const sigset_t * __restrict, sigset_t * __restrict)
-    __RENAME(__sigprocmask14);
+	    __RENAME(__sigprocmask14);
 int	sigsuspend(const sigset_t *) __RENAME(__sigsuspend14);
 
 #if defined(__c99inline) || defined(__SIGSETOPS_BODY)
@@ -162,9 +162,10 @@ sigfillset(sigset_t *set)
 
 /*
  * X/Open CAE Specification Issue 4 Version 2
- */      
+ */
 #if (defined(_XOPEN_SOURCE) && defined(_XOPEN_SOURCE_EXTENDED)) || \
-    (_XOPEN_SOURCE - 0) >= 500 || defined(_NETBSD_SOURCE)
+    (_XOPEN_SOURCE - 0) >= 500 || (_POSIX_C_SOURCE - 0) >= 200809L || \
+    defined(_NETBSD_SOURCE)
 int	killpg(pid_t, int);
 int	siginterrupt(int, int);
 int	sigstack(const struct sigstack *, struct sigstack *);
@@ -177,12 +178,14 @@ int	sigignore(int);
 int	sigpause(int);
 int	sigrelse(int);
 void	(*sigset (int, void (*)(int)))(int);
-#endif /* _XOPEN_SOURCE_EXTENDED || _XOPEN_SOURCE >= 500 || _NETBSD_SOURCE */
+#endif /* _XOPEN_SOURCE_EXTENDED || _XOPEN_SOURCE >= 500
+	* || _POSIX_C_SOURCE >= 200809L || _NETBSD_SOURCE
+	*/
 
 
 /*
  * X/Open CAE Specification Issue 5; IEEE Std 1003.1b-1993 (POSIX)
- */      
+ */
 #if (_POSIX_C_SOURCE - 0) >= 199309L || (_XOPEN_SOURCE - 0) >= 500 || \
     defined(_NETBSD_SOURCE)
 int	sigwait	(const sigset_t * __restrict, int * __restrict);
@@ -198,7 +201,7 @@ int	__sigtimedwait(const sigset_t * __restrict,
     siginfo_t * __restrict, struct timespec * __restrict)
     __RENAME(____sigtimedwait50);
 #endif
-#endif /* _POSIX_C_SOURCE >= 200112 || _XOPEN_SOURCE_EXTENDED || ... */
+#endif /* _POSIX_C_SOURCE >= 199309L || _XOPEN_SOURCE_EXTENDED || ... */
 
 
 #if defined(_NETBSD_SOURCE)
@@ -210,6 +213,8 @@ void	psignal(int, const char *);
 int	sigblock(int);
 int	sigsetmask(int);
 #endif /* _NETBSD_SOURCE */
+
+int	__sigtramp_check_np(void *);
 
 #endif	/* _POSIX_C_SOURCE || _XOPEN_SOURCE || _NETBSD_SOURCE */
 __END_DECLS

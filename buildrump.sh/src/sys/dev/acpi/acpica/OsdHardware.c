@@ -1,4 +1,4 @@
-/*	$NetBSD: OsdHardware.c,v 1.12 2020/01/17 17:06:33 jmcneill Exp $	*/
+/*	$NetBSD: OsdHardware.c,v 1.15 2024/06/23 15:21:52 andvar Exp $	*/
 
 /*
  * Copyright 2001 Wasabi Systems, Inc.
@@ -44,7 +44,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: OsdHardware.c,v 1.12 2020/01/17 17:06:33 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: OsdHardware.c,v 1.15 2024/06/23 15:21:52 andvar Exp $");
+
+#include "pci.h"
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -58,7 +60,7 @@ __KERNEL_RCSID(0, "$NetBSD: OsdHardware.c,v 1.12 2020/01/17 17:06:33 jmcneill Ex
 /*
  * ACPICA doesn't provide much in the way of letting us know which
  * hardware resources it wants to use.  We therefore have to resort
- * to calling machinde-dependent code to do the access for us.
+ * to calling machine-dependent code to do the access for us.
  */
 
 /*
@@ -210,6 +212,7 @@ ACPI_STATUS
 AcpiOsReadPciConfiguration(ACPI_PCI_ID *PciId, UINT32 Register, UINT64 *Value,
     UINT32 Width)
 {
+#if NPCI > 0
 	pci_chipset_tag_t pc;
 	pcitag_t tag;
 	pcireg_t tmp;
@@ -224,15 +227,15 @@ AcpiOsReadPciConfiguration(ACPI_PCI_ID *PciId, UINT32 Register, UINT64 *Value,
 
 	switch (Width) {
 	case 8:
-		*(uint8_t *) Value = (tmp >> ((Register & 3) * 8)) & 0xff;
+		*Value = (tmp >> ((Register & 3) * 8)) & 0xff;
 		break;
 
 	case 16:
-		*(uint16_t *) Value = (tmp >> ((Register & 3) * 8)) & 0xffff;
+		*Value = (tmp >> ((Register & 3) * 8)) & 0xffff;
 		break;
 
 	case 32:
-		*(uint32_t *) Value = tmp;
+		*Value = tmp;
 		break;
 
 	default:
@@ -240,6 +243,9 @@ AcpiOsReadPciConfiguration(ACPI_PCI_ID *PciId, UINT32 Register, UINT64 *Value,
 	}
 
 	return AE_OK;
+#else
+	return AE_BAD_PARAMETER;
+#endif
 }
 
 /*
@@ -251,6 +257,7 @@ ACPI_STATUS
 AcpiOsWritePciConfiguration(ACPI_PCI_ID *PciId, UINT32 Register,
     ACPI_INTEGER Value, UINT32 Width)
 {
+#if NPCI > 0
 	pci_chipset_tag_t pc;
 	pcitag_t tag;
 	pcireg_t tmp;
@@ -282,4 +289,7 @@ AcpiOsWritePciConfiguration(ACPI_PCI_ID *PciId, UINT32 Register,
 	pci_conf_write(pc, tag, Register & ~3, tmp);
 
 	return AE_OK;
+#else
+	return AE_BAD_PARAMETER;
+#endif
 }

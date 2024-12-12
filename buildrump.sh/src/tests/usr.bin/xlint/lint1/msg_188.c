@@ -1,9 +1,9 @@
-/*	$NetBSD: msg_188.c,v 1.3 2021/03/28 15:12:20 rillig Exp $	*/
+/*	$NetBSD: msg_188.c,v 1.7 2024/01/28 08:17:27 rillig Exp $	*/
 # 3 "msg_188.c"
 
 /* Test for message: no automatic aggregate initialization in traditional C [188] */
 
-/* lint1-flags: -tw */
+/* lint1-flags: -tw -X 351 */
 
 struct point {
 	int x;
@@ -18,7 +18,9 @@ struct point global = {
 void
 function()
 {
-	struct point local = {	/* expect: 188 */
+	/* expect+2: warning: no automatic aggregate initialization in traditional C [188] */
+	/* expect+1: warning: 'local' set but not used in function 'function' [191] */
+	struct point local = {
 		3,
 		4,
 	};

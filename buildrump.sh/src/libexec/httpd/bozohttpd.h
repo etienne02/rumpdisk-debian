@@ -1,9 +1,9 @@
-/*	$NetBSD: bozohttpd.h,v 1.70 2021/08/24 09:47:36 mrg Exp $	*/
+/*	$NetBSD: bozohttpd.h,v 1.73 2022/09/12 10:30:39 martin Exp $	*/
 
 /*	$eterna: bozohttpd.h,v 1.39 2011/11/18 09:21:15 mrg Exp $	*/
 
 /*
- * Copyright (c) 1997-2021 Matthew R. Green
+ * Copyright (c) 1997-2022 Matthew R. Green
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -103,6 +103,7 @@ typedef struct bozohttpd_t {
 	char		*virtbase;	/* virtual directory base */
 	int		 unknown_slash;	/* unknown vhosts go to normal slashdir */
 	int		 logstderr;	/* log to stderr (even if not tty) */
+	int		 nolog;		/* do not log anything */
 	int		 background;	/* drop into daemon mode */
 	int		 foreground;	/* keep daemon mode in foreground */
 	char		*pidfile;	/* path to the pid file, if any */
@@ -267,9 +268,6 @@ void	debug__(bozohttpd_t *, int, const char *, ...) BOZO_PRINTFLIKE(3, 4);
  * bozo_check_special_files()
  */
 
-#ifndef DIRECT_ACCESS_FILE
-#define DIRECT_ACCESS_FILE	".bzdirect"
-#endif
 #ifndef REDIRECT_FILE
 #define REDIRECT_FILE		".bzredirect"
 #endif

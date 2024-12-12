@@ -1,4 +1,4 @@
-/*	$NetBSD: btuart.c,v 1.29 2019/01/24 09:33:03 knakahara Exp $	*/
+/*	$NetBSD: btuart.c,v 1.32 2024/07/05 04:31:50 rin Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007 KIYOHARA Takashi
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: btuart.c,v 1.29 2019/01/24 09:33:03 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: btuart.c,v 1.32 2024/07/05 04:31:50 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -240,8 +240,6 @@ btuartopen(dev_t devno __unused, struct tty *tp)
 		}
 	}
 
-	KASSERT(tp->t_oproc != NULL);
-
 	cfdata = malloc(sizeof(struct cfdata), M_DEVBUF, M_WAITOK);
 	for (unit = 0; unit < btuart_cd.cd_ndevs; unit++)
 		if (device_lookup(&btuart_cd, unit) == NULL)
@@ -267,9 +265,9 @@ btuartopen(dev_t devno __unused, struct tty *tp)
 	sc->sc_tp = tp;
 	tp->t_sc = sc;
 
-	mutex_spin_enter(&tty_lock);
+	ttylock(tp);
 	ttyflush(tp, FREAD | FWRITE);
-	mutex_spin_exit(&tty_lock);
+	ttyunlock(tp);
 
 	splx(s);
 
@@ -285,9 +283,9 @@ btuartclose(struct tty *tp, int flag __unused)
 
 	s = spltty();
 
-	mutex_spin_enter(&tty_lock);
+	ttylock(tp);
 	ttyflush(tp, FREAD | FWRITE);
-	mutex_spin_exit(&tty_lock);	/* XXX */
+	ttyunlock(tp);	/* XXX */
 
 	ttyldisc_release(tp->t_linesw);
 	tp->t_linesw = ttyldisc_default();
@@ -543,7 +541,7 @@ btuartstart(struct tty *tp)
 
 	sc->sc_stats.byte_tx += count;
 
-	if (tp->t_outq.c_cc != 0)
+	if (tp->t_outq.c_cc != 0 && tp->t_oproc != NULL)
 		(*tp->t_oproc)(tp);
 
 	return 0;
@@ -584,15 +582,11 @@ btuart_disable(device_t self)
 
 	s = spltty();
 
-	if (sc->sc_rxp) {
-		m_freem(sc->sc_rxp);
-		sc->sc_rxp = NULL;
-	}
+	m_freem(sc->sc_rxp);
+	sc->sc_rxp = NULL;
 
-	if (sc->sc_txp) {
-		m_freem(sc->sc_txp);
-		sc->sc_txp = NULL;
-	}
+	m_freem(sc->sc_txp);
+	sc->sc_txp = NULL;
 
 	MBUFQ_DRAIN(&sc->sc_cmdq);
 	MBUFQ_DRAIN(&sc->sc_aclq);

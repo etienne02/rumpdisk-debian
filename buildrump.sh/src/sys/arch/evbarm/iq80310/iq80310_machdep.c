@@ -1,4 +1,4 @@
-/*	$NetBSD: iq80310_machdep.c,v 1.94 2021/08/17 22:00:28 andvar Exp $	*/
+/*	$NetBSD: iq80310_machdep.c,v 1.97 2024/02/20 23:36:02 andvar Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003 Wasabi Systems, Inc.
@@ -73,7 +73,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: iq80310_machdep.c,v 1.94 2021/08/17 22:00:28 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: iq80310_machdep.c,v 1.97 2024/02/20 23:36:02 andvar Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -263,42 +263,28 @@ static const struct pmap_devmap iq80310_devmap[] = {
      * Map the on-board devices VA == PA so that we can access them
      * with the MMU on or off.
      */
-    {
+    DEVMAP_ENTRY(
 	IQ80310_OBIO_BASE,
 	IQ80310_OBIO_BASE,
-	IQ80310_OBIO_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
-    {
+	IQ80310_OBIO_SIZE
+    ),
+    DEVMAP_ENTRY(
 	IQ80310_PIOW_VBASE,
 	I80312_PCI_XLATE_PIOW_BASE,
-	I80312_PCI_XLATE_IOSIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
-    {
+	I80312_PCI_XLATE_IOSIZE
+    ),
+    DEVMAP_ENTRY(
 	IQ80310_SIOW_VBASE,
 	I80312_PCI_XLATE_SIOW_BASE,
-	I80312_PCI_XLATE_IOSIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
-    {
+	I80312_PCI_XLATE_IOSIZE
+    ),
+    DEVMAP_ENTRY(
 	IQ80310_80312_VBASE,
 	I80312_PMMR_BASE,
-	I80312_PMMR_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
+	I80312_PMMR_SIZE
+    ),
 
-    {
-	0,
-	0,
-	0,
-	0,
-	0,
-    }
+    DEVMAP_ENTRY_END
 };
 
 /*
@@ -317,10 +303,6 @@ static const struct pmap_devmap iq80310_devmap[] = {
 vaddr_t
 initarm(void *arg)
 {
-	extern vaddr_t xscale_cache_clean_addr;
-#ifdef DIAGNOSTIC
-	extern vsize_t xscale_minidata_clean_size;
-#endif
 	int loop;
 	int loop1;
 	u_int l1pagetable;
@@ -427,7 +409,7 @@ initarm(void *arg)
 
 #ifdef VERBOSE_INIT_ARM
 	/* Tell the user about the memory */
-	printf("physmemory: %d pages at 0x%08lx -> 0x%08lx\n", physmem,
+	printf("physmemory: 0x%"PRIxPSIZE" pages at 0x%08lx -> 0x%08lx\n", physmem,
 	    physical_start, physical_end - 1);
 #endif
 

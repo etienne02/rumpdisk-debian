@@ -1,4 +1,4 @@
-/*	$NetBSD: math64.h,v 1.6 2018/08/27 07:02:51 riastradh Exp $	*/
+/*	$NetBSD: math64.h,v 1.12 2021/12/19 11:48:34 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -36,6 +36,8 @@
 
 #include <asm/div64.h>
 
+#include <linux/types.h>
+
 static inline int64_t
 div64_u64(int64_t dividend, uint64_t divisor)
 {
@@ -54,9 +56,22 @@ div64_s64(int64_t dividend, int64_t divisor)
 	return dividend / divisor;
 }
 
+static inline uint64_t
+DIV64_U64_ROUND_UP(uint64_t dividend, uint64_t divisor)
+{
+	return (dividend + (divisor - 1))/divisor;
+}
+
 static inline int64_t
 div_s64(int64_t dividend, int32_t divisor)
 {
+	return dividend / divisor;
+}
+
+static inline uint32_t
+div_u64_rem(uint64_t dividend, uint32_t divisor, uint32_t *rem)
+{
+	*rem = dividend % divisor;
 	return dividend / divisor;
 }
 
@@ -65,6 +80,36 @@ div64_u64_rem(uint64_t dividend, uint64_t divisor, uint64_t *rem)
 {
 	*rem = dividend % divisor;
 	return dividend / divisor;
+}
+
+static inline uint64_t
+mul_u32_u32(uint32_t a, uint32_t b)
+{
+	return (uint64_t)a * (uint64_t)b;
+}
+
+static inline uint64_t
+mul_u64_u32_div(uint64_t a, uint32_t b, uint32_t div)
+{
+	/* XXX implement to account for overflow */
+	return (a * b) / div;
+}
+
+/* return floor((a*b) / 2^c) */
+static inline uint64_t
+mul_u64_u32_shr(uint64_t a, uint32_t b, unsigned c)
+{
+	/* 2^32 a_hi + a_lo := a */
+	uint64_t a_hi = a >> 32;
+	uint64_t a_lo = a & 0xffffffffU;
+
+	if (c >= 32) {
+		/* (a*b) / 2^c = (a_hi b + a_lo b / 2^32) / 2^{c - 32} */
+		return ((a_hi * b) + ((a_lo * b) >> 32)) >> (c - 32);
+	} else {
+		/* (a*b) / 2^c = 2^{32 - c} a_hi b + a_lo b / 2^c */
+		return ((a_hi * b) << (32 - c)) + ((a_lo * b) >> c);
+	}
 }
 
 #endif  /* _LINUX_MATH64_H_ */

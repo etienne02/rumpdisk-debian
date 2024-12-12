@@ -1,4 +1,18 @@
-$NetBSD: CHANGES,v 1.51 2021/08/24 09:53:26 mrg Exp $
+$NetBSD: CHANGES,v 1.56 2024/04/28 17:12:30 maya Exp $
+
+changes in bozohttpd 20240428:
+	o  make directory listings mobile friendly. from D. Bohdan.
+
+changes in bozohttpd 20240126:
+	o  add some more default mime types.
+	o  fix memory leaks.  from shm.
+	o  fix reading 2 bytes beyond '%', possibly not mapped.  from shm.
+	o  support openssl 3.  from christos.
+	o  add -q option to not log.  from martin.
+	o  fix default return value of bozo_set_defaults(), PR#54785.
+
+changes in bozohttpd 20220104:
+	o  remove obsolete .bzdirect handling.
 
 changes in bozohttpd 20210824:
 	o  new "-m tlsversion" option to set the minimum TLS version
@@ -8,7 +22,7 @@ changes in bozohttpd 20210824:
 	   list of bad options.  should deal with PR#51278.
 
 changes in bozohttpd 20210504:
-	o  don't assume host BUFSIZ is sufficent.  small BUFSIZ leads to
+	o  don't assume host BUFSIZ is sufficient.  small BUFSIZ leads to
 	   always happens errors in the testsuite.  switch all these buffers
 	   to be 4KiB sized.  reported by embr <git@liclac.eu>
 
@@ -282,7 +296,7 @@ changes in bozohttpd 20030409:
 
 changes in bozohttpd 20030313:
 	o  deprecate -r flag; make this the default and silently ignore -r now
-	o  add support for file extentions to call CGI programs (from lukem)
+	o  add support for file extensions to call CGI programs (from lukem)
 	o  add dynamic support to add new content map entries, allowing both
 	   new file types and non /cgi-bin CGI programs to be run with the
 	   new -C "suffix cgihandler" and -M "suffix type encoding encoding11"
@@ -373,7 +387,7 @@ changes in bozohttpd 5.03 (20000427):
 	- fix a bug with chdir() 
 
 changes in bozohttpd 5.02 (20000426):
-	- .pac spport from simonb
+	- .pac support from simonb
 
 changes in bozohttpd 5.01 (20000421):
 	- .swf support 

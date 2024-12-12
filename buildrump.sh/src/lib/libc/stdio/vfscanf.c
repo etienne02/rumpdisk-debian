@@ -1,4 +1,4 @@
-/*	$NetBSD: vfscanf.c,v 1.45 2013/05/17 12:55:57 joerg Exp $	*/
+/*	$NetBSD: vfscanf.c,v 1.47 2022/05/24 06:27:59 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -38,7 +38,7 @@
 static char sccsid[] = "@(#)vfscanf.c	8.1 (Berkeley) 6/4/93";
 __FBSDID("$FreeBSD: src/lib/libc/stdio/vfscanf.c,v 1.41 2007/01/09 00:28:07 imp Exp $");
 #else
-__RCSID("$NetBSD: vfscanf.c,v 1.45 2013/05/17 12:55:57 joerg Exp $");
+__RCSID("$NetBSD: vfscanf.c,v 1.47 2022/05/24 06:27:59 andvar Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -150,7 +150,7 @@ __svfscanf_l(FILE *fp, locale_t loc, char const *fmt0, va_list ap)
 do { \
 	while ((fp->_r > 0 || __srefill(fp) == 0) && isspace_l(*fp->_p, loc)) \
 		nread++, fp->_r--, fp->_p++; \
-} while (/*CONSTCOND*/ 0)
+} while (0)
 
 /*
  * __svfscanf_unlocked - non-MT-safe version of __svfscanf
@@ -905,7 +905,7 @@ doswitch:
 			 * z', but treats `a-a' as `the letter a, the
 			 * character -, and the letter a'.
 			 *
-			 * For compatibility, the `-' is not considerd
+			 * For compatibility, the `-' is not considered
 			 * to define a range if the character following
 			 * it is either a close bracket (required by ANSI)
 			 * or is not numerically greater than the character

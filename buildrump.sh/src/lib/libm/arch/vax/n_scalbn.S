@@ -30,7 +30,7 @@
 #include <machine/asm.h>
 #include <sys/errno.h>
 
-RCSID("$NetBSD: n_scalbn.S,v 1.5 2014/02/03 21:22:21 martin Exp $")
+RCSID("$NetBSD: n_scalbn.S,v 1.8 2024/05/07 15:15:31 riastradh Exp $")
 
 WEAK_ALIAS(scalbn,_scalbn)
 WEAK_ALIAS(scalbnl,_scalbnl)
@@ -43,8 +43,9 @@ ENTRY(_scalbnf, 0)
 	cvtfd	4(%ap), %r0
 	movl	8(%ap), %r2
 	jr	1f
+END(_scalbnf)
 
-ALTENTRY(_scalbnl)
+STRONG_ALIAS(_scalbnl, _scalbn)
 ENTRY(_scalbn, 0)
 	movd	4(%ap), %r0
 	movl	12(%ap), %r2
@@ -73,7 +74,7 @@ ENTRY(_scalbn, 0)
 
 underflow:
 	clrq	%r0			/* return 0.0 */
-	jr	copysign		/* or mabye -0.0 */
+	jr	copysign		/* or maybe -0.0 */
 overflow:
 	pushl	$ERANGE			/* overflow */
 	calls	$1, _C_LABEL(infnan)	/* possibly signal */
@@ -82,3 +83,4 @@ copysign:
 	bisw2	$0x8000, %r0		/* preserve sign-bit */
 5:
 	ret
+END(_scalbn)

@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.prog.mk,v 1.339 2021/08/23 22:13:27 mrg Exp $
+#	$NetBSD: bsd.prog.mk,v 1.352 2024/11/02 22:02:39 christos Exp $
 #	@(#)bsd.prog.mk	8.2 (Berkeley) 4/2/94
 
 .ifndef HOSTPROG
@@ -34,22 +34,6 @@ realinstall:	proginstall scriptsinstall
 .endfor
 
 CLEANFILES+= a.out [Ee]rrs mklog core *.core .gdbinit
-
-.if defined(SHAREDSTRINGS)
-CLEANFILES+=strings
-.c.o:
-	${CC} -E ${CPPFLAGS} ${CFLAGS} ${.IMPSRC} | xstr -c -
-	@${CC} ${CPPFLAGS} ${CFLAGS} -c x.c ${OBJECT_TARGET}
-	${CTFCONVERT_RUN}
-	@rm -f x.c
-
-.cc.o .cpp.o .cxx.o .C.o:
-	${CXX} -E ${CPPFLAGS} ${CXXFLAGS} ${.IMPSRC} | xstr -c -
-	@${MV} x.c x.cc
-	@${CXX} ${CPPFLAGS} ${CXXFLAGS} -c x.cc ${OBJECT_TARGET}
-	${CTFCONVERT_RUN}
-	@rm -f x.cc
-.endif
 
 .if defined(MKPIE) && (${MKPIE} != "no") && !defined(NOPIE)
 CFLAGS+=	${PIE_CFLAGS}
@@ -208,7 +192,7 @@ _LIBLIST=\
 	wind \
 	wrap \
 	y \
-	z 
+	z
 
 .for _lib in ${_LIBLIST}
 .ifndef LIB${_lib:tu}
@@ -222,11 +206,11 @@ LIB${_lib:tu}=	${DESTDIR}/usr/lib/lib${_lib:S/xx/++/:S/atf_c/atf-c/}.a
 LIBKRB5_LDADD+= -lkrb5 -lcom_err \
 	-lhx509 -lcrypto -lasn1 \
 	-lwind -lheimbase -lcom_err -lroken \
-	-lsqlite3 -lm -lcrypt -lutil
+	-lcrypt -lutil
 LIBKRB5_DPADD+= ${LIBKRB5} ${LIBCOM_ERR} \
 	${LIBHX509} ${LIBCRYPTO} ${LIBASN1} \
 	${LIBWIND} ${LIBHEIMBASE} ${LIBCOM_ERR} ${LIBROKEN} \
-	${LIBSQLITE3} ${LIBM} ${LIBCRYPT} ${LIBUTIL}
+	${LIBCRYPT} ${LIBUTIL}
 LIBGSSAPI_LDADD+= -lgssapi -lheimntlm ${LIBKRB5_LDADD}
 LIBGSSAPI_DPADD+= ${LIBGSSAPI} ${LIBHEIMNTLM} ${LIBKRB5_DPADD}
 .endif
@@ -260,10 +244,11 @@ PAM_STATIC_DPADD=
 
 #	NB:	If you are a library here, add it in bsd.README
 #	This list is sorted with -f so that it matches the order in bsd.README
-_X11LIBLIST= dps fntstubs fontcache fontconfig fontenc freetype FS GL GLU \
-    ICE lbxutil SM X11 X11_xcb Xau Xaw xcb Xdmcp Xext Xfont Xfont2 Xft Xi \
+_X11LIBLIST= dps EGL fntstubs fontcache fontconfig fontenc freetype FS GL GLU \
+    GLw I810XvMC  ICE IntelXvMC lbxutil SM X11 X11_xcb Xres Xau Xau7 Xaw xcb \
+    Xcomposite Xcursor xcvt Xdamage Xdmcp Xext Xfixes Xfont Xfont2 Xft Xi \
     Xinerama xkbfile Xmu Xmuu Xpm Xrandr Xrender Xss Xt XTrap Xtst Xv Xxf86dga \
-    Xxf86misc Xxf86vm Xcomposite Xdamage Xfixes
+    Xxf86misc Xxf86vm
 _XCBLIBLIST= \
     atom aux composite damage dpms dri2 dri3 event glx icccm image keysyms \
     present property randr record render_util render reply res screensaver \
@@ -404,6 +389,10 @@ PROGS=		${PROG}
 PROGDO.${_lib}!=	cd "${_dir}" && ${PRINTOBJDIR}
 .MAKEOVERRIDES+=PROGDO.${_lib}
 .endif
+.if defined(PROGDPLIBSSTATIC)
+DPADD+=		${PROGDO.${_lib}}/lib${_lib}.a
+LDADD+=		${PROGDO.${_lib}}/lib${_lib}.a
+.else
 LDADD+=		-L${PROGDO.${_lib}} -l${_lib}
 .if exists(${PROGDO.${_lib}}/lib${_lib}_pic.a)
 DPADD+=		${PROGDO.${_lib}}/lib${_lib}_pic.a
@@ -412,8 +401,13 @@ DPADD+=		${PROGDO.${_lib}}/lib${_lib}.so
 .else
 DPADD+=		${PROGDO.${_lib}}/lib${_lib}.a
 .endif
+.endif
 .endfor
 .endif									# }
+
+LDADD+=${LDADD_AFTER}
+DPADD+=${DPADD_AFTER}
+
 #
 # Per-program definitions and targets.
 #
@@ -486,56 +480,6 @@ LOBJS.${_P}+=	${LSRCS:.c=.ln} ${SRCS.${_P}:M*.c:.c=.ln}
 .if defined(OBJS.${_P}) && !empty(OBJS.${_P})			# {
 .NOPATH: ${OBJS.${_P}} ${_P} ${_YPSRCS.${_P}}
 
-.if (defined(USE_COMBINE) && ${USE_COMBINE} != "no" && !commands(${_P}) \
-   && (${_CCLINK.${_P}} == ${_CCLINK.CDEFAULT} \
-       || ${_CCLINK.${_P}} == ${_CCLINK.CXXDEFAULT}) \
-   && !defined(NOCOMBINE.${_P}) && !defined(NOCOMBINE))
-.for f in ${SRCS.${_P}:N*.h:N*.sh:N*.fth:C/\.[yl]$/.c/g}
-#_XFLAGS.$f := ${CPPFLAGS.$f:D1} ${CPUFLAGS.$f:D2} \
-#     ${COPTS.$f:D3} ${OBJCOPTS.$f:D4} ${CXXFLAGS.$f:D5}
-.if (${CPPFLAGS.$f:D1} == "1" || ${CPUFLAGS.$f:D2} == "2" \
-     || ${COPTS.$f:D3} == "3" || ${OBJCOPTS.$f:D4} == "4" \
-     || ${CXXFLAGS.$f:D5} == "5") \
-    || ("${f:M*.[cyl]}" == "" || commands(${f:R:S/$/.o/}))
-XOBJS.${_P}+=	${f:R:S/$/.o/}
-.else
-XSRCS.${_P}+=	${f}
-NODPSRCS+=	${f}
-.endif
-.endfor
-
-${_P}: .gdbinit ${LIBCRT0} ${LIBCRTI} ${XOBJS.${_P}} ${SRCS.${_P}} \
-    ${DPSRCS} ${LIBC} ${LIBCRTBEGIN} ${LIBCRTEND} ${_DPADD.${_P}}
-	${_MKTARGET_LINK}
-.if defined(DESTDIR)
-	${_CCLINK.${_P}} -Wl,-nostdlib \
-	    ${_LDFLAGS.${_P}} ${_LDSTATIC.${_P}} -o ${.TARGET} ${_PROGLDOPTS} \
-	    -B${_GCC_CRTDIR}/ -B${DESTDIR}/usr/lib/ \
-	    -MD --combine ${_CPPFLAGS.${_P}} ${_CFLAGS.${_P}} ${_COPTS.${_P}} \
-	    ${XSRCS.${_P}:@.SRC.@${.ALLSRC:M*.c:M*${.SRC.}}@:O:u} ${XOBJS.${_P}} \
-	    ${_LDADD.${_P}} -L${_GCC_LIBGCCDIR} -L${DESTDIR}/usr/lib
-.else
-	${_CCLINK.${_P}} ${_LDFLAGS.${_P}} ${_LDSTATIC.${_P}} -o ${.TARGET} ${_PROGLDOPTS} \
-	    -MD --combine ${_CPPFLAGS.${_P}} ${_COPTS.${_P}}
-	    ${XSRCS.${_P}:@.SRC.@${.ALLSRC:M*.c:M*${.SRC.}}@:O:u} ${XOBJS.${_P}} \
-	    ${_LDADD.${_P}}
-.endif	# defined(DESTDIR)
-.if defined(CTFMERGE)
-	${CTFMERGE} ${CTFMFLAGS} -o ${.TARGET} ${OBJS.${_P}}
-.endif
-.if defined(PAXCTL_FLAGS.${_P})
-	${PAXCTL} ${PAXCTL_FLAGS.${_P}} ${.TARGET}
-.endif
-.if ${MKSTRIPIDENT} != "no"
-	${OBJCOPY} -R .ident ${.TARGET}
-.endif
-
-CLEANFILES+=	${_P}.d
-.if exists(${_P}.d)
-.include "${_P}.d"		# include -MD depend for program.
-.endif
-.else	# USE_COMBINE
-
 ${OBJS.${_P}} ${LOBJS.${_P}}: ${DPSRCS}
 
 ${_P}: .gdbinit ${LIBCRT0} ${LIBCRTI} ${OBJS.${_P}} ${LIBC} ${LIBCRTBEGIN} \
@@ -555,7 +499,6 @@ ${_P}: .gdbinit ${LIBCRT0} ${LIBCRTI} ${OBJS.${_P}} ${LIBC} ${LIBCRTBEGIN} \
 	${OBJCOPY} -R .ident ${.TARGET}
 .endif
 .endif	# !commands(${_P})
-.endif	# USE_COMBINE
 
 ${_P}.ro: ${OBJS.${_P}} ${_DPADD.${_P}}
 	${_MKTARGET_LINK}
@@ -564,8 +507,9 @@ ${_P}.ro: ${OBJS.${_P}} ${_DPADD.${_P}}
 .if defined(_PROGDEBUG.${_P})
 ${_PROGDEBUG.${_P}}: ${_P}
 	${_MKTARGET_CREATE}
-	(  ${OBJCOPY} --only-keep-debug ${_P} ${_PROGDEBUG.${_P}} \
-	&& ${OBJCOPY} --strip-debug -p -R .gnu_debuglink \
+	( ${OBJCOPY} --only-keep-debug --compress-debug-sections \
+	    ${_P} ${_PROGDEBUG.${_P}} && \
+	  ${OBJCOPY} --strip-debug -p -R .gnu_debuglink \
 		--add-gnu-debuglink=${_PROGDEBUG.${_P}} ${_P} \
 	) || (rm -f ${_PROGDEBUG.${_P}}; false)
 .endif
@@ -632,7 +576,11 @@ ${DESTDIR}${DEBUGDIR}${BINDIR.${_P}}/${_PROGDEBUG.${_P}}: .MADE
 lint: lint-${_P}
 lint-${_P}: ${LOBJS.${_P}}
 .if defined(LOBJS.${_P}) && !empty(LOBJS.${_P})
+.if defined(DESTDIR)
+	${LINT} ${LINTFLAGS} ${_LDFLAGS.${_P}:C/-L[  ]*/-L/Wg:M-L*} -L${DESTDIR}/usr/libdata/lint ${LOBJS.${_P}} ${_LDADD.${_P}}
+.else
 	${LINT} ${LINTFLAGS} ${_LDFLAGS.${_P}:C/-L[  ]*/-L/Wg:M-L*} ${LOBJS.${_P}} ${_LDADD.${_P}}
+.endif
 .endif
 
 .endfor # _P in ${PROGS} ${PROGS_CXX}					# }

@@ -1,10 +1,10 @@
-/*	$NetBSD: font_8x8.c,v 1.4 2005/12/11 12:16:54 christos Exp $	*/
+/*	$NetBSD: font_8x8.c,v 1.6 2023/09/21 09:31:49 msaitoh Exp $	*/
 
 /*
  *  Copyright (c) 1992, 1993, 1994 Hellmuth Michaelis and Joerg Wunsch
- *  
+ *
  *  All rights reserved.
- * 
+ *
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions
  *  are met:
@@ -15,11 +15,11 @@
  *     documentation and/or other materials provided with the distribution.
  *  3. All advertising materials mentioning features or use of this software
  *     must display the following acknowledgement:
- * 	This product includes software developed by
+ *	This product includes software developed by
  *	Hellmuth Michaelis and Joerg Wunsch
  *  4. The name authors may not be used to endorse or promote products
  *     derived from this software without specific prior written permission.
- * 
+ *
  *  THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
  *  IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
  *  OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -33,7 +33,7 @@
  */
 
 /*
- * Translated into compiler and human readable for for the Atari-TT port of
+ * Translated into compiler and human readable for the Atari-TT port of
  * NetBSD by Leo Weppelman.
  *
  * Reorganized and edited some chars to fit the iso-8859-1 fontset
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: font_8x8.c,v 1.4 2005/12/11 12:16:54 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: font_8x8.c,v 1.6 2023/09/21 09:31:49 msaitoh Exp $");
 
 #include <atari/dev/font.h>
 
@@ -50,7 +50,7 @@ char fontname_8x8[64] = "vt220iso.808";
 extern unsigned char fontdata_8x8[];
 
 font_info	font_info_8x8 = { 1, 8, 8, 6, 0, 255, &fontdata_8x8[0] };
-				
+
 unsigned char fontdata_8x8[] = {
 /* 0x00 */ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 /* 0x01 */ 0x18, 0x3c, 0x7e, 0xff, 0xff, 0x7e, 0x3c, 0x18,

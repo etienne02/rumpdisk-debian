@@ -1,4 +1,4 @@
-/*	$NetBSD: crash.c,v 1.14 2020/08/17 04:15:33 mrg Exp $	*/
+/*	$NetBSD: crash.c,v 1.17 2024/11/21 07:20:10 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -31,10 +31,10 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: crash.c,v 1.14 2020/08/17 04:15:33 mrg Exp $");
+__RCSID("$NetBSD: crash.c,v 1.17 2024/11/21 07:20:10 skrll Exp $");
 #endif /* not lint */
 
-#include <ddb/ddb.h>
+#include <sys/types.h>
 
 #include <sys/fcntl.h>
 #include <sys/mman.h>
@@ -44,6 +44,8 @@ __RCSID("$NetBSD: crash.c,v 1.14 2020/08/17 04:15:33 mrg Exp $");
 #ifndef __mips__
 #include <machine/frame.h>
 #endif
+
+#include <ddb/ddb.h>
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -92,7 +94,6 @@ void lockdebug_lock_print(void) {
 }
 #endif
 
-
 static void
 cleanup(void)
 {
@@ -114,7 +115,7 @@ db_vprintf(const char *fmt, va_list ap)
 	c = vsnprintf(buf, sizeof(buf), fmt, ap);
 	for (b = 0; b < c; b++) {
 		db_putchar(buf[b]);
-	} 
+	}
 }
 
 void
@@ -307,9 +308,11 @@ db_check_interrupt(void)
 int
 cngetc(void)
 {
+	char ch;
 
-	fprintf(stderr, "cngetc\n");
-	abort();
+	if (el_getc(elptr, &ch) <= 0)
+		return 0;
+	return (unsigned char)ch;
 }
 
 void

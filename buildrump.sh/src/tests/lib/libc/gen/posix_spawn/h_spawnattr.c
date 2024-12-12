@@ -1,4 +1,4 @@
-/* $NetBSD: h_spawnattr.c,v 1.2 2021/08/21 23:00:32 andvar Exp $ */
+/* $NetBSD: h_spawnattr.c,v 1.3 2021/11/07 15:46:20 christos Exp $ */
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -29,6 +29,8 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+#include <sys/cdefs.h>
+__RCSID("$NetBSD: h_spawnattr.c,v 1.3 2021/11/07 15:46:20 christos Exp $");
 
 #include <errno.h>
 #include <stdio.h>

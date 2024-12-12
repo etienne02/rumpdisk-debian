@@ -1,11 +1,11 @@
-/*	$NetBSD: vm_machdep.c,v 1.16 2019/01/18 18:03:06 scole Exp $	*/
+/*	$NetBSD: vm_machdep.c,v 1.20 2023/10/06 11:53:27 skrll Exp $	*/
 
 /*
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  *
- * Author: 
+ * Author:
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,6 +37,7 @@
 #include <sys/proc.h>
 #include <sys/systm.h>
 #include <sys/cpu.h>
+#include <sys/atomic.h>
 
 #include <machine/frame.h>
 #include <machine/md_var.h>
@@ -77,14 +78,34 @@ cpu_switchto(lwp_t *oldlwp, lwp_t *newlwp, bool returning)
 	register uint64_t reg9 __asm("r9");
 
 	KASSERT(newlwp != NULL);
-	
+
+	/*
+	 * Issue barriers to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
+	 */
+	membar_producer();	/* store-before-store */
 	ci->ci_curlwp = newlwp;
-	
+	membar_sync();		/* store-before-load */
+
 	/* required for lwp_startup, copy oldlwp into r9, "mov r9=in0" */
 	__asm __volatile("mov %0=%1" : "=r"(reg9) : "r"(oldlwp));
-	
+
 	/* XXX handle RAS eventually */
-	
+
 	if (oldlwp == NULL) {
 		restorectx(newpcb);
 	} else {
@@ -99,7 +120,7 @@ cpu_switchto(lwp_t *oldlwp, lwp_t *newlwp, bool returning)
 /*
  * Finish a fork operation, with process p2 nearly set up.
  * Copy and update the pcb and trap frame, making the child ready to run.
- * 
+ *
  * Rig the child's kernel stack so that it will start out in
  * lwp_trampoline() and call child_return() with p2 as an
  * argument. This causes the newly-created child process to go
@@ -145,7 +166,7 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 	}
 
 	/*
-	 * create the child's kernel stack and backing store. We basicly
+	 * create the child's kernel stack and backing store. We basically
 	 * create an image of the parent's stack and backing store and
 	 * adjust where necessary.
 	 */
@@ -153,10 +174,10 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 
 	l2->l_md.md_flags = l1->l_md.md_flags;
 	l2->l_md.md_tf = (struct trapframe *)(ua2 + UAREA_TF_OFFSET);
-	l2->l_md.md_astpending = 0;
 	l2->l_md.user_stack = NULL;
 	l2->l_md.user_stack_size = 0;
-	
+	KASSERT(l2->l_md.md_astpending == 0);
+
         /*
 	 * Copy the trapframe.
 	 */

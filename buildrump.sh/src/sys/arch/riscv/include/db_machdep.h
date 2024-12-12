@@ -1,4 +1,4 @@
-/* $NetBSD: db_machdep.h,v 1.5 2021/05/18 06:42:11 skrll Exp $ */
+/* $NetBSD: db_machdep.h,v 1.13 2024/11/25 22:04:14 skrll Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -32,7 +32,11 @@
 #ifndef	_RISCV_DB_MACHDEP_H_
 #define	_RISCV_DB_MACHDEP_H_
 
-#include <riscv/locore.h>		/* T_BREAK */
+#include <riscv/frame.h>
+
+#ifndef _KERNEL
+#include <stdbool.h>
+#endif /* _KERNEL */
 
 #define	DB_ELF_SYMBOLS
 
@@ -42,20 +46,22 @@ typedef	long		db_expr_t;	/* expression - signed */
 
 typedef struct trapframe db_regs_t;
 
-extern const uint32_t __cpu_Debugger_insn[1];
-#define	DDB_REGS	(curcpu()->ci_ddb_regs)
+extern const uint32_t cpu_Debugger_insn[];
+extern const uint32_t cpu_Debugger_ret[];
+extern db_regs_t ddb_regs;
+#define	DDB_REGS	(&ddb_regs)
 
 #define	PC_REGS(tf)	((tf)->tf_pc)
 
-#define	PC_ADVANCE(tf) do {						\
-	if (db_get_value((tf)->tf_pc, sizeof(uint32_t), false) == BKPT_INST) \
-		(tf)->tf_pc += BKPT_SIZE;			\
+#define	PC_ADVANCE(tf) do {						       \
+	if (db_get_value((tf)->tf_pc, sizeof(uint32_t), false) == BKPT_INST)   \
+		(tf)->tf_pc += BKPT_SIZE;				       \
 } while(0)
 
 /* Similar to PC_ADVANCE(), except only advance on cpu_Debugger()'s bpt */
-#define	PC_BREAK_ADVANCE(tf) do {				\
-	if ((tf)->tf_pc == (register_t) __cpu_Debugger_insn)	\
-		(tf)->tf_pc += BKPT_SIZE;			\
+#define	PC_BREAK_ADVANCE(tf) do {					       \
+	if ((tf)->tf_pc == (register_t)cpu_Debugger_insn)		       \
+		(tf)->tf_pc = (register_t)cpu_Debugger_ret;		       \
 } while(0)
 
 #define	BKPT_ADDR(addr)		(addr)			/* breakpoint address */
@@ -87,14 +93,7 @@ db_addr_t	db_disasm_insn(uint32_t, db_addr_t, bool);
  * Entrypoints to DDB for kernel, keyboard drivers, init hook
  */
 void 	kdb_kbd_trap(db_regs_t *);
-int 	kdb_trap(int, struct trapframe *);
-
-static inline void
-db_set_ddb_regs(int type, struct trapframe *tf)
-{
-	*curcpu()->ci_ddb_regs = *tf;
-}
-
+int 	kdb_trap(int, db_regs_t *);
 
 /*
  * Constants for KGDB.
@@ -104,7 +103,7 @@ typedef	register_t	kgdb_reg_t;
 #define	KGDB_BUFLEN	1024
 
 /*
- * RISCV cpus have no hardware single-step.
+ * RISC-V harts have no hardware single-step.
  */
 #define	SOFTWARE_SSTEP
 
@@ -123,11 +122,11 @@ bool ddb_running_on_this_cpu_p(void);
 bool ddb_running_on_any_cpu_p(void);
 void db_resume_others(void);
 
-#if 0
 /*
  * We have machine-dependent commands.
  */
 #define	DB_MACHINE_COMMANDS
-#endif
+
+void dump_trapframe(const struct trapframe *, void (*)(const char *, ...) __printflike(1, 2));
 
 #endif	/* _RISCV_DB_MACHDEP_H_ */

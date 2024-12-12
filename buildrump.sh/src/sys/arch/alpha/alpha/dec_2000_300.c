@@ -1,4 +1,4 @@
-/* $NetBSD: dec_2000_300.c,v 1.20 2020/10/14 00:59:50 thorpej Exp $ */
+/* $NetBSD: dec_2000_300.c,v 1.22 2024/03/31 19:06:30 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -60,7 +60,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: dec_2000_300.c,v 1.20 2020/10/14 00:59:50 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dec_2000_300.c,v 1.22 2024/03/31 19:06:30 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -127,7 +127,7 @@ dec_2000_300_cons_init(void)
 	extern struct jensenio_config jensenio_configuration;
 
 	jcp = &jensenio_configuration;
-	jensenio_init(jcp, 0);
+	jensenio_init(jcp);
 
 	ctb = (struct ctb_tt *)(((char *)hwrpb) + hwrpb->rpb_ctb_off);
 
@@ -204,7 +204,7 @@ dec_2000_300_device_register(device_t dev, void *aux)
 	struct bootdev_data *b = bootdev_data;
 	device_t parent = device_parent(dev);
 
-	if (found)
+	if (b == NULL || found)
 		return;
 
 	if (!initted) {

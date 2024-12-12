@@ -1,4 +1,4 @@
-/* $NetBSD: uscsi_subr.c,v 1.2 2019/05/28 08:59:36 msaitoh Exp $	*/
+/* $NetBSD: uscsi_subr.c,v 1.5 2022/05/28 21:14:57 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -224,7 +224,7 @@ uscsi_check_for_scsi(struct uscsi_dev *disc)
 #ifdef USCSI_LINUX_SCSI
 	/*
 	 * Support code for Linux SCSI code. It uses the ioctl() way of
-	 * communicating since this is more close to the origional NetBSD
+	 * communicating since this is more close to the original NetBSD
 	 * scsipi implementation.
 	 */
 #include <scsi/sg.h>
@@ -518,8 +518,8 @@ uscsi_check_for_scsi(struct uscsi_dev *disc)
 
 
 /*
- * Generic SCSI funtions also used by the sense printing functionality.
- * FreeBSD support has it allready asked for by the CAM.
+ * Generic SCSI functions also used by the sense printing functionality.
+ * FreeBSD support has it already asked for by the CAM.
  */
 
 int

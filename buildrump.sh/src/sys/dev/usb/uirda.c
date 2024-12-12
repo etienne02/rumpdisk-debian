@@ -1,4 +1,4 @@
-/*	$NetBSD: uirda.c,v 1.50 2021/08/07 16:19:17 thorpej Exp $	*/
+/*	$NetBSD: uirda.c,v 1.53 2022/08/07 11:25:32 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uirda.c,v 1.50 2021/08/07 16:19:17 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uirda.c,v 1.53 2022/08/07 11:25:32 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -201,6 +201,10 @@ uirda_attach(device_t parent, device_t self, void *aux)
 	sc->sc_udev = dev;
 	sc->sc_iface = iface;
 
+	mutex_init(&sc->sc_wr_buf_lk, MUTEX_DEFAULT, IPL_NONE);
+	mutex_init(&sc->sc_rd_buf_lk, MUTEX_DEFAULT, IPL_NONE);
+	selinit(&sc->sc_rd_sel);
+
 	if (sc->sc_hdszi == 0)
 		sc->sc_hdszi = UIRDA_INPUT_HEADER_SIZE;
 
@@ -280,11 +284,6 @@ uirda_attach(device_t parent, device_t self, void *aux)
 
 	usbd_add_drv_event(USB_EVENT_DRIVER_ATTACH, sc->sc_udev, sc->sc_dev);
 
-	mutex_init(&sc->sc_wr_buf_lk, MUTEX_DEFAULT, IPL_NONE);
-	mutex_init(&sc->sc_rd_buf_lk, MUTEX_DEFAULT, IPL_NONE);
-	selinit(&sc->sc_rd_sel);
-	selinit(&sc->sc_wr_sel);
-
 	ia.ia_type = IR_TYPE_IRFRAME;
 	ia.ia_methods = sc->sc_irm ? sc->sc_irm : &uirda_methods;
 	ia.ia_handle = sc;
@@ -346,7 +345,6 @@ uirda_detach(device_t self, int flags)
 	mutex_destroy(&sc->sc_wr_buf_lk);
 	mutex_destroy(&sc->sc_rd_buf_lk);
 	seldestroy(&sc->sc_rd_sel);
-	seldestroy(&sc->sc_wr_sel);
 
 	return rv;
 }
@@ -629,56 +627,35 @@ filt_uirdaread(struct knote *kn, long hint)
 	return kn->kn_data > 0;
 }
 
-static void
-filt_uirdawdetach(struct knote *kn)
-{
-	struct uirda_softc *sc = kn->kn_hook;
-	int s;
-
-	s = splusb();
-	selremove_knote(&sc->sc_wr_sel, kn);
-	splx(s);
-}
-
 static const struct filterops uirdaread_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_uirdardetach,
 	.f_event = filt_uirdaread,
-};
-
-static const struct filterops uirdawrite_filtops = {
-	.f_isfd = 1,
-	.f_attach = NULL,
-	.f_detach = filt_uirdawdetach,
-	.f_event = filt_seltrue,
 };
 
 int
 uirda_kqfilter(void *h, struct knote *kn)
 {
 	struct uirda_softc *sc = kn->kn_hook;
-	struct selinfo *sip;
 	int s;
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		sip = &sc->sc_rd_sel;
 		kn->kn_fop = &uirdaread_filtops;
+		kn->kn_hook = sc;
+		s = splusb();
+		selrecord_knote(&sc->sc_rd_sel, kn);
+		splx(s);
 		break;
+
 	case EVFILT_WRITE:
-		sip = &sc->sc_wr_sel;
-		kn->kn_fop = &uirdawrite_filtops;
+		kn->kn_fop = &seltrue_filtops;
 		break;
+
 	default:
 		return EINVAL;
 	}
-
-	kn->kn_hook = sc;
-
-	s = splusb();
-	selrecord_knote(sip, kn);
-	splx(s);
 
 	return 0;
 }

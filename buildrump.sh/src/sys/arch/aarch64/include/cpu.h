@@ -1,4 +1,4 @@
-/* $NetBSD: cpu.h,v 1.38 2021/08/14 17:51:18 ryo Exp $ */
+/* $NetBSD: cpu.h,v 1.52 2024/12/10 11:27:28 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2014, 2020 The NetBSD Foundation, Inc.
@@ -39,6 +39,7 @@
 #ifdef _KERNEL_OPT
 #include "opt_gprof.h"
 #include "opt_multiprocessor.h"
+#include "opt_pmap.h"
 #endif
 
 #include <sys/param.h>
@@ -72,6 +73,32 @@ struct aarch64_cpufuncs {
 	void (*cf_icache_sync_range)(vaddr_t, vsize_t);
 };
 
+#define MAX_CACHE_LEVEL	8		/* ARMv8 has maximum 8 level cache */
+
+struct aarch64_cache_unit {
+	u_int cache_type;
+#define CACHE_TYPE_VPIPT	0	/* VMID-aware PIPT */
+#define CACHE_TYPE_VIVT		1	/* ASID-tagged VIVT */
+#define CACHE_TYPE_VIPT		2
+#define CACHE_TYPE_PIPT		3
+	u_int cache_line_size;
+	u_int cache_ways;
+	u_int cache_sets;
+	u_int cache_way_size;
+	u_int cache_size;
+};
+
+struct aarch64_cache_info {
+	u_int cacheable;
+#define CACHE_CACHEABLE_NONE	0
+#define CACHE_CACHEABLE_ICACHE	1	/* instruction cache only */
+#define CACHE_CACHEABLE_DCACHE	2	/* data cache only */
+#define CACHE_CACHEABLE_IDCACHE	3	/* instruction and data caches */
+#define CACHE_CACHEABLE_UNIFIED	4	/* unified cache */
+	struct aarch64_cache_unit icache;
+	struct aarch64_cache_unit dcache;
+};
+
 struct cpu_info {
 	struct cpu_data ci_data;
 	device_t ci_dev;
@@ -102,7 +129,7 @@ struct cpu_info {
 	int ci_mtx_count;
 
 	int ci_cpl;		/* current processor level (spl) */
-	int ci_hwpl;		/* current hardware priority */
+	volatile int ci_hwpl;	/* current hardware priority */
 	volatile u_int ci_softints;
 	volatile u_int ci_intr_depth;
 	volatile uint32_t ci_blocked_pics;
@@ -111,6 +138,15 @@ struct cpu_info {
 
 	int ci_kfpu_spl;
 
+#if defined(PMAP_MI)
+        struct pmap_tlb_info *ci_tlb_info;
+        struct pmap *ci_pmap_lastuser;
+        struct pmap *ci_pmap_cur;
+#endif
+
+	/* ASID of current pmap */
+	tlb_asid_t ci_pmap_asid_cur;
+
 	/* event counters */
 	struct evcnt ci_vfp_use;
 	struct evcnt ci_vfp_reuse;
@@ -118,6 +154,7 @@ struct cpu_info {
 	struct evcnt ci_vfp_release;
 	struct evcnt ci_uct_trap;
 	struct evcnt ci_intr_preempt;
+	struct evcnt ci_rndrrs_fail;
 
 	/* FDT or similar supplied "cpu capacity" */
 	uint32_t ci_capacity_dmips_mhz;
@@ -129,9 +166,16 @@ struct cpu_info {
 	/* ACPI */
 	uint32_t ci_acpiid;	/* ACPI Processor Unique ID */
 
-	struct aarch64_sysctl_cpu_id ci_id;
+	/* cached system registers */
+	uint64_t ci_sctlr_el1;
+	uint64_t ci_sctlr_el2;
 
-	struct aarch64_cache_info *ci_cacheinfo;
+	/* sysctl(9) exposed system registers */
+	struct aarch64_sysctl_cpu_id ci_id;
+#define ci_midr		ci_id.ac_midr
+
+	/* cache information and function pointers */
+	struct aarch64_cache_info ci_cacheinfo[MAX_CACHE_LEVEL];
 	struct aarch64_cpufuncs ci_cpufuncs;
 
 #if defined(GPROF) && defined(MULTIPROCESSOR)
@@ -140,7 +184,7 @@ struct cpu_info {
 } __aligned(COHERENCY_UNIT);
 
 #ifdef _KERNEL
-static inline struct lwp * __attribute__ ((const))
+static inline __always_inline struct lwp * __attribute__ ((const))
 aarch64_curlwp(void)
 {
 	struct lwp *l;
@@ -155,22 +199,7 @@ static __inline struct cpu_info *lwp_getcpu(struct lwp *);
 #define	setsoftast(ci)		(cpu_signotify((ci)->ci_onproc))
 #undef curlwp
 #define	curlwp			(aarch64_curlwp())
-
-static inline int
-cpu_maxproc(void)
-{
-	/*
-	 * the pmap uses PID for ASID.
-	 */
-	switch (__SHIFTOUT(reg_id_aa64mmfr0_el1_read(), ID_AA64MMFR0_EL1_ASIDBITS)) {
-	case ID_AA64MMFR0_EL1_ASIDBITS_8BIT:
-		return (1U << 8) - 1;
-	case ID_AA64MMFR0_EL1_ASIDBITS_16BIT:
-		return (1U << 16) - 1;
-	default:
-		return 0;
-	}
-}
+#define	curpcb			((struct pcb *)lwp_getpcb(curlwp))
 
 void	cpu_signotify(struct lwp *l);
 void	cpu_need_proftick(struct lwp *l);
@@ -215,10 +244,14 @@ static inline void
 cpu_dosoftints(void)
 {
 #if defined(__HAVE_FAST_SOFTINTS) && !defined(__HAVE_PIC_FAST_SOFTINTS)
+	KDASSERT(kpreempt_disabled());
 	cpu_dosoftints_ci(curcpu());
 #endif
 }
 
+struct cpufeature_attach_args {
+	struct cpu_info *ci;
+};
 
 #endif /* _KERNEL */
 

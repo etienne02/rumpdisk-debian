@@ -1,4 +1,4 @@
-/*	$NetBSD: t_ptrace_core_wait.h,v 1.4 2021/07/24 08:39:54 rin Exp $	*/
+/*	$NetBSD: t_ptrace_core_wait.h,v 1.9 2024/06/29 07:10:27 rin Exp $	*/
 
 /*-
  * Copyright (c) 2016, 2017, 2018, 2019, 2020 The NetBSD Foundation, Inc.
@@ -208,8 +208,9 @@ ATF_TC_BODY(core_dump_procinfo, tc)
 	DPRINTF("Before resuming the child process where it left off and "
 	    "without signal to be sent\n");
 
-#if defined(__aarch64__) || defined(__arm__) || defined(__powerpc__) || \
-    defined(__sh3__)
+#if defined(__aarch64__) || defined(__arm__) || defined(__hppa__) || \
+    defined(__powerpc__) || defined(__riscv__) || defined(__sh3__) || \
+    defined(sparc) || defined(__vax__)
 	/*
 	 * For these archs, program counter is not automatically incremented
 	 * by a trap instruction. We cannot increment PC in the trap handler,

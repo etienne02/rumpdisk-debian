@@ -1,4 +1,4 @@
-/* $NetBSD: sbmac.c,v 1.62 2020/01/29 05:30:14 thorpej Exp $ */
+/* $NetBSD: sbmac.c,v 1.66 2024/02/09 17:57:03 andvar Exp $ */
 
 /*
  * Copyright 2000, 2001, 2004
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sbmac.c,v 1.62 2020/01/29 05:30:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sbmac.c,v 1.66 2024/02/09 17:57:03 andvar Exp $");
 
 #include "opt_inet.h"
 #include "opt_ns.h"
@@ -1025,14 +1025,6 @@ sbdma_tx_process(struct sbmac_softc *sc, sbmacdma_t *d)
 
 		d->sbdma_rem_index = SBDMA_NEXTBUF(d, d->sbdma_rem_index);
 	}
-
-	/*
-	 * Decide what to set the IFF_OACTIVE bit in the interface to.
-	 * It's supposed to reflect if the interface is actively
-	 * transmitting, but that's really hard to do quickly.
-	 */
-
-	ifp->if_flags &= ~IFF_OACTIVE;
 }
 
 /*
@@ -1779,21 +1771,21 @@ sbmac_start(struct ifnet *ifp)
 	struct mbuf		*m_head = NULL;
 	int			rv;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	sc = ifp->if_softc;
 
 	for (;;) {
 
-		IF_DEQUEUE(&ifp->if_snd, m_head);
+		IF_POLL(&ifp->if_snd, m_head);
 		if (m_head == NULL)
 		    break;
 
 		/*
 		 * Put the buffer on the transmit ring.  If we
-		 * don't have room, set the OACTIVE flag and wait
-		 * for the NIC to drain the ring.
+		 * don't have room, we'll try to get things going
+		 * again after a transmit interrupt.
 		 */
 
 		rv = sbdma_add_txbuffer(&(sc->sbm_txdma), m_head);
@@ -1803,6 +1795,7 @@ sbmac_start(struct ifnet *ifp)
 			 * If there's a BPF listener, bounce a copy of this
 			 * frame to it.
 			 */
+			IF_DEQUEUE(&ifp->if_snd, m_head);
 			bpf_mtap(ifp, m_head, BPF_D_OUT);
 			if (!sc->sbm_pass3_dma) {
 				/*
@@ -1812,10 +1805,6 @@ sbmac_start(struct ifnet *ifp)
 				 */
 				m_freem(m_head);
 			}
-		} else {
-		    IF_PREPEND(&ifp->if_snd, m_head);
-		    ifp->if_flags |= IFF_OACTIVE;
-		    break;
 		}
 	}
 }
@@ -1883,7 +1872,7 @@ sbmac_setmulti(struct sbmac_softc *sc)
 	}
 
 	/*
-	 * Progam new multicast entries.  For now, only use the
+	 * Program new multicast entries.  For now, only use the
 	 * perfect filter.  In the future we'll need to use the
 	 * hash filter if the perfect filter overflows
 	 */
@@ -2260,7 +2249,7 @@ sbmac_attach(device_t parent, device_t self, void *aux)
 	callout_init(&(sc->sc_tick_ch), 0);
 
 	/*
-	 * Read the ethernet address.  The firwmare left this programmed
+	 * Read the ethernet address.  The firmware left this programmed
 	 * for us in the ethernet address register for each mac.
 	 */
 

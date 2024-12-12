@@ -1,4 +1,4 @@
-/*	$NetBSD: mutex.h,v 1.6 2021/08/25 04:13:41 thorpej Exp $	*/
+/*	$NetBSD: mutex.h,v 1.9 2023/07/12 12:50:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -32,6 +32,8 @@
 #ifndef _IA64_MUTEX_H_
 #define	_IA64_MUTEX_H_
 
+#include <sys/types.h>
+
 #ifndef __MUTEX_PRIVATE
 
 struct kmutex {
@@ -41,12 +43,13 @@ struct kmutex {
 
 #else
 
+#include <machine/intr.h>
+
 struct kmutex {
 	volatile uintptr_t	mtx_owner;
 	ipl_cookie_t		mtx_ipl;
 	__cpu_simple_lock_t	mtx_lock;
 };
-
 
 /* XXX when we implement mutex_enter()/mutex_exit(), uncomment this
 #define __HAVE_MUTEX_STUBS		1

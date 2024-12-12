@@ -1,4 +1,4 @@
-/*	$NetBSD: hci_link.c,v 1.25 2018/09/07 14:47:15 plunky Exp $	*/
+/*	$NetBSD: hci_link.c,v 1.27 2024/07/05 04:31:53 rin Exp $	*/
 
 /*-
  * Copyright (c) 2005 Iain Hibbert.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hci_link.c,v 1.25 2018/09/07 14:47:15 plunky Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hci_link.c,v 1.27 2024/07/05 04:31:53 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -123,7 +123,7 @@ hci_acl_open(struct hci_unit *unit, bdaddr_t *bdaddr)
 
 	case HCI_LINK_OPEN:
 		/*
-		 * If already open, halt any expiry timeouts. We dont need
+		 * If already open, halt any expiry timeouts. We don't need
 		 * to care about already invoking timeouts since refcnt >0
 		 * will keep the link alive.
 		 */
@@ -352,7 +352,7 @@ hci_acl_linkmode(struct hci_link *link)
 	/*
 	 * The link state will only be OPEN here if the mode change
 	 * was successful. So, we can proceed with L2CAP connections,
-	 * or notify already establshed channels, to allow any that
+	 * or notify already established channels, to allow any that
 	 * are dissatisfied to disconnect before we restart.
 	 */
 	next = LIST_FIRST(&l2cap_active_list);
@@ -599,7 +599,7 @@ hci_acl_send(struct mbuf *m, struct hci_link *link,
 	return 0;
 
 nomem:
-	if (m) m_freem(m);
+	m_freem(m);
 	if (pdu) {
 		MBUFQ_DRAIN(&pdu->lp_data);
 		pool_put(&l2cap_pdu_pool, pdu);
@@ -968,10 +968,8 @@ hci_link_free(struct hci_link *link, int err)
 	KASSERT(TAILQ_EMPTY(&link->hl_txq));
 
 	/* ACL incoming data packet */
-	if (link->hl_rxp != NULL) {
-		m_freem(link->hl_rxp);
-		link->hl_rxp = NULL;
-	}
+	m_freem(link->hl_rxp);
+	link->hl_rxp = NULL;
 
 	/* SCO master ACL link */
 	if (link->hl_link != NULL) {

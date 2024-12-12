@@ -1,4 +1,4 @@
-# $NetBSD: t_option.sh,v 1.7 2019/07/11 03:49:51 msaitoh Exp $
+# $NetBSD: t_option.sh,v 1.9 2022/05/22 11:27:36 andvar Exp $
 #
 # Copyright (c) 2016 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -454,7 +454,8 @@ set_v_body() {
 			-o not-match:for -o not-match:do -o not-match:done \
 			-e match:printf -e match:111 -e not-match:111222 \
 			-e match:for -e match:do -e match:done \
-				${TEST_SH}
+				${TEST_SH} ||
+		atf_fail '111 222 333 test failure'
 }
 
 atf_test_case set_x
@@ -1006,7 +1007,7 @@ Option_switching_body() {
 
 	# and these are extensions that might not exist (non-fatal to test)
 	# -i and -s (and -c) are posix options, but are not required to
-	# be accessable via the "set" command, just the command line.
+	# be accessible via the "set" command, just the command line.
 	# We allow for -i to work with set, as that makes some sense,
 	# -c and -s do not.
 	test_optional_on_off E i I p q V X || true

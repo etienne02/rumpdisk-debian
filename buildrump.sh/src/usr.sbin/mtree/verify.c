@@ -1,4 +1,4 @@
-/*	$NetBSD: verify.c,v 1.47 2021/03/18 20:02:18 cheusov Exp $	*/
+/*	$NetBSD: verify.c,v 1.50 2024/12/11 14:52:26 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -38,7 +38,7 @@
 #if 0
 static char sccsid[] = "@(#)verify.c	8.1 (Berkeley) 6/6/93";
 #else
-__RCSID("$NetBSD: verify.c,v 1.47 2021/03/18 20:02:18 cheusov Exp $");
+__RCSID("$NetBSD: verify.c,v 1.50 2024/12/11 14:52:26 christos Exp $");
 #endif
 #endif /* not lint */
 
@@ -86,7 +86,7 @@ vwalk(void)
 	argv[0] = dot;
 	argv[1] = NULL;
 
-	if ((t = fts_open(argv, ftsoptions, NULL)) == NULL)
+	if ((t = fts_open(argv, ftsoptions, dcmp)) == NULL)
 		mtree_err("fts_open: %s", strerror(errno));
 	level = root;
 	specdepth = rval = 0;
@@ -147,7 +147,8 @@ vwalk(void)
 			continue;
  extra:
 		if (!eflag && !(dflag && p->fts_info == FTS_SL)) {
-			printf("extra: %s", RP(p));
+			printf(flavor == F_FREEBSD9 ? "%s extra" : "extra: %s",
+			    RP(p));
 			if (rflag) {
 #if HAVE_STRUCT_STAT_ST_FLAGS
 				if (rflag > 1 &&
@@ -166,6 +167,8 @@ vwalk(void)
 		}
 		fts_set(t, p, FTS_SKIP);
 	}
+	if (errno != 0)
+		mtree_err("fts_read: %s", strerror(errno));
 	fts_close(t);
 	if (sflag)
 		warnx("%s checksum: %u", fullpath, crc_total);
@@ -178,7 +181,7 @@ miss(NODE *p, char *tail)
 	int create;
 	char *tp;
 	const char *type;
-	uint32_t flags;
+	u_long flags;
 
 	for (; p; p = p->next) {
 		if (p->flags & F_OPT && !(p->flags & F_VISIT))

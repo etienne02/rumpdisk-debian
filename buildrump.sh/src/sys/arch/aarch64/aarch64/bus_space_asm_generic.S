@@ -1,7 +1,7 @@
-/*	$NetBSD: bus_space_asm_generic.S,v 1.5 2020/11/12 11:28:39 jmcneill Exp $	*/
+/*	$NetBSD: bus_space_asm_generic.S,v 1.7 2024/02/07 04:20:26 msaitoh Exp $	*/
 
 /*
- * Copyright (c) 2017 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2017 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,7 +29,7 @@
 #include <aarch64/asm.h>
 #include "assym.h"
 
-RCSID("$NetBSD: bus_space_asm_generic.S,v 1.5 2020/11/12 11:28:39 jmcneill Exp $")
+RCSID("$NetBSD: bus_space_asm_generic.S,v 1.7 2024/02/07 04:20:26 msaitoh Exp $")
 
 .macro generate_bsfunc funcname, dsbop
 /* uint8_t {funcname}_bs_r_1(x0:tag, x1:addr, x2:offset) */
@@ -389,7 +389,7 @@ ENTRY_NP(\funcname\()_bs_rr_2_swap)
 0:
 	lsl	x2, x2, x8	/* offset <<= tag->bs_stride */
 1:
-	ldrh	w8, [x1, x9]	/* value = *src */
+	ldrh	w8, [x1, x2]	/* value = *src */
 	subs	x4, x4, #1	/* count-- */
 	add	x2, x2, x9	/* src += delta */
 	rev16	w8, w8
@@ -419,7 +419,7 @@ ENTRY_NP(\funcname\()_bs_rr_4_swap)
 0:
 	lsl	x2, x2, x8	/* offset <<= tag->bs_stride */
 1:
-	ldr	w8, [x1, x9]	/* value = *src */
+	ldr	w8, [x1, x2]	/* value = *src */
 	subs	x4, x4, #1	/* count-- */
 	add	x2, x2, x9	/* src += delta */
 	rev	w8, w8
@@ -449,7 +449,7 @@ ENTRY_NP(\funcname\()_bs_rr_8_swap)
 0:
 	lsl	x2, x2, x8	/* offset <<= tag->bs_stride */
 1:
-	ldr	x8, [x1, x9]	/* value = *src */
+	ldr	x8, [x1, x2]	/* value = *src */
 	subs	x4, x4, #1	/* count-- */
 	add	x2, x2, x9	/* src += delta */
 	rev	x8, x8

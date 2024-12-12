@@ -1,4 +1,4 @@
-/* $NetBSD: fp_complete.c,v 1.27 2021/07/23 03:57:06 thorpej Exp $ */
+/* $NetBSD: fp_complete.c,v 1.31 2023/11/21 22:19:12 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2001 Ross Harvey
@@ -37,7 +37,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: fp_complete.c,v 1.27 2021/07/23 03:57:06 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fp_complete.c,v 1.31 2023/11/21 22:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -49,7 +49,7 @@ __KERNEL_RCSID(0, "$NetBSD: fp_complete.c,v 1.27 2021/07/23 03:57:06 thorpej Exp
 #include <machine/fpu.h>
 #include <machine/reg.h>
 #include <machine/alpha.h>
-#include <alpha/alpha/db_instruction.h>
+#include <machine/alpha_instruction.h>
 
 #include <lib/libkern/softfloat.h>
 
@@ -435,7 +435,7 @@ uint64_t
 alpha_read_fp_c(struct lwp *l)
 {
 	/*
-	 * A possibly-desireable EV6-specific optimization would deviate from
+	 * A possibly-desirable EV6-specific optimization would deviate from
 	 * the Alpha Architecture spec and keep some FP_C bits in the FPCR,
 	 * but in a transparent way. Some of the code for that would need to
 	 * go right here.
@@ -648,7 +648,7 @@ alpha_fp_complete_at(unsigned long trigger_pc, struct lwp *l, uint64_t *ucode)
 	 * for it, and so we don't have to lock any memory locations or
 	 * pass a third parameter to every SoftFloat entry point.
 	 *
-	 * N.B. the rounding mode field of the the FLOAT format instructions
+	 * N.B. the rounding mode field of the FLOAT format instructions
 	 * matches that of the FPCR *except* for the value 3, which means
 	 * "dynamic" rounding mode (i.e. what is programmed into the FPCR).
 	 */
@@ -703,7 +703,7 @@ alpha_fp_complete(u_long a0, u_long a1, struct lwp *l, uint64_t *ucode)
 
 	/*
 	 * Start out with the code mirroring the exception flags
-	 * (FP_X_*).  Shift right 1 bit to discard SWC to achive
+	 * (FP_X_*).  Shift right 1 bit to discard SWC to achieve
 	 * this.
 	 */
 	*ucode = a0 >> 1;

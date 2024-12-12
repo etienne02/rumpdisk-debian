@@ -1,4 +1,4 @@
-/*	$NetBSD: elinkxl.c,v 1.138 2020/03/12 03:01:46 thorpej Exp $	*/
+/*	$NetBSD: elinkxl.c,v 1.140 2024/06/29 12:11:11 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: elinkxl.c,v 1.138 2020/03/12 03:01:46 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: elinkxl.c,v 1.140 2024/06/29 12:11:11 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1490,18 +1490,18 @@ ex_getstats(struct ex_softc *sc)
 
 	GO_WINDOW(6);
 	upperok = bus_space_read_1(iot, ioh, UPPER_FRAMES_OK);
-	if_statadd_ref(nsr, if_opackets,
+	if_statadd_ref(ifp, nsr, if_opackets,
 	    bus_space_read_1(iot, ioh, TX_FRAMES_OK));
-	if_statadd_ref(nsr, if_opackets, (upperok & 0x30) << 4);
-	if_statadd_ref(nsr, if_ierrors,
+	if_statadd_ref(ifp, nsr, if_opackets, (upperok & 0x30) << 4);
+	if_statadd_ref(ifp, nsr, if_ierrors,
 	    bus_space_read_1(iot, ioh, RX_OVERRUNS));
-	if_statadd_ref(nsr, if_collisions,
+	if_statadd_ref(ifp, nsr, if_collisions,
 	    bus_space_read_1(iot, ioh, TX_COLLISIONS));
 	/*
 	 * There seems to be no way to get the exact number of collisions,
 	 * this is the number that occurred at the very least.
 	 */
-	if_statadd_ref(nsr, if_collisions,
+	if_statadd_ref(ifp, nsr, if_collisions,
 	    2 * bus_space_read_1(iot, ioh, TX_AFTER_X_COLLISIONS));
 
 	IF_STAT_PUTREF(ifp);
@@ -1598,10 +1598,10 @@ ex_stop(struct ifnet *ifp, int disable)
 	for (tx = sc->tx_head ; tx != NULL; tx = tx->tx_next) {
 		if (tx->tx_mbhead == NULL)
 			continue;
-		m_freem(tx->tx_mbhead);
-		tx->tx_mbhead = NULL;
 		bus_dmamap_unload(sc->sc_dmat, tx->tx_dmamap);
 		tx->tx_dpd->dpd_fsh = tx->tx_dpd->dpd_nextptr = 0;
+		m_freem(tx->tx_mbhead);
+		tx->tx_mbhead = NULL;
 		bus_dmamap_sync(sc->sc_dmat, sc->sc_dpd_dmamap,
 		    ((char *)tx->tx_dpd - (char *)sc->sc_dpd),
 		    sizeof (struct ex_dpd),

@@ -1,4 +1,4 @@
-/*	$NetBSD: vmparam.h,v 1.23 2020/02/01 19:41:49 tsutsui Exp $	*/
+/*	$NetBSD: vmparam.h,v 1.25 2024/05/14 19:00:43 andvar Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -78,8 +78,8 @@
 #define USRIOSIZE	(1 * NPTEPG)	/* 4mb */
 #endif
 
-/* 
- * Mach derived constants       
+/*
+ * Mach derived constants
  */
 
 /* user/kernel map constants */
@@ -97,7 +97,7 @@
 
 /*
  * Constants which control the way the VM system deals with memory segments.
- * Only one physical contigous memory segment.
+ * Only one physical contiguous memory segment.
  */
 #define VM_PHYSSEG_MAX		1
 #define VM_PHYSSEG_STRAT	VM_PSTRAT_BSEARCH

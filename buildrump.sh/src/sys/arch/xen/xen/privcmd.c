@@ -1,4 +1,4 @@
-/* $NetBSD: privcmd.c,v 1.60 2020/11/30 17:06:02 bouyer Exp $ */
+/* $NetBSD: privcmd.c,v 1.66 2022/09/01 15:32:16 bouyer Exp $ */
 
 /*-
  * Copyright (c) 2004 Christian Limpach.
@@ -27,7 +27,11 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: privcmd.c,v 1.60 2020/11/30 17:06:02 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: privcmd.c,v 1.66 2022/09/01 15:32:16 bouyer Exp $");
+
+#include "opt_xen.h"
+
+#include "opt_xen.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -47,6 +51,7 @@ __KERNEL_RCSID(0, "$NetBSD: privcmd.c,v 1.60 2020/11/30 17:06:02 bouyer Exp $");
 #include <xen/hypervisor.h>
 #include <xen/xen.h>
 #include <xen/xenio.h>
+#include <xen/xenmem.h>
 #include <xen/xenpmap.h>
 #include <xen/granttables.h>
 
@@ -60,17 +65,20 @@ __KERNEL_RCSID(0, "$NetBSD: privcmd.c,v 1.60 2020/11/30 17:06:02 bouyer Exp $");
 
 typedef enum _privcmd_type {
 	PTYPE_PRIVCMD,
+	PTYPE_PRIVCMD_PHYSMAP,
 	PTYPE_GNTDEV_REF,
 	PTYPE_GNTDEV_ALLOC
 } privcmd_type;
 
 struct privcmd_object_privcmd {
+	paddr_t base_paddr; /* base address of physical space */
         paddr_t *maddr; /* array of machine address to map */
         int     domid;
         bool    no_translate;
 };
 
 struct privcmd_object_gntref {
+	paddr_t base_paddr; /* base address of physical space */
         struct ioctl_gntdev_grant_notify notify;
 	struct gnttab_map_grant_ref ops[1]; /* variable length */
 };
@@ -316,6 +324,10 @@ privcmd_get_map_prot(struct vm_map *map, vaddr_t start, off_t size)
 static int
 privcmd_mmap(struct vop_ioctl_args *ap)
 {
+#ifndef XENPV
+	printf("IOCTL_PRIVCMD_MMAP not supported\n");
+	return EINVAL;
+#else
 	int i, j;
 	privcmd_mmap_t *mcmd = ap->a_data;
 	privcmd_mmap_entry_t mentry;
@@ -357,11 +369,16 @@ privcmd_mmap(struct vop_ioctl_args *ap)
 			return error;
 	}
 	return 0;
+#endif
 }
 
 static int
 privcmd_mmapbatch(struct vop_ioctl_args *ap)
 {
+#ifndef XENPV
+	printf("IOCTL_PRIVCMD_MMAPBATCH not supported\n");
+	return EINVAL;
+#else
 	int i;
 	privcmd_mmapbatch_t* pmb = ap->a_data;
 	vaddr_t va0;
@@ -432,6 +449,7 @@ privcmd_mmapbatch(struct vop_ioctl_args *ap)
 	error = privcmd_map_obj(vmm, va0, obj, prot);
 
 	return error;
+#endif
 }
 
 static int
@@ -446,6 +464,7 @@ privcmd_mmapbatch_v2(struct vop_ioctl_args *ap)
 	struct privcmd_object *obj;
 	vm_prot_t prot;
 	int error;
+	paddr_t base_paddr = 0;
 
 	vmm = &curlwp->l_proc->p_vmspace->vm_map;
 	va0 = pmb->addr & ~PAGE_MASK;
@@ -461,10 +480,16 @@ privcmd_mmapbatch_v2(struct vop_ioctl_args *ap)
 	if (prot == UVM_PROT_NONE)
 		return EINVAL;
 	
+#ifndef XENPV
+	KASSERT(xen_feature(XENFEAT_auto_translated_physmap));
+	base_paddr = xenmem_alloc_pa(pmb->num * PAGE_SIZE, PAGE_SIZE, true);
+	KASSERT(base_paddr != 0);
+#endif
 	maddr = kmem_alloc(sizeof(paddr_t) * pmb->num, KM_SLEEP);
 	obj = kmem_alloc(sizeof(*obj), KM_SLEEP);
-	obj->type = PTYPE_PRIVCMD;
+	obj->type = PTYPE_PRIVCMD_PHYSMAP;
 	obj->u.pc.maddr = maddr;
+	obj->u.pc.base_paddr = base_paddr;
 	obj->u.pc.no_translate = false;
 	obj->npages = pmb->num;
 	obj->u.pc.domid = pmb->dom;
@@ -473,9 +498,18 @@ privcmd_mmapbatch_v2(struct vop_ioctl_args *ap)
 		error = copyin(&pmb->arr[i], &mfn, sizeof(mfn));
 		if (error != 0) {
 			kmem_free(maddr, sizeof(paddr_t) * pmb->num);
+			kmem_free(obj, sizeof(*obj));
+#ifndef XENPV
+			xenmem_free_pa(base_paddr, pmb->num * PAGE_SIZE);
+#endif
 			return error;
 		}
+#ifdef XENPV
 		maddr[i] = ((paddr_t)mfn) << PGSHIFT;
+#else
+		maddr[i] = mfn; /* TMP argument for XENMEM_add_to_physmap */
+#endif
+
 	}
 	error = privcmd_map_obj(vmm, va0, obj, prot);
 	if (error)
@@ -487,6 +521,7 @@ privcmd_mmapbatch_v2(struct vop_ioctl_args *ap)
 	 */
 	for(i = 0; i < pmb->num; i++, va0 += PAGE_SIZE) {
 		int err, cerr;
+#ifdef XENPV
 		for (int j = 0 ; j < 10; j++) {
 			err = pmap_enter_ma(vmm->pmap, va0, maddr[i], 0, 
 			    prot, PMAP_CANFAIL | prot,
@@ -499,6 +534,35 @@ privcmd_mmapbatch_v2(struct vop_ioctl_args *ap)
 		if (err) {
 			maddr[i] = INVALID_PAGE;
 		}
+#else /* XENPV */
+		xen_add_to_physmap_batch_t add;
+		u_long idx;
+		xen_pfn_t gpfn;
+		int err2;
+		memset(&add, 0, sizeof(add));
+
+		add.domid = DOMID_SELF;
+		add.space = XENMAPSPACE_gmfn_foreign;
+		add.size = 1;
+		add.foreign_domid = pmb->dom;
+		idx = maddr[i];
+		set_xen_guest_handle(add.idxs, &idx);
+		maddr[i] = INVALID_PAGE;
+		gpfn = (base_paddr >> PGSHIFT) + i;
+		set_xen_guest_handle(add.gpfns, &gpfn);
+		err2 = 0;
+		set_xen_guest_handle(add.errs, &err2);
+		err = HYPERVISOR_memory_op(XENMEM_add_to_physmap_batch, &add);
+		if (err < 0) {
+			printf("privcmd_mmapbatch_v2: XENMEM_add_to_physmap_batch failed %d\n", err);
+			privpgop_detach(&obj->uobj);
+			return privcmd_xen2bsd_errno(err);
+		}
+		err = err2;
+		if (err == 0) 
+			maddr[i] = base_paddr + i * PAGE_SIZE;
+#endif /* XENPV */
+
 		cerr = copyout(&err, &pmb->err[i], sizeof(pmb->err[i]));
 		if (cerr) {
 			privpgop_detach(&obj->uobj);
@@ -521,8 +585,7 @@ privcmd_mmap_resource(struct vop_ioctl_args *ap)
 	struct xen_mem_acquire_resource op;
 	xen_pfn_t *pfns;
 	paddr_t *maddr;
-
-	KASSERT(!xen_feature(XENFEAT_auto_translated_physmap));
+	paddr_t base_paddr = 0;
 
 	vmm = &curlwp->l_proc->p_vmspace->vm_map;
 	va0 = pmr->addr & ~PAGE_MASK;
@@ -539,6 +602,17 @@ privcmd_mmap_resource(struct vop_ioctl_args *ap)
 		return EINVAL;
 	
 	pfns = kmem_alloc(sizeof(xen_pfn_t) * pmr->num, KM_SLEEP);
+#ifndef XENPV
+	KASSERT(xen_feature(XENFEAT_auto_translated_physmap));
+	base_paddr = xenmem_alloc_pa(pmr->num * PAGE_SIZE, PAGE_SIZE, true);
+	KASSERT(base_paddr != 0);
+	for (i = 0; i < pmr->num; i++) {
+		pfns[i] = (base_paddr >> PGSHIFT) + i;
+	}
+#else
+	KASSERT(!xen_feature(XENFEAT_auto_translated_physmap));
+#endif
+	
 	memset(&op, 0, sizeof(op));
 	op.domid = pmr->dom;
 	op.type = pmr->type;
@@ -560,7 +634,8 @@ privcmd_mmap_resource(struct vop_ioctl_args *ap)
 	kmem_free(pfns, sizeof(xen_pfn_t) * pmr->num);
 
 	obj = kmem_alloc(sizeof(*obj), KM_SLEEP);
-	obj->type = PTYPE_PRIVCMD;
+	obj->type = PTYPE_PRIVCMD_PHYSMAP;
+	obj->u.pc.base_paddr = base_paddr;
 	obj->u.pc.maddr = maddr;
 	obj->u.pc.no_translate = true;
 	obj->npages = pmr->num;
@@ -600,6 +675,14 @@ privcmd_map_gref(struct vop_ioctl_args *ap)
 	obj->npages = mgr->count;
 	memcpy(&obj->u.gr.notify, &mgr->notify,
 	    sizeof(obj->u.gr.notify));
+#ifndef XENPV
+	KASSERT(xen_feature(XENFEAT_auto_translated_physmap));
+	obj->u.gr.base_paddr = xenmem_alloc_pa(obj->npages * PAGE_SIZE,
+	    PAGE_SIZE, true);
+	KASSERT(obj->u.gr.base_paddr != 0);
+#else
+	obj->u.gr.base_paddr = 0;
+#endif /* !XENPV */
 
 	for (int i = 0; i < obj->npages; ++i) {
 		struct ioctl_gntdev_grant_ref gref;
@@ -607,20 +690,28 @@ privcmd_map_gref(struct vop_ioctl_args *ap)
 		if (error != 0) {
 			goto err1;
 		}
+#ifdef XENPV
 		obj->u.gr.ops[i].host_addr = 0;
+		obj->u.gr.ops[i].flags = GNTMAP_host_map |
+		    GNTMAP_application_map | GNTMAP_contains_pte;
+#else /* XENPV */
+		obj->u.gr.ops[i].host_addr = 
+		    obj->u.gr.base_paddr + PAGE_SIZE * i;
+		obj->u.gr.ops[i].flags = GNTMAP_host_map;
+#endif /* XENPV */
 		obj->u.gr.ops[i].dev_bus_addr = 0;
 		obj->u.gr.ops[i].ref = gref.ref;
 		obj->u.gr.ops[i].dom = gref.domid;
 		obj->u.gr.ops[i].handle = -1;
-		obj->u.gr.ops[i].flags = GNTMAP_host_map |
-		    GNTMAP_application_map | GNTMAP_contains_pte;
 		if (prot == UVM_PROT_READ)
 			obj->u.gr.ops[i].flags |= GNTMAP_readonly;
 	}
 	error = privcmd_map_obj(vmm, va0, obj, prot);
 	return error;
-
 err1:
+#ifndef XENPV
+	xenmem_free_pa(obj->u.gr.base_paddr, obj->npages * PAGE_SIZE);
+#endif
 	kmem_free(obj, PGO_GNTREF_LEN(obj->npages));
 	return error;
 }
@@ -772,7 +863,7 @@ privcmd_ioctl(void *v)
 				hc->retval = error;
 				error = 0;
 			} else {
-				/* error occured, return the errno */
+				/* error occurred, return the errno */
 				error = privcmd_xen2bsd_errno(error);
 				hc->retval = 0;
 			}
@@ -836,11 +927,19 @@ privcmd_notify(struct ioctl_gntdev_grant_notify *notify, vaddr_t va,
 		int i = notify->offset / PAGE_SIZE;
 		int o = notify->offset % PAGE_SIZE;
 		int err;
+#ifndef XENPV
+		paddr_t base_paddr;
+		base_paddr = xenmem_alloc_pa(PAGE_SIZE, PAGE_SIZE, true);
+#endif
 
 		KASSERT(gmops != NULL);
 		va = uvm_km_alloc(kernel_map, PAGE_SIZE, PAGE_SIZE,
 		    UVM_KMF_VAONLY | UVM_KMF_WAITVA);
+#ifndef XENPV
+		op.host_addr = base_paddr;
+#else
 		op.host_addr = va;
+#endif
 		op.dev_bus_addr = 0;
 		op.ref = gmops[i].ref;
 		op.dom = gmops[i].dom;
@@ -848,15 +947,27 @@ privcmd_notify(struct ioctl_gntdev_grant_notify *notify, vaddr_t va,
 		op.flags = GNTMAP_host_map;
 		err = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &op, 1);
 		if (err == 0 && op.status == GNTST_okay) {
+#ifndef XENPV
+			pmap_kenter_pa(va, base_paddr,
+			    VM_PROT_READ | VM_PROT_WRITE, 0);
+#endif
 			char *n = (void *)(va + o);
 			*n = 0;
+#ifndef XENPV
+			pmap_kremove(va, PAGE_SIZE);
+			uop.host_addr = base_paddr;
+#else
 			uop.host_addr = va;
+#endif
 			uop.handle = op.handle;
 			uop.dev_bus_addr = 0;
 			(void)HYPERVISOR_grant_table_op(
 			    GNTTABOP_unmap_grant_ref, &uop, 1);
 		}
 		uvm_km_free(kernel_map, va, PAGE_SIZE, UVM_KMF_VAONLY);
+#ifndef XENPV
+		xenmem_free_pa(base_paddr, PAGE_SIZE);
+#endif
 	} else {
 		KASSERT(gmops == NULL);
 		char *n = (void *)(va + notify->offset);
@@ -879,6 +990,20 @@ privpgop_detach(struct uvm_object *uobj)
 	}
 	rw_exit(uobj->vmobjlock);
 	switch (pobj->type) {
+	case PTYPE_PRIVCMD_PHYSMAP:
+#ifndef XENPV
+		for (int i = 0; i < pobj->npages; i++) {
+			if (pobj->u.pc.maddr[i] != INVALID_PAGE) {
+				struct xen_remove_from_physmap rm;
+				rm.domid = DOMID_SELF;
+				rm.gpfn = pobj->u.pc.maddr[i] >> PGSHIFT;
+				HYPERVISOR_memory_op(
+				    XENMEM_remove_from_physmap, &rm);
+			}
+		}
+		xenmem_free_pa(pobj->u.pc.base_paddr, pobj->npages * PAGE_SIZE);
+#endif
+		/* FALLTHROUGH */
 	case PTYPE_PRIVCMD:
 		kmem_free(pobj->u.pc.maddr, sizeof(paddr_t) * pobj->npages);
 		uvm_obj_destroy(uobj, true);
@@ -887,6 +1012,16 @@ privpgop_detach(struct uvm_object *uobj)
 	case PTYPE_GNTDEV_REF:
 	{
 		privcmd_notify(&pobj->u.gr.notify, 0, pobj->u.gr.ops);
+#ifndef XENPV
+		KASSERT(pobj->u.gr.base_paddr != 0);
+		for (int i = 0; i < pobj->npages; i++) {
+			struct xen_remove_from_physmap rm;
+			rm.domid = DOMID_SELF;
+			rm.gpfn = (pobj->u.gr.base_paddr << PGSHIFT) + i;
+			HYPERVISOR_memory_op(XENMEM_remove_from_physmap, &rm);
+		}
+		xenmem_free_pa(pobj->u.gr.base_paddr, pobj->npages * PAGE_SIZE);
+#endif
 		kmem_free(pobj, PGO_GNTREF_LEN(pobj->npages));
 		break;
 	}
@@ -923,6 +1058,7 @@ privpgop_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 			continue;
 		switch(pobj->type) {
 		case PTYPE_PRIVCMD:
+		case PTYPE_PRIVCMD_PHYSMAP:
 		{
 			u_int pm_flags = PMAP_CANFAIL | ufi->entry->protection;
 #ifdef XENPV

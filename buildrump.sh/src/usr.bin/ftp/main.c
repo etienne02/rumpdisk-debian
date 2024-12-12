@@ -1,7 +1,7 @@
-/*	$NetBSD: main.c,v 1.127 2020/07/18 03:00:37 lukem Exp $	*/
+/*	$NetBSD: main.c,v 1.135 2024/11/29 07:24:04 lukem Exp $	*/
 
 /*-
- * Copyright (c) 1996-2015 The NetBSD Foundation, Inc.
+ * Copyright (c) 1996-2024 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -98,7 +98,7 @@ __COPYRIGHT("@(#) Copyright (c) 1985, 1989, 1993, 1994\
 #if 0
 static char sccsid[] = "@(#)main.c	8.6 (Berkeley) 10/9/94";
 #else
-__RCSID("$NetBSD: main.c,v 1.127 2020/07/18 03:00:37 lukem Exp $");
+__RCSID("$NetBSD: main.c,v 1.135 2024/11/29 07:24:04 lukem Exp $");
 #endif
 #endif /* not lint */
 
@@ -134,11 +134,14 @@ static int	usage(void);
 static int	usage_help(void);
 static void	setupoption(const char *, const char *, const char *);
 
+struct http_headers custom_headers;
+
 int
 main(int volatile argc, char **volatile argv)
 {
 	int ch, rval;
 	struct passwd *pw;
+	struct entry *p;
 	char *cp, *ep, *anonpass, *upload_path, *src_addr;
 	const char *anonuser;
 	int dumbterm, isupload;
@@ -267,7 +270,8 @@ main(int volatile argc, char **volatile argv)
 		}
 	}
 
-	while ((ch = getopt(argc, argv, "?46AadefginN:o:pP:q:r:Rs:tT:u:vVx:")) != -1) {
+	SLIST_INIT(&custom_headers);
+	while ((ch = getopt(argc, argv, ":46Aab:defgH:iN:no:P:pq:Rr:s:T:tu:Vvx:")) != -1) {
 		switch (ch) {
 		case '4':
 			family = AF_INET;
@@ -290,6 +294,12 @@ main(int volatile argc, char **volatile argv)
 			anonftp = 1;
 			break;
 
+		case 'b':
+			ftp_buflen = strtol(optarg, &ep, 0);
+			if (ftp_buflen < 1 || *ep != '\0')
+				errx(1, "Bad buflen value: %s", optarg);
+			break;
+
 		case 'd':
 			options |= SO_DEBUG;
 			ftp_debug++;
@@ -309,12 +319,14 @@ main(int volatile argc, char **volatile argv)
 			doglob = 0;
 			break;
 
-		case 'i':
-			interactive = 0;
+		case 'H':
+			p = ftp_malloc(sizeof(*p));
+			p->header = ftp_strdup(optarg);
+			SLIST_INSERT_HEAD(&custom_headers, p, entries);
 			break;
 
-		case 'n':
-			autologin = 0;
+		case 'i':
+			interactive = 0;
 			break;
 
 		case 'N':
@@ -324,10 +336,18 @@ main(int volatile argc, char **volatile argv)
 				    strerror(ENAMETOOLONG));
 			break;
 
+		case 'n':
+			autologin = 0;
+			break;
+
 		case 'o':
 			outfile = ftp_strdup(optarg);
 			if (strcmp(outfile, "-") == 0)
 				ttyout = stderr;
+			break;
+
+		case 'P':
+			ftpport = optarg;
 			break;
 
 		case 'p':
@@ -335,32 +355,24 @@ main(int volatile argc, char **volatile argv)
 			activefallback = 0;
 			break;
 
-		case 'P':
-			ftpport = optarg;
-			break;
-
 		case 'q':
-			quit_time = strtol(optarg, &ep, 10);
+			quit_time = (int)strtol(optarg, &ep, 10);
 			if (quit_time < 1 || *ep != '\0')
 				errx(1, "Bad quit value: %s", optarg);
-			break;
-
-		case 'r':
-			retry_connect = strtol(optarg, &ep, 10);
-			if (retry_connect < 1 || *ep != '\0')
-				errx(1, "Bad retry value: %s", optarg);
 			break;
 
 		case 'R':
 			restartautofetch = 1;
 			break;
 
-		case 's':
-			src_addr = optarg;
+		case 'r':
+			retry_connect = (int)strtol(optarg, &ep, 10);
+			if (retry_connect < 1 || *ep != '\0')
+				errx(1, "Bad retry value: %s", optarg);
 			break;
 
-		case 't':
-			trace = 1;
+		case 's':
+			src_addr = optarg;
 			break;
 
 		case 'T':
@@ -392,6 +404,10 @@ main(int volatile argc, char **volatile argv)
 			break;
 		}
 
+		case 't':
+			trace = 1;
+			break;
+
 		case 'u':
 		{
 			isupload = 1;
@@ -401,12 +417,12 @@ main(int volatile argc, char **volatile argv)
 			break;
 		}
 
-		case 'v':
-			progress = verbose = 1;
-			break;
-
 		case 'V':
 			progress = verbose = 0;
+			break;
+
+		case 'v':
+			progress = verbose = 1;
 			break;
 
 		case 'x':
@@ -420,6 +436,11 @@ main(int volatile argc, char **volatile argv)
 			if (optopt == '?') {
 				return usage_help();
 			}
+			warnx("-%c: unknown option", optopt);
+			return usage();
+
+		case ':':
+			warnx("-%c: missing argument", optopt);
 			return usage();
 
 		default:
@@ -507,6 +528,7 @@ main(int volatile argc, char **volatile argv)
 	setupoption("pager",		getenv("PAGER"),	DEFAULTPAGER);
 	setupoption("prompt",		getenv("FTPPROMPT"),	DEFAULTPROMPT);
 	setupoption("rprompt",		getenv("FTPRPROMPT"),	DEFAULTRPROMPT);
+	setupoption("sslnoverify",   	getenv("FTPSSLNOVERIFY"),	"");
 
 	free(anonpass);
 
@@ -753,7 +775,8 @@ getcmd(const char *name)
 {
 	const char *p, *q;
 	struct cmd *c, *found;
-	int nmatches, longest;
+	int nmatches;
+	ptrdiff_t longest;
 
 	if (name == NULL)
 		return (0);
@@ -783,7 +806,7 @@ getcmd(const char *name)
  * Slice a string up into argc/argv.
  */
 
-int slrflag;
+static int slrflag;
 
 void
 makeargv(void)
@@ -1057,8 +1080,9 @@ synopsis(FILE * stream)
 	const char * progname = getprogname();
 
 	fprintf(stream,
-"usage: %s [-46AadefginpRtVv] [-N NETRC] [-o OUTPUT] [-P PORT] [-q QUITTIME]\n"
-"           [-r RETRY] [-s SRCADDR] [-T DIR,MAX[,INC]] [-x XFERSIZE]\n"
+"usage: %s [-46AadefginpRtVv] [-b BUFSIZE] [-H HEADER] [-N NETRC] [-o OUTPUT]\n"
+"           [-P PORT] [-q QUITTIME] [-r RETRY] [-s SRCADDR] [-T DIR,MAX[,INC]]\n"
+"	    [-x XFERSIZE]\n"
 "           [[USER@]HOST [PORT]]\n"
 "           [[USER@]HOST:[PATH][/]]\n"
 "           [file:///PATH]\n"
@@ -1083,10 +1107,13 @@ usage_help(void)
 "  -6            Only use IPv6 addresses\n"
 "  -A            Force active mode\n"
 "  -a            Use anonymous login\n"
+"  -b BUFSIZE    Use BUFSIZE bytes for fetch buffer\n"
 "  -d            Enable debugging\n"
 "  -e            Disable command-line editing\n"
 "  -f            Force cache reload for FTP or HTTP proxy transfers\n"
 "  -g            Disable file name globbing\n"
+"  -H HEADER     Add custom HTTP header HEADER for HTTP transfers;\n"
+"                may be repeated for additional headers\n"
 "  -i            Disable interactive prompt during multiple file transfers\n"
 "  -N NETRC      Use NETRC instead of ~/.netrc\n"
 "  -n            Disable auto-login\n"
@@ -1096,15 +1123,15 @@ usage_help(void)
 "  -q QUITTIME   Quit if connection stalls for QUITTIME seconds\n"
 "  -R            Restart non-proxy auto-fetch\n"
 "  -r RETRY      Retry failed connection attempts after RETRY seconds\n"
-"  -s SRCADDR    Use source address SRCADDR\n"
-"  -t            Enable packet tracing\n"
+"  -s SRCADDR    Use IP source address SRCADDR\n"
 "  -T DIR,MAX[,INC]\n"
-"                Set maximum transfer rate for direction DIR to MAX bytes/s,\n"
-"                with optional increment INC bytes/s\n"
+"                Set maximum transfer rate for direction DIR (all, get, or put)\n"
+"                to MAX bytes/s, with optional increment INC bytes/s\n"
+"  -t            Enable packet tracing\n"
 "  -u URL        URL to upload file arguments to\n"
 "  -V            Disable verbose and progress\n"
 "  -v            Enable verbose and progress\n"
-"  -x XFERSIZE   Set socket send and receive size to XFERSIZE\n"
+"  -x XFERSIZE   Set socket send and receive size to XFERSIZE bytes\n"
 "  -?            Display this help and exit\n"
 		);
 #endif

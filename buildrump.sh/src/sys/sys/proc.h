@@ -1,7 +1,7 @@
-/*	$NetBSD: proc.h,v 1.368 2020/12/05 18:17:01 thorpej Exp $	*/
+/*	$NetBSD: proc.h,v 1.373 2023/10/04 20:52:07 ad Exp $	*/
 
 /*-
- * Copyright (c) 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
+ * Copyright (c) 2006, 2007, 2008, 2020, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -93,7 +93,9 @@
 #include <sys/event.h>
 #include <sys/specificdata.h>
 
-#ifndef _KERNEL
+#ifdef _KERNEL
+#include <sys/resourcevar.h>
+#else
 #include <sys/time.h>
 #include <sys/resource.h>
 #endif
@@ -250,12 +252,12 @@ struct proc {
 	int		p_exitsig;	/* l: signal to send to parent on exit */
 	int		p_flag;		/* p: PK_* flags */
 	int		p_sflag;	/* p: PS_* flags */
-	int		p_slflag;	/* p, l: PSL_* flags */
-	int		p_lflag;	/* l: PL_* flags */
 	int		p_stflag;	/* t: PST_* flags */
-	char		p_stat;		/* p: S* process status. */
+	short		p_slflag;	/* l, p: PSL_* flags */
+	char		p_stat;		/* l: S* process status. */
+	char		p_lflag;	/* l: PL_* flags */
 	char		p_trace_enabled;/* p: cached by syscall_intern() */
-	char		p_pad1[2];	/*  unused */
+	char		p_pad1[3];	/*  unused */
 
 	pid_t		p_pid;		/* :: Process identifier. */
 	LIST_ENTRY(proc) p_pglist;	/* l: List of processes in pgrp. */
@@ -412,11 +414,11 @@ struct proc {
 #define	PSL_TRACEPOSIX_SPAWN	\
 			0x00000020 /* traced process wants posix_spawn events */
 
-#define	PSL_TRACED	0x00000800 /* Debugged process being traced */
-#define	PSL_TRACEDCHILD 0x00001000 /* Report process birth */
-#define	PSL_CHTRACED	0x00400000 /* Child has been traced & reparented */
-#define	PSL_SYSCALL	0x04000000 /* process has PT_SYSCALL enabled */
-#define	PSL_SYSCALLEMU	0x08000000 /* cancel in-progress syscall */
+#define	PSL_TRACED	0x00000040 /* Debugged process being traced */
+#define	PSL_TRACEDCHILD 0x00000080 /* Report process birth */
+#define	PSL_CHTRACED	0x00000100 /* Child has been traced & reparented */
+#define	PSL_SYSCALL	0x00000200 /* process has PT_SYSCALL enabled */
+#define	PSL_SYSCALLEMU	0x00000400 /* cancel in-progress syscall */
 
 /*
  * Kept in p_stflag and protected by p_stmutex.
@@ -427,10 +429,10 @@ struct proc {
  * Kept in p_lflag and protected by the proc_lock.  Access
  * from process context only.
  */
-#define	PL_CONTROLT	0x00000002 /* Has a controlling terminal */
-#define	PL_PPWAIT	0x00000010 /* Parent is waiting for child exec/exit */
-#define	PL_SIGCOMPAT	0x00000200 /* Has used compat signal trampoline */
-#define	PL_ORPHANPG	0x20000000 /* Member of an orphaned pgrp */
+#define	PL_CONTROLT	0x00000001 /* Has a controlling terminal */
+#define	PL_PPWAIT	0x00000002 /* Parent is waiting for child exec/exit */
+#define	PL_SIGCOMPAT	0x00000004 /* Has used compat signal trampoline */
+#define	PL_ORPHANPG	0x00000008 /* Member of an orphaned pgrp */
 
 #if defined(_KMEMUSER) || defined(_KERNEL)
 
@@ -562,6 +564,15 @@ void	proc_setspecific(struct proc *, specificdata_key_t, void *);
 int	proc_compare(const struct proc *, const struct lwp *,
     const struct proc *, const struct lwp *);
 
+/*
+ * Special handlers for delivering EVFILT_PROC notifications.  These
+ * exist to handle some of the special locking considerations around
+ * processes.
+ */
+void	knote_proc_exec(struct proc *);
+void	knote_proc_fork(struct proc *, struct proc *);
+void	knote_proc_exit(struct proc *);
+
 int	proclist_foreach_call(struct proclist *,
     int (*)(struct proc *, void *arg), void *);
 
@@ -583,6 +594,10 @@ _proclist_skipmarker(struct proc *p0)
     sizeof(process_fpreg32) : sizeof(struct fpreg))
 #define PROC_DBREGSZ(p) (((p)->p_flag & PK_32) ? \
     sizeof(process_dbreg32) : sizeof(struct dbreg))
+
+#ifndef PROC_MACHINE_ARCH
+#define PROC_MACHINE_ARCH(p) machine_arch
+#endif
 
 /*
  * PROCLIST_FOREACH: iterate on the given proclist, skipping PK_MARKER ones.

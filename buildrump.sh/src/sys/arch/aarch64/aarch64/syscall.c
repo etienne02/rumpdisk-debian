@@ -1,4 +1,4 @@
-/*	$NetBSD: syscall.c,v 1.6 2019/04/10 06:30:05 ryo Exp $	*/
+/*	$NetBSD: syscall.c,v 1.13 2023/10/05 19:41:03 ad Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -29,8 +29,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/* DO NOT INCLUDE opt_compat_XXX.h */
-
 #include <sys/param.h>
 #include <sys/cpu.h>
 #include <sys/ktrace.h>
@@ -51,17 +49,16 @@
 #define	NARGREG		8		/* 8 args are in registers */
 #endif
 #define	MOREARGS(sp)	((const void *)(uintptr_t)(sp)) /* more args go here */
-#ifndef REGISTER_T
-#define REGISTER_T	register_t
-#endif
 
 #ifndef EMULNAME
 #include <sys/syscall.h>
 
+#define SYSCALL_INDIRECT_CODE_REG	17	/* netbsd/aarch64 use x17 */
+
 #define EMULNAME(x)	(x)
 #define EMULNAMEU(x)	(x)
 
-__KERNEL_RCSID(0, "$NetBSD: syscall.c,v 1.6 2019/04/10 06:30:05 ryo Exp $");
+__KERNEL_RCSID(0, "$NetBSD: syscall.c,v 1.13 2023/10/05 19:41:03 ad Exp $");
 
 void
 cpu_spawn_return(struct lwp *l)
@@ -73,7 +70,7 @@ cpu_spawn_return(struct lwp *l)
 void
 md_child_return(struct lwp *l)
 {
-	struct trapframe * const tf = l->l_md.md_utf;
+	struct trapframe * const tf = lwp_trapframe(l);
 
 	tf->tf_reg[0] = 0;
 	tf->tf_reg[1] = 1;
@@ -95,22 +92,35 @@ EMULNAME(syscall)(struct trapframe *tf)
 	register_t args[10];
 	int error;
 
-	LWP_CACHE_CREDS(l, p);
+	curcpu()->ci_data.cpu_nsyscall++; /* XXX unsafe curcpu() */
 
-	curcpu()->ci_data.cpu_nsyscall++;
-
-	size_t code = tf->tf_esr & 0xffff;
 	register_t *params = (void *)tf->tf_reg;
 	size_t nargs = NARGREG;
+#ifdef SYSCALL_CODE_REG
+	/*
+	 * mov x<SYSCALL_CODE_REG>, #<syscall_no>
+	 * svc #<optional>
+	 */
+	size_t code = tf->tf_reg[SYSCALL_CODE_REG];
+#if (SYSCALL_CODE_REG == 0)
+	params++;
+#endif
+#else /* SYSCALL_CODE_REG */
+	/*
+	 * svc #<syscall_no>
+	 */
+	size_t code = tf->tf_esr & 0xffff;
+#endif /* SYSCALL_CODE_REG */
 
+#ifndef SYSCALL_NO_INDIRECT
 	switch (code) {
 	case EMULNAMEU(SYS_syscall):
-#if !defined(COMPAT_LINUX)
 	case EMULNAMEU(SYS___syscall):
-		code = tf->tf_reg[17];
-#else
+#if (SYSCALL_INDIRECT_CODE_REG == 0)
 		code = *params++;
 		nargs -= 1;
+#else
+		code = tf->tf_reg[SYSCALL_INDIRECT_CODE_REG];
 #endif
 		/*
 		 * code is first argument,
@@ -120,6 +130,7 @@ EMULNAME(syscall)(struct trapframe *tf)
 	default:
 		break;
 	}
+#endif /* !SYSCALL_NO_INDIRECT */
 
 	code &= EMULNAMEU(SYS_NSYSENT) - 1;
 	const struct sysent * const callp = p->p_emul->e_sysent + code;
@@ -127,71 +138,22 @@ EMULNAME(syscall)(struct trapframe *tf)
 	if (__predict_false(callp->sy_narg > nargs)) {
 		const size_t diff = callp->sy_narg - nargs;
 		memcpy(args, params, nargs * sizeof(params[0]));
-		if (sizeof(params[0]) == sizeof(REGISTER_T)) {
-			error = copyin(MOREARGS(tf->tf_sp), &args[nargs],
-			    diff * sizeof(register_t));
-			if (error)
-				goto bad;
-		} else {
-			/*
-			 * If the register_t used by the process isn't the
-			 * as the one used by the kernel, we can't directly
-			 * copy the arguments off the stack into args.  We
-			 * need to buffer them in a REGISTER_T array and
-			 * then move them individually into args.
-			 */
-			REGISTER_T args32[10];
-			error = copyin(MOREARGS(tf->tf_sp), args32,
-			    diff * sizeof(REGISTER_T));
-			if (error)
-				goto bad;
-			for (size_t i = 0; i < diff; i++) {
-				args[nargs + i] = args32[i];
-			}
-		}
+		error = copyin(MOREARGS(tf->tf_sp), &args[nargs],
+		    diff * sizeof(register_t));
+		if (error)
+			goto bad;
 		params = args;
 	}
 
-#ifdef __AARCH64EB__
-#define SYCALL_ARG_64(a, b)	(((register_t) (a) << 32) | (uint32_t)(b))
-#else
-#define SYCALL_ARG_64(a, b)	(((register_t) (b) << 32) | (uint32_t)(a))
-#endif
-
-	/*
-	 * If the syscall used a different (smaller) register size,
-	 * reconstruct the 64-bit arguments from two 32-bit registers.
-	 */
-	if (__predict_false(sizeof(register_t) != sizeof(REGISTER_T)
-			    && SYCALL_NARGS64(callp) > 0)) {
-		for (size_t i = 0, j = 0; i < callp->sy_narg; i++, j++) {
-			if (SYCALL_ARG_64_P(callp, i)) {
-				register_t *inp = &params[j];
-				args[i] = SYCALL_ARG_64(inp[0], inp[1]);
-				j++;
-			} else if (i != j) {
-				args[i] = params[j];
-			}
-		}
-		params = args;
-	}
-
+	rval[0] = 0;
+	rval[1] = tf->tf_reg[1];
 	error = sy_invoke(callp, l, params, rval, code);
 
 	if (__predict_true(error == 0)) {
-		if (__predict_false(sizeof(register_t) != sizeof(REGISTER_T)
-				    && SYCALL_RET_64_P(callp))) {
-#ifdef __AARCH64EB__
-			tf->tf_reg[0] = (uint32_t) (rval[0] >> 32);
-			tf->tf_reg[1] = (uint32_t) (rval[0] >>  0);
-#else
-			tf->tf_reg[0] = (uint32_t) (rval[0] >>  0);
-			tf->tf_reg[1] = (uint32_t) (rval[0] >> 32);
+		tf->tf_reg[0] = rval[0];
+#ifndef SYSCALL_NO_RVAL1
+		tf->tf_reg[1] = rval[1];
 #endif
-		} else {
-			tf->tf_reg[0] = rval[0];
-			tf->tf_reg[1] = rval[1];
-		}
 		tf->tf_spsr &= ~NZCV_C;
 	} else {
 		switch (error) {
@@ -209,6 +171,8 @@ EMULNAME(syscall)(struct trapframe *tf)
 #ifndef __HAVE_MINIMAL_EMUL
 			if (p->p_emul->e_errno)
 				error = p->p_emul->e_errno[error];
+#elif defined(SYSCALL_EMUL_ERRNO)
+			error = SYSCALL_EMUL_ERRNO(error);
 #endif
 			tf->tf_reg[0] = error;
 			tf->tf_spsr |= NZCV_C;

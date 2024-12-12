@@ -1,4 +1,4 @@
-/*	$NetBSD: siopvar.h,v 1.27 2012/10/27 17:17:31 chs Exp $	*/
+/*	$NetBSD: siopvar.h,v 1.29 2022/04/07 19:33:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -72,7 +72,7 @@ struct siop_ds {
 /*
  * ACB. Holds additional information for each SCSI command Comments: We
  * need a separate scsi command block because we may need to overwrite it
- * with a request sense command.  Basicly, we refrain from fiddling with
+ * with a request sense command.  Basically, we refrain from fiddling with
  * the scsi_xfer struct (except do the expected updating of return values).
  * We'll generally update: xs->{flags,resid,error,sense,status} and
  * occasionally xs->retries.
@@ -183,10 +183,10 @@ struct	siop_softc {
 
 /* negotiation states */
 #define NEG_WIDE	0	/* Negotiate wide transfers */
-#define	NEG_WAITW	1	/* Waiting for wide negotation response */
+#define	NEG_WAITW	1	/* Waiting for wide negotiation response */
 #define NEG_SYNC	2	/* Negotiate synch transfers */
 #define	NEG_WAITS	3	/* Waiting for synch negoation response */
-#define NEG_DONE	4	/* Wide and/or sync negotation done */
+#define NEG_DONE	4	/* Wide and/or sync negotiation done */
 
 #define	MSG_CMD_COMPLETE	0x00
 #define MSG_EXT_MESSAGE		0x01

@@ -1,4 +1,4 @@
-/*	$NetBSD: ipsec_input.c,v 1.75 2019/01/27 02:08:48 pgoyette Exp $	*/
+/*	$NetBSD: ipsec_input.c,v 1.81 2024/07/05 04:31:54 rin Exp $	*/
 /*	$FreeBSD: ipsec_input.c,v 1.2.4.2 2003/03/28 20:32:53 sam Exp $	*/
 /*	$OpenBSD: ipsec_input.c,v 1.63 2003/02/20 18:35:43 deraadt Exp $	*/
 
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ipsec_input.c,v 1.75 2019/01/27 02:08:48 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ipsec_input.c,v 1.81 2024/07/05 04:31:54 rin Exp $");
 
 /*
  * IPsec input processing.
@@ -116,7 +116,7 @@ do {									\
  * XXX: if we have NAT-OA payload from IKE server,
  *      we must do the differential update of checksum.
  *
- * XXX: NAT-OAi/NAT-OAr drived from IKE initiator/responder.
+ * XXX: NAT-OAi/NAT-OAr derived from IKE initiator/responder.
  *      how to know the IKE side from kernel?
  */
 static struct mbuf *
@@ -182,6 +182,29 @@ nat_t_ports_get(struct mbuf *m, uint16_t *dport, uint16_t *sport)
 		*sport = *dport = 0;
 }
 
+static uint32_t
+spi_get(struct mbuf *m, int sproto, int skip)
+{
+	uint32_t spi;
+	uint16_t cpi;
+
+	switch (sproto) {
+	case IPPROTO_ESP:
+		m_copydata(m, skip, sizeof(spi), &spi);
+		return spi;
+	case IPPROTO_AH:
+		m_copydata(m, skip + sizeof(spi), sizeof(spi), &spi);
+		return spi;
+	case IPPROTO_IPCOMP:
+		m_copydata(m, skip + sizeof(cpi), sizeof(cpi), &cpi);
+		return htonl(ntohs(cpi));
+	default:
+		panic("%s called with bad protocol number: %d\n", __func__,
+		    sproto);
+	}
+}
+
+
 /*
  * ipsec_common_input gets called when an IPsec-protected packet
  * is received by IPv4 or IPv6.  Its job is to find the right SA
@@ -191,13 +214,13 @@ nat_t_ports_get(struct mbuf *m, uint16_t *dport, uint16_t *sport)
 static int
 ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto)
 {
-	char buf[IPSEC_ADDRSTRLEN];
-	union sockaddr_union dst_address;
+	char buf[IPSEC_ADDRSTRLEN], buf2[IPSEC_ADDRSTRLEN];
+	union sockaddr_union src_address, dst_address;
 	struct secasvar *sav;
 	u_int32_t spi;
 	u_int16_t sport;
 	u_int16_t dport;
-	int s, error;
+	int error;
 
 	IPSEC_ISTAT(sproto, ESP_STAT_INPUT, AH_STAT_INPUT,
 		IPCOMP_STAT_INPUT);
@@ -222,18 +245,7 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto)
 	}
 
 	/* Retrieve the SPI from the relevant IPsec header */
-	if (sproto == IPPROTO_ESP) {
-		m_copydata(m, skip, sizeof(u_int32_t), &spi);
-	} else if (sproto == IPPROTO_AH) {
-		m_copydata(m, skip + sizeof(u_int32_t), sizeof(u_int32_t), &spi);
-	} else if (sproto == IPPROTO_IPCOMP) {
-		u_int16_t cpi;
-		m_copydata(m, skip + sizeof(u_int16_t), sizeof(u_int16_t), &cpi);
-		spi = ntohl(htons(cpi));
-	} else {
-		panic("%s called with bad protocol number: %d\n", __func__,
-		    sproto);
-	}
+	spi = spi_get(m, sproto, skip);
 
 	/* find the source port for NAT-T */
 	nat_t_ports_get(m, &dport, &sport);
@@ -243,12 +255,18 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto)
 	 * kernel crypto routine. The resulting mbuf chain is a valid
 	 * IP packet ready to go through input processing.
 	 */
+	memset(&src_address, 0, sizeof (src_address));
 	memset(&dst_address, 0, sizeof(dst_address));
+	src_address.sa.sa_family = af;
 	dst_address.sa.sa_family = af;
 	switch (af) {
 #ifdef INET
 	case AF_INET:
+		src_address.sin.sin_len = sizeof(struct sockaddr_in);
 		dst_address.sin.sin_len = sizeof(struct sockaddr_in);
+		m_copydata(m, offsetof(struct ip, ip_src),
+		    sizeof(struct in_addr),
+		    &src_address.sin.sin_addr);
 		m_copydata(m, offsetof(struct ip, ip_dst),
 		    sizeof(struct in_addr),
 		    &dst_address.sin.sin_addr);
@@ -256,7 +274,11 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto)
 #endif
 #ifdef INET6
 	case AF_INET6:
+		src_address.sin6.sin6_len = sizeof(struct sockaddr_in6);
 		dst_address.sin6.sin6_len = sizeof(struct sockaddr_in6);
+		m_copydata(m, offsetof(struct ip6_hdr, ip6_src),
+		    sizeof(struct in6_addr),
+		    &src_address.sin6.sin6_addr);
 		m_copydata(m, offsetof(struct ip6_hdr, ip6_dst),
 		    sizeof(struct in6_addr),
 		    &dst_address.sin6.sin6_addr);
@@ -274,18 +296,40 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto)
 		return EPFNOSUPPORT;
 	}
 
-	s = splsoftnet();
-
 	/* NB: only pass dst since key_lookup_sa follows RFC2401 */
 	sav = KEY_LOOKUP_SA(&dst_address, sproto, spi, sport, dport);
 	if (sav == NULL) {
-		IPSECLOG(LOG_DEBUG,
-		    "no key association found for SA %s/%08lx/%u/%u\n",
-		    ipsec_address(&dst_address, buf, sizeof(buf)),
-		    (u_long) ntohl(spi), sproto, ntohs(dport));
+		static struct timeval lasttime = {0, 0};
+		static int curpps = 0;
+
+		if (!ipsec_debug && ppsratecheck(&lasttime, &curpps, 1)) {
+			if (sport || dport) {
+				log(LOG_INFO,
+				    "no key association found for SA"
+				    " %s[%u]-%s[%u]/SPI 0x%08lx\n",
+				    ipsec_address(&src_address, buf, sizeof(buf)),
+				    ntohs(sport),
+				    ipsec_address(&dst_address, buf2, sizeof(buf2)),
+				    ntohs(dport),
+				    (u_long) ntohl(spi));
+			} else {
+				log(LOG_INFO,
+				    "no key association found for"
+				    " SA %s-%s/SPI 0x%08lx\n",
+				    ipsec_address(&src_address, buf, sizeof(buf)),
+				    ipsec_address(&src_address, buf2, sizeof(buf2)),
+				    (u_long) ntohl(spi));
+			}
+		} else if (ipsec_debug) {
+			IPSECLOG(LOG_DEBUG,
+			    "no key association found for SA "
+			    "%s-%s/SPI 0x%08lx/PROTO %u/PORT %u-%u\n",
+			    ipsec_address(&src_address, buf, sizeof(buf)),
+			    ipsec_address(&dst_address, buf2, sizeof(buf2)),
+			     (u_long) ntohl(spi), sproto, ntohs(dport), ntohs(sport));
+		}
 		IPSEC_ISTAT(sproto, ESP_STAT_NOTDB, AH_STAT_NOTDB,
 		    IPCOMP_STAT_NOTDB);
-		splx(s);
 		m_freem(m);
 		return ENOENT;
 	}
@@ -298,7 +342,6 @@ ipsec_common_input(struct mbuf *m, int skip, int protoff, int af, int sproto)
 	 */
 	error = (*sav->tdb_xform->xf_input)(m, sav, skip, protoff);
 	KEY_SA_UNREF(&sav);
-	splx(s);
 	return error;
 }
 
@@ -388,7 +431,7 @@ cantpull:
 	}
 
 	/*
-	 * There is no struct ifnet for tunnel mode IP-IP tunnel connecttion,
+	 * There is no struct ifnet for tunnel mode IP-IP tunnel connection,
 	 * so we cannot write filtering rule to the inner packet.
 	 */
 	if (saidx->mode == IPSEC_MODE_TUNNEL)
@@ -543,7 +586,7 @@ ipsec6_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 		}
 
 		/*
-		 * There is no struct ifnet for tunnel mode IP-IP tunnel connecttion,
+		 * There is no struct ifnet for tunnel mode IP-IP tunnel connection,
 		 * so we cannot write filtering rule to the inner packet.
 		 */
 		if (saidx->mode == IPSEC_MODE_TUNNEL)
@@ -554,8 +597,7 @@ ipsec6_common_input_cb(struct mbuf *m, struct secasvar *sav, int skip,
 	return 0;
 
 bad:
-	if (m)
-		m_freem(m);
+	m_freem(m);
 	return error;
 }
 #endif /* INET6 */

@@ -1,4 +1,4 @@
-/*	$NetBSD: timer.h,v 1.7 2019/10/13 22:32:09 christos Exp $	*/
+/*	$NetBSD: timer.h,v 1.17 2021/12/19 12:33:48 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -29,49 +29,43 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * Notes on porting:
- *
- * - Linux does not have teardown_timer.  You must add it yourself in
- *   the appropriate place.
- */
-
 #ifndef _LINUX_TIMER_H_
 #define _LINUX_TIMER_H_
 
 #include <sys/callout.h>
 
 #include <linux/jiffies.h>
+#include <linux/ktime.h>
 
 struct timer_list {
 	struct callout tl_callout;
 };
 
+#define	from_timer(V, T, F)	container_of(T, __typeof__(*(V)), F)
+
+#define	TIMER_IRQSAFE		__BIT(0)
+
 static inline void
-setup_timer(struct timer_list *timer, void (*fn)(unsigned long),
-    unsigned long arg)
+timer_setup(struct timer_list *timer, void (*fn)(struct timer_list *),
+    int flags)
 {
 
 	callout_init(&timer->tl_callout, 0);
 
 	/* XXX Super-sketchy casts!  */
 	callout_setfunc(&timer->tl_callout, (void (*)(void *))(void *)fn,
-	    (void *)(uintptr_t)arg);
+	    (void *)timer);
 }
 
-static inline void
-teardown_timer(struct timer_list *timer)
-{
-
-	callout_destroy(&timer->tl_callout);
-}
-
-static inline void
+static inline int
 mod_timer(struct timer_list *timer, unsigned long then)
 {
 	const unsigned long now = jiffies;
+	int pending;
 
+	pending = callout_pending(&timer->tl_callout);
 	callout_schedule(&timer->tl_callout, (now < then? (then - now) : 0));
+	return pending;
 }
 
 static inline void
@@ -82,19 +76,40 @@ mod_timer_pinned(struct timer_list *timer, unsigned long then)
 	mod_timer(timer, then);
 }
 
-static inline void
+static inline int
 del_timer(struct timer_list *timer)
 {
 
-	callout_stop(&timer->tl_callout);
+	/*
+	 * Linux: `del_timer of an inactive timer returns 0, del_timer
+	 * of an active timer returns 1.'
+	 *
+	 * NetBSD: `callout_stop will return a non-zero value if the
+	 * callout was EXPIRED.', meaning it is no longer pending.
+	 */
+	if (!callout_pending(&timer->tl_callout))
+		return 0;	/* not active */
+	if (callout_stop(&timer->tl_callout))
+		return 0;	/* too late, already expired */
+	return 1;		/* we stopped it while active */
 }
 
-static inline bool
+static inline int
 del_timer_sync(struct timer_list *timer)
 {
 
-	/* XXX return values? */
-	return callout_halt(&timer->tl_callout, NULL);
+	/*
+	 * Linux: `The function returns whether it has deactivated a
+	 * pending timer or not.'
+	 *
+	 * NetBSD: `[callout_halt] will return a non-zero value if the
+	 * callout was EXPIRED.', meaning it is no longer pending.
+	 */
+	if (!callout_pending(&timer->tl_callout))
+		return 0;	/* not active */
+	if (callout_halt(&timer->tl_callout, NULL))
+		return 0;	/* too late, already expired */
+	return 1;		/* we stopped it while active */
 }
 
 static inline bool

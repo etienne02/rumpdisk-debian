@@ -1,4 +1,4 @@
-/*	$NetBSD: pthread.c,v 1.179 2021/04/13 00:31:54 mrg Exp $	*/
+/*	$NetBSD: pthread.c,v 1.185 2024/06/08 08:01:49 hannken Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002, 2003, 2006, 2007, 2008, 2020
@@ -31,9 +31,12 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: pthread.c,v 1.179 2021/04/13 00:31:54 mrg Exp $");
+__RCSID("$NetBSD: pthread.c,v 1.185 2024/06/08 08:01:49 hannken Exp $");
 
 #define	__EXPOSE_STACK	1
+
+/* Need to use libc-private names for atomic operations. */
+#include "../../common/lib/libc/atomic/atomic_op_namespace.h"
 
 #include <sys/param.h>
 #include <sys/exec_elf.h>
@@ -328,7 +331,10 @@ pthread__getstack(pthread_t newthread, const pthread_attr_t *attr)
 
 	if (attr != NULL) {
 		pthread_attr_getstack(attr, &stackbase, &stacksize);
-		pthread_attr_getguardsize(attr, &guardsize);
+		if (stackbase == NULL)
+			pthread_attr_getguardsize(attr, &guardsize);
+		else
+			guardsize = 0;
 	} else {
 		stackbase = NULL;
 		stacksize = 0;
@@ -411,6 +417,34 @@ pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 	else
 		return EINVAL;
 
+	if (!pthread__started) {
+		/*
+		 * Force the _lwp_park symbol to be resolved before we
+		 * begin any activity that might rely on concurrent
+		 * wakeups.
+		 *
+		 * This is necessary because rtld itself uses _lwp_park
+		 * and _lwp_unpark internally for its own locking: If
+		 * we wait to resolve _lwp_park until there is an
+		 * _lwp_unpark from another thread pending in the
+		 * current lwp (for example, pthread_mutex_unlock or
+		 * pthread_cond_signal), rtld's internal use of
+		 * _lwp_park might consume the pending unpark.  The
+		 * result is a deadlock where libpthread and rtld have
+		 * both correctly used _lwp_park and _lwp_unpark for
+		 * themselves, but rtld has consumed the wakeup meant
+		 * for libpthread so it is lost to libpthread.
+		 *
+		 * For the very first thread, before pthread__started
+		 * is set to true, pthread__self()->pt_lid should have
+		 * been initialized in pthread__init by the time we get
+		 * here to the correct lid so we go to sleep and wake
+		 * ourselves at the same time as a no-op.
+		 */
+		_lwp_park(CLOCK_REALTIME, 0, NULL, pthread__self()->pt_lid,
+		    NULL, NULL);
+	}
+
 	pthread__started = 1;
 
 	/* Fetch misc. attributes from the attr structure. */
@@ -428,9 +462,9 @@ pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 	if (!PTQ_EMPTY(&pthread__deadqueue)) {
 		pthread_mutex_lock(&pthread__deadqueue_lock);
 		PTQ_FOREACH(newthread, &pthread__deadqueue, pt_deadq) {
-			/* Still busily exiting, or finished? */
-			if (newthread->pt_lwpctl->lc_curcpu ==
-			    LWPCTL_CPU_EXITED)
+			/* Still running? */
+			if (_lwp_kill(newthread->pt_lid, 0) == -1 &&
+			    errno == ESRCH)
 				break;
 		}
 		if (newthread)
@@ -1042,10 +1076,10 @@ pthread__assertfunc(const char *file, int line, const char *function,
 	int len;
 
 	/*
-	 * snprintf should not acquire any locks, or we could
+	 * snprintf_ss should not acquire any locks, or we could
 	 * end up deadlocked if the assert caller held locks.
 	 */
-	len = snprintf(buf, 1024,
+	len = snprintf_ss(buf, 1024,
 	    "assertion \"%s\" failed: file \"%s\", line %d%s%s%s\n",
 	    expr, file, line,
 	    function ? ", function \"" : "",
@@ -1075,7 +1109,7 @@ pthread__errorfunc(const char *file, int line, const char *function,
 	va_end(ap);
 
 	/*
-	 * snprintf should not acquire any locks, or we could
+	 * snprintf_ss should not acquire any locks, or we could
 	 * end up deadlocked if the assert caller held locks.
 	 */
 	len = snprintf_ss(buf, sizeof(buf),
@@ -1094,7 +1128,7 @@ pthread__errorfunc(const char *file, int line, const char *function,
 		syslog(LOG_DEBUG | LOG_USER, "%s", buf);
 
 	if (pthread__diagassert & DIAGASSERT_ABORT) {
-		(void)_lwp_kill(_lwp_self(), SIGABRT);
+		(void)raise(SIGABRT);
 		_exit(1);
 	}
 }

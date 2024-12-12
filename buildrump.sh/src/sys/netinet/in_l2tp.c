@@ -1,4 +1,4 @@
-/*	$NetBSD: in_l2tp.c,v 1.20 2021/02/19 14:51:59 christos Exp $	*/
+/*	$NetBSD: in_l2tp.c,v 1.22 2023/09/01 11:23:39 andvar Exp $	*/
 
 /*
  * Copyright (c) 2017 Internet Initiative Japan Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in_l2tp.c,v 1.20 2021/02/19 14:51:59 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in_l2tp.c,v 1.22 2023/09/01 11:23:39 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_l2tp.h"
@@ -121,7 +121,7 @@ in_l2tp_output(struct l2tp_variant *var, struct mbuf *m)
 	}
 
 #ifdef NOTYET
-/* TODO: support ALTQ for innner frame */
+/* TODO: support ALTQ for inner frame */
 #ifdef ALTQ
 	ALTQ_SAVE_PAYLOAD(m, AF_ETHER);
 #endif
@@ -404,8 +404,9 @@ in_l2tp_attach(struct l2tp_variant *var)
 
 	if (sc == NULL)
 		return EINVAL;
-	var->lv_encap_cookie = encap_attach_func(AF_INET, IPPROTO_L2TP,
-	    in_l2tp_match, &in_l2tp_encapsw, sc);
+
+	var->lv_encap_cookie = encap_attach_addr(AF_INET, IPPROTO_L2TP,
+	    var->lv_psrc, var->lv_pdst, in_l2tp_match, &in_l2tp_encapsw, sc);
 	if (var->lv_encap_cookie == NULL)
 		return EEXIST;
 

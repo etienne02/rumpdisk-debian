@@ -1,4 +1,4 @@
-/*	$NetBSD: ctu.c,v 1.37 2018/04/02 22:49:48 mrg Exp $ */
+/*	$NetBSD: ctu.c,v 1.39 2023/12/20 15:34:45 thorpej Exp $ */
 /*
  * Copyright (c) 1996 Ludd, University of Lule}, Sweden.
  * All rights reserved.
@@ -30,11 +30,11 @@
  * Writing of tapes does not work, by some unknown reason so far.
  * It is almost useless to try to use this driver when running
  * multiuser, because the serial device don't have any buffers 
- * so we will loose interrupts.
+ * so we will lose interrupts.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ctu.c,v 1.37 2018/04/02 22:49:48 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ctu.c,v 1.39 2023/12/20 15:34:45 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -47,7 +47,6 @@ __KERNEL_RCSID(0, "$NetBSD: ctu.c,v 1.37 2018/04/02 22:49:48 mrg Exp $");
 #include <sys/fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/proc.h>
 
 #include <machine/rsp.h>

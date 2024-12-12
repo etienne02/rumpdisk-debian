@@ -210,6 +210,7 @@ OBJECTS = \
 	$(OBJDIR)/utascii.o\
 	$(OBJDIR)/utbuffer.o\
 	$(OBJDIR)/utcache.o\
+	$(OBJDIR)/utcksum.o\
 	$(OBJDIR)/utcopy.o\
 	$(OBJDIR)/utdebug.o\
 	$(OBJDIR)/utdecode.o\
@@ -261,7 +262,9 @@ endif
 
 ifneq ($(ACPI_HOST),_APPLE)
 ifneq ($(ACPI_HOST),_QNX)
+ifneq ($(ACPI_HOST),_HAIKU)
 LDFLAGS += -lrt
+endif
 endif
 endif
 

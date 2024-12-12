@@ -1,4 +1,4 @@
-/* $NetBSD: t_spawnattr.c,v 1.4 2021/05/02 11:18:11 martin Exp $ */
+/* $NetBSD: t_spawnattr.c,v 1.6 2022/05/23 21:46:12 andvar Exp $ */
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -29,7 +29,10 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+#include <sys/cdefs.h>
+__RCSID("$NetBSD: t_spawnattr.c,v 1.6 2022/05/23 21:46:12 andvar Exp $");
 
+#include <sys/param.h>
 #include <atf-c.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,9 +44,6 @@
 #include <spawn.h>
 #include <unistd.h>
 #include <sys/wait.h>
-
-#define MAX(a, b)	(a) > (b) ? (a) : (b)
-#define MIN(a, b)	(a) > (b) ? (b) : (a)
 
 static int
 get_different_scheduler(void)
@@ -109,7 +109,7 @@ ATF_TC_BODY(t_spawnattr, tc)
 	char helper[FILENAME_MAX];
 
 	/*
-	 * create a pipe to controll the child
+	 * create a pipe to control the child
 	 */
 	err = pipe(pfd);
 	ATF_REQUIRE_MSG(err == 0, "could not create pipe, errno %d", errno);

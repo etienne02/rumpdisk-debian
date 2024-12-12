@@ -1,4 +1,4 @@
-/*      $NetBSD: xennetback_xenbus.c,v 1.105 2020/05/05 17:02:01 bouyer Exp $      */
+/*      $NetBSD: xennetback_xenbus.c,v 1.126 2024/07/05 04:31:50 rin Exp $      */
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -25,9 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xennetback_xenbus.c,v 1.105 2020/05/05 17:02:01 bouyer Exp $");
-
-#include "opt_xen.h"
+__KERNEL_RCSID(0, "$NetBSD: xennetback_xenbus.c,v 1.126 2024/07/05 04:31:50 rin Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -41,17 +39,16 @@ __KERNEL_RCSID(0, "$NetBSD: xennetback_xenbus.c,v 1.105 2020/05/05 17:02:01 bouy
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 #include <sys/device.h>
-#include <sys/intr.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/if_dl.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <net/bpf.h>
 
 #include <net/if_ether.h>
 
+#include <xen/intr.h>
 #include <xen/hypervisor.h>
 #include <xen/xen.h>
 #include <xen/xen_shm.h>
@@ -355,14 +352,12 @@ int
 xennetback_xenbus_destroy(void *arg)
 {
 	struct xnetback_instance *xneti = arg;
-	struct gnttab_unmap_grant_ref op;
-	int err;
 
 	aprint_verbose_ifnet(&xneti->xni_if, "disconnecting\n");
 
 	if (xneti->xni_ih != NULL) {
 		hypervisor_mask_event(xneti->xni_evtchn);
-		intr_disestablish(xneti->xni_ih);
+		xen_intr_disestablish(xneti->xni_ih);
 		xneti->xni_ih = NULL;
 	}
 
@@ -387,24 +382,12 @@ xennetback_xenbus_destroy(void *arg)
 	}
 
 	if (xneti->xni_txring.sring) {
-		op.host_addr = xneti->xni_tx_ring_va;
-		op.handle = xneti->xni_tx_ring_handle;
-		op.dev_bus_addr = 0;
-		err = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
-		    &op, 1);
-		if (err)
-			aprint_error_ifnet(&xneti->xni_if,
-					"unmap_grant_ref failed: %d\n", err);
+		xen_shm_unmap(xneti->xni_tx_ring_va, 1,
+		    &xneti->xni_tx_ring_handle);
 	}
 	if (xneti->xni_rxring.sring) {
-		op.host_addr = xneti->xni_rx_ring_va;
-		op.handle = xneti->xni_rx_ring_handle;
-		op.dev_bus_addr = 0;
-		err = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
-		    &op, 1);
-		if (err)
-			aprint_error_ifnet(&xneti->xni_if,
-					"unmap_grant_ref failed: %d\n", err);
+		xen_shm_unmap(xneti->xni_rx_ring_va, 1,
+		    &xneti->xni_rx_ring_handle);
 	}
 	if (xneti->xni_tx_ring_va != 0) {
 		uvm_km_free(kernel_map, xneti->xni_tx_ring_va,
@@ -426,10 +409,9 @@ xennetback_connect(struct xnetback_instance *xneti)
 	int err;
 	netif_tx_sring_t *tx_ring;
 	netif_rx_sring_t *rx_ring;
-	struct gnttab_map_grant_ref op;
-	struct gnttab_unmap_grant_ref uop;
 	evtchn_op_t evop;
 	u_long tx_ring_ref, rx_ring_ref;
+	grant_ref_t gtx_ring_ref, grx_ring_ref;
 	u_long revtchn, rx_copy;
 	struct xenbus_device *xbusd = xneti->xni_xbusd;
 
@@ -487,32 +469,22 @@ xennetback_connect(struct xnetback_instance *xneti)
 	}
 	rx_ring = (void *)xneti->xni_rx_ring_va;
 
-	op.host_addr = xneti->xni_tx_ring_va;
-	op.flags = GNTMAP_host_map;
-	op.ref = tx_ring_ref;
-	op.dom = xneti->xni_domid;
-	err = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &op, 1);
-	if (err || op.status) {
+	gtx_ring_ref = tx_ring_ref;
+        if (xen_shm_map(1, xneti->xni_domid, &gtx_ring_ref,
+	    xneti->xni_tx_ring_va, &xneti->xni_tx_ring_handle, 0) != 0) {
 		aprint_error_ifnet(&xneti->xni_if,
-		    "can't map TX grant ref: err %d status %d\n",
-		    err, op.status);
+		    "can't map TX grant ref\n");
 		goto err2;
 	}
-	xneti->xni_tx_ring_handle = op.handle;
 	BACK_RING_INIT(&xneti->xni_txring, tx_ring, PAGE_SIZE);
 
-	op.host_addr = xneti->xni_rx_ring_va;
-	op.flags = GNTMAP_host_map;
-	op.ref = rx_ring_ref;
-	op.dom = xneti->xni_domid;
-	err = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &op, 1);
-	if (err || op.status) {
+	grx_ring_ref = rx_ring_ref;
+        if (xen_shm_map(1, xneti->xni_domid, &grx_ring_ref,
+	    xneti->xni_rx_ring_va, &xneti->xni_rx_ring_handle, 0) != 0) {
 		aprint_error_ifnet(&xneti->xni_if,
-		    "can't map RX grant ref: err %d status %d\n",
-		    err, op.status);
+		    "can't map RX grant ref\n");
 		goto err2;
 	}
-	xneti->xni_rx_ring_handle = op.handle;
 	BACK_RING_INIT(&xneti->xni_rxring, rx_ring, PAGE_SIZE);
 
 	evop.cmd = EVTCHNOP_bind_interdomain;
@@ -525,13 +497,11 @@ xennetback_connect(struct xnetback_instance *xneti)
 		goto err2;
 	}
 	xneti->xni_evtchn = evop.u.bind_interdomain.local_port;
-	xen_wmb();
 	xneti->xni_status = CONNECTED;
-	xen_wmb();
 
-	xneti->xni_ih = intr_establish_xname(-1, &xen_pic, xneti->xni_evtchn,
-	    IST_LEVEL, IPL_NET, xennetback_evthandler, xneti, false,
-	    xneti->xni_if.if_xname);
+	xneti->xni_ih = xen_intr_establish_xname(-1, &xen_pic,
+	    xneti->xni_evtchn, IST_LEVEL, IPL_NET, xennetback_evthandler,
+	    xneti, false, xneti->xni_if.if_xname);
 	KASSERT(xneti->xni_ih != NULL);
 	xennetback_ifinit(&xneti->xni_if);
 	hypervisor_unmask_event(xneti->xni_evtchn);
@@ -541,27 +511,14 @@ xennetback_connect(struct xnetback_instance *xneti)
 err2:
 	/* unmap rings */
 	if (xneti->xni_tx_ring_handle != 0) {
-		uop.host_addr = xneti->xni_tx_ring_va;
-		uop.handle = xneti->xni_tx_ring_handle;
-		uop.dev_bus_addr = 0;
-		err = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
-		    &uop, 1);
-		if (err)
-			aprint_error_ifnet(&xneti->xni_if,
-			    "unmap_grant_ref failed: %d\n", err);
+		xen_shm_unmap(xneti->xni_tx_ring_va, 1,
+		    &xneti->xni_tx_ring_handle);
 	}
 
 	if (xneti->xni_rx_ring_handle != 0) {
-		uop.host_addr = xneti->xni_rx_ring_va;
-		uop.handle = xneti->xni_rx_ring_handle;
-		uop.dev_bus_addr = 0;
-		err = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
-		    &uop, 1);
-		if (err)
-			aprint_error_ifnet(&xneti->xni_if,
-			    "unmap_grant_ref failed: %d\n", err);
+		xen_shm_unmap(xneti->xni_rx_ring_va, 1,
+		    &xneti->xni_rx_ring_handle);
 	}
-
 err1:
 	/* free rings VA space */
 	if (xneti->xni_rx_ring_va != 0)
@@ -656,7 +613,7 @@ xennetback_tx_response(struct xnetback_instance *xneti, int id, int status)
 }
 
 static const char *
-xennetback_tx_check_packet(const netif_tx_request_t *txreq)
+xennetback_tx_check_packet(const netif_tx_request_t *txreq, bool first)
 {
 	if (__predict_false((txreq->flags & NETTXF_more_data) == 0 &&
 	    txreq->offset + txreq->size > PAGE_SIZE))
@@ -664,6 +621,10 @@ xennetback_tx_check_packet(const netif_tx_request_t *txreq)
 
 	if (__predict_false(txreq->size > ETHER_MAX_LEN_JUMBO))
 		return "bigger then jumbo";
+
+	if (first &&
+	    __predict_false(txreq->size < ETHER_HDR_LEN))
+		return "too short";
 
 	return NULL;
 }
@@ -825,11 +786,15 @@ xennetback_tx_m0len_fragment(struct xnetback_instance *xneti,
 {
 	netif_tx_request_t *txreq;
 
-	/* This assumes all the requests are already pushed into the ring */ 
+	/* This assumes all the requests are already pushed into the ring */
 	*cntp = 1;
 	do {
 		txreq = RING_GET_REQUEST(&xneti->xni_txring, req_cons);
-		KASSERT(m0_len > txreq->size);
+		if (m0_len <= txreq->size || *cntp > XEN_NETIF_NR_SLOTS_MIN)
+			return -1;
+		if (RING_REQUEST_CONS_OVERFLOW(&xneti->xni_txring, req_cons))
+			return -1;
+
 		m0_len -= txreq->size;
 		req_cons++;
 		(*cntp)++;
@@ -846,31 +811,32 @@ xennetback_evthandler(void *arg)
 	netif_tx_request_t txreq;
 	struct mbuf *m, *m0 = NULL, *mlast = NULL;
 	int receive_pending;
-	RING_IDX req_cons;
 	int queued = 0, m0_len = 0;
 	struct xnetback_xstate *xst;
-	const bool discard = ((ifp->if_flags & (IFF_UP | IFF_RUNNING)) !=
+	const bool nupnrun = ((ifp->if_flags & (IFF_UP | IFF_RUNNING)) !=
 	    (IFF_UP | IFF_RUNNING));
+	bool discard = 0;
 
 	XENPRINTF(("xennetback_evthandler "));
-	req_cons = xneti->xni_txring.req_cons;
-	while (1) {
-		xen_rmb(); /* be sure to read the request before updating */
-		xneti->xni_txring.req_cons = req_cons;
-		xen_wmb();
-		RING_FINAL_CHECK_FOR_REQUESTS(&xneti->xni_txring,
-		    receive_pending);
-		if (receive_pending == 0)
-			break;
-		RING_COPY_REQUEST(&xneti->xni_txring, req_cons,
-		    &txreq);
+again:
+	while (RING_HAS_UNCONSUMED_REQUESTS(&xneti->xni_txring)) {
+		/*
+		 * Ensure we have read the producer's queue index in
+		 * RING_FINAL_CHECK_FOR_REQUESTS before we read the
+		 * content of the producer's next request in
+		 * RING_COPY_REQUEST.
+		 */
 		xen_rmb();
+		RING_COPY_REQUEST(&xneti->xni_txring,
+		    xneti->xni_txring.req_cons,
+		    &txreq);
 		XENPRINTF(("%s pkt size %d\n", xneti->xni_if.if_xname,
 		    txreq.size));
-		req_cons++;
-		if (__predict_false(discard)) {
+		xneti->xni_txring.req_cons++;
+		if (__predict_false(nupnrun || discard)) {
 			/* interface not up, drop all requests */
 			if_statinc(ifp, if_iqdrops);
+			discard = (txreq.flags & NETTXF_more_data) != 0;
 			xennetback_tx_response(xneti, txreq.id,
 			    NETIF_RSP_DROPPED);
 			continue;
@@ -879,10 +845,12 @@ xennetback_evthandler(void *arg)
 		/*
 		 * Do some sanity checks, and queue copy of the data.
 		 */
-		const char *msg = xennetback_tx_check_packet(&txreq);
+		const char *msg = xennetback_tx_check_packet(&txreq,
+		    m0 == NULL);
 		if (__predict_false(msg != NULL)) {
 			printf("%s: packet with size %d is %s\n",
 			    ifp->if_xname, txreq.size, msg);
+			discard = (txreq.flags & NETTXF_more_data) != 0;
 			xennetback_tx_response(xneti, txreq.id,
 			    NETIF_RSP_ERROR);
 			if_statinc(ifp, if_ierrors);
@@ -900,6 +868,7 @@ mbuf_fail:
 			xennetback_tx_copy_abort(ifp, xneti, queued);
 			queued = 0;
 			m0 = NULL;
+			discard = (txreq.flags & NETTXF_more_data) != 0;
 			xennetback_tx_response(xneti, txreq.id,
 			    NETIF_RSP_DROPPED);
 			if_statinc(ifp, if_ierrors);
@@ -916,7 +885,15 @@ mbuf_fail:
 			 */
 			int cnt;
 			m0_len = xennetback_tx_m0len_fragment(xneti,
-			    txreq.size, req_cons, &cnt);
+			    txreq.size, xneti->xni_txring.req_cons, &cnt);
+			if (m0_len < 0) {
+				m_freem(m);
+				discard = 1;
+				xennetback_tx_response(xneti, txreq.id,
+				    NETIF_RSP_DROPPED);
+				if_statinc(ifp, if_ierrors);
+				continue;
+			}
 			m->m_len = m0_len;
 			KASSERT(cnt <= XEN_NETIF_NR_SLOTS_MIN);
 
@@ -925,7 +902,6 @@ mbuf_fail:
 				 * Flush queue if too full to fit this
 				 * new packet whole.
 				 */
-				KASSERT(m0 == NULL);
 				xennetback_tx_copy_process(ifp, xneti, queued);
 				queued = 0;
 			}
@@ -982,7 +958,8 @@ mbuf_fail:
 
 		XENPRINTF(("%s pkt offset %d size %d id %d req_cons %d\n",
 		    xneti->xni_if.if_xname, txreq.offset,
-		    txreq.size, txreq.id, MASK_NETIF_TX_IDX(req_cons)));
+		    txreq.size, txreq.id,
+		    xneti->xni_txring.req_cons & (RING_SIZE(&xneti->xni_txring) - 1)));
 
 		xst = &xneti->xni_xstate[queued];
 		xst->xs_m = (m0 == NULL || m == m0) ? m : NULL;
@@ -1003,6 +980,9 @@ mbuf_fail:
 			queued = 0;
 		}
 	}
+	RING_FINAL_CHECK_FOR_REQUESTS(&xneti->xni_txring, receive_pending);
+	if (receive_pending)
+		goto again;
 	if (m0) {
 		/* Queue empty, and still unfinished multi-fragment request */
 		printf("%s: dropped unfinished multi-fragment\n",
@@ -1062,14 +1042,12 @@ xennetback_rx_copy_process(struct ifnet *ifp, struct xnetback_instance *xneti,
 	}
 
 	/* update pointer */
-	xen_rmb();
 	xneti->xni_rxring.req_cons += queued;
 	xneti->xni_rxring.rsp_prod_pvt += queued;
 	RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(&xneti->xni_rxring, notify);
 
 	/* send event */
 	if (notify) {
-		xen_rmb();
 		XENPRINTF(("%s receive event\n",
 		    xneti->xni_if.if_xname));
 		hypervisor_notify_via_evtchn(xneti->xni_evtchn);
@@ -1084,10 +1062,8 @@ free_mbufs:
 			    xst->xs_dmamap);
 			xst->xs_loaded = false;
 		}
-		if (xst->xs_m != NULL) {
-			m_freem(xst->xs_m);
-			xst->xs_m = NULL;
-		}
+		m_freem(xst->xs_m);
+		xst->xs_m = NULL;
 	}
 }
 
@@ -1312,7 +1288,7 @@ again:
 		 * here, as the frontend doesn't notify when adding
 		 * requests anyway
 		 */
-		if (__predict_false(abort || 
+		if (__predict_false(abort ||
 		    !RING_HAS_UNCONSUMED_REQUESTS(&xneti->xni_rxring))) {
 			/* ring full */
 			ifp->if_timer = 1;
@@ -1362,10 +1338,6 @@ xennetback_ifstop(struct ifnet *ifp, int disable)
 	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 	if (xneti->xni_status == CONNECTED) {
-		XENPRINTF(("%s: req_prod 0x%x resp_prod 0x%x req_cons 0x%x "
-		    "event 0x%x\n", ifp->if_xname, xneti->xni_txring->req_prod,
-		    xneti->xni_txring->resp_prod, xneti->xni_txring->req_cons,
-		    xneti->xni_txring->event));
 		xennetback_evthandler(ifp->if_softc); /* flush pending RX requests */
 	}
 	splx(s);

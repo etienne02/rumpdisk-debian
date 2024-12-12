@@ -1,4 +1,4 @@
-/*	$NetBSD: nfsm_subs.h,v 1.55 2021/08/12 20:25:27 andvar Exp $	*/
+/*	$NetBSD: nfsm_subs.h,v 1.59 2024/12/07 02:05:55 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -33,7 +33,6 @@
  *
  *	@(#)nfsm_subs.h	8.2 (Berkeley) 3/30/95
  */
-
 
 #ifndef _NFS_NFSM_SUBS_H_
 #define _NFS_NFSM_SUBS_H_
@@ -366,7 +365,7 @@
 
 #define	nfsm_strsiz(s,m) \
 		{ nfsm_dissect(tl,uint32_t *,NFSX_UNSIGNED); \
-		if (((s) = fxdr_unsigned(uint32_t,*tl)) > (m)) { \
+		if ((uint32_t)((s) = fxdr_unsigned(uint32_t,*tl)) > (m)) { \
 			m_freem(mrep); \
 			error = EBADRPC; \
 			goto nfsmout; \
@@ -374,7 +373,8 @@
 
 #define	nfsm_srvnamesiz(s) \
 		{ nfsm_dissect(tl,uint32_t *,NFSX_UNSIGNED); \
-		if (((s) = fxdr_unsigned(uint32_t,*tl)) > NFS_MAXNAMLEN) \
+		if ((uint32_t)((s) = fxdr_unsigned(uint32_t,*tl)) > \
+		    NFS_MAXNAMLEN) \
 			error = NFSERR_NAMETOL; \
 		if (error) \
 			nfsm_reply(0); \
@@ -446,10 +446,8 @@
 		else \
 		   (void) nfs_rephead((s), nfsd, slp, error, cache, &frev, \
 			mrq, &mb, &bpos); \
-		if (mrep != NULL) { \
-			m_freem(mrep); \
-			mrep = NULL; \
-		} \
+		m_freem(mrep); \
+		mrep = NULL; \
 		mreq = *mrq; \
 		if (error && (!(nfsd->nd_flag & ND_NFSV3) || \
 			error == EBADRPC)) {\
@@ -480,20 +478,24 @@
 		} }
 
 #define nfsm_srvmtofh(nsfh) \
-	{ int fhlen = NFSX_V3FH; \
+	{ uint32_t fhlen = NFSX_V3FH; \
 		if (nfsd->nd_flag & ND_NFSV3) { \
-			nfsm_dissect(tl, u_int32_t *, NFSX_UNSIGNED); \
-			fhlen = fxdr_unsigned(int, *tl); \
+			nfsm_dissect(tl, uint32_t *, NFSX_UNSIGNED); \
+			fhlen = fxdr_unsigned(uint32_t, *tl); \
+			CTASSERT(NFSX_V3FHMAX <= FHANDLE_SIZE_MAX); \
 			if (fhlen > NFSX_V3FHMAX || \
 			    (fhlen < FHANDLE_SIZE_MIN && fhlen > 0)) { \
 				error = EBADRPC; \
 				nfsm_reply(0); \
 			} \
 		} else { \
+			CTASSERT(NFSX_V2FH >= FHANDLE_SIZE_MIN); \
 			fhlen = NFSX_V2FH; \
 		} \
 		(nsfh)->nsfh_size = fhlen; \
 		if (fhlen != 0) { \
+			KASSERT(fhlen >= FHANDLE_SIZE_MIN); \
+			KASSERT(fhlen <= FHANDLE_SIZE_MAX); \
 			nfsm_dissect(tl, u_int32_t *, fhlen); \
 			memcpy(NFSRVFH_DATA(nsfh), tl, fhlen); \
 		} \
@@ -569,4 +571,4 @@
 			break; \
 		}; }
 
-#endif
+#endif	/* _NFS_NFSM_SUBS_H_ */

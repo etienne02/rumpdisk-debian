@@ -1,4 +1,4 @@
-/*	$NetBSD: bcm2835_spi.c,v 1.11 2021/08/07 16:18:43 thorpej Exp $	*/
+/*	$NetBSD: bcm2835_spi.c,v 1.13 2023/09/03 11:36:52 tnn Exp $	*/
 
 /*
  * Copyright (c) 2012 Jonathan A. Kollasch
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bcm2835_spi.c,v 1.11 2021/08/07 16:18:43 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bcm2835_spi.c,v 1.13 2023/09/03 11:36:52 tnn Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -182,6 +182,8 @@ bcmspi_configure(void *cookie, int slave, int mode, int speed)
 	clk = 2 * 250000000 / speed; /* XXX 250MHz */
 	clk = (clk / 2) + (clk & 1);
 	clk = roundup(clk, 2);
+	if (clk >= 0xfffe)
+		clk = 0xfffe;
 	clk = __SHIFTIN(clk, SPI_CLK_CDIV);
 	bus_space_write_4(sc->sc_iot, sc->sc_ioh, SPI_CLK, clk);
 
@@ -298,7 +300,6 @@ bcmspi_intr(void *cookie)
 	if (ISSET(cs, SPI_CS_DONE)) {
 		if (sc->sc_wchunk != NULL) {
 			bcmspi_send(sc);
-			goto end;
 		} else {
 			bus_space_write_4(sc->sc_iot, sc->sc_ioh, SPI_CS,
 			    sc->sc_CS);
@@ -309,14 +310,12 @@ bcmspi_intr(void *cookie)
 			KASSERT(st != NULL);
 			spi_done(st, 0);
 			sc->sc_running = false;
-			goto end;
 		}
 	} else if (ISSET(cs, SPI_CS_RXR)) {
 		bcmspi_recv(sc);
 		bcmspi_send(sc);
 	}
 
-end:
 	mutex_exit(&sc->sc_mutex);
 	return ISSET(cs, SPI_CS_DONE|SPI_CS_RXR);
 }

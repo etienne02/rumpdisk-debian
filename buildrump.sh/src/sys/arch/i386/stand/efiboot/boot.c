@@ -1,4 +1,4 @@
-/*	$NetBSD: boot.c,v 1.19 2021/06/22 19:53:58 nia Exp $	*/
+/*	$NetBSD: boot.c,v 1.23 2023/05/14 09:07:54 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2016 Kimihiro Nonaka <nonaka@netbsd.org>
@@ -83,6 +83,7 @@ void	command_menu(char *);
 #endif
 void	command_modules(char *);
 void	command_multiboot(char *);
+void	command_reloc(char *);
 void	command_text(char *);
 void	command_version(char *);
 
@@ -109,6 +110,7 @@ const struct bootblk_command commands[] = {
 #endif
 	{ "modules",	command_modules },
 	{ "multiboot",	command_multiboot },
+	{ "reloc",	command_reloc },
 	{ "rndseed",	rnd_add },
 	{ "splash",	splash_add },
 	{ "text",	command_text },
@@ -278,31 +280,6 @@ bootit(const char *filename, int howto)
 }
 
 void
-print_banner(void)
-{
-	int n;
-
-	clearit();
-	if (bootcfg_info.banner[0]) {
-		for (n = 0; n < BOOTCFG_MAXBANNER && bootcfg_info.banner[n];
-		    n++)
-			printf("%s\n", bootcfg_info.banner[n]);
-	} else {
-		printf("\n"
-		   "  \\-__,------,___.\n"
-		   "   \\        __,---`  %s (from NetBSD %s)\n"
-		   "    \\       `---,_.  Revision %s\n"
-		   "     \\-,_____,.---`  Memory: %d/%d k\n"
-		   "      \\\n"  
-		   "       \\\n"
-		   "        \\\n",
-		   bootprog_name, bootprog_kernrev,
-		   bootprog_rev,               
-		   getbasemem(), getextmem());
-	}
-}
-
-void
 boot(void)
 {
 	int currname;
@@ -344,10 +321,12 @@ boot(void)
 	 * If console set in boot.cfg, switch to it.
 	 * This will print the banner, so we don't need to explicitly do it
 	 */
-	if (bootcfg_info.consdev)
+	if (bootcfg_info.consdev) {
 		command_consdev(bootcfg_info.consdev);
-	else
-		print_banner();
+	} else {
+		clearit();
+		print_bootcfg_banner(bootprog_name, bootprog_rev);
+	}
 
 	/* Display the menu, if applicable */
 	twiddle_toggle = 0;
@@ -429,6 +408,7 @@ command_help(char *arg)
 #endif
 	       "modules {on|off|enabled|disabled}\n"
 	       "multiboot [dev:][filename] [<args>]\n"
+	       "reloc {address|none|default}\n"
 	       "rndseed {path_to_rndseed_file}\n"
 	       "splash {path_to_image_file}\n"
 	       "text [{modenum|list}]\n"
@@ -476,8 +456,6 @@ command_boot(char *arg)
 	} else {
 		int i;
 
-		if (howto == 0)
-			bootdefault();
 		for (i = 0; i < NUMNAMES; i++) {
 			bootit(names[i][0], howto);
 			bootit(names[i][1], howto);
@@ -505,7 +483,7 @@ command_dev(char *arg)
 	if (*arg == '\0') {
 		efi_disk_show();
 		efi_net_show();
-	
+
 		if (default_part_name != NULL)
 			printf("default NAME=%s\n", default_part_name);
 		else
@@ -602,7 +580,8 @@ command_consdev(char *arg)
 				}
 			}
 			efi_consinit(cdp->tag, ioport, speed);
-			print_banner();
+			clearit();
+			print_bootcfg_banner(bootprog_name, bootprog_rev);
 			return;
 		}
 	}
@@ -662,6 +641,48 @@ command_multiboot(char *arg)
 		       strerror(errno));
 	else
 		printf("boot returned\n");
+}
+
+void
+command_reloc(char *arg)
+{
+	char *ep;
+
+	if (*arg == '\0') {
+		switch (efi_reloc_type) {
+		case RELOC_NONE:
+			printf("reloc: none\n");
+			break;
+		case RELOC_ADDR:
+			printf("reloc: %p\n", (void *)efi_kernel_reloc);
+			break;
+		case RELOC_DEFAULT:
+		default:
+			printf("reloc: default\n");
+			break;
+		}
+		goto out;
+	}
+
+	if (strcmp(arg, "default") == 0) {
+		efi_reloc_type = RELOC_DEFAULT;
+		goto out;
+	}
+
+	if (strcmp(arg, "none") == 0) {
+		efi_reloc_type = RELOC_NONE;
+		goto out;
+	}
+
+	errno = 0;
+	efi_kernel_reloc = strtoul(arg, &ep, 0);
+	if (ep == arg || *ep != '\0' || errno)
+		printf("could not parse address \"%s\"\n", arg);
+	else
+		efi_reloc_type = RELOC_ADDR;
+out:
+	return;
+
 }
 
 void

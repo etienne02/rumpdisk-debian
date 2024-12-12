@@ -1,4 +1,4 @@
-/*	$NetBSD: usbdivar.h,v 1.129 2021/08/02 12:56:24 andvar Exp $	*/
+/*	$NetBSD: usbdivar.h,v 1.138 2024/02/04 05:43:06 mrg Exp $	*/
 
 /*
  * Copyright (c) 1998, 2012 The NetBSD Foundation, Inc.
@@ -6,7 +6,7 @@
  *
  * This code is derived from software contributed to The NetBSD Foundation
  * by Lennart Augustsson (lennart@augustsson.net) at
- * Carlstedt Research & Technology and Matthew R. Green (mrg@eterna.com.au).
+ * Carlstedt Research & Technology and Matthew R. Green (mrg@eterna23.net).
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,6 +30,9 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef	_DEV_USB_USBDIVAR_H_
+#define	_DEV_USB_USBDIVAR_H_
+
 /*
  * Discussion about locking in the USB code:
  *
@@ -41,18 +44,21 @@
  *	BUS METHOD		LOCK	NOTES
  *	----------------------- -------	-------------------------
  *	ubm_open		-	might want to take lock?
- *	ubm_softint		x
+ *	ubm_softint		x	may release/reacquire lock
  *	ubm_dopoll		-	might want to take lock?
  *	ubm_allocx		-
  *	ubm_freex		-
+ *	ubm_abortx		x	must not release/reacquire lock
  *	ubm_getlock 		-	Called at attach time
  *	ubm_newdev		-	Will take lock
-	ubm_rhctrl
+ *	ubm_rhctrl              -
  *
  *	PIPE METHOD		LOCK	NOTES
  *	----------------------- -------	-------------------------
- *	upm_transfer		-
- *	upm_start		-	might want to take lock?
+ *	upm_init		-
+ *	upm_fini		-
+ *	upm_transfer		x
+ *	upm_start		x
  *	upm_abort		x
  *	upm_close		x
  *	upm_cleartoggle		-
@@ -64,7 +70,6 @@
  * USB functions known to expect the lock taken include (this list is
  * probably not exhaustive):
  *    usb_transfer_complete()
- *    usb_insert_transfer()
  *    usb_start_next()
  *
  */
@@ -176,6 +181,8 @@ struct usbd_bus {
 	/* Filled by usb driver */
 	kmutex_t	       *ub_lock;
 	struct usbd_device     *ub_roothub;
+	struct usbd_xfer       *ub_rhxfer;	/* roothub xfer in progress */
+	kcondvar_t		ub_rhxfercv;
 	uint8_t			ub_rhaddr;	/* roothub address */
 	uint8_t			ub_rhconf;	/* roothub configuration */
 	struct usbd_device     *ub_devices[USB_TOTAL_DEVICES];
@@ -248,6 +255,11 @@ struct usbd_pipe {
 	char			up_repeat;
 	int			up_interval;
 	uint8_t			up_flags;
+
+	struct usbd_xfer       *up_callingxfer; /* currently in callback */
+	kcondvar_t		up_callingcv;
+
+	struct lwp	       *up_abortlwp;	/* lwp currently aborting */
 
 	/* Filled by HC driver. */
 	const struct usbd_pipe_methods
@@ -353,7 +365,6 @@ void		usbd_iface_pipeunref(struct usbd_interface *);
 usbd_status	usbd_fill_iface_data(struct usbd_device *, int, int);
 void		usb_free_device(struct usbd_device *);
 
-usbd_status	usb_insert_transfer(struct usbd_xfer *);
 void		usb_transfer_complete(struct usbd_xfer *);
 int		usb_disconnect_port(struct usbd_port *, device_t, int);
 
@@ -394,3 +405,5 @@ usb_addr2dindex(int addr)
 
 #define usbd_lock_pipe(p)	mutex_enter((p)->up_dev->ud_bus->ub_lock)
 #define usbd_unlock_pipe(p)	mutex_exit((p)->up_dev->ud_bus->ub_lock)
+
+#endif	/* _DEV_USB_USBDIVAR_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_loop.c,v 1.113 2021/06/16 00:21:19 riastradh Exp $	*/
+/*	$NetBSD: if_loop.c,v 1.118 2022/09/04 23:34:51 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_loop.c,v 1.113 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_loop.c,v 1.118 2022/09/04 23:34:51 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -90,7 +90,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_loop.c,v 1.113 2021/06/16 00:21:19 riastradh Exp 
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 
 #ifdef	INET
@@ -99,6 +98,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_loop.c,v 1.113 2021/06/16 00:21:19 riastradh Exp 
 #include <netinet/in_var.h>
 #include <netinet/in_offload.h>
 #include <netinet/ip.h>
+#include <netinet/ip_var.h>
 #endif
 
 #ifdef INET6
@@ -242,8 +242,7 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
     const struct rtentry *rt)
 {
 	pktqueue_t *pktq = NULL;
-	struct ifqueue *ifq = NULL;
-	int s, isr = -1;
+	int s;
 	int csum_flags;
 	int error = 0;
 	size_t pktlen;
@@ -284,6 +283,7 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 
 		M_PREPEND(m, sizeof(uint32_t), M_DONTWAIT);
 		if (m == NULL) {
+			if_statinc(ifp, if_oerrors);
 			error = ENOBUFS;
 			goto out;
 		}
@@ -297,17 +297,18 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	m_tag_delete_chain(m);
 
 #ifdef MPLS
+	bool is_mpls = false;
 	if (rt != NULL && rt_gettag(rt) != NULL &&
 	    rt_gettag(rt)->sa_family == AF_MPLS &&
 	    (m->m_flags & (M_MCAST | M_BCAST)) == 0) {
 		union mpls_shim msh;
 		msh.s_addr = MPLS_GETSADDR(rt);
 		if (msh.shim.label != MPLS_LABEL_IMPLNULL) {
-			ifq = &mplsintrq;
-			isr = NETISR_MPLS;
+			is_mpls = true;
+			pktq = mpls_pktq;
 		}
 	}
-	if (isr != NETISR_MPLS)
+	if (!is_mpls)
 #endif
 	switch (dst->sa_family) {
 
@@ -347,8 +348,7 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 #endif
 #ifdef NETATALK
 	case AF_APPLETALK:
-	        ifq = &atintrq2;
-		isr = NETISR_ATALK;
+		pktq = at_pktq2;
 		break;
 #endif
 	default:
@@ -359,29 +359,17 @@ looutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 		goto out;
 	}
 
-	s = splnet();
-	if (__predict_true(pktq)) {
-		error = 0;
+	KASSERT(pktq != NULL);
 
-		if (__predict_true(pktq_enqueue(pktq, m, 0))) {
-			if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
-		} else {
-			m_freem(m);
-			error = ENOBUFS;
-		}
-		splx(s);
-		goto out;
-	}
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);
+	error = 0;
+	s = splnet();
+	if (__predict_true(pktq_enqueue(pktq, m, 0))) {
+		if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
+	} else {
 		m_freem(m);
-		splx(s);
+		if_statinc(ifp, if_oerrors);
 		error = ENOBUFS;
-		goto out;
 	}
-	if_statadd2(ifp, if_ipackets, 1, if_ibytes, m->m_pkthdr.len);
-	IF_ENQUEUE(ifq, m);
-	schednetisr(isr);
 	splx(s);
 out:
 	KERNEL_UNLOCK_UNLESS_NET_MPSAFE();
@@ -394,11 +382,10 @@ lostart(struct ifnet *ifp)
 {
 	for (;;) {
 		pktqueue_t *pktq = NULL;
-		struct ifqueue *ifq = NULL;
 		struct mbuf *m;
 		size_t pktlen;
 		uint32_t af;
-		int s, isr = 0;
+		int s;
 
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == NULL)
@@ -421,8 +408,7 @@ lostart(struct ifnet *ifp)
 #endif
 #ifdef NETATALK
 		case AF_APPLETALK:
-			ifq = &atintrq2;
-			isr = NETISR_ATALK;
+			pktq = at_pktq2;
 			break;
 #endif
 		default:
@@ -432,25 +418,14 @@ lostart(struct ifnet *ifp)
 		}
 		pktlen = m->m_pkthdr.len;
 
+		KASSERT(pktq != NULL);
+
 		s = splnet();
-		if (__predict_true(pktq)) {
-			if (__predict_false(pktq_enqueue(pktq, m, 0))) {
-				m_freem(m);
-				splx(s);
-				return;
-			}
-			if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
-			splx(s);
-			continue;
-		}
-		if (IF_QFULL(ifq)) {
-			IF_DROP(ifq);
-			splx(s);
+		if (__predict_false(pktq_enqueue(pktq, m, 0))) {
 			m_freem(m);
+			splx(s);
 			return;
 		}
-		IF_ENQUEUE(ifq, m);
-		schednetisr(isr);
 		if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
 		splx(s);
 	}

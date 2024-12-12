@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_subr.c,v 1.229 2020/11/21 08:10:27 mlelstv Exp $	*/
+/*	$NetBSD: kern_subr.c,v 1.231 2023/01/19 07:40:58 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999, 2002, 2007, 2008 The NetBSD Foundation, Inc.
@@ -79,7 +79,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_subr.c,v 1.229 2020/11/21 08:10:27 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_subr.c,v 1.231 2023/01/19 07:40:58 mlelstv Exp $");
 
 #include "opt_ddb.h"
 #include "opt_md.h"
@@ -137,7 +137,9 @@ isswap(device_t dv)
 	if ((vn = opendisk(dv)) == NULL)
 		return 0;
 
+	VOP_UNLOCK(vn);
 	error = VOP_IOCTL(vn, DIOCGWEDGEINFO, &wi, FREAD, NOCRED);
+	vn_lock(vn, LK_EXCLUSIVE | LK_RETRY);
 	VOP_CLOSE(vn, FREAD, NOCRED);
 	vput(vn);
 	if (error) {
@@ -172,6 +174,13 @@ uint64_t booted_nblks;
 char *bootspec;
 
 /*
+ * Time to wait for a specified boot device to appear.
+ */
+#ifndef ROOT_WAITTIME
+#define ROOT_WAITTIME 20
+#endif
+
+/*
  * Use partition letters if it's a disk class but not a wedge or flash.
  * XXX Check for wedge/flash is kinda gross.
  */
@@ -183,6 +192,7 @@ char *bootspec;
 void
 setroot(device_t bootdv, int bootpartition)
 {
+	time_t waitend;
 
 	/*
 	 * Let bootcode augment "rootspec", ensure that
@@ -239,14 +249,19 @@ setroot(device_t bootdv, int bootpartition)
 	/*
 	 * loop until a root device is specified
 	 */
+	waitend = time_uptime + ROOT_WAITTIME;
 	do {
 		if (boothowto & RB_ASKNAME)
 			setroot_ask(bootdv, bootpartition);
-		else
+		else {
 			setroot_root(bootdv, bootpartition);
-
-		if (root_device == NULL)
-			boothowto |= RB_ASKNAME;
+			if (root_device == NULL) {
+				if (time_uptime < waitend) {
+					kpause("root", false, hz, NULL);
+				} else
+					boothowto |= RB_ASKNAME;
+			}
+		}
 	} while (root_device == NULL);
 }
 

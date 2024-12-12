@@ -1,10 +1,10 @@
-#	$NetBSD: Makefile,v 1.10 2020/11/17 10:47:17 rin Exp $
+#	$NetBSD: Makefile,v 1.13 2022/12/09 01:56:40 ryo Exp $
 
 .PATH:	${.CURDIR}/arch
 
 PROG=	tprof
 MAN=	tprof.8
-SRCS=	tprof.c tprof_analyze.c
+SRCS=	tprof.c tprof_analyze.c tprof_top.c ksyms.c
 
 .if	${MACHINE_ARCH} == "i386" || ${MACHINE_ARCH} == "x86_64"
 SRCS+=	tprof_x86.c
@@ -19,11 +19,17 @@ SRCS+=	tprof_noarch.c
 CPPFLAGS+= -I${NETBSDSRCDIR}/sys/
 
 LDADD+= -lpthread
+LDADD+= -lm
 LDADD+= -lelf
+LDADD+= -lterminfo
 LDADD+= -lutil
 DPADD+= ${LIBPTHREAD}
+DPADD+= ${LIBM}
 DPADD+= ${LIBELF}
+DPADD+= ${LIBTERMINFO}
 DPADD+= ${LIBUTIL}
+
+COPTS.tprof_top.c = -Wno-format-nonliteral
 
 .include <bsd.own.mk>
 .include <bsd.prog.mk>

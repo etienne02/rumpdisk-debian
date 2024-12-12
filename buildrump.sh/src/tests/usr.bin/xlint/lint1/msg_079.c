@@ -1,14 +1,22 @@
-/*	$NetBSD: msg_079.c,v 1.3 2021/08/27 20:16:50 rillig Exp $	*/
+/*	$NetBSD: msg_079.c,v 1.6 2024/02/02 19:07:58 rillig Exp $	*/
 # 3 "msg_079.c"
 
 // Test for message: dubious escape \%c [79]
 
-int my_printf(const char *, ...);
+/* \e is only accepted in GCC mode. */
 
-void
-print_color(_Bool red, _Bool green, _Bool blue)
-{
-	/* expect+1: warning: dubious escape \e [79] */
-	my_printf("\e[%dm",
-	    30 + (red ? 1 : 0) + (green ? 2 : 0) + (blue ? 4 : 0));
-}
+/* lint1-extra-flags: -X 351 */
+
+char char_e = '\e';
+/* expect+1: warning: dubious escape \y [79] */
+char char_y = '\y';
+int wide_e = L'\e';
+/* expect+1: warning: dubious escape \y [79] */
+int wide_y = L'\y';
+
+char char_string_e[] = "\e[0m";
+/* expect+1: warning: dubious escape \y [79] */
+char char_string_y[] = "\y[0m";
+int wide_string_e[] = L"\e[0m";
+/* expect+1: warning: dubious escape \y [79] */
+int wide_string_y[] = L"\y[0m";

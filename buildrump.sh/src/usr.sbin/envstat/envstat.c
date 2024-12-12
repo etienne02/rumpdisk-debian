@@ -1,4 +1,4 @@
-/* $NetBSD: envstat.c,v 1.100 2020/11/14 16:32:53 mlelstv Exp $ */
+/* $NetBSD: envstat.c,v 1.104 2023/06/19 03:03:11 rin Exp $ */
 
 /*-
  * Copyright (c) 2007, 2008 Juan Romero Pardines.
@@ -27,7 +27,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: envstat.c,v 1.100 2020/11/14 16:32:53 mlelstv Exp $");
+__RCSID("$NetBSD: envstat.c,v 1.104 2023/06/19 03:03:11 rin Exp $");
 #endif /* not lint */
 
 #include <stdio.h>
@@ -52,7 +52,7 @@ __RCSID("$NetBSD: envstat.c,v 1.100 2020/11/14 16:32:53 mlelstv Exp $");
 #include "prog_ops.h"
 
 #define ENVSYS_DFLAG	0x00000001	/* list registered devices */
-#define ENVSYS_FFLAG	0x00000002	/* show temp in farenheit */
+#define ENVSYS_FFLAG	0x00000002	/* show temp in fahrenheit */
 #define ENVSYS_LFLAG	0x00000004	/* list sensors */
 #define ENVSYS_XFLAG	0x00000008	/* externalize dictionary */
 #define ENVSYS_IFLAG 	0x00000010	/* skip invalid sensors */
@@ -142,7 +142,7 @@ int main(int argc, char **argv)
 		case 'd':	/* show sensors of a specific device */
 			mydevname = optarg;
 			break;
-		case 'f':	/* display temperature in Farenheit */
+		case 'f':	/* display temperature in Fahrenheit */
 			flags |= ENVSYS_FFLAG;
 			break;
 		case 'I':	/* Skips invalid sensors */
@@ -236,7 +236,8 @@ int main(int argc, char **argv)
 					err(EXIT_FAILURE, "add_sensors");
 			}
 			if (sensors) {
-				char *dvstring, *sstring, *p, *last, *s;
+				char *sstring, *p, *last, *s;
+				char *dvstring = NULL; /* XXXGCC */
 				unsigned count = 0;
 
 				s = strdup(sensors);
@@ -986,7 +987,7 @@ do {								\
 		ilen = 9;					\
 	} else							\
 		ilen += 9;					\
-} while (/* CONSTCOND */ 0)
+} while (0)
 
 		/* temperatures */
 		} else if (strcmp(sensor->type, "Temperature") == 0) {
@@ -1139,6 +1140,53 @@ do {									\
 				/* show statistics if flag set */
 				(void)printf(" %8u %8u %8u",
 				    stats->max, stats->min, stats->avg);
+				ilen += 2;
+			} else if (!nflag) {
+				if (sensor->critmax_value) {
+					(void)printf(" %*u", (int)ilen,
+					    sensor->critmax_value);
+					ilen = 8;
+				} else
+					ilen += 9;
+
+				if (sensor->warnmax_value) {
+					(void)printf(" %*u", (int)ilen,
+					    sensor->warnmax_value);
+					ilen = 8;
+				} else
+					ilen += 9;
+
+				if (sensor->warnmin_value) {
+					(void)printf(" %*u", (int)ilen,
+					    sensor->warnmin_value);
+					ilen = 8;
+				} else
+					ilen += 9;
+
+				if (sensor->critmin_value) {
+					(void)printf( " %*u", (int)ilen,
+					    sensor->critmin_value);
+					ilen = 8;
+				} else
+					ilen += 9;
+
+			}
+
+			if (!nflag)
+				(void)printf(" %*s", (int)ilen - 3, stype);
+
+		/* Pressure */
+		} else if (strcmp(sensor->type, "pressure") == 0) {
+			stype = "hPa";
+
+			(void)printf("%s%*.3f", sep, flen,
+			    sensor->cur_value / 10000.0);
+
+			ilen = 8;
+			if (statistics) {
+				/* show statistics if flag set */
+				(void)printf("  %.3f  %.3f  %.3f",
+				    stats->max / 10000.0, stats->min / 10000.0, stats->avg / 10000.0);
 				ilen += 2;
 			} else if (!nflag) {
 				if (sensor->critmax_value) {

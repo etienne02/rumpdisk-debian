@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC.SKI,v 1.18 2020/09/27 13:48:52 roy Exp $
+# $NetBSD: GENERIC.SKI,v 1.22 2024/01/29 18:27:13 christos Exp $
 #
 # GENERIC machine description file
 #
@@ -22,7 +22,7 @@ include 	"arch/ia64/conf/std.ia64"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"GENERIC-$Revision: 1.18 $"
+#ident 		"GENERIC-$Revision: 1.22 $"
 
 maxusers	32		# estimated number of users
 
@@ -74,6 +74,18 @@ file-system	KERNFS		# /kern
 file-system	NULLFS		# loopback file system
 #file-system	OVERLAY		# overlay file system
 #file-system	PROCFS		# /proc
+file-system	TMPFS		# Efficient memory file-system
+
+# File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	QUOTA		# legacy UFS quotas
+options 	QUOTA2		# new, in-filesystem UFS quotas
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
+options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
+options 	NFSSERVER	# Network File System server
 
 #options 	GATEWAY		# packet forwarding
 options 	INET		# IP + ICMP + TCP + UDP
@@ -99,10 +111,6 @@ cpu* at mainbus?
 #options 	ACPI_SCANPCI	# find PCI roots using ACPI
 
 acpi0 at mainbus?
-
-
-# Pull in optional local configuration
-cinclude "arch/ia64/conf/GENERIC.local"
 
 # Console Devices
 #ssccons*	at mainbus0		# Ski console interface driver
@@ -155,3 +163,6 @@ pseudo-device	loop			# network loopback
 
 # miscellaneous pseudo-devices
 pseudo-device	pty			# pseudo-terminals
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/ia64/conf/GENERIC.local"

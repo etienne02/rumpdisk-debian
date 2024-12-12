@@ -1,4 +1,4 @@
-/*      $NetBSD: scheduler.c,v 1.52 2020/11/01 20:58:38 christos Exp $	*/
+/*      $NetBSD: scheduler.c,v 1.55 2023/10/05 19:41:07 ad Exp $	*/
 
 /*
  * Copyright (c) 2010, 2011 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scheduler.c,v 1.52 2020/11/01 20:58:38 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scheduler.c,v 1.55 2023/10/05 19:41:07 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -255,8 +255,15 @@ rump_schedule()
 	 * start a real thread.
 	 */
 	if (__predict_true((l = curlwp) != NULL)) {
+		struct proc *p = l->l_proc;
 		rump_schedule_cpu(l);
-		LWP_CACHE_CREDS(l, l->l_proc);
+		if (l->l_cred != p->p_cred) {
+			kauth_cred_t oc = l->l_cred;
+			mutex_enter(p->p_lock);
+			l->l_cred = kauth_cred_hold(p->p_cred);
+			mutex_exit(p->p_lock);
+			kauth_cred_free(oc);
+		}
 	} else {
 		lwp0busy();
 
@@ -372,7 +379,7 @@ rump_schedule_cpu_interlock(struct lwp *l, void *interlock)
 	ci = rcpu->rcpu_ci;
 	l->l_cpu = l->l_target_cpu = ci;
 	l->l_mutex = rcpu->rcpu_ci->ci_schedstate.spc_mutex;
-	l->l_ncsw++;
+	l->l_ru.ru_nvcsw++;
 	l->l_stat = LSONPROC;
 
 	/*
@@ -473,7 +480,7 @@ rump_unschedule_cpu1(struct lwp *l, void *interlock)
 	if (interlock == rcpu->rcpu_mtx)
 		rumpuser_mutex_enter_nowrap(rcpu->rcpu_mtx);
 	else
-		membar_exit();
+		membar_release(); /* XXX what does this pair with? */
 
 	/* Release the CPU. */
 	old = atomic_swap_ptr(&rcpu->rcpu_prevlwp, l);

@@ -1,7 +1,19 @@
-/*	$NetBSD: msg_028.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_028.c,v 1.5 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_028.c"
 
-// Test for message: redefinition of %s [28]
+// Test for message: redefinition of '%s' [28]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+int
+defined(int arg)
+{
+	return arg;
+}
+
+int
+defined(int arg)
+/* expect+1: error: redefinition of 'defined' [28] */
+{
+	return arg;
+}

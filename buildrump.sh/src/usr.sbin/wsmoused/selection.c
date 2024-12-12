@@ -1,4 +1,4 @@
-/* $NetBSD: selection.c,v 1.10 2007/05/27 15:05:00 jmmv Exp $ */
+/* $NetBSD: selection.c,v 1.12 2023/02/07 20:37:48 mlelstv Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2004, 2007 The NetBSD Foundation, Inc.
@@ -32,7 +32,7 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: selection.c,v 1.10 2007/05/27 15:05:00 jmmv Exp $");
+__RCSID("$NetBSD: selection.c,v 1.12 2023/02/07 20:37:48 mlelstv Exp $");
 #endif /* not lint */
 
 #include <sys/ioctl.h>
@@ -144,6 +144,7 @@ static void selarea_copy_text(void);
 static void selarea_start(void);
 static void selarea_end(void);
 static void selarea_calculate(void);
+static void selarea_getrowcol(size_t, size_t *, size_t *);
 static void selarea_hide(void);
 static void selarea_show(void);
 static void selarea_paste(void);
@@ -226,6 +227,7 @@ selection_cleanup(void)
 void
 selection_wsmouse_event(struct wscons_event evt)
 {
+	const struct wsmouse_calibcoords *abs = &Selmouse.sm_mouse->m_calib;
 
 	if (IS_MOTION_EVENT(evt.type)) {
 		if (Selmouse.sm_selecting)
@@ -259,7 +261,30 @@ selection_wsmouse_event(struct wscons_event evt)
 				Selmouse.sm_count_y++;
 			break;
 
-		case WSCONS_EVENT_MOUSE_DELTA_Z:
+		case WSCONS_EVENT_MOUSE_DELTA_Z: /* FALLTHROUGH */
+		case WSCONS_EVENT_MOUSE_DELTA_W:
+			break;
+
+		case WSCONS_EVENT_MOUSE_ABSOLUTE_X:
+			if (!Selmouse.sm_mouse->m_doabs)
+				break;
+			/* max x is inclusive in both selmouse and tpcalib */
+			Selmouse.sm_x
+			    = ((evt.value - abs->minx) * (Selmouse.sm_max_x + 1))
+			      / (abs->maxx - abs->minx + 1);
+			break;
+
+		case WSCONS_EVENT_MOUSE_ABSOLUTE_Y:
+			if (!Selmouse.sm_mouse->m_doabs)
+				break;
+			/* max y is inclusive in both selmouse and tpcalib */
+			Selmouse.sm_y
+			    = ((evt.value - abs->miny) * (Selmouse.sm_max_y + 1))
+			      / (abs->maxy - abs->miny + 1);
+			break;
+
+		case WSCONS_EVENT_MOUSE_ABSOLUTE_Z: /* FALLTHROUGH */
+		case WSCONS_EVENT_MOUSE_ABSOLUTE_W:
 			break;
 
 		default:
@@ -624,14 +649,29 @@ selarea_calculate(void)
 
 /* ---------------------------------------------------------------------- */
 
+/* Turns selection absolute position in the screen buffer back into
+   row, col co-ordinates */
+static void
+selarea_getrowcol(size_t pos, size_t* row, size_t* col)
+{
+	size_t xres = Selmouse.sm_max_x + 1;
+
+	*row = pos / xres;
+	*col = pos - (*row * xres);
+}
+
+/* ---------------------------------------------------------------------- */
+
 /* Hides the highlighted region, returning it to normal colors. */
 static void
 selarea_hide(void)
 {
-	size_t i;
+	size_t i, row, col;
 
-	for (i = Selarea.sa_startoff; i <= Selarea.sa_endoff; i++)
-		char_invert(0, i);
+	for (i = Selarea.sa_startoff; i <= Selarea.sa_endoff; i++) {
+		selarea_getrowcol(i, &row, &col);
+		char_invert(row, col);
+	}
 }
 
 /* ---------------------------------------------------------------------- */
@@ -640,11 +680,13 @@ selarea_hide(void)
 static void
 selarea_show(void)
 {
-	size_t i;
+	size_t i, row, col;
 
 	selarea_calculate();
-	for (i = Selarea.sa_startoff; i <= Selarea.sa_endoff; i++)
-		char_invert(0, i);
+	for (i = Selarea.sa_startoff; i <= Selarea.sa_endoff; i++) {
+		selarea_getrowcol(i, &row, &col);
+		char_invert(row, col);
+	}
 }
 
 /* ---------------------------------------------------------------------- */

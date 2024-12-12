@@ -1,11 +1,11 @@
-#	$NetBSD: Makefile.kern.inc,v 1.281 2021/06/02 15:45:28 nia Exp $
+#	$NetBSD: Makefile.kern.inc,v 1.301 2024/05/06 08:43:36 mrg Exp $
 #
 # This file contains common `MI' targets and definitions and it is included
 # at the bottom of each `MD' ${MACHINE}/conf/Makefile.${MACHINE}.
 #
 # Each target in this file should be protected with `if !target(target)'
 # or `if !commands(target)' and each variable should only be conditionally
-# assigned `VAR ?= VALUE', so that everything can be overriden.
+# assigned `VAR ?= VALUE', so that everything can be overridden.
 #
 # DEBUG is set to -g if debugging.
 # PROF is set to -pg if profiling.
@@ -17,9 +17,11 @@
 #
 # all ports are expected to include bsd.own.mk for toolchain settings
 
-# Default DEBUG to -g if kernel debug info is requested by MKKDEBUG=yes
-.if defined(MKKDEBUG) && ${MKKDEBUG} == "yes"
+# Default DEBUG to -g if kernel debug info is requested by MKDEBUGKERNEL=yes
+.if ${MKDEBUGKERNEL:Uno} == "yes" || ${MKDEBUG:Uno} == "yes"
 DEBUG?=-g
+.else
+DEBUG?=
 .endif
 
 ##
@@ -80,6 +82,7 @@ CWARNFLAGS+=	-Wcast-qual -Wwrite-strings
 CWARNFLAGS+=	-Wno-unreachable-code
 #CWARNFLAGS+=	-Wc++-compat -Wno-error=c++-compat
 CWARNFLAGS+=	-Wno-pointer-sign -Wno-attributes
+CWARNFLAGS+=	-Wno-type-limits
 .  if ${MACHINE} == "i386" || ${MACHINE_ARCH} == "x86_64" || \
 	${MACHINE_ARCH} == "sparc64" || ${MACHINE} == "prep"
 CWARNFLAGS+=	-Wextra -Wno-unused-parameter
@@ -92,9 +95,9 @@ CWARNFLAGS+=	-Wold-style-definition
 CWARNFLAGS+=	-Wno-sign-compare
 
 CWARNFLAGS.clang+=	-Wno-unknown-pragmas -Wno-conversion \
-			-Wno-self-assign -Wno-error=address-of-packed-member \
+			-Wno-self-assign \
 			-Wno-error=constant-conversion
-CWARNFLAGS.gcc+=	${GCC_NO_ADDR_OF_PACKED_MEMBER}
+CWARNFLAGS+=		${CC_WNO_ADDRESS_OF_PACKED_MEMBER}
 
 CWARNFLAGS.ah_regdomain.c= ${${ACTIVE_CC} == "clang":? \
     -Wno-shift-count-negative -Wno-shift-count-overflow:}
@@ -240,18 +243,36 @@ LINKFLAGS?=	${LINKFORMAT} ${LINKSCRIPT} ${LINKTEXT} ${LINKDATA} ${LINKENTRY} \
 		${EXTRA_LINKFLAGS}
 
 LINKFLAGS_DEBUG?=	-X
+KERNEL_CONFIG?=	${KERNEL_BUILD:T}
 
-SYSTEM_LD_TAIL?=@${TOOL_SED} '/const char sccs/!d;s/.*@(.)//;s/" "//;s/\\.*//' vers.c && \
-		${SIZE} $@ && ${SYSTEM_CTFMERGE} && chmod 755 $@
+SYSTEM_LD_TAIL?=	@${_MKSHECHO}
+OBJCOPY_STRIPFLAGS?=	-g
+
+# Strip some architecture-defined symbols from kernel image, while
+# keeping them in netbsd.gdb.
+.if defined(ARCH_STRIP_SYMBOLS)
+.if empty(DEBUG:M-g*)
+SYSTEM_LD_TAIL+=	&& ${OBJCOPY} -w ${ARCH_STRIP_SYMBOLS} $@
+.endif
+OBJCOPY_STRIPFLAGS+=	-w ${ARCH_STRIP_SYMBOLS}
+.endif
+
+SYSTEM_LD_TAIL+= && ${TOOL_SED} \
+	'/const char sccs/!d;s/.*@(.)//;s/" "//;s/\\.*//' vers.c && \
+	${SIZE} $@ && ${SYSTEM_CTFMERGE} && chmod 755 $@ && \
+	runit() { echo $$@; $$@; }
+
 SYSTEM_LD_TAIL_DEBUG?=&& \
-		echo mv -f $@ $@.gdb && mv -f $@ $@.gdb && \
-		echo ${STRIP} ${STRIPFLAGS} -o $@ $@.gdb && \
-		${STRIP} ${STRIPFLAGS} -o $@ $@.gdb && \
-		chmod 755 $@ $@.gdb
+	runit mv -f $@ $@.gdb && \
+	runit ${OBJCOPY} --only-keep-debug --compress-debug-sections \
+	    $@.gdb $@-${KERNEL_CONFIG}.debug && \
+	runit ${OBJCOPY} ${OBJCOPY_STRIPFLAGS} -p -R .gnu_debuglink \
+	    --add-gnu-debuglink=$@-${KERNEL_CONFIG}.debug $@.gdb $@ && \
+	runit chmod 755 $@ $@.gdb $@-${KERNEL_CONFIG}.debug
+
 LINKFLAGS_NORMAL?=	-S
 STRIPFLAGS?=	-g
 
-DEBUG?=
 .if !empty(DEBUG:M-g*)
 SYSTEM_LD_TAIL+=${SYSTEM_LD_TAIL_DEBUG}
 LINKFLAGS+=	${LINKFLAGS_DEBUG}
@@ -262,13 +283,27 @@ TARGETSFX=	.gdb
 LINKFLAGS+=	${LINKFLAGS_NORMAL}
 .endif
 
+.if ${MKDEBUG:Uno} == "yes"
+# XXX: KERNEL_DIR?
+debuginstall: install-kernel-debug
+.for k in ${KERNELS}
+install-kernel-debug: ${DESTDIR}${DEBUGDIR}/${k}-${KERNEL_CONFIG}.debug
+
+${DESTDIR}${DEBUGDIR}/${k}-${KERNEL_CONFIG}.debug: ${k}-${KERNEL_CONFIG}.debug
+	${_MKTARGET_INSTALL}
+	${INSTALL_FILE} -o root -g bin -m 444 ${.ALLSRC} ${.TARGET}
+.endfor
+.else
+debuginstall:
+.endif
+
 SYSTEM_LD_HEAD+=	${SYSTEM_LD_HEAD_EXTRA}
 SYSTEM_LD_TAIL_STAGE1=	${SYSTEM_LD_TAIL}
 SYSTEM_LD_TAIL_STAGE2=	${SYSTEM_LD_TAIL}
 .if defined(COPY_SYMTAB)
-SYSTEM_LD_TAIL_STAGE2+=	&& echo ${DBSYM} $@ && ${DBSYM} $@
+SYSTEM_LD_TAIL_STAGE2+=	&& runit ${DBSYM} $@
 .if !empty(DEBUG:M-g)
-SYSTEM_LD_TAIL_STAGE2+=	&& echo ${DBSYM} $@.gdb && ${DBSYM} $@.gdb
+SYSTEM_LD_TAIL_STAGE2+=	&& runit ${DBSYM} $@.gdb
 .endif
 .endif
 SYSTEM_LD_TAIL_STAGE2+=	${SYSTEM_LD_TAIL_EXTRA}
@@ -414,7 +449,7 @@ ${_s:T:R}.d: ${_s}
 
 # List of kernel images that will be installed into the root file system.
 # Some platforms may need to install more than one (e.g. a netbsd.aout file
-# to be loaded directly by the firmware), so this can be overriden by them.
+# to be loaded directly by the firmware), so this can be overridden by them.
 KERNIMAGES?=	netbsd
 
 .if !target(install)
@@ -459,7 +494,7 @@ ${_v}.${_c:T}+=${OPT.${_c:T}:@.o.@${${_v}.${.o.}}@}
 all: .gdbinit
 .for k in ${KERNELS}
 all: .WAIT ${k}
-${k}: ${SYSTEM_DEP:O} swap${k}.o vers.o build_kernel
+${k}: ${SYSTEM_DEP:O} swap${k}.o vers.o build_kernel #${MKLINT:Myes:%=lint}
 .endfor
 
 .if !defined(COPY_SYMTAB)

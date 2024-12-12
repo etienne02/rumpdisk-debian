@@ -1,4 +1,4 @@
-/*	$NetBSD: coda_vnops.c,v 1.115 2021/06/29 22:34:05 dholland Exp $	*/
+/*	$NetBSD: coda_vnops.c,v 1.119 2024/05/14 19:00:44 andvar Exp $	*/
 
 /*
  *
@@ -46,7 +46,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: coda_vnops.c,v 1.115 2021/06/29 22:34:05 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: coda_vnops.c,v 1.119 2024/05/14 19:00:44 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -797,7 +797,7 @@ coda_fsync(void *v)
 	return(ENODEV);
     }
 
-    /* Check for fsync of control object or unitialized cnode. */
+    /* Check for fsync of control object or uninitialized cnode. */
     if (IS_CTL_VP(vp) || vp->v_type == VNON) {
 	MARK_INT_SAT(CODA_FSYNC_STATS);
 	return(0);
@@ -1075,7 +1075,7 @@ int
 coda_remove(void *v)
 {
 /* true args */
-    struct vop_remove_v2_args *ap = v;
+    struct vop_remove_v3_args *ap = v;
     vnode_t *dvp = ap->a_dvp;
     struct cnode *cp = VTOC(dvp);
     vnode_t *vp = ap->a_vp;
@@ -1198,6 +1198,10 @@ coda_link(void *v)
 	error = EFAULT;		/* XXX better value */
 	goto exit;
     }
+    error = kauth_authorize_vnode(cnp->cn_cred, KAUTH_VNODE_ADD_LINK, vp,
+	dvp, 0);
+    if (error)
+	    goto exit;
     error = venus_link(vtomi(vp), &cp->c_fid, &dcp->c_fid, nm, len, cred, l);
     VOP_UNLOCK(vp);
 
@@ -1465,7 +1469,7 @@ coda_symlink(void *v)
     /*
      * Here's the strategy for the moment: perform the symlink, then
      * do a lookup to grab the resulting vnode.  I know this requires
-     * two communications with Venus for a new sybolic link, but
+     * two communications with Venus for a new symbolic link, but
      * that's the way the ball bounces.  I don't yet want to change
      * the way the Mach symlink works.  When Mach support is
      * deprecated, we should change symlink so that the common case

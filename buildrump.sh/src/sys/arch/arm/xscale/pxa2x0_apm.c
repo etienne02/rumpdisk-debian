@@ -1,4 +1,4 @@
-/*	$NetBSD: pxa2x0_apm.c,v 1.5 2020/10/30 22:20:38 christos Exp $	*/
+/*	$NetBSD: pxa2x0_apm.c,v 1.9 2022/10/31 21:22:05 andvar Exp $	*/
 /*	$OpenBSD: pxa2x0_apm.c,v 1.28 2007/03/29 18:42:38 uwe Exp $	*/
 
 /*-
@@ -105,7 +105,7 @@ int	filt_apmread(struct knote *kn, long hint);
 int	apmkqfilter(dev_t dev, struct knote *kn);
 
 static const struct filterops apmread_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_apmrdetach,
 	.f_event = filt_apmread,
@@ -601,7 +601,7 @@ filt_apmrdetach(struct knote *kn)
 	struct pxa2x0_apm_softc *sc =
 	    (struct pxa2x0_apm_softc *)kn->kn_hook;
 
-	SLIST_REMOVE(&sc->sc_note, kn, knote, kn_selnext);
+	klist_remove(&sc->sc_note, kn);
 }
 
 int
@@ -629,11 +629,11 @@ apmkqfilter(dev_t dev, struct knote *kn)
 		kn->kn_fop = &apmread_filtops;
 		break;
 	default:
-		return (1);
+		return (EINVAL);
 	}
 
 	kn->kn_hook = (caddr_t)sc;
-	SLIST_INSERT_HEAD(&sc->sc_note, kn, kn_selnext);
+	klist_insert(&sc->sc_note, kn);
 
 	return (0);
 }
@@ -651,6 +651,7 @@ pxa2x0_apm_attach_sub(struct pxa2x0_apm_softc *sc)
 	}
 
 	lockinit(&sc->sc_lock, PWAIT, "apmlk", 0, 0);
+	klist_init(&sc->sc_note);
 
 	kthread_create_deferred(apm_thread_create, sc);
 
@@ -1397,7 +1398,7 @@ struct {
 	int maxspeed;
 	int numspeeds;
 	int hz [6];
-	int rate [6]; /* could this be simplfied by not having 100% in table? */
+	int rate [6]; /* could this be simplified by not having 100% in table? */
 }
 	speedtables[] = {
 		{ 91, 1, { 91 }, { 100 }},

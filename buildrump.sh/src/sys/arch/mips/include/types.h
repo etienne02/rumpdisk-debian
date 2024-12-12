@@ -1,4 +1,4 @@
-/*	$NetBSD: types.h,v 1.76 2021/05/15 02:37:07 simonb Exp $	*/
+/*	$NetBSD: types.h,v 1.78 2023/03/28 10:54:13 nakayama Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -74,12 +74,14 @@ typedef __uint64_t	psize_t;
 #define	PRIxPADDR	PRIx64
 #define	PRIxPSIZE	PRIx64
 #define	PRIdPSIZE	PRId64
+#define	PRIuPSIZE	PRIu64
 #else
 typedef __uint32_t	paddr_t;
 typedef __uint32_t	psize_t;
 #define	PRIxPADDR	PRIx32
 #define	PRIxPSIZE	PRIx32
 #define	PRIdPSIZE	PRId32
+#define	PRIuPSIZE	PRIu32
 #endif
 #ifdef _LP64
 typedef __uint64_t	vaddr_t;
@@ -87,12 +89,14 @@ typedef __uint64_t	vsize_t;
 #define	PRIxVADDR	PRIx64
 #define	PRIxVSIZE	PRIx64
 #define	PRIdVSIZE	PRId64
+#define	PRIuVSIZE	PRIu64
 #else
 typedef __uint32_t	vaddr_t;
 typedef __uint32_t	vsize_t;
 #define	PRIxVADDR	PRIx32
 #define	PRIxVSIZE	PRIx32
 #define	PRIdVSIZE	PRId32
+#define	PRIuVSIZE	PRIu32
 #endif
 
 typedef	vaddr_t	vm_offset_t;	/* deprecated (cddl/FreeBSD compat) */

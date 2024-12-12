@@ -1,4 +1,4 @@
-/*	$NetBSD: fpu_emu.h,v 1.4 2012/07/23 04:13:06 matt Exp $ */
+/*	$NetBSD: fpu_emu.h,v 1.12 2022/09/07 02:41:39 rin Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -134,6 +134,17 @@ struct fpn {
 }
 
 /*
+ * FPU data types.
+ */
+#define	FTYPE_INT	0x00	/* data = 32-bit signed integer */
+#define	FTYPE_LNG	0x01	/* data = 64-bit signed long integer */
+#define	FTYPE_SNG	0x02	/* data = 32-bit float */
+#define	FTYPE_DBL	0x04	/* data = 64-bit double */
+#define	FTYPE_RD_RZ	0x08
+#define	FTYPE_FPSCR	0x10
+#define	FTYPE_FLAG_MASK	(FTYPE_RD_RZ | FTYPE_FPSCR)
+
+/*
  * Emulator state.
  */
 struct fpemu {
@@ -152,10 +163,19 @@ struct fpemu {
  * Each returns a pointer to the result and/or sets exceptions.
  */
 struct	fpn *fpu_add(struct fpemu *);
-#define	fpu_sub(fe) ((fe)->fe_f2.fp_sign ^= 1, fpu_add(fe))
 struct	fpn *fpu_mul(struct fpemu *);
 struct	fpn *fpu_div(struct fpemu *);
 struct	fpn *fpu_sqrt(struct fpemu *);
+
+static inline struct fpn *
+fpu_sub(struct fpemu *fe)
+{
+	struct fpn *fp = &fe->fe_f2;
+
+	if (!ISNAN(fp))
+		fp->fp_sign ^= 1;
+	return fpu_add(fe);
+}
 
 /*
  * Other functions.
@@ -174,8 +194,10 @@ struct	fpn *fpu_newnan(struct fpemu *);
  */
 int	fpu_shr(struct fpn *, int);
 
-void	fpu_explode(struct fpemu *, struct fpn *, int, int);
-void	fpu_implode(struct fpemu *, struct fpn *, int, u_int *);
+void	fpu_norm(struct fpn *);
+
+void	fpu_explode(struct fpemu *, struct fpn *, int, uint64_t);
+void	fpu_implode(struct fpemu *, struct fpn *, int, uint64_t *);
 
 #ifdef DEBUG
 #define	FPE_EX		0x1

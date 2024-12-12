@@ -1,4 +1,4 @@
-/*	$NetBSD: cgfourteen.c,v 1.90 2021/08/07 16:19:05 thorpej Exp $ */
+/*	$NetBSD: cgfourteen.c,v 1.99 2024/09/25 10:06:15 macallan Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -67,7 +67,6 @@
 #include <sys/buf.h>
 #include <sys/device.h>
 #include <sys/ioctl.h>
-#include <sys/malloc.h>
 #include <sys/kmem.h>
 #include <sys/mman.h>
 #include <sys/tty.h>
@@ -168,6 +167,21 @@ static void cg14_copycols(void *, int, int, int, int);
 static void cg14_erasecols(void *, int, int, int, long);
 static void cg14_copyrows(void *, int, int, int);
 static void cg14_eraserows(void *, int, int, long);
+
+/* 
+ * issue ALU instruction:
+ * sxi(OPCODE, srcA, srcB, dest, count)
+ */
+#define sxi(inst, a, b, d, cnt) \
+	sx_wait(sc->sc_sx); \
+	sx_write(sc->sc_sx, SX_INSTRUCTIONS, inst((a), (b), (d), (cnt)))
+
+/*
+ * issue memory referencing instruction:
+ * sxm(OPCODE, address, start register, count)
+ */
+#define sxm(inst, addr, reg, count) sta((addr) & ~7, ASI_SX, inst((reg), (count), (addr) & 7))
+
 #endif /* NSX > 0 */
 
 #endif
@@ -229,6 +243,7 @@ cgfourteenattach(device_t parent, device_t self, void *aux)
 	int i, isconsole, items;
 	uint32_t fbva[2] = {0, 0};
 	uint32_t *ptr = fbva;
+	int ver, impl;
 #if NSX > 0
 	device_t dv;
 	deviter_t di;
@@ -340,6 +355,12 @@ cgfourteenattach(device_t parent, device_t self, void *aux)
 	else
 		printf("\n");
 
+	ver = sc->sc_ctl->ctl_rsr & CG14_RSR_REVMASK;
+	impl = sc->sc_ctl->ctl_rsr & CG14_RSR_IMPLMASK;
+	aprint_normal_dev(sc->sc_dev, "rev %d, %d CLUTs\n",
+		ver == 0 ? 1 : 2,
+		(impl & 1) == 0 ? 2 : 3);
+
 	sc->sc_depth = 8;
 
 #if NSX > 0
@@ -358,7 +379,7 @@ cgfourteenattach(device_t parent, device_t self, void *aux)
 		    sc->sc_fbaddr, 0, 0, 0) & 0xfffff000;
 		aprint_normal_dev(sc->sc_dev, "using %s\n", 
 		    device_xname(sc->sc_sx->sc_dev));
-		aprint_debug_dev(sc->sc_dev, "fb paddr: %08x\n",
+		aprint_normal_dev(sc->sc_dev, "fb paddr: %08x\n",
 		    sc->sc_fb_paddr);
 		sx_write(sc->sc_sx, SX_PAGE_BOUND_LOWER, sc->sc_fb_paddr);
 		sx_write(sc->sc_sx, SX_PAGE_BOUND_UPPER,
@@ -371,6 +392,7 @@ cgfourteenattach(device_t parent, device_t self, void *aux)
 
 	/* Attach to /dev/fb */
 	fb_attach(&sc->sc_fb, isconsole);
+
 }
 
 /*
@@ -379,7 +401,7 @@ cgfourteenattach(device_t parent, device_t self, void *aux)
  * the last close. This kind of nonsense is needed to give screenblank
  * a fighting chance of working.
  */
-
+ 
 int
 cgfourteenopen(dev_t dev, int flags, int mode, struct lwp *l)
 {
@@ -460,7 +482,8 @@ cgfourteenioctl(dev_t dev, u_long cmd, void *data, int flags, struct lwp *l)
 			return (error);
 		/* now blast them into the chip */
 		/* XXX should use retrace interrupt */
-		cg14_load_hwcmap(sc, p->index, p->count);
+		if (sc->sc_depth == 8)
+			cg14_load_hwcmap(sc, p->index, p->count);
 #undef p
 		break;
 
@@ -479,6 +502,7 @@ cgfourteenioctl(dev_t dev, u_long cmd, void *data, int flags, struct lwp *l)
 			return EINVAL;
 
 		cg14_set_depth(sc, depth);
+		cg14_init_cmap(sc);
 		}
 		break;
 	default:
@@ -567,8 +591,9 @@ cgfourteenmmap(dev_t dev, off_t off, int prot)
 			0, prot, BUS_SPACE_MAP_LINEAR));
 	} else if (off >= CG14_SXIO_VOFF &&
 		   off < (CG14_SXIO_VOFF + 0x03ffffff)) {
+		off -= CG14_SXIO_VOFF;
 		return (bus_space_mmap(sc->sc_sx->sc_tag, 0x800000000LL,
-			sc->sc_fb_paddr + (off - CG14_SXIO_VOFF),
+			sc->sc_fb_paddr + off,
 			prot, BUS_SPACE_MAP_LINEAR));
 #endif
 	} else
@@ -593,7 +618,8 @@ cgfourteenpoll(dev_t dev, int events, struct lwp *l)
 static void
 cg14_init(struct cgfourteen_softc *sc)
 {
-	cg14_set_depth(sc, 32);
+	cg14_set_depth(sc, 32);	
+	cg14_init_cmap(sc);
 }
 
 static void
@@ -601,6 +627,7 @@ static void
 cg14_reset(struct cgfourteen_softc *sc)
 {
 	cg14_set_depth(sc, 8);
+	cg14_init_cmap(sc);
 }
 
 /* Enable/disable video display; power down monitor if DPMS-capable */
@@ -721,7 +748,9 @@ cg14_setup_wsdisplay(struct cgfourteen_softc *sc, int is_cons)
 		WSSCREEN_RESIZE,
 		NULL
 	};
+
 	cg14_set_depth(sc, 8);
+
 	sc->sc_screens[0] = &sc->sc_defaultscreen_descr;
 	sc->sc_screenlist = (struct wsscreen_list){1, sc->sc_screens};
 	sc->sc_mode = WSDISPLAYIO_MODE_EMUL;
@@ -738,38 +767,37 @@ cg14_setup_wsdisplay(struct cgfourteen_softc *sc, int is_cons)
 	sc->sc_gc.gc_rectfill = cg14_rectfill_a;
 	sc->sc_gc.gc_rop = 0xc;
 
-		vcons_init_screen(&sc->sc_vd, &sc->sc_console_screen, 1,
-		    &defattr);
+	vcons_init_screen(&sc->sc_vd, &sc->sc_console_screen, 1,
+	    &defattr);
 
-		/* clear the screen with the default background colour */
-		if (sc->sc_sx != NULL) {
-			cg14_rectfill(sc, 0, 0, ri->ri_width, ri->ri_height,
-				ri->ri_devcmap[(defattr >> 16) & 0xf]);
-		} else {
-			memset(sc->sc_fb.fb_pixels,
-			       ri->ri_devcmap[(defattr >> 16) & 0xf],
-			       ri->ri_stride * ri->ri_height);
-		}
-		sc->sc_console_screen.scr_flags |= VCONS_SCREEN_IS_STATIC;
+	/* clear the screen with the default background colour */
+	if (sc->sc_sx != NULL) {
+		cg14_rectfill(sc, 0, 0, ri->ri_width, ri->ri_height,
+			ri->ri_devcmap[(defattr >> 16) & 0xf]);
+	} else {
+		memset(sc->sc_fb.fb_pixels,
+		       ri->ri_devcmap[(defattr >> 16) & 0xf],
+		       ri->ri_stride * ri->ri_height);
+	}
+	sc->sc_console_screen.scr_flags |= VCONS_SCREEN_IS_STATIC;
 
-		sc->sc_defaultscreen_descr.textops = &ri->ri_ops;
-		sc->sc_defaultscreen_descr.capabilities = ri->ri_caps;
-		sc->sc_defaultscreen_descr.nrows = ri->ri_rows;
-		sc->sc_defaultscreen_descr.ncols = ri->ri_cols;
-		glyphcache_init(&sc->sc_gc, sc->sc_fb.fb_type.fb_height + 5,
-			(sc->sc_vramsize / sc->sc_fb.fb_type.fb_width) - 
-			 sc->sc_fb.fb_type.fb_height - 5,
-			sc->sc_fb.fb_type.fb_width,
-			ri->ri_font->fontwidth,
-			ri->ri_font->fontheight,
-			defattr);
+	sc->sc_defaultscreen_descr.textops = &ri->ri_ops;
+	sc->sc_defaultscreen_descr.capabilities = ri->ri_caps;
+	sc->sc_defaultscreen_descr.nrows = ri->ri_rows;
+	sc->sc_defaultscreen_descr.ncols = ri->ri_cols;
+	glyphcache_init_align(&sc->sc_gc, sc->sc_fb.fb_type.fb_height + 5,
+		(sc->sc_vramsize / sc->sc_fb.fb_type.fb_width) - 
+		 sc->sc_fb.fb_type.fb_height - 5,
+		sc->sc_fb.fb_type.fb_width,
+		ri->ri_font->fontwidth,
+		ri->ri_font->fontheight,
+		defattr, 4);
+
 	if (is_cons) {
 		wsdisplay_cnattach(&sc->sc_defaultscreen_descr, ri, 0, 0,
 		    defattr);
 		vcons_replay_msgbuf(&sc->sc_console_screen);
 	}
-
-	cg14_init_cmap(sc);
 
 	aa.console = is_cons;
 	aa.scrdata = &sc->sc_screenlist;
@@ -777,6 +805,12 @@ cg14_setup_wsdisplay(struct cgfourteen_softc *sc, int is_cons)
 	aa.accesscookie = &sc->sc_vd;
 
 	config_found(sc->sc_dev, &aa, wsemuldisplaydevprint, CFARGS_NONE);
+
+	/*
+	 * do this here since any output through firmware calls will mess
+	 * with XLUT settings
+	 */
+	cg14_init_cmap(sc);
 }
 
 static void
@@ -784,18 +818,74 @@ cg14_init_cmap(struct cgfourteen_softc *sc)
 {
 	struct rasops_info *ri = &sc->sc_console_screen.scr_ri;
 	int i, j = 0;
+	uint32_t r, g, b, c, cc;
 	uint8_t cmap[768];
 
-	rasops_get_cmap(ri, cmap, sizeof(cmap));
+	if (sc->sc_depth == 16) {
+		/* construct an R5G6B5 palette in CLUT1/2 */
+		for (i = 0; i < 0x100; i++) {
+			/* upper byte first */
+			r = (i & 0xf8);	/* red component */
+			r |= r >> 5;		/* fill lower bits so 0xf8 */
+			c = 0x40000000 | r;	/* becomes 0xff */
+			g = i & 0x7;		/* upper 3 bits of green */
+			g |= g << 3;		/* 0x003f */
+			c |= ((g << 10) & 0xf000);	/* make it 4 */
+			sc->sc_clut1->clut_lut[i] = c;
+			/* lower byte */
+			g = i & 0xe0;		/* lower half of green */
+			g |= g >> 3;
+			cc = 0x40000000 | ((g << 4) & 0x0f00);
+			b = i & 0x1f;		/* and blue */
+			b = (b << 3) | (b >> 2);
+			cc |= (b << 16); 
+			sc->sc_clut2->clut_lut[i] = cc;
+		}	
 
-	for (i = 0; i < 256; i++) {
+		/*
+		 * because we alpha blend our components everything is half
+		 * intensity, fix that with the gamma LUT
+		 */
 
-		sc->sc_cmap.cm_map[i][3] = cmap[j];
-		sc->sc_cmap.cm_map[i][2] = cmap[j + 1];
-		sc->sc_cmap.cm_map[i][1] = cmap[j + 2];
-		j += 3;
+		sc->sc_dac->dac_mode &= ~6;	/* 8bit mode, for simlicity */
+		for (i = 0; i < 128; i++) {
+			sc->sc_dac->dac_addr = i;
+			sc->sc_dac->dac_gammalut = i << 1;
+			sc->sc_dac->dac_gammalut = i << 1;
+			sc->sc_dac->dac_gammalut = i << 1;
+		}
+
+		/* finally fill the XLUT */
+		for (i = 0; i < 256; i++)
+		     sc->sc_xlut->xlut_lut[i] = 
+		         CG14_LEFT_CLUT2 | CG14_LEFT_B |
+		         CG14_RIGHT_CLUT1 | CG14_RIGHT_X;
+	} else {
+		/* in 8 or 24bit put a linear ramp in the gamma LUT */
+		sc->sc_dac->dac_mode &= ~6;	/* 8bit mode, for simlicity */
+		for (i = 0; i < 256; i++) {
+			sc->sc_dac->dac_addr = i;
+			sc->sc_dac->dac_gammalut = i;
+			sc->sc_dac->dac_gammalut = i;
+			sc->sc_dac->dac_gammalut = i;
+		}
+
+		/* and zero the XLUT */
+		for (i = 0; i < 256; i++)
+		     sc->sc_xlut->xlut_lut[i] = 0;
+
+		if (sc->sc_depth == 8) {
+			rasops_get_cmap(ri, cmap, sizeof(cmap));
+
+			for (i = 0; i < 256; i++) {
+				sc->sc_cmap.cm_map[i][3] = cmap[j];
+				sc->sc_cmap.cm_map[i][2] = cmap[j + 1];
+				sc->sc_cmap.cm_map[i][1] = cmap[j + 2];
+				j += 3;
+			}
+			cg14_load_hwcmap(sc, 0, 256);
+		}
 	}
-	cg14_load_hwcmap(sc, 0, 256);
 }
 
 static int
@@ -826,7 +916,10 @@ cg14_putcmap(struct cgfourteen_softc *sc, struct wsdisplay_cmap *cm)
 		
 		index++;
 	}
-	cg14_load_hwcmap(sc, 0, 256);
+
+	if (sc->sc_depth == 8)
+		cg14_load_hwcmap(sc, 0, 256);
+
 	return 0;
 }
 
@@ -917,6 +1010,7 @@ cg14_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 					} else {
 
 						cg14_set_depth(sc, 32);
+						cg14_init_cmap(sc);
 					}
 				}
 			}
@@ -925,8 +1019,9 @@ cg14_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 			cg14_set_video(sc, *(int *)data);
 			return 0;
 		case WSDISPLAYIO_GVIDEO:
-			return cg14_get_video(sc) ? 
+			*(int *)data = cg14_get_video(sc) ? 
 			    WSDISPLAYIO_VIDEO_ON : WSDISPLAYIO_VIDEO_OFF;
+			return 0;
 		case WSDISPLAYIO_GCURPOS:
 			{
 				struct wsdisplay_curpos *cp = (void *)data;
@@ -987,10 +1082,10 @@ cg14_init_screen(void *cookie, struct vcons_screen *scr,
 	struct cgfourteen_softc *sc = cookie;
 	struct rasops_info *ri = &scr->scr_ri;
 
-	ri->ri_depth = 8;
+	ri->ri_depth = sc->sc_depth;
 	ri->ri_width = sc->sc_fb.fb_type.fb_width;
 	ri->ri_height = sc->sc_fb.fb_type.fb_height;
-	ri->ri_stride = ri->ri_width;
+	ri->ri_stride = ri->ri_width * (sc->sc_depth >> 3);
 	ri->ri_flg = RI_CENTER | RI_FULLCLEAR;
 
 	ri->ri_bits = (char *)sc->sc_fb.fb_pixels;
@@ -1023,7 +1118,7 @@ cg14_init_screen(void *cookie, struct vcons_screen *scr,
 
 	ri->ri_hw = scr;
 #if NSX > 0
-	if (sc->sc_sx != NULL) {
+	if ((sc->sc_sx != NULL) && (sc->sc_depth == 8)) {
 		ri->ri_ops.copyrows = cg14_copyrows;
 		ri->ri_ops.copycols = cg14_copycols;
 		ri->ri_ops.eraserows = cg14_eraserows;
@@ -1040,7 +1135,12 @@ cg14_init_screen(void *cookie, struct vcons_screen *scr,
 static void
 cg14_set_depth(struct cgfourteen_softc *sc, int depth)
 {
-	int i;
+
+	/* init mask */
+	if (sc->sc_sx != NULL) {
+		sc->sc_mask = 0xffffffff;
+		sx_write(sc->sc_sx, SX_QUEUED(R_MASK), sc->sc_mask);
+	}
 
 	if (sc->sc_depth == depth)
 		return;
@@ -1051,22 +1151,25 @@ cg14_set_depth(struct cgfourteen_softc *sc, int depth)
 			    CG14_MCTL, CG14_MCTL_ENABLEVID | 
 			    CG14_MCTL_PIXMODE_8 | CG14_MCTL_POWERCTL);
 			sc->sc_depth = 8;
-			/* everything is CLUT1 */
-			for (i = 0; i < CG14_CLUT_SIZE; i++)
-			     sc->sc_xlut->xlut_lut[i] = 0;
+			break;
+		case 16:
+			bus_space_write_1(sc->sc_bustag, sc->sc_regh,
+			    CG14_MCTL, CG14_MCTL_ENABLEVID | 
+			    CG14_MCTL_PIXMODE_16 | CG14_MCTL_POWERCTL);
+			sc->sc_depth = 16;
 			break;
 		case 32:
 			bus_space_write_1(sc->sc_bustag, sc->sc_regh,
 			    CG14_MCTL, CG14_MCTL_ENABLEVID | 
 			    CG14_MCTL_PIXMODE_32 | CG14_MCTL_POWERCTL);
 			sc->sc_depth = 32;
-			for (i = 0; i < CG14_CLUT_SIZE; i++)
-			     sc->sc_xlut->xlut_lut[i] = 0;
 			break;
 		default:
 			printf("%s: can't change to depth %d\n",
 			    device_xname(sc->sc_dev), depth);
+			return;
 	}
+
 }
 
 static void
@@ -1198,20 +1301,20 @@ cg14_rectfill(struct cgfourteen_softc *sc, int x, int y, int wi, int he,
 		pptr = addr;
 		cnt = wi;
 		if (pre) {
-			sta(pptr & ~7, ASI_SX, SX_STBS(8, pre - 1, pptr & 7));
+			sxm(SX_STBS, pptr, 8, pre - 1);
 			pptr += pre;
 			cnt -= pre;
 		}
 		/* now do the aligned pixels in 32bit chunks */
 		while(cnt > 3) {
 			words = uimin(32, cnt >> 2);
-			sta(pptr & ~7, ASI_SX, SX_STS(8, words - 1, pptr & 7));
+			sxm(SX_STS, pptr, 8, words - 1);
 			pptr += words << 2;
 			cnt -= words << 2;
 		}
 		/* do any remaining pixels byte-wise again */
 		if (cnt > 0)
-			sta(pptr & ~7, ASI_SX, SX_STBS(8, cnt - 1, pptr & 7));
+			sxm(SX_STBS, pptr, 8, cnt - 1);
 		addr += stride;
 	}
 }
@@ -1226,50 +1329,68 @@ cg14_rectfill_a(void *cookie, int dstx, int dsty,
 	    sc->sc_vd.active->scr_ri.ri_devcmap[(attr >> 24 & 0xf)]);
 }
 
+static inline void
+cg14_set_mask(struct cgfourteen_softc *sc, uint32_t mask)
+{
+	if (mask == sc->sc_mask) return;
+	sc->sc_mask = mask;
+	sx_write(sc->sc_sx, SX_QUEUED(R_MASK), mask);
+}
+/*
+ * invert a rectangle, used only to (un)draw the cursor.
+ * - does a scanline at a time
+ * - does not handle wi > 64 or wi < 4, not that we need it for our fonts
+ * - uses all 32bit accesses
+ */ 
 static void
 cg14_invert(struct cgfourteen_softc *sc, int x, int y, int wi, int he)
 {
-	uint32_t addr, pptr;
-	int line, cnt, pre, words;
+	uint32_t addr, pptr, lmask, rmask;
+	int line, cnt, pre, words, pwrds = 0, post, reg;
 	int stride = sc->sc_fb.fb_type.fb_width;
 
-	addr = sc->sc_fb_paddr + x + stride * y;
-	sx_write(sc->sc_sx, SX_ROP_CONTROL, 0x33); /* ~src a */
+	addr = (sc->sc_fb_paddr + x + stride * y) & ~3;
+	sx_write(sc->sc_sx, SX_ROP_CONTROL, 0x3C); /* ~src a / src a */
 	/*
-	 * Calculate the number of pixels we need to do one by one
-	 * until we're 32bit aligned, then do the rest in 32bit
-	 * mode. Assumes that stride is always a multiple of 4. 
-	 */ 
-	/* TODO: use 32bit writes with byte mask instead */
-	pre = addr & 3;
-	if (pre != 0) pre = 4 - pre;
+	 * Calculate the number of pixels we need to mask on each end of the
+	 * scanline and how many we can do without mask, if any
+	 */
+	pre = x & 3;
+	if (pre != 0) {
+		lmask = 0xffffffff >> pre;
+		pre = 4 - pre;
+		pwrds++;
+	}
+	post = (x + wi) & 3;
+	if (post != 0) {
+		rmask = ~(0xffffffff >> post);
+		pwrds++;
+	}
+	words = (wi + pre + 3) >> 2;
+	cnt = words - pwrds;
+
 	for (line = 0; line < he; line++) {
 		pptr = addr;
-		cnt = wi;
+		/* load a whole scanline */
+		sxm(SX_LD, pptr, 8, words - 1);
+		reg = 8;
 		if (pre) {
-			sta(pptr & ~7, ASI_SX, SX_LDB(8, pre - 1, pptr & 7));
-			sx_write(sc->sc_sx, SX_INSTRUCTIONS,
-			    SX_ROP(8, 8, 32, pre - 1));
-			sta(pptr & ~7, ASI_SX, SX_STB(32, pre - 1, pptr & 7));
-			pptr += pre;
-			cnt -= pre;
+			cg14_set_mask(sc, lmask);
+			sxi(SX_ROPB, 8, 8, 40, 0);
+			reg++;
 		}
-		/* now do the aligned pixels in 32bit chunks */
-		while(cnt > 15) {
-			words = uimin(16, cnt >> 2);
-			sta(pptr & ~7, ASI_SX, SX_LD(8, words - 1, pptr & 7));
-			sx_write(sc->sc_sx, SX_INSTRUCTIONS,
-			    SX_ROP(8, 8, 32, words - 1));
-			sta(pptr & ~7, ASI_SX, SX_ST(32, words - 1, pptr & 7));
-			pptr += words << 2;
-			cnt -= words << 2;
+		if (cnt > 0) {
+			cg14_set_mask(sc, 0xffffffff);
+			/* XXX handle cnt > 16 */
+			sxi(SX_ROP, reg, reg, reg + 32, cnt - 1);
+			reg += cnt;
 		}
-		/* do any remaining pixels byte-wise again */
-		if (cnt > 0)
-			sta(pptr & ~7, ASI_SX, SX_LDB(8, cnt - 1, pptr & 7));
-			sx_write(sc->sc_sx, SX_INSTRUCTIONS,
-			    SX_ROP(8, 8, 32, cnt - 1));
-			sta(pptr & ~7, ASI_SX, SX_STB(32, cnt - 1, pptr & 7));
+		if (post) {
+			cg14_set_mask(sc, rmask);
+			sxi(SX_ROPB, reg, 7, reg + 32, 0);
+			reg++;
+		}
+		sxm(SX_ST, pptr, 40, words - 1);		
 		addr += stride;
 	}
 }
@@ -1280,7 +1401,7 @@ cg14_slurp(int reg, uint32_t addr, int cnt)
 	int num;
 	while (cnt > 0) {
 		num = uimin(32, cnt);
-		sta(addr & ~7, ASI_SX, SX_LD(reg, num - 1, addr & 7));
+		sxm(SX_LD, addr, reg, num - 1);
 		cnt -= num;
 		reg += num;
 		addr += (num << 2);
@@ -1293,7 +1414,7 @@ cg14_spit(int reg, uint32_t addr, int cnt)
 	int num;
 	while (cnt > 0) {
 		num = uimin(32, cnt);
-		sta(addr & ~7, ASI_SX, SX_ST(reg, num - 1, addr & 7));
+		sxm(SX_ST, addr, reg, num - 1);
 		cnt -= num;
 		reg += num;
 		addr += (num << 2);
@@ -1328,10 +1449,8 @@ cg14_bitblt(void *cookie, int xs, int ys, int xd, int yd,
 			dptr = daddr;
 			cnt = wi;
 			if (pre > 0) {
-				sta(sptr & ~7, ASI_SX,
-				    SX_LDB(32, pre - 1, sptr & 7));
-				sta(dptr & ~7, ASI_SX,
-				    SX_STB(32, pre - 1, dptr & 7));
+				sxm(SX_LDB, sptr, 32, pre - 1);
+				sxm(SX_STB, dptr, 32, pre - 1);
 				cnt -= pre;
 				sptr += pre;
 				dptr += pre;
@@ -1346,10 +1465,8 @@ cg14_bitblt(void *cookie, int xs, int ys, int xd, int yd,
 				cnt -= num << 2;
 			}
 			if (cnt > 0) {
-				sta(sptr & ~7, ASI_SX,
-				    SX_LDB(32, cnt - 1, sptr & 7));
-				sta(dptr & ~7, ASI_SX,
-				    SX_STB(32, cnt - 1, dptr & 7));
+				sxm(SX_LDB, sptr, 32, cnt - 1);
+				sxm(SX_STB, dptr, 32, cnt - 1);
 			}
 			saddr += skip;
 			daddr += skip;
@@ -1362,17 +1479,15 @@ cg14_bitblt(void *cookie, int xs, int ys, int xd, int yd,
 			dptr = daddr;
 			cnt = wi;
 			while(cnt > 31) {
-				sta(sptr & ~7, ASI_SX, SX_LDB(32, 31, sptr & 7));
-				sta(dptr & ~7, ASI_SX, SX_STB(32, 31, dptr & 7));
+				sxm(SX_LDB, sptr, 32, 31);
+				sxm(SX_STB, dptr, 32, 31);
 				sptr += 32;
 				dptr += 32;
 				cnt -= 32;
 			}
 			if (cnt > 0) {
-				sta(sptr & ~7, ASI_SX,
-				    SX_LDB(32, cnt - 1, sptr & 7));
-				sta(dptr & ~7, ASI_SX,
-				    SX_STB(32, cnt - 1, dptr & 7));
+				sxm(SX_LDB, sptr, 32, cnt - 1);
+				sxm(SX_STB, dptr, 32, cnt - 1);
 			}
 			saddr += skip;
 			daddr += skip;
@@ -1399,7 +1514,7 @@ cg14_bitblt_gc(void *cookie, int xs, int ys, int xd, int yd,
 
 	saddr = sc->sc_fb_paddr + xs + stride * ys;
 	daddr = sc->sc_fb_paddr + xd + stride * yd;
-
+		
 	if (saddr & 3) {
 		swi += saddr & 3;
 		dreg += saddr & 3;
@@ -1417,22 +1532,22 @@ cg14_bitblt_gc(void *cookie, int xs, int ys, int xd, int yd,
 	
 	for (line = 0; line < he; line++) {
 		/* read source line, in all quads */
-		sta(saddr & ~7, ASI_SX, SX_LDUQ0(8, swi - 1, saddr & 7));
+		sxm(SX_LDUQ0, saddr, 8, swi - 1);
 		/* now write it out */
 		dd = daddr;
 		r = dreg;
 		if (in > 0) {
-			sta(dd & ~7, ASI_SX, SX_STB(r, in - 1, dd & 7));
+			sxm(SX_STB, dd, r, in - 1);
 			dd += in;
 			r += in;
 		}
 		if (q > 0) {
-			sta(dd & ~7, ASI_SX, SX_STUQ0(r, q - 1, dd & 7));
+			sxm(SX_STUQ0, dd, r, q - 1);
 			r += q << 2;
 			dd += q << 2;
 		}
 		if (out > 0) {
-			sta(dd & ~7, ASI_SX, SX_STB(r, out - 1, dd & 7));
+			sxm(SX_STB, dd, r, out - 1);
 		}
 		saddr += stride;
 		daddr += stride;
@@ -1457,6 +1572,10 @@ cg14_putchar(void *cookie, int row, int col, u_int c, long attr)
 
 	if (!CHAR_IN_FONT(c, font))
 		return;
+
+	if (row == ri->ri_crow && col == ri->ri_ccol) {
+		ri->ri_flg &= ~RI_CURSOR;
+	}
 
 	wi = font->fontwidth;
 	he = font->fontheight;
@@ -1486,9 +1605,8 @@ cg14_putchar(void *cookie, int row, int col, u_int c, long attr)
 			uint32_t reg;
 			for (i = 0; i < he; i++) {
 				reg = *data8;
-				sx_write(sc->sc_sx, SX_QUEUED(R_MASK),
-				    reg << 24);
-				sta(addr & ~7, ASI_SX, SX_STBS(8, wi - 1, addr & 7));
+				cg14_set_mask(sc, reg << 24);
+				sxm(SX_STBS, addr, 8, wi - 1);
 				data8++;
 				addr += stride;
 			}
@@ -1499,9 +1617,8 @@ cg14_putchar(void *cookie, int row, int col, u_int c, long attr)
 			uint32_t reg;
 			for (i = 0; i < he; i++) {
 				reg = *data16;
-				sx_write(sc->sc_sx, SX_QUEUED(R_MASK),
-				    reg << 16);
-				sta(addr & ~7, ASI_SX, SX_STBS(8, wi - 1, addr & 7));
+				cg14_set_mask(sc, reg << 16);
+				sxm(SX_STBS, addr, 8, wi - 1);
 				data16++;
 				addr += stride;
 			}
@@ -1510,6 +1627,23 @@ cg14_putchar(void *cookie, int row, int col, u_int c, long attr)
 	}
 	if (attr & 1)
 		cg14_rectfill(sc, x, y + he - 2, wi, 1, fg);
+}
+
+static void
+cg14_nuke_cursor(struct rasops_info *ri)
+{
+	struct vcons_screen *scr = ri->ri_hw;
+	struct cgfourteen_softc *sc = scr->scr_cookie;
+	int wi, he, x, y;
+		
+	if (ri->ri_flg & RI_CURSOR) {
+		wi = ri->ri_font->fontwidth;
+		he = ri->ri_font->fontheight;
+		x = ri->ri_ccol * wi + ri->ri_xorigin;
+		y = ri->ri_crow * he + ri->ri_yorigin;
+		cg14_invert(sc, x, y, wi, he);
+		ri->ri_flg &= ~RI_CURSOR;
+	}
 }
 
 static void
@@ -1524,20 +1658,17 @@ cg14_cursor(void *cookie, int on, int row, int col)
 	he = ri->ri_font->fontheight;
 	
 	if (sc->sc_mode == WSDISPLAYIO_MODE_EMUL) {
-		x = ri->ri_ccol * wi + ri->ri_xorigin;
-		y = ri->ri_crow * he + ri->ri_yorigin;
-		if (ri->ri_flg & RI_CURSOR) {
-			cg14_invert(sc, x, y, wi, he);
-			ri->ri_flg &= ~RI_CURSOR;
-		}
-		ri->ri_crow = row;
-		ri->ri_ccol = col;
 		if (on) {
-			x = ri->ri_ccol * wi + ri->ri_xorigin;
-			y = ri->ri_crow * he + ri->ri_yorigin;
+			if (ri->ri_flg & RI_CURSOR) {
+				cg14_nuke_cursor(ri);
+			}
+			x = col * wi + ri->ri_xorigin;
+			y = row * he + ri->ri_yorigin;
 			cg14_invert(sc, x, y, wi, he);
 			ri->ri_flg |= RI_CURSOR;
 		}
+		ri->ri_crow = row;
+		ri->ri_ccol = col;
 	} else {
 		scr->scr_ri.ri_crow = row;
 		scr->scr_ri.ri_ccol = col;
@@ -1564,6 +1695,10 @@ cg14_putchar_aa(void *cookie, int row, int col, u_int c, long attr)
 
 	if (!CHAR_IN_FONT(c, font))
 		return;
+
+	if (row == ri->ri_crow && col == ri->ri_ccol) {
+		ri->ri_flg &= ~RI_CURSOR;
+	}
 
 	wi = font->fontwidth;
 	he = font->fontheight;
@@ -1632,20 +1767,20 @@ cg14_putchar_aa(void *cookie, int row, int col, u_int c, long attr)
 		cnt = wi;
 		if (in != 0) {
 			in = 4 - in;	/* pixels to write until aligned */
-			sta(next & ~7, ASI_SX, SX_STB(8, in - 1, next & 7));
+			sxm(SX_STB, next, 8, in - 1);
 			next += in;
 			reg = 8 + in;
 			cnt -= in;
 		}
 		q = cnt >> 2;	/* number of writes we can do in quads */
 		if (q > 0) {
-			sta(next & ~7, ASI_SX, SX_STUQ0(reg, q - 1, next & 7));
+			sxm(SX_STUQ0, next, reg, q - 1);
 			next += (q << 2);
 			cnt -= (q << 2);
 			reg += (q << 2);
 		}
 		if (cnt > 0) {
-			sta(next & ~7, ASI_SX, SX_STB(reg, cnt - 1, next & 7));
+			sxm(SX_STB, next, reg, cnt - 1);
 		}
 			
 		addr += stride;
@@ -1667,12 +1802,20 @@ cg14_copycols(void *cookie, int row, int srccol, int dstcol, int ncols)
 	int32_t xs, xd, y, width, height;
 	
 	if (sc->sc_mode == WSDISPLAYIO_MODE_EMUL) {
+		if (ri->ri_crow == row && 
+		   (ri->ri_ccol >= srccol && ri->ri_ccol < (srccol + ncols)) &&
+		   (ri->ri_flg & RI_CURSOR)) {
+			cg14_nuke_cursor(ri);
+		}
 		xs = ri->ri_xorigin + ri->ri_font->fontwidth * srccol;
 		xd = ri->ri_xorigin + ri->ri_font->fontwidth * dstcol;
 		y = ri->ri_yorigin + ri->ri_font->fontheight * row;
 		width = ri->ri_font->fontwidth * ncols;
 		height = ri->ri_font->fontheight;
 		cg14_bitblt(sc, xs, y, xd, y, width, height, 0x0c);
+		if (ri->ri_crow == row && 
+		   (ri->ri_ccol >= dstcol && ri->ri_ccol < (dstcol + ncols)))
+			ri->ri_flg &= ~RI_CURSOR;
 	}
 }
 
@@ -1690,8 +1833,11 @@ cg14_erasecols(void *cookie, int row, int startcol, int ncols, long fillattr)
 		width = ri->ri_font->fontwidth * ncols;
 		height = ri->ri_font->fontheight;
 		rasops_unpack_attr(fillattr, &fg, &bg, &ul);
-
 		cg14_rectfill(sc, x, y, width, height, ri->ri_devcmap[bg]);
+		if (ri->ri_crow == row && 
+		   (ri->ri_ccol >= startcol && ri->ri_ccol < (startcol + ncols)))
+			ri->ri_flg &= ~RI_CURSOR;
+
 	}
 }
 
@@ -1704,12 +1850,18 @@ cg14_copyrows(void *cookie, int srcrow, int dstrow, int nrows)
 	int32_t x, ys, yd, width, height;
 
 	if (sc->sc_mode == WSDISPLAYIO_MODE_EMUL) {
+		if ((ri->ri_crow >= srcrow && ri->ri_crow < (srcrow + nrows)) &&
+		   (ri->ri_flg & RI_CURSOR)) {
+			cg14_nuke_cursor(ri);
+		}
 		x = ri->ri_xorigin;
 		ys = ri->ri_yorigin + ri->ri_font->fontheight * srcrow;
 		yd = ri->ri_yorigin + ri->ri_font->fontheight * dstrow;
 		width = ri->ri_emuwidth;
 		height = ri->ri_font->fontheight * nrows;
 		cg14_bitblt(sc, x, ys, x, yd, width, height, 0x0c);
+		if (ri->ri_crow >= dstrow && ri->ri_crow < (dstrow + nrows))
+			ri->ri_flg &= ~RI_CURSOR;
 	}
 }
 
@@ -1727,8 +1879,9 @@ cg14_eraserows(void *cookie, int row, int nrows, long fillattr)
 		width = ri->ri_emuwidth;
 		height = ri->ri_font->fontheight * nrows;
 		rasops_unpack_attr(fillattr, &fg, &bg, &ul);
-
 		cg14_rectfill(sc, x, y, width, height, ri->ri_devcmap[bg]);
+		if (ri->ri_crow >= row && ri->ri_crow < (row + nrows))
+			ri->ri_flg &= ~RI_CURSOR;
 	}
 }
 

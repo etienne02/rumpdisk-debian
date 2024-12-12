@@ -1,10 +1,12 @@
-/*	$NetBSD: d_c99_complex_split.c,v 1.8 2021/07/11 19:39:00 rillig Exp $	*/
+/*	$NetBSD: d_c99_complex_split.c,v 1.13 2023/03/28 14:44:34 rillig Exp $	*/
 # 3 "d_c99_complex_split.c"
 
 /*
  * Checks that the real and imaginary parts of a complex number can be
  * accessed (since C99).
  */
+
+/* lint1-extra-flags: -X 351 */
 
 int
 b(double a)
@@ -42,7 +44,7 @@ set_complex_complete(double re, double im)
 
 /*
  * Before tree.c 1.275 from 2021-04-09, lint wrongly warned that when
- * '__real__ c' was assigned, 'c may be used before set'.
+ * '__real__ c' was assigned, 'c may be used before set [158]'.
  *
  * As of 2021-04-09, support for _Complex is still very incomplete, see
  * build_real_imag for details.
@@ -59,7 +61,7 @@ set_complex_only_real(double re)
 
 /*
  * Before tree.c 1.275 from 2021-04-09, lint wrongly warned that when
- * '__imag__ c' was assigned, 'c may be used before set'.
+ * '__imag__ c' was assigned, 'c may be used before set [158]'.
  *
  * As of 2021-04-09, support for _Complex is still very incomplete, see
  * build_real_imag for details.
@@ -72,14 +74,6 @@ set_complex_only_imag(double im)
 	/* __real__ c is left uninitialized */
 	__imag__ c = im;
 	sink(c);		/* XXX: may be used before set */
-}
-
-/* Just to keep the .exp file alive. */
-void
-trigger_warning(double _Complex c)
-{
-	c += 1.0;
-	return c | c;		/* expect: incompatible types */
 }
 
 void

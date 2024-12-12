@@ -1,4 +1,4 @@
-/*	$NetBSD: netstat.h,v 1.52 2020/04/23 00:24:50 joerg Exp $	*/
+/*	$NetBSD: netstat.h,v 1.54 2023/08/18 13:18:17 martin Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -57,14 +57,14 @@ extern int	rflag;		/* show routing tables (or routing stats) */
 extern int	sflag;		/* show protocol statistics */
 extern int	tagflag;	/* show route tags */
 extern int	tflag;		/* show i/f watchdog timers */
-extern int	Vflag;		/* show Vestigial TIME_WAIT (VTW) information */
-extern int	vflag;		/* verbose route information or don't truncate names */
+extern int	Vflag;	       /* show Vestigial TIME_WAIT (VTW) information */
+extern int	vflag;	/* verbose route information or don't truncate names */
 
-extern char	*interface;	/* desired i/f for stats, or NULL for all i/fs */
+extern char	*interface;   /* desired i/f for stats, or NULL for all i/fs */
 
 extern int	af;		/* address family */
 extern int	use_sysctl;	/* use sysctl instead of kmem */
-extern int	force_sysctl;	/* force use of sysctl (or exit) - for testing */
+extern int	force_sysctl; /* force use of sysctl (or exit) - for testing */
 
 
 int	kread(u_long addr, char *buf, int size);
@@ -137,8 +137,8 @@ void	routepr(u_long);
 void	mroutepr(u_long, u_long, u_long, u_long);
 void	mrt_stats(u_long, u_long);
 
-void	bpf_stats(void);
-void	bpf_dump(const char *);
+void	nsbpf_stats(void);
+void	nsbpf_dump(const char *);
 
 kvm_t *get_kvmd(void);
 

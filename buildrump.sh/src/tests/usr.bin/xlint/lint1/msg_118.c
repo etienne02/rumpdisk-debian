@@ -1,9 +1,9 @@
-/*	$NetBSD: msg_118.c,v 1.5 2021/05/04 19:57:56 rillig Exp $	*/
+/*	$NetBSD: msg_118.c,v 1.8 2023/08/26 10:43:53 rillig Exp $	*/
 # 3 "msg_118.c"
 
-/* Test for message: semantics of '%s' change in ANSI C; use explicit cast [118] */
+/* Test for message: semantics of '%s' change in C90; use explicit cast [118] */
 
-/* lint1-flags: -hw */
+/* lint1-flags: -hw -X 351 */
 
 int
 int_shl_uint(int left, unsigned int right)
@@ -14,7 +14,7 @@ int_shl_uint(int left, unsigned int right)
 int
 int_shr_uint(int left, unsigned int right)
 {
-	/* expect+1: semantics of '>>' change in ANSI C */
+	/* expect+1: warning: semantics of '>>' change in C90; use explicit cast [118] */
 	return left >> right;
 }
 

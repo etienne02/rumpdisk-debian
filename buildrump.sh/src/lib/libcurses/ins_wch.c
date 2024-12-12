@@ -1,4 +1,4 @@
-/*   $NetBSD: ins_wch.c,v 1.16 2021/06/22 07:22:44 blymn Exp $ */
+/*   $NetBSD: ins_wch.c,v 1.20 2022/10/19 06:09:27 blymn Exp $ */
 
 /*
  * Copyright (c) 2005 The NetBSD Foundation Inc.
@@ -36,7 +36,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: ins_wch.c,v 1.16 2021/06/22 07:22:44 blymn Exp $");
+__RCSID("$NetBSD: ins_wch.c,v 1.20 2022/10/19 06:09:27 blymn Exp $");
 #endif						  /* not lint */
 
 #include <string.h>
@@ -95,9 +95,7 @@ wins_wch(WINDOW *win, const cchar_t *wch)
 	if (!wch)
 		return OK;
 	cw = wcwidth(wch->vals[0]);
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INPUT, "wins_wch: wcwidth %d\n", cw);
-#endif
 	if (cw < 0)
 		cw = 1;
 	if (!cw)
@@ -105,9 +103,7 @@ wins_wch(WINDOW *win, const cchar_t *wch)
 
 	x = win->curx;
 	y = win->cury;
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INPUT, "wins_wch: (%d,%d)\n", y, x);
-#endif /* DEBUG */
 	switch (wch->vals[0]) {
 		case L'\b':
 			if (--x < 0)
@@ -138,7 +134,7 @@ wins_wch(WINDOW *win, const cchar_t *wch)
 	lnp = win->alines[y];
 	start = &win->alines[y]->line[x];
 	sx = x;
-	pcw = WCOL(*start);
+	pcw = start->wcols;
 	if (pcw < 0) {
 		start += pcw;
 		sx += pcw;
@@ -151,16 +147,12 @@ wins_wch(WINDOW *win, const cchar_t *wch)
 		*lnp->firstchp = newx;
 
 	/* shift all complete characters */
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INPUT, "wins_wch: shift all characters\n");
-#endif /* DEBUG */
 	temp1 = &win->alines[y]->line[win->maxx - 1];
 	temp2 = temp1 - cw;
-	pcw = WCOL(*(temp2 + 1));
+	pcw = (temp2 + 1)->wcols;
 	if (pcw < 0) {
-#ifdef DEBUG
 		__CTRACE(__CTRACE_INPUT, "wins_wch: clear EOL\n");
-#endif /* DEBUG */
 		temp2 += pcw;
 		while (temp1 > temp2 + cw) {
 			np = temp1->nsp;
@@ -172,11 +164,11 @@ wins_wch(WINDOW *win, const cchar_t *wch)
 				}
 				temp1->nsp = NULL;
 			}
-			temp1->ch = (wchar_t)btowc((int)win->bch );
+			temp1->ch = win->bch;
 			if (_cursesi_copy_nsp(win->bnsp, temp1) == ERR)
 				return ERR;
 			temp1->attr = win->battr;
-			SET_WCOL(*temp1, 1);
+			temp1->wcols = 1;
 			temp1--;
 		}
 	}
@@ -189,7 +181,7 @@ wins_wch(WINDOW *win, const cchar_t *wch)
 	start->nsp = NULL;
 	start->ch = wch->vals[0];
 	start->attr = wch->attributes & WA_ATTRIBUTES;
-	SET_WCOL(*start, cw);
+	start->wcols = cw;
 	if (wch->elements > 1) {
 		for (i = 1; i < wch->elements; i++) {
 			np = malloc(sizeof(nschar_t));
@@ -200,16 +192,15 @@ wins_wch(WINDOW *win, const cchar_t *wch)
 			start->nsp = np;
 		}
 	}
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INPUT, "wins_wch: insert (%x,%x,%p)\n",
 	    start->ch, start->attr, start->nsp);
-#endif /* DEBUG */
 	temp1 = start + 1;
 	ex = x + 1;
 	while (ex - x < cw) {
 		temp1->ch = wch->vals[0];
-		SET_WCOL(*temp1, x - ex);
+		temp1->wcols = x - ex;
 		temp1->nsp = NULL;
+		temp1->cflags |= CA_CONTINUATION;
 		ex++, temp1++;
 	}
 

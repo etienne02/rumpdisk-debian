@@ -1,4 +1,4 @@
-/*	$NetBSD: wsdisplay_vconsvar.h,v 1.31 2021/01/21 21:45:42 macallan Exp $ */
+/*	$NetBSD: wsdisplay_vconsvar.h,v 1.34 2023/02/14 08:22:02 macallan Exp $ */
 
 /*-
  * Copyright (c) 2005, 2006 Michael Lorenz
@@ -70,6 +70,11 @@ struct vcons_screen {
 #define VCONS_LOADFONT		0x40	/* driver can load_font() */
 #define VCONS_NO_CURSOR		0x80	/* use putchar() based cursor(), to
 					 * avoid fb reads */
+#define VCONS_FONT_BITS_R2L	0x100	/* request right-to-left bitorder in
+					 * wsfont_find() */
+#define VCONS_FONT_BYTES_R2L	0x200	/* request right-to-left byteorder in
+					 * wsfont_find() */
+					 
 	/* status flags used by vcons */
 	uint32_t scr_status;
 #define VCONS_IS_VISIBLE	1	/* this screen is currently visible */
@@ -111,38 +116,12 @@ struct vcons_data {
 	void (*init_screen)(void *, struct vcons_screen *, int,
 	    long *);
 
-	/* accessops */
-	int (*ioctl)(void *, void *, u_long, void *, int, struct lwp *);
-
-	/* rasops */
-	void (*copycols)(void *, int, int, int, int);
-	void (*erasecols)(void *, int, int, int, long);
-	void (*copyrows)(void *, int, int, int);
-	void (*eraserows)(void *, int, int, long);
-	void (*cursor)(void *, int, int, int);
 	/* called before vcons_redraw_screen */
 	void *show_screen_cookie;
 	void (*show_screen_cb)(struct vcons_screen *, void *);
-	/* virtual screen management stuff */
-	void (*switch_cb)(void *, int, int);
-	void *switch_cb_arg;
-	struct callout switch_callout;
-	uint32_t switch_pending;
-	LIST_HEAD(, vcons_screen) screens;
-	struct vcons_screen *active, *wanted;
-	const struct wsscreen_descr *currenttype;
-	struct wsscreen_descr *defaulttype;
-	int switch_poll_count;
-#ifdef VCONS_DRAW_INTR
-	int cells;
-	long *attrs;
-	uint32_t *chars;
-	int cursor_offset;
-	callout_t intr;
-	int intr_valid;
-	void *intr_softint;
-	int use_intr;		/* use intr drawing when non-zero */
-#endif
+
+	struct vcons_screen *active;
+	struct vcons_data_private *private;
 };
 
 int	vcons_init(struct vcons_data *, void *, struct wsscreen_descr *,
@@ -156,18 +135,14 @@ int	vcons_init_screen(struct vcons_data *, struct vcons_screen *, int,
 /* completely redraw the screen, clear it if RI_FULLCLEAR is set */
 void	vcons_redraw_screen(struct vcons_screen *);
 
-#ifdef VCONS_DRAW_INTR
-/* redraw all dirty character cells */
 void	vcons_update_screen(struct vcons_screen *);
-void	vcons_invalidate_cache(struct vcons_data *);
-#else
-#define vcons_update_screen vcons_redraw_screen
-#endif
 
 void	vcons_replay_msgbuf(struct vcons_screen *);
 
 void	vcons_enable_polling(struct vcons_data *);
 void	vcons_disable_polling(struct vcons_data *);
 void	vcons_hard_switch(struct vcons_screen *);
+
+int	vcons_offset_to_zero(const struct vcons_screen *);
 
 #endif /* _WSDISPLAY_VCONS_H_ */

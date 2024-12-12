@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_crashme.c,v 1.3 2020/04/23 03:15:47 rin Exp $	*/
+/*	$NetBSD: kern_crashme.c,v 1.11 2023/07/07 12:34:26 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2018, 2019 Matthew R. Green
@@ -36,6 +36,10 @@
  * panic or crash.  you can add and remove nodes.
  */
 
+#ifdef _KERNEL_OPT
+#include "opt_ddb.h"
+#endif
+
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
@@ -43,6 +47,11 @@
 #include <sys/kmem.h>
 #include <sys/mutex.h>
 #include <sys/crashme.h>
+#include <sys/intr.h>
+
+#ifdef DDB
+#include <ddb/ddb.h>
+#endif
 
 #define DPRINTF(fmt, ...) \
 	printf("%s:%d: " fmt "\n", __func__, __LINE__, ## __VA_ARGS__)
@@ -51,6 +60,16 @@ static int crashme_sysctl_forwarder(SYSCTLFN_PROTO);
 
 static int crashme_panic(int);
 static int crashme_null_deref(int);
+static int crashme_null_jump(int);
+#ifdef DDB
+static int crashme_ddb(int);
+#endif
+#ifdef LOCKDEBUG
+static int crashme_kernel_lock_spinout(int);
+#endif
+static int crashme_mutex_recursion(int);
+static int crashme_spl_spinout(int);
+static int crashme_kpreempt_spinout(int);
 
 #define CMNODE(name, lname, func)	\
     {					\
@@ -62,10 +81,24 @@ static int crashme_null_deref(int);
 static crashme_node nodes[] = {
     CMNODE("panic", "plain old panic", crashme_panic),
     CMNODE("null_deref", "null dereference", crashme_null_deref),
+    CMNODE("null_jump", "jump to null", crashme_null_jump),
+#ifdef DDB
+    CMNODE("ddb", "enter ddb directly", crashme_ddb),
+#endif
+#ifdef LOCKDEBUG
+    CMNODE("kernel_lock_spinout", "infinite loop under kernel lock",
+	crashme_kernel_lock_spinout),
+#endif
+    CMNODE("mutex_recursion", "enter the same mutex twice",
+	crashme_mutex_recursion),
+    CMNODE("spl_spinout", "infinite loop at raised spl",
+	crashme_spl_spinout),
+    CMNODE("kpreempt_spinout", "infinite loop with kpreempt disabled",
+	crashme_kpreempt_spinout),
 };
 static crashme_node *first_node;
 static kmutex_t crashme_lock;
-static const struct sysctlnode *crashme_root = NULL;
+static int crashme_root = -1;
 static bool crashme_enable = 0;
 
 /*
@@ -77,8 +110,9 @@ crashme_add(crashme_node *ncn)
 	int rv = -1;
 	crashme_node *cn;
 	crashme_node *last = NULL;
+	const struct sysctlnode *cnode;
 
-	if (crashme_root == NULL)
+	if (crashme_root == -1)
 		return -1;
 
 	mutex_enter(&crashme_lock);
@@ -89,17 +123,16 @@ crashme_add(crashme_node *ncn)
 	if (!cn) {
 		ncn->cn_next = NULL;
 
-		rv = sysctl_createv(NULL, 0,
-				    &crashme_root, &ncn->cn_sysctl,
-				    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
-				    CTLTYPE_INT, ncn->cn_name,
-				    SYSCTL_DESCR(ncn->cn_longname),
-				    crashme_sysctl_forwarder, 0,
-				    NULL, 0,
-				    CTL_CREATE, CTL_EOL);
+		rv = sysctl_createv(NULL, 0, NULL, &cnode,
+		    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+		    CTLTYPE_INT, ncn->cn_name,
+		    SYSCTL_DESCR(ncn->cn_longname),
+		    crashme_sysctl_forwarder, 0, NULL, 0,
+		    CTL_DEBUG, crashme_root, CTL_CREATE, CTL_EOL);
 
 		/* don't insert upon failure */
 		if (rv == 0) {
+			ncn->cn_sysctl = cnode->sysctl_num;
 			if (last)
 				last->cn_next = ncn;
 			if (first_node == NULL)
@@ -108,7 +141,7 @@ crashme_add(crashme_node *ncn)
 	}
 	mutex_exit(&crashme_lock);
 
-	return rv;
+	return rv == 0 ? 0 : -1;
 }
 
 /*
@@ -132,9 +165,9 @@ crashme_remove(crashme_node *rcn)
 			prev->cn_next = cn->cn_next;
 
 		if ((rv = sysctl_destroyv(NULL, CTL_DEBUG, crashme_root,
-					  cn->cn_name, CTL_EOL)) == 0)
+			    cn->cn_sysctl, CTL_EOL)) == 0)
 			printf("%s: unable to remove %s from sysctl\n",
-			       __func__, cn->cn_name);
+			    __func__, cn->cn_name);
 		break;
 	}
 	mutex_exit(&crashme_lock);
@@ -156,7 +189,7 @@ crashme_sysctl_forwarder(SYSCTLFN_ARGS)
 	int error, arg = 0;
 
 	for (cn = first_node; cn; cn = cn->cn_next) {
-		if (cn->cn_sysctl == rnode)
+		if (cn->cn_sysctl == rnode->sysctl_num)
 			break;
 	}
 	if (!cn) {
@@ -183,20 +216,27 @@ crashme_sysctl_forwarder(SYSCTLFN_ARGS)
  */
 SYSCTL_SETUP(selfdebug_crashme, "sysctl crashme setup")
 {
+	const struct sysctlnode *rnode;
 	int rv;
 	size_t n;
 
 	mutex_init(&crashme_lock, MUTEX_DEFAULT, IPL_NONE);
 
-	rv = sysctl_createv(NULL, 0, NULL, &crashme_root,
+	KASSERT(crashme_root == -1);
+
+	rv = sysctl_createv(NULL, 0, NULL, &rnode,
 	    CTLFLAG_PERMANENT,
 	    CTLTYPE_NODE, "crashme",
 	    SYSCTL_DESCR("Crashme options"),
 	    NULL, 0, NULL, 0,
 	    CTL_DEBUG, CTL_CREATE, CTL_EOL);
 
-	if (rv != 0 || crashme_root == NULL)
+	if (rv != 0) {
+		printf("%s: failed to create sysctl debug.crashme: %d\n",
+		    __func__, rv);
 		return;
+	}
+	crashme_root = rnode->sysctl_num;
 
 	rv = sysctl_createv(NULL, 0, NULL, NULL,
 	    CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
@@ -204,15 +244,14 @@ SYSCTL_SETUP(selfdebug_crashme, "sysctl crashme setup")
 	    SYSCTL_DESCR("Enable crashme"),
 	    NULL, 0, &crashme_enable, 0,
 	    CTL_DEBUG, CTL_CREATE, CTL_EOL);
+	if (rv != 0)
+		printf("%s: failed to create sysctl debug.crashme_enable:"
+		    " %d\n", __func__, rv);
 
 	for (n = 0; n < __arraycount(nodes); n++) {
-		crashme_node *cn = &nodes[n];
-
-		rv = crashme_add(cn);
-
-		/* don't insert */
-		if (rv != 0)
-			continue;
+		if (crashme_add(&nodes[n]))
+			printf("%s: failed to create sysctl"
+			    " debug.crashme.%s\n", __func__, nodes[n].cn_name);
 	}
 }
 
@@ -233,4 +272,102 @@ crashme_null_deref(int flags)
 
 	*(volatile char *)0 = 0;
 	return -1;
+}
+
+static int
+crashme_null_jump(int flags)
+{
+	void (*volatile f)(int) = NULL;
+
+	(*f)(flags);
+	/* make sure to have a nontrivial return address here */
+	return -1;
+}
+
+#ifdef DDB
+static int
+crashme_ddb(int flags)
+{
+
+	Debugger();
+	return 0;
+}
+#endif
+
+#ifdef LOCKDEBUG
+static int
+crashme_kernel_lock_spinout(int flags)
+{
+
+	KERNEL_LOCK(1, NULL);
+	for (;;)
+		__insn_barrier();
+	KERNEL_UNLOCK_ONE(NULL);
+	return 0;
+}
+#endif
+
+static int
+crashme_mutex_recursion(int flags)
+{
+	kmutex_t crashme_spinlock;
+
+	switch (flags) {
+	case 0:
+		return 0;
+	case 1:
+	default:
+		/*
+		 * printf makes the return address of the first
+		 * mutex_enter call a little more obvious, so the line
+		 * number of the _return address_ for the first
+		 * mutex_enter doesn't confusingly point at the second
+		 * mutex_enter.
+		 */
+		mutex_enter(&crashme_lock);
+		printf("%s: locked once\n", __func__);
+		mutex_enter(&crashme_lock);
+		printf("%s: locked twice\n", __func__);
+		return -1;
+	case 2:
+		mutex_init(&crashme_spinlock, MUTEX_DEFAULT, IPL_VM);
+		printf("%s: initialized\n", __func__);
+		mutex_enter(&crashme_spinlock);
+		printf("%s: locked once\n", __func__);
+		mutex_enter(&crashme_spinlock);
+		printf("%s: locked twice\n", __func__);
+		return -1;
+	}
+}
+
+static int
+crashme_spl_spinout(int flags)
+{
+	int s;
+
+	printf("%s: raising ipl to %d\n", __func__, flags);
+	s = splraiseipl(makeiplcookie(flags));
+	printf("%s: raised ipl to %d, s=%d\n", __func__, flags, s);
+	for (;;)
+		__insn_barrier();
+	printf("%s: exited infinite loop!?\n", __func__);
+	splx(s);
+	printf("%s: lowered ipl to s=%d\n", __func__, s);
+
+	return 0;
+}
+
+static int
+crashme_kpreempt_spinout(int flags)
+{
+
+	kpreempt_disable();
+	printf("%s: disabled kpreemption\n", __func__);
+	for (;;)
+		__insn_barrier();
+	printf("%s: exited infinite loop!?\n", __func__);
+	kpreempt_enable();
+	printf("%s: re-enabled kpreemption\n", __func__);
+
+	return 0;
 }

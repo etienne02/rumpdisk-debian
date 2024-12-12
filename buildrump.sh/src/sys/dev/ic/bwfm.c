@@ -1,4 +1,4 @@
-/* $NetBSD: bwfm.c,v 1.31 2021/06/16 00:21:18 riastradh Exp $ */
+/* $NetBSD: bwfm.c,v 1.36 2023/12/31 21:32:43 gutteridge Exp $ */
 /* $OpenBSD: bwfm.c,v 1.5 2017/10/16 22:27:16 patrick Exp $ */
 /*
  * Copyright (c) 2010-2016 Broadcom Corporation
@@ -69,7 +69,7 @@ int	 bwfm_send_mgmt(struct ieee80211com *, struct ieee80211_node *,
 void	 bwfm_recv_mgmt(struct ieee80211com *, struct mbuf *,
 	     struct ieee80211_node *, int, int, uint32_t);
 int	 bwfm_key_set(struct ieee80211com *, const struct ieee80211_key *,
-	     const uint8_t *);
+	     const uint8_t[IEEE80211_ADDR_LEN]);
 int	 bwfm_key_delete(struct ieee80211com *, const struct ieee80211_key *);
 int	 bwfm_newstate(struct ieee80211com *, enum ieee80211_state, int);
 void	 bwfm_newstate_cb(struct bwfm_softc *, struct bwfm_cmd_newstate *);
@@ -99,6 +99,8 @@ void	 bwfm_chip_sysmem_ramsize(struct bwfm_softc *, struct bwfm_core *);
 void	 bwfm_chip_tcm_ramsize(struct bwfm_softc *, struct bwfm_core *);
 void	 bwfm_chip_tcm_rambase(struct bwfm_softc *);
 
+void     bwfm_process_blob(struct bwfm_softc *, const char *, uint8_t **,
+	     size_t *);
 int	 bwfm_proto_bcdc_query_dcmd(struct bwfm_softc *, int,
 	     int, char *, size_t *);
 int	 bwfm_proto_bcdc_set_dcmd(struct bwfm_softc *, int,
@@ -151,6 +153,14 @@ static const struct {
 	[BWFM_FILETYPE_CLM] = {
 		.suffix = "clm_blob",
 		.description = "CLM",
+	},
+	[BWFM_FILETYPE_TXCAP] = {
+		.suffix = "txcap_blob",
+		.description = "TXCAP",
+	},
+	[BWFM_FILETYPE_CAL] = {
+		.suffix = "cal_blob",
+		.description = "CAL",
 	},
 };
 
@@ -320,6 +330,7 @@ bwfm_attach(struct bwfm_softc *sc)
 	struct ifnet *ifp = &sc->sc_if;
 	char fw_version[BWFM_DCMD_SMLEN];
 	uint32_t bandlist[3];
+	int nmode, vhtmode;
 	uint32_t tmp;
 	int i, j, error;
 
@@ -348,10 +359,15 @@ bwfm_attach(struct bwfm_softc *sc)
 		return;
 	}
 
+	printf("%s: address %s\n", DEVNAME(sc), ether_sprintf(ic->ic_myaddr));
+
+	bwfm_process_blob(sc, "clmload", &sc->sc_clm, &sc->sc_clmsize);
+	bwfm_process_blob(sc, "txcapload", &sc->sc_txcap, &sc->sc_txcapsize);
+	bwfm_process_blob(sc, "calload", &sc->sc_cal, &sc->sc_calsize);
+
 	memset(fw_version, 0, sizeof(fw_version));
 	if (bwfm_fwvar_var_get_data(sc, "ver", fw_version, sizeof(fw_version)) == 0)
 		printf("%s: %s", DEVNAME(sc), fw_version);
-	printf("%s: address %s\n", DEVNAME(sc), ether_sprintf(ic->ic_myaddr));
 
 	ic->ic_ifp = ifp;
 	ic->ic_phytype = IEEE80211_T_OFDM;
@@ -363,6 +379,7 @@ bwfm_attach(struct bwfm_softc *sc)
 	    IEEE80211_C_TKIP |
 	    IEEE80211_C_AES |
 	    IEEE80211_C_AES_CCM |
+	    IEEE80211_C_PMGT |
 #if notyet
 	    IEEE80211_C_MONITOR |		/* monitor mode supported */
 	    IEEE80211_C_IBSS |
@@ -377,6 +394,10 @@ bwfm_attach(struct bwfm_softc *sc)
 	/* IBSS channel undefined for now. */
 	ic->ic_ibss_chan = &ic->ic_channels[0];
 
+	if (bwfm_fwvar_var_get_int(sc, "nmode", &nmode))
+		nmode = 0;
+	if (bwfm_fwvar_var_get_int(sc, "vhtmode", &vhtmode))
+		vhtmode = 0;
 	if (bwfm_fwvar_cmd_get_data(sc, BWFM_C_GET_BANDLIST, bandlist,
 	    sizeof(bandlist))) {
 		printf("%s: couldn't get supported band list\n", DEVNAME(sc));
@@ -396,6 +417,9 @@ bwfm_attach(struct bwfm_softc *sc)
 				ic->ic_channels[chan].ic_flags =
 				    IEEE80211_CHAN_CCK | IEEE80211_CHAN_OFDM |
 				    IEEE80211_CHAN_DYN | IEEE80211_CHAN_2GHZ;
+				if (nmode)
+					ic->ic_channels[chan].ic_flags |=
+					    IEEE80211_CHAN_HT;
 			}
 			break;
 		case BWFM_BAND_5G:
@@ -407,7 +431,17 @@ bwfm_attach(struct bwfm_softc *sc)
 				    ieee80211_ieee2mhz(chan, IEEE80211_CHAN_5GHZ);
 				ic->ic_channels[chan].ic_flags =
 				    IEEE80211_CHAN_A;
+				if (nmode)
+					ic->ic_channels[chan].ic_flags |=
+					    IEEE80211_CHAN_HT;
+				if (vhtmode)
+					ic->ic_channels[chan].ic_flags |=
+					    IEEE80211_CHAN_VHT;
 			}
+			break;
+		default:
+			printf("%s: unsupported band 0x%x\n", DEVNAME(sc),
+			    le32toh(bandlist[i]));
 			break;
 		}
 	}
@@ -475,6 +509,12 @@ bwfm_start(struct ifnet *ifp)
 
 	/* TODO: return if no link? */
 
+	if (sc->sc_setpm) {
+		sc->sc_setpm = false;
+		if (bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_PM, sc->sc_pm))
+			printf("%s: could not set power\n", DEVNAME(sc));
+	}
+
 	for (;;) {
 		/* Discard management packets (fw handles this for us) */
 		IF_DEQUEUE(&ic->ic_mgtq, m);
@@ -515,7 +555,6 @@ bwfm_init(struct ifnet *ifp)
 	struct ieee80211com *ic = &sc->sc_ic;
 	uint8_t evmask[BWFM_EVENT_MASK_LEN];
 	struct bwfm_join_pref_params join_pref[2];
-	int pm;
 
 	if (bwfm_fwvar_var_set_int(sc, "mpc", 1)) {
 		printf("%s: could not set mpc\n", DEVNAME(sc));
@@ -593,19 +632,20 @@ bwfm_init(struct ifnet *ifp)
 		return EIO;
 	}
 
-        /*
-         * Use CAM (constantly awake) when we are running as AP
-         * otherwise use fast power saving.
-         */
-	pm = BWFM_PM_FAST_PS;
+	/*
+	 * Use CAM (constantly awake) when we are running as AP
+	 * otherwise use fast power saving.
+	 */
+	if (ic->ic_flags & IEEE80211_F_PMGTON) {
+		sc->sc_pm = BWFM_PM_FAST_PS;
 #ifndef IEEE80211_STA_ONLY
-	if (ic->ic_opmode == IEEE80211_M_HOSTAP)
-		pm = BWFM_PM_CAM;
+		if (ic->ic_opmode == IEEE80211_M_HOSTAP)
+			sc->sc_pm = BWFM_PM_CAM;
 #endif
-	if (bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_PM, pm)) {
-		printf("%s: could not set power\n", DEVNAME(sc));
-		return EIO;
+	} else {
+		sc->sc_pm = BWFM_PM_CAM;
 	}
+	sc->sc_setpm = true;
 
 	bwfm_fwvar_var_set_int(sc, "txbf", 1);
 	bwfm_fwvar_cmd_set_int(sc, BWFM_C_UP, 0);
@@ -655,19 +695,22 @@ bwfm_stop(struct ifnet *ifp, int disable)
 	ifp->if_timer = 0;
 	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
 
+	ieee80211_new_state(ic, IEEE80211_S_INIT, -1);
+
 	memset(&join, 0, sizeof(join));
 	bwfm_fwvar_cmd_set_data(sc, BWFM_C_SET_SSID, &join, sizeof(join));
-	bwfm_fwvar_cmd_set_int(sc, BWFM_C_DOWN, 1);
 	bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_PM, 0);
+	bwfm_fwvar_cmd_set_int(sc, BWFM_C_DOWN, 1);
 	bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_AP, 0);
 	bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_INFRA, 0);
 	bwfm_fwvar_cmd_set_int(sc, BWFM_C_UP, 1);
 	bwfm_fwvar_cmd_set_int(sc, BWFM_C_SET_PM, BWFM_PM_FAST_PS);
-
-	ieee80211_new_state(ic, IEEE80211_S_INIT, -1);
+	bwfm_fwvar_var_set_int(sc, "mpc", 1);
 
 	if (sc->sc_bus_ops->bs_stop)
 		sc->sc_bus_ops->bs_stop(sc);
+
+	sc->sc_setpm = true;
 }
 
 void
@@ -694,22 +737,25 @@ bwfm_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
 	struct bwfm_softc *sc = ifp->if_softc;
 	struct ieee80211com *ic = &sc->sc_ic;
-	int s, error = 0;
+	int s, error = 0, oflags;
 
 	s = splnet();
 
 	switch (cmd) {
 	case SIOCSIFFLAGS:
+		oflags = ifp->if_flags;
 		if ((error = ifioctl_common(ifp, cmd, data)) != 0)
 			break;
 		switch (ifp->if_flags & (IFF_UP | IFF_RUNNING)) {
 		case IFF_UP | IFF_RUNNING:
 			break;
 		case IFF_UP:
-			bwfm_init(ifp);
+			if ((oflags & IFF_UP) == 0)
+				bwfm_init(ifp);
 			break;
 		case IFF_RUNNING:
-			bwfm_stop(ifp, 1);
+			if ((oflags & IFF_UP) != 0)
+				bwfm_stop(ifp, 1);
 			break;
 		case 0:
 			break;
@@ -736,8 +782,7 @@ bwfm_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 
 	if (error == ENETRESET) {
 		if ((ifp->if_flags & IFF_UP) != 0 &&
-		    (ifp->if_flags & IFF_RUNNING) != 0 &&
-		    ic->ic_roaming != IEEE80211_ROAMING_MANUAL) {
+		    (ifp->if_flags & IFF_RUNNING) != 0) {
 			bwfm_init(ifp);
 		}
 		error = 0;
@@ -1770,6 +1815,50 @@ bwfm_proto_bcdc_set_dcmd(struct bwfm_softc *sc, int ifidx,
 err:
 	kmem_free(dcmd, sizeof(*dcmd));
 	return ret;
+}
+
+void
+bwfm_process_blob(struct bwfm_softc *sc, const char *var, uint8_t **blob,
+    size_t *blobsize)
+{
+	struct bwfm_dload_data *data;
+	size_t off, remain, len;
+
+	if (*blob == NULL || *blobsize == 0)
+		return;
+
+	off = 0;
+	remain = *blobsize;
+	data = kmem_alloc(sizeof(*data) + BWFM_DLOAD_MAX_LEN, KM_SLEEP);
+
+	while (remain) {
+		len = uimin(remain, BWFM_DLOAD_MAX_LEN);
+
+		data->flag = htole16(BWFM_DLOAD_FLAG_HANDLER_VER_1);
+		if (off == 0)
+			data->flag |= htole16(BWFM_DLOAD_FLAG_BEGIN);
+		if (remain <= BWFM_DLOAD_MAX_LEN)
+			data->flag |= htole16(BWFM_DLOAD_FLAG_END);
+		data->type = htole16(BWFM_DLOAD_TYPE_CLM);
+		data->len = htole32(len);
+		data->crc = 0;
+		memcpy(data->data, *blob + off, len);
+
+		if (bwfm_fwvar_var_set_data(sc, var, data,
+		    sizeof(*data) + len)) {
+			printf("%s: could not load blob (%s)\n", DEVNAME(sc),
+			    var);
+			break;
+		}
+
+		off += len;
+		remain -= len;
+	}
+
+	kmem_free(data, sizeof(*data) + BWFM_DLOAD_MAX_LEN);
+	// kmem_free(*blob, *blobsize);
+	*blob = NULL;
+	*blobsize = 0;
 }
 
 /* FW Variable code */

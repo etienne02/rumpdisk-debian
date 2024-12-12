@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.h,v 1.31 2008/07/17 16:13:33 tsutsui Exp $	*/
+/*	$NetBSD: intr.h,v 1.33 2024/02/28 13:05:40 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1997 Scott Reynolds
@@ -31,6 +31,12 @@
 #define _MAC68K_INTR_H_
 
 #include <machine/psl.h>
+
+#if defined(_KERNEL) || defined(_KMEMUSER)
+typedef struct {
+	uint16_t _ipl;
+} ipl_cookie_t;
+#endif
 
 #ifdef _KERNEL
 
@@ -66,9 +72,6 @@ extern uint16_t ipl2psl_table[NIPL];
 
 
 typedef int ipl_t;
-typedef struct {
-	uint16_t _ipl;
-} ipl_cookie_t;
 
 static inline ipl_cookie_t
 makeiplcookie(ipl_t ipl)
@@ -87,10 +90,11 @@ splraiseipl(ipl_cookie_t icookie)
 #include <sys/spl.h>
 
 /* intr.c */
+struct clockframe;
 void	intr_init(void);
 void	intr_establish(int (*)(void *), void *, int);
 void	intr_disestablish(int);
-void	intr_dispatch(int);
+void	intr_dispatch(struct clockframe);
 
 /* locore.s */
 int	spl0(void);

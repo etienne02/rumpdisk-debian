@@ -1,4 +1,4 @@
-/* $NetBSD: configmenu.c,v 1.12 2021/01/31 22:45:46 rillig Exp $ */
+/* $NetBSD: configmenu.c,v 1.19 2024/03/24 16:06:37 martin Exp $ */
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -45,11 +45,15 @@ static int set_timezone_menu(struct menudesc *, void *);
 static int set_root_shell(struct menudesc *, void *);
 static int change_root_password(struct menudesc *, void *);
 static int add_new_user(struct menudesc *, void *);
+#if CHECK_ENTROPY
+static int add_entropy(struct menudesc *, void *);
+#endif
 static int set_binpkg(struct menudesc *, void *);
 static int set_pkgsrc(struct menudesc *, void *);
 static void config_list_init(void);
 static void get_rootsh(void);
 static int toggle_rcvar(struct menudesc *, void *);
+static int toggle_mdnsd(struct menudesc *, void *);
 static void configmenu_hdr(struct menudesc *, void *);
 static int check_root_password(void);
 
@@ -74,6 +78,7 @@ enum {
 	CONFIGOPT_LVM,
 	CONFIGOPT_RAIDFRAME,
 	CONFIGOPT_ADDUSER,
+	CONFIGOPT_ADD_ENTROPY,
 	CONFIGOPT_LAST
 };
 
@@ -96,12 +101,15 @@ configinfo config_list[] = {
 	{MSG_enable_sshd, CONFIGOPT_SSHD, "sshd", toggle_rcvar, NULL},
 	{MSG_enable_ntpd, CONFIGOPT_NTPD, "ntpd", toggle_rcvar, NULL},
 	{MSG_run_ntpdate, CONFIGOPT_NTPDATE, "ntpdate", toggle_rcvar, NULL},
-	{MSG_enable_mdnsd, CONFIGOPT_MDNSD, "mdnsd", toggle_rcvar, NULL},
+	{MSG_enable_mdnsd, CONFIGOPT_MDNSD, "mdnsd", toggle_mdnsd, NULL},
 	{MSG_enable_xdm, CONFIGOPT_XDM, "xdm", toggle_rcvar, NULL},
 	{MSG_enable_cgd, CONFIGOPT_CGD, "cgd", toggle_rcvar, NULL},
 	{MSG_enable_lvm, CONFIGOPT_LVM, "lvm", toggle_rcvar, NULL},
 	{MSG_enable_raid, CONFIGOPT_RAIDFRAME, "raidframe", toggle_rcvar, NULL},
 	{MSG_add_a_user, CONFIGOPT_ADDUSER, NULL, add_new_user, ""},
+#if CHECK_ENTROPY
+	{MSG_Configure_entropy, CONFIGOPT_ADD_ENTROPY, NULL, add_entropy, ""},
+#endif
 	{NULL,		CONFIGOPT_LAST,	NULL, NULL, NULL}
 };
 
@@ -180,6 +188,10 @@ init_config_menu(configinfo *conf, menu_ent *me, configinfo **ce)
 		opt = conf->opt;
 		if (opt == CONFIGOPT_LAST)
 			break;
+#if CHECK_ENTROPY
+		if (opt == CONFIGOPT_ADD_ENTROPY && entropy_needed() == 0)
+			continue;
+#endif
 		*ce = conf;
 		memset(me, 0, sizeof(*me));
 		me->opt_action = conf->action;
@@ -218,7 +230,7 @@ static int
 set_network(struct menudesc *menu, void *arg)
 {
 	network_up = 0;
-	if (config_network())
+	if (config_network(1))
 		mnt_net_config();
 	return 0;
 }
@@ -247,6 +259,15 @@ check_root_password(void)
 	return rval;
 }
 
+#if CHECK_ENTROPY
+static int
+add_entropy(struct menudesc *menu, void *arg)
+{
+	do_add_entropy();
+	return 0;
+}
+#endif
+
 static int
 add_new_user(struct menudesc *menu, void *arg)
 {
@@ -269,6 +290,14 @@ add_new_user(struct menudesc *menu, void *arg)
 	run_program(RUN_DISPLAY | RUN_PROGRESS | RUN_CHROOT,
 	    "passwd -l %s", username);
 	return 0;
+}
+
+void
+root_pw_setup(void)
+{
+	msg_display(MSG_force_rootpw);
+	run_program(RUN_DISPLAY | RUN_PROGRESS | RUN_CHROOT | RUN_STDSCR,
+	    "passwd -l root");
 }
 
 static int
@@ -295,6 +324,9 @@ set_binpkg(struct menudesc *menu, void *arg)
 	int allok = 0;
 	arg_rv parm;
 
+	if (config_network(0))
+		mnt_net_config();
+
 	do {
 		parm.rv = -1;
 		parm.arg = additional_pkgs;
@@ -303,6 +335,14 @@ set_binpkg(struct menudesc *menu, void *arg)
 			confp[menu->cursel]->setting = MSG_abandoned;
 			return 0;
 		}
+
+		/*
+		 * Make sure we have the TLS certs in a usable state
+		 * (if target is a new installation)
+		 */
+		if (pkg.xfer == XFER_HTTPS)
+			run_program(RUN_CHROOT | RUN_SILENT,
+			    "/bin/sh /etc/rc.d/certctl_init onestart");
 
 		make_url(pkgpath, &pkg, pkg_dir);
 		if (run_program(RUN_DISPLAY | RUN_PROGRESS | RUN_CHROOT,
@@ -423,6 +463,37 @@ toggle_rcvar(struct menudesc *menu, void *arg)
 		}
 		replace("/etc/rc.conf", "%s", pattern);
 	}
+
+	return 0;
+}
+
+static int
+toggle_mdnsd(struct menudesc *menu, void *arg)
+{
+	configinfo **confp = arg;
+	int s;
+	const char *setting, *varname;
+
+	varname = confp[menu->cursel]->rcvar;
+
+	s = check_rcvar(varname);
+
+	/* we're toggling, so invert the sense */
+	if (s) {
+		confp[menu->cursel]->setting = MSG_NO;
+		setting = "files dns";
+	} else {
+		confp[menu->cursel]->setting = MSG_YES;
+		setting = "files multicast_dns dns";
+	}
+
+	if (logfp) {
+		fprintf(logfp, "setting hosts: %s\n", setting);
+		fflush(logfp);
+	}
+	replace("/etc/nsswitch.conf", "s/^hosts:.*/hosts:\t\t%s/", setting);
+
+	toggle_rcvar(menu, arg);
 
 	return 0;
 }

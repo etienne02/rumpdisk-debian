@@ -1,4 +1,4 @@
-/*	$NetBSD: i8259reg.h,v 1.4 2008/04/28 20:23:50 martin Exp $	*/
+/*	$NetBSD: i8259reg.h,v 1.6 2024/12/05 20:59:40 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -43,7 +43,7 @@
 
 /*
  * Note a write to ICW1 starts an initialization cycle, and must be
- * followied by writes to ICW2, ICW3, and ICW4.
+ * followed by writes to ICW2, ICW3, and ICW4.
  */
 #define	PIC_ICW1	0x00	/* Initialization Command Word 1 (w) */
 #define	ICW1_IC4	(1U << 0)	/* ICW4 Write Required */
@@ -59,7 +59,7 @@
 
 #define	PIC_ICW3	0x01	/* Initialization Command Word 3 (w) */
 #define	ICW3_CASCADE(x)	(1U << (x))	/* cascaded mode enable */
-#define	ICW3_SIC(x)	((x) << 0)	/* slave identifcation code */
+#define	ICW3_SIC(x)	((x) << 0)	/* slave identification code */
 
 #define	PIC_ICW4	0x01	/* Initialization Command Word 4 (w) */
 #define	ICW4_8086	(1U << 0)	/* 8086 mode */

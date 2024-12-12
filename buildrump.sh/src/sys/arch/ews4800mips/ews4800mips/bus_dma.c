@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_dma.c,v 1.16 2020/11/21 17:09:34 thorpej Exp $	*/
+/*	$NetBSD: bus_dma.c,v 1.18 2023/09/04 12:24:07 andvar Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.16 2020/11/21 17:09:34 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.18 2023/09/04 12:24:07 andvar Exp $");
 
 #define	_EWS4800MIPS_BUS_DMA_PRIVATE
 /* #define	BUS_DMA_DEBUG */
@@ -484,7 +484,7 @@ _bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 
 #ifdef BUS_DMA_DEBUG
 		printf("bus_dmamap_sync: flushing segment %d "
-		    "(0x%lx+%lx, 0x%lx+0x%lx) (olen = %ld)...", i,
+		    "(0x%x+%lx, 0x%x+0x%lx) (olen = %ld)...", i,
 		    vaddr, offset, vaddr, offset + minlen - 1, len);
 #endif
 
@@ -611,7 +611,7 @@ _bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 }
 
 /*
- * Common functin for mmap(2)'ing DMA-safe memory.  May be called by
+ * Common function for mmap(2)'ing DMA-safe memory.  May be called by
  * bus-specific DMA mmap(2)'ing functions.
  */
 paddr_t

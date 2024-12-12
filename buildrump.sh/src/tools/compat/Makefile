@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.89 2021/02/25 13:41:58 christos Exp $
+#	$NetBSD: Makefile,v 1.93 2024/10/31 15:05:48 jakllsch Exp $
 
 HOSTLIB=	nbcompat
 
@@ -18,7 +18,9 @@ SRCS=		atoll.c basename.c cdbr.c cdbw.c dirname.c \
 		regcomp.c regerror.c regexec.c regfree.c \
 		setenv.c setgroupent.c \
 		setpassent.c setprogname.c sha1.c sha1hl.c sha2.c \
-		sha256hl.c sha384hl.c sha512hl.c snprintb.c snprintf.c \
+		sha256hl.c sha384hl.c sha512hl.c \
+		shquote.c \
+		snprintb.c snprintf.c \
 		stat_flags.c strlcat.c strlcpy.c strmode.c \
 		strcasecmp.c strncasecmp.c strndup.c strnlen.c \
 		strsep.c strsuftoll.c strtoll.c \
@@ -31,13 +33,13 @@ BUILD_OSTYPE!=  uname -s
 
 # Disable use of pre-compiled headers on Darwin.
 .if ${BUILD_OSTYPE} == "Darwin"
-CPPFLAGS+=	-no-cpp-precomp
+HOST_CPPFLAGS+=	-no-cpp-precomp
 .endif
 
 # -D_FILE_OFFSET_BITS=64 produces a much more amenable `struct stat', and
 # other file ops, on many systems, without changing function names.
 
-CPPFLAGS+=	-I. -I./include -I${.CURDIR} -I${.CURDIR}/sys \
+HOST_CPPFLAGS+=	-I. -I./include -I${.CURDIR} -I${.CURDIR}/sys \
 		-DHAVE_NBTOOL_CONFIG_H=1 -D_FILE_OFFSET_BITS=64
 
 .PATH:		${.CURDIR}/../../lib/libc/cdb \
@@ -84,7 +86,8 @@ CONFIGURE_ARGS+=--silent
 
 config.cache: include/.stamp configure nbtool_config.h.in defs.mk.in
 	rm -f ${.TARGET}
-	CC=${HOST_CC:Q} CFLAGS=${HOST_CFLAGS:Q} LDFLAGS=${HOST_LDFLAGS:Q} \
+	CC=${HOST_CC:Q} CFLAGS=${HOST_CFLAGS:Q} CPPFLAGS=${HOST_CPPFLAGS:Q} \
+		LDFLAGS=${HOST_LDFLAGS:Q} \
 		${HOST_SH} ${.CURDIR}/configure ${CONFIGURE_ARGS}
 
 defs.mk: config.cache
@@ -149,8 +152,7 @@ ${HOST_SHAREDIR}/compat/defs.mk: defs.mk
 
 # bsd.hostlib.mk wants HOST_CPPFLAGS, not CPPFLAGS
 
-HOST_CPPFLAGS:=	${CPPFLAGS}
-CPPFLAGS:=	# empty
+HOST_CPPFLAGS+=	${CPPFLAGS}
 
 .include <bsd.hostlib.mk>
 
@@ -166,5 +168,6 @@ INSTALL=	${INSTALL_OBJ}/xinstall
 # Run "${TOOLDIR}/bin/nbmake-${MACHINE} regen" by hand after editing
 # configure.ac.  See more detailed instructions in configure.ac.
 regen:
-	cd ${.CURDIR} && ${TOOLDIR}/bin/${_TOOL_PREFIX}autoconf
-	cd ${.CURDIR} && ${TOOLDIR}/bin/${_TOOL_PREFIX}autoheader
+	${_MKMSG_REGEN} configure nbtool_config.h.in
+	cd ${.CURDIR} && ${TOOLDIR}/bin/${_TOOL_PREFIX}autoreconf \
+		${${MAKEVERBOSE} >= 2 :? -v :}

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ether.h,v 1.86 2021/02/14 19:35:37 roy Exp $	*/
+/*	$NetBSD: if_ether.h,v 1.91 2024/02/05 21:46:06 andvar Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -110,7 +110,7 @@ struct ether_header {
 	 (((etype) == ETHERTYPE_PPPOE) ? ETHER_PPPOE_ENCAP_LEN : 0))
 
 /*
- * Ethernet CRC32 polynomials (big- and little-endian verions).
+ * Ethernet CRC32 polynomials (big- and little-endian versions).
  */
 #define	ETHER_CRC_POLY_LE	0xedb88320
 #define	ETHER_CRC_POLY_BE	0x04c11db6
@@ -198,6 +198,8 @@ struct ethercom {
 	 * being added or removed.
 	 */
 	ether_vlancb_t				ec_vlan_cb;
+	/* Hooks called at the beginning of detach of this interface */
+	khook_list_t				*ec_ifdetach_hooks;
 	kmutex_t				*ec_lock;
 	/* Flags used only by the kernel */
 	int					ec_flags;
@@ -253,7 +255,8 @@ void	ether_set_vlan_cb(struct ethercom *, ether_vlancb_t);
 int	ether_ioctl(struct ifnet *, u_long, void *);
 int	ether_addmulti(const struct sockaddr *, struct ethercom *);
 int	ether_delmulti(const struct sockaddr *, struct ethercom *);
-int	ether_multiaddr(const struct sockaddr *, uint8_t[], uint8_t[]);
+int	ether_multiaddr(const struct sockaddr *, uint8_t[ETHER_ADDR_LEN],
+			uint8_t[ETHER_ADDR_LEN]);
 void    ether_input(struct ifnet *, struct mbuf *);
 
 /*
@@ -362,12 +365,6 @@ vlan_set_tag(struct mbuf *m, uint16_t vlantag)
 	return;
 }
 
-static __inline bool
-vlan_has_tag(struct mbuf *m)
-{
-	return (m->m_flags & M_VLANTAG) != 0;
-}
-
 /* extract VLAN ID value from a VLAN tag */
 static __inline uint16_t
 vlan_get_tag(struct mbuf *m)
@@ -375,6 +372,23 @@ vlan_get_tag(struct mbuf *m)
 	KASSERT((m->m_flags & M_PKTHDR) != 0);
 	KASSERT(m->m_flags & M_VLANTAG);
 	return m->m_pkthdr.ether_vtag;
+}
+
+static __inline bool
+vlan_has_tag(struct mbuf *m)
+{
+	return (m->m_flags & M_VLANTAG) != 0;
+}
+
+static __inline bool
+vlan_is_hwtag_enabled(struct ifnet *_ifp)
+{
+	struct ethercom *ec = (void *)_ifp;
+
+	if (ec->ec_capenable & ETHERCAP_VLAN_HWTAGGING)
+		return true;
+
+	return false;
 }
 
 /* test if any VLAN is configured for this interface */
@@ -385,6 +399,10 @@ void	ether_ifattach(struct ifnet *, const uint8_t *);
 void	ether_ifdetach(struct ifnet *);
 int	ether_mediachange(struct ifnet *);
 void	ether_mediastatus(struct ifnet *, struct ifmediareq *);
+void *	ether_ifdetachhook_establish(struct ifnet *,
+	    void (*)(void *), void *arg);
+void	ether_ifdetachhook_disestablish(struct ifnet *,
+	    void *, kmutex_t *);
 
 char	*ether_sprintf(const uint8_t *);
 char	*ether_snprintf(char *, size_t, const uint8_t *);
@@ -395,6 +413,11 @@ uint32_t ether_crc32_be(const uint8_t *, size_t);
 int	ether_aton_r(u_char *, size_t, const char *);
 int	ether_enable_vlan_mtu(struct ifnet *);
 int	ether_disable_vlan_mtu(struct ifnet *);
+int	ether_add_vlantag(struct ifnet *, uint16_t, bool *);
+int	ether_del_vlantag(struct ifnet *, uint16_t);
+int	ether_inject_vlantag(struct mbuf **, uint16_t, uint16_t);
+struct mbuf *
+	ether_strip_vlantag(struct mbuf *);
 #else
 /*
  * Prototype ethers(3) functions.

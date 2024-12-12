@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_155.c,v 1.9 2021/06/30 14:23:50 rillig Exp $	*/
+/*	$NetBSD: msg_155.c,v 1.12 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_155.c"
 
 // Test for message: passing '%s' to incompatible '%s', arg #%d [155]
+
+/* lint1-extra-flags: -X 351 */
 
 
 void c99_6_7_6_example_a(int);
@@ -9,8 +11,8 @@ void c99_6_7_6_example_b(int *);
 void c99_6_7_6_example_c(int *[3]);
 void c99_6_7_6_example_d(int (*)[3]);
 void c99_6_7_6_example_e(int (*)[*]);
-// FIXME: assertion "sym->s_type != NULL" failed in declare_argument at decl.c:2436
-// void c99_6_7_6_example_f(int *());
+/* Wrong type before decl.c 1.256 from 2022-04-01. */
+void c99_6_7_6_example_f(int *());
 void c99_6_7_6_example_g(int (*)(void));
 void c99_6_7_6_example_h(int (*const[])(unsigned int, ...));
 
@@ -21,30 +23,30 @@ struct incompatible {
 void
 provoke_error_messages(struct incompatible arg)
 {
-	/* expect+1: 'int' */
+	/* expect+1: ... 'int', ... */
 	c99_6_7_6_example_a(arg);
 
-	/* expect+1: 'pointer to int' */
+	/* expect+1: ... 'pointer to int', ... */
 	c99_6_7_6_example_b(arg);
 
 	/* C99 says 'array[3] of pointer to int', which is close enough. */
-	/* expect+1: 'pointer to pointer to int' */
+	/* expect+1: ... 'pointer to pointer to int', ... */
 	c99_6_7_6_example_c(arg);
 
-	/* expect+1: 'pointer to array[3] of int' */
+	/* expect+1: ... 'pointer to array[3] of int', ... */
 	c99_6_7_6_example_d(arg);
 
-	/* expect+1: 'pointer to array[unknown_size] of int' */
+	/* expect+1: ... 'pointer to array[unknown_size] of int', ... */
 	c99_6_7_6_example_e(arg);
 
-	/* TODO: C99 says 'function with no parameter specification returning a pointer to int' */
-	/* expect+1: function 'c99_6_7_6_example_f' implicitly declared */
+	/* Wrong type before decl.c 1.256 from 2022-04-01. */
+	/* expect+1: ... 'pointer to function() returning pointer to int', ... */
 	c99_6_7_6_example_f(arg);
 
-	/* expect+1: 'pointer to function(void) returning int' */
+	/* expect+1: ... 'pointer to function(void) returning int', ... */
 	c99_6_7_6_example_g(arg);
 
-	/* expect+1: 'pointer to const pointer to function(unsigned int, ...) returning int' */
+	/* expect+1: ... 'pointer to const pointer to function(unsigned int, ...) returning int', ... */
 	c99_6_7_6_example_h(arg);
 }
 
@@ -65,15 +67,15 @@ type_name_of_enum(void)
 		MONDAY
 	} day = MONDAY;
 
-	/* expect+1: passing 'enum Day' */
+	/* expect+1: ... passing 'enum Day' ... */
 	sink(day);
 
-	/* expect+1: passing 'enum Day' */
+	/* expect+1: ... passing 'enum Day' ... */
 	sink(day + 0);
 
-	/* expect+1: passing 'int' */
+	/* expect+1: ... passing 'int' ... */
 	sink(0 + day);
 
-	/* expect+1: passing 'int' */
+	/* expect+1: ... passing 'int' ... */
 	sink(0);
 }

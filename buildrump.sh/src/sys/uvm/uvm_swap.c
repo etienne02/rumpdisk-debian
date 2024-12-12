@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_swap.c,v 1.206 2021/08/23 13:08:18 hannken Exp $	*/
+/*	$NetBSD: uvm_swap.c,v 1.208 2023/04/09 09:00:56 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1995, 1996, 1997, 2009 Matthew R. Green
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_swap.c,v 1.206 2021/08/23 13:08:18 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_swap.c,v 1.208 2023/04/09 09:00:56 riastradh Exp $");
 
 #include "opt_uvmhist.h"
 #include "opt_compat_netbsd.h"
@@ -1190,6 +1190,22 @@ again:
  */
 
 /*
+ * swopen: allow the initial open from uvm_swap_init() and reject all others.
+ */
+
+static int
+swopen(dev_t dev, int flag, int mode, struct lwp *l)
+{
+	static bool inited = false;
+
+	if (!inited) {
+		inited = true;
+		return 0;
+	}
+	return ENODEV;
+}
+
+/*
  * swstrategy: perform I/O on the drum
  *
  * => we must map the i/o request from the drum to the correct swapdev.
@@ -1308,8 +1324,8 @@ swwrite(dev_t dev, struct uio *uio, int ioflag)
 }
 
 const struct bdevsw swap_bdevsw = {
-	.d_open = nullopen,
-	.d_close = nullclose,
+	.d_open = swopen,
+	.d_close = noclose,
 	.d_strategy = swstrategy,
 	.d_ioctl = noioctl,
 	.d_dump = nodump,
@@ -1857,7 +1873,8 @@ uvm_swap_io(struct vm_page **pps, int startslot, int npages, int flags)
 	 * allocate a buf for the i/o.
 	 */
 
-	KASSERT(curlwp != uvm.pagedaemon_lwp || (write && async));
+	KASSERT(curlwp != uvm.pagedaemon_lwp || write);
+	KASSERT(curlwp != uvm.pagedaemon_lwp || async);
 	bp = getiobuf(swapdev_vp, curlwp != uvm.pagedaemon_lwp);
 	if (bp == NULL) {
 		uvm_aio_aiodone_pages(pps, npages, true, ENOMEM);

@@ -1,4 +1,4 @@
-/*	$NetBSD: msg.mi.es,v 1.29 2020/11/04 14:29:40 martin Exp $	*/
+/*	$NetBSD: msg.mi.es,v 1.43 2024/04/25 11:25:08 hannken Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -141,6 +141,8 @@ message ask_disk
 message Available_disks
 {Discos disponibles}
 
+message Available_wedges	{Existing "wedges"}
+
 message heads
 {cabezas}
 
@@ -148,7 +150,7 @@ message sectors
 {sectores}
 
 message mountpoint
-{punto de montaje (o 'ninguno')}
+{punto de montaje (o '-')}
 
 message cylname
 {cil}
@@ -297,6 +299,8 @@ message cvtscheme_keep		{keep (use only part of disk)}
 message cvtscheme_delete	{delete (all data will be lost!)}
 message cvtscheme_convert	{convert to another partitioning method}
 message cvtscheme_abort		{abort}
+message cvtscheme_error
+{Could not convert all partitions}
 
 /* Called with:				Example
  *  $0 = device name			wd0
@@ -632,6 +636,12 @@ message net_defroute
 message net_media
 {Tipo de medio de la red}
 
+message net_ssid
+{Wi-Fi SSID?}
+
+message net_passphrase
+{Wi-Fi passphrase?}
+
 message netok
 {Ha introducido los siguientes valores.
 
@@ -824,12 +834,18 @@ message cur_distsets
 }
 
 message cur_distsets_header
-{   Conjunto de distribución Selecc.
-   ------------------------ --------
+{   Conjunto de distribución           Selecc.
+   ---------------------------------- --------
 }
 
 message set_base
 {Base}
+
+message set_base32
+{Base de compatibilidad de 32 bits}
+
+message set_base64
+{Base de compatibilidad de 64 bits}
 
 message set_system
 {Sistema (/etc)}
@@ -843,8 +859,14 @@ message set_dtb
 message set_games
 {Juegos}
 
+message set_gpufw
+{Graphics driver firmware}
+
 message set_man_pages
 {Paginas de manual}
+
+message set_man_pages_html
+{Paginas de manual en HTML}
 
 message set_misc
 {Varios}
@@ -899,6 +921,12 @@ message set_xsrc
 
 message set_debug
 {Debug symbols}
+
+message set_debug32
+{Debug symbols (32-bit)}
+
+message set_debug64
+{Debug symbols (64-bit)}
 
 message set_xdebug
 {X11 debug symbols}
@@ -984,6 +1012,12 @@ message rootpw
 y por tanto está vacía.  ¿Quiere establecer ahora una contraseña de root para
 el sistema?}
 
+message force_rootpw
+{The root password of the newly installed system has not yet been
+initialized. 
+ 
+If you do not want to set a password, enter an empty line.}
+
 message rootsh
 {Ahora puede seleccionar que shell quiere usar para el usuario root.  Por
 omisión es /bin/sh, pero podría preferir otra.}
@@ -1052,6 +1086,12 @@ message Set_Sizes {Establecer los tamaños de las particiones NetBSD}
 message Use_Default_Parts {Use default partition sizes}
 
 /* Called with:				Example
+ *  $0 = partitioning name		Master Boot Record (MBR)
+ *  $1 = short version of $0		MBR
+ */
+message Use_Empty_Parts {Manually define partitions}
+
+/* Called with:				Example
  *  $0 = current partitioning name	Master Boot Record (MBR)
  *  $1 = short version of $0		MBR
  */
@@ -1085,6 +1125,7 @@ message Host {Máquina}
 message Base_dir {Directorio base}
 message Set_dir_src {Directorio de conjuntos binary} /* fix XLAT */
 message Set_dir_bin {Directorio de conjuntos source} /* fix XLAT */
+message Dist_postfix {Extensión de archivo}
 message Xfer_dir {Directorio a transferir a}
 message transfer_method {Download via}
 message User {Usuario}
@@ -1230,6 +1271,7 @@ message failed {Error}
 message askfsmountadv {Punto de montaje o 'raid' o 'CGD' o 'lvm'?}
 message partman {Partición extendida}
 message editpart {Editar particiones}
+message selectwedge {Preconfigured "wedges" dk(4)}
 
 message fremove {QUITAR}
 message remove {Quitar}
@@ -1359,7 +1401,9 @@ message Too_large {Demasiado grande!}
 message free_space_line {Espacio en $0..$1 $3 (tamaño $2 $3)\n}
 
 message	fs_type_ffsv2	{FFSv2}
+message	fs_type_ffsv2ea	{FFSv2ea}
 message	fs_type_ffs	{FFS}
+message	fs_type_efi_sp	{EFI system partition}
 message fs_type_ext2old	{Linux Ext2 (old)}
 message	other_fs_type	{Other type}
 
@@ -1523,3 +1567,8 @@ message clone_target_hdr
 message clone_target_disp		{cloned partition(s)}
 message clone_src_done
 {Source selection OK, proceed to target selection}
+
+message network_ok
+{Your network seems to work fine. 
+Should we skip the configuration 
+and just use the network as-is?}

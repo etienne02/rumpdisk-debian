@@ -1,4 +1,4 @@
-/*	$NetBSD: extern.h,v 1.26 2020/05/15 14:37:21 joerg Exp $	*/
+/*	$NetBSD: extern.h,v 1.32 2024/10/01 16:35:13 christos Exp $	*/
 
 /*
  * Copyright (c) 1997 Christos Zoulas.  All rights reserved.
@@ -24,6 +24,7 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <sys/types.h>	/* off_t */
 #include <stdarg.h>
 #include <ucontext.h>
 
@@ -34,9 +35,14 @@ typedef struct _locale		*locale_t;
 
 __BEGIN_DECLS
 extern char *__minbrk;
+extern sigset_t __sigintr;
+extern char **environ;
 int __getcwd(char *, size_t);
 int __getlogin(char *, size_t);
 int __setlogin(const char *);
+int __posix_fadvise50(int, int, off_t, off_t, int);
+void  __section(".text.startup") __attribute__((__visibility__("hidden")))
+    __libc_atomic_init(void);
 void _resumecontext(void) __dead;
 __dso_hidden int	_strerror_lr(int, char *, size_t, locale_t);
 const char *__strerror(int , char *, size_t);
@@ -49,23 +55,17 @@ struct sigaction;
 int __sigaction_sigtramp(int, const struct sigaction *,
     struct sigaction *, const void *, int);
 
+/* is "long double" and "double" different? */
+#if (__LDBL_MANT_DIG__ != __DBL_MANT_DIG__) || \
+    (__LDBL_MAX_EXP__ != __DBL_MAX_EXP__)
+#define WIDE_DOUBLE
+#endif
+
 #ifdef WIDE_DOUBLE
-char *__hdtoa(double, const char *, int, int *, int *, char **);
 char *__hldtoa(long double, const char *, int, int *, int *,  char **);
 char *__ldtoa(long double *, int, int, int *, int *, char **);
 #endif
-
-#ifndef __LIBC12_SOURCE__
-struct syslog_data;
-void	syslog_ss(int, struct syslog_data *, const char *, ...)
-    __RENAME(__syslog_ss60) __printflike(3, 4);
-void    vsyslog_ss(int, struct syslog_data *, const char *, va_list) 
-    __RENAME(__vsyslog_ss60) __printflike(3, 0); 
-void	syslogp_ss(int, struct syslog_data *, const char *, const char *, 
-    const char *, ...) __RENAME(__syslogp_ss60) __printflike(5, 0);
-void	vsyslogp_ss(int, struct syslog_data *, const char *, const char *, 
-    const char *, va_list) __RENAME(__vsyslogp_ss60) __printflike(5, 0);
-#endif
+char *__hdtoa(double, const char *, int, int *, int *, char **);
 
 void	_malloc_prefork(void);
 void	_malloc_postfork(void);

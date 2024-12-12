@@ -1,4 +1,4 @@
-/* $NetBSD: podulebus.c,v 1.32 2021/08/07 16:18:40 thorpej Exp $ */
+/* $NetBSD: podulebus.c,v 1.34 2022/05/30 09:56:02 andvar Exp $ */
 
 /*
  * Copyright (c) 1994-1996 Mark Brinicombe.
@@ -43,7 +43,7 @@
 
 #include <sys/param.h>
 
-__KERNEL_RCSID(0, "$NetBSD: podulebus.c,v 1.32 2021/08/07 16:18:40 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: podulebus.c,v 1.34 2022/05/30 09:56:02 andvar Exp $");
 
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -399,7 +399,7 @@ podulescan(device_t dev)
  * Attach podulebus.
  * This probes all the podules and sets up the podules array with
  * information found in the podule headers.
- * After identifing all the podules, all the children of the podulebus
+ * After identifying all the podules, all the children of the podulebus
  * are probed and attached.
  */
   
@@ -484,7 +484,7 @@ podulebusattach(device_t parent, device_t self, void *aux)
 			/* Any old description is now wrong */
 			podules[loop].description[0] = 0;
 			if (value != 0xffff) {
-				printf("podule%d: ID overriden man=%04x prod=%04x\n",
+				printf("podule%d: ID overridden man=%04x prod=%04x\n",
 				    loop, podules[loop].manufacturer,
 				    podules[loop].product);
 				podules[loop].slottype = SLOT_POD;

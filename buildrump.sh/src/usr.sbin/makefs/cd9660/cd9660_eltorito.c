@@ -1,4 +1,4 @@
-/*	$NetBSD: cd9660_eltorito.c,v 1.24 2020/11/15 00:18:48 jmcneill Exp $	*/
+/*	$NetBSD: cd9660_eltorito.c,v 1.27 2023/12/28 12:13:56 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 2005 Daniel Watt, Walter Deignan, Ryan Gabrys, Alan
@@ -40,7 +40,7 @@
 
 #include <sys/cdefs.h>
 #if defined(__RCSID) && !defined(__lint)
-__RCSID("$NetBSD: cd9660_eltorito.c,v 1.24 2020/11/15 00:18:48 jmcneill Exp $");
+__RCSID("$NetBSD: cd9660_eltorito.c,v 1.27 2023/12/28 12:13:56 tsutsui Exp $");
 #endif  /* !__lint */
 
 #ifdef DEBUG
@@ -377,15 +377,15 @@ cd9660_setup_boot(iso9660_disk *diskStructure, int first_sector)
 	/* Point to catalog: For now assume it consumes one sector */
 	ELTORITO_DPRINTF(("Boot catalog will go in sector %d\n", first_sector));
 	diskStructure->boot_catalog_sector = first_sector;
-	cd9660_bothendian_dword(first_sector,
-		diskStructure->boot_descriptor->boot_catalog_pointer);
+	cd9660_731(first_sector,
+	    diskStructure->boot_descriptor->boot_catalog_pointer);
 
 	/*
 	 * Use system type of default image for validation entry. Fallback to
 	 * X86 system type if not found.
 	 */
 	system = default_boot_image != NULL ? default_boot_image->system :
-					      ET_SYS_X86; 
+					      ET_SYS_X86;
 
 	/* Step 1: Generate boot catalog */
 	/* Step 1a: Validation entry */
@@ -546,8 +546,8 @@ cd9660_write_mbr_partition_entry(FILE *fd, int idx, off_t sector_start,
 	uint32_t lba;
 
 	if (fseeko(fd, (off_t)(idx) * 16 + 0x1be, SEEK_SET) == -1)
-		err(1, "fseeko");
-	
+		err(EXIT_FAILURE, "fseeko");
+
 	val = 0x80; /* Bootable */
 	fwrite(&val, sizeof(val), 1, fd);
 
@@ -593,7 +593,7 @@ cd9660_write_apm_partition_entry(FILE *fd, int idx, int total_partitions,
 	    APPLE_PS_WRITABLE;
 
 	if (fseeko(fd, (off_t)(idx + 1) * sector_size, SEEK_SET) == -1)
-		err(1, "fseeko");
+		err(EXIT_FAILURE, "fseeko");
 
 	/* Signature */
 	apm16 = htobe16(0x504d);
@@ -618,7 +618,7 @@ cd9660_write_apm_partition_entry(FILE *fd, int idx, int total_partitions,
 	apm32 = 0;
 	/* pmLgDataStart */
 	fwrite(&apm32, sizeof(apm32), 1, fd);
-	/* pmDataCnt */ 
+	/* pmDataCnt */
 	apm32 = htobe32(nsectors);
 	fwrite(&apm32, sizeof(apm32), 1, fd);
 	/* pmPartStatus */
@@ -639,7 +639,7 @@ cd9660_write_boot(iso9660_disk *diskStructure, FILE *fd)
 	/* write boot catalog */
 	if (fseeko(fd, (off_t)diskStructure->boot_catalog_sector *
 	    diskStructure->sectorSize, SEEK_SET) == -1)
-		err(1, "fseeko");
+		err(EXIT_FAILURE, "fseeko");
 
 	if (diskStructure->verbose_level > 0) {
 		printf("Writing boot catalog to sector %" PRId64 "\n",
@@ -667,9 +667,9 @@ cd9660_write_boot(iso9660_disk *diskStructure, FILE *fd)
 		}
 		cd9660_copy_file(diskStructure, fd, t->sector, t->filename);
 
-		if (t->system == ET_SYS_MAC) 
+		if (t->system == ET_SYS_MAC)
 			apm_partitions++;
-		if (t->system == ET_SYS_PPC) 
+		if (t->system == ET_SYS_PPC)
 			mbr_partitions++;
 	}
 

@@ -1,4 +1,4 @@
-/* $NetBSD: com.c,v 1.365 2021/07/31 10:04:12 tnn Exp $ */
+/* $NetBSD: com.c,v 1.384 2023/04/11 13:01:41 riastradh Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999, 2004, 2008 The NetBSD Foundation, Inc.
@@ -63,10 +63,15 @@
 /*
  * COM driver, uses National Semiconductor NS16450/NS16550AF UART
  * Supports automatic hardware flow control on StarTech ST16C650A UART
+ *
+ * Lock order:
+ *	ttylock (IPL_VM)
+ *	-> sc->sc_lock (IPL_HIGH)
+ *	-> timecounter_lock (IPL_HIGH)
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: com.c,v 1.365 2021/07/31 10:04:12 tnn Exp $");
+__KERNEL_RCSID(0, "$NetBSD: com.c,v 1.384 2023/04/11 13:01:41 riastradh Exp $");
 
 #include "opt_com.h"
 #include "opt_ddb.h"
@@ -115,8 +120,9 @@ __KERNEL_RCSID(0, "$NetBSD: com.c,v 1.365 2021/07/31 10:04:12 tnn Exp $");
 #include <sys/rndsource.h>
 #endif
 
-
 #include <sys/bus.h>
+
+#include <ddb/db_active.h>
 
 #include <dev/ic/comreg.h>
 #include <dev/ic/comvar.h>
@@ -128,17 +134,20 @@ __KERNEL_RCSID(0, "$NetBSD: com.c,v 1.365 2021/07/31 10:04:12 tnn Exp $");
 
 #include "ioconf.h"
 
-#define	CSR_WRITE_1(r, o, v)	\
-	bus_space_write_1((r)->cr_iot, (r)->cr_ioh, (r)->cr_map[o], v)
 #define	CSR_READ_1(r, o)	\
-	bus_space_read_1((r)->cr_iot, (r)->cr_ioh, (r)->cr_map[o])
+	(r)->cr_read((r), (r)->cr_map[o])
+#define	CSR_WRITE_1(r, o, v)	\
+	(r)->cr_write((r), (r)->cr_map[o], (v))
+#define	CSR_WRITE_MULTI(r, o, p, n)	\
+	(r)->cr_write_multi((r), (r)->cr_map[o], (p), (n))
+
+/*
+ * XXX COM_TYPE_AU1x00 specific
+ */
 #define	CSR_WRITE_2(r, o, v)	\
 	bus_space_write_2((r)->cr_iot, (r)->cr_ioh, (r)->cr_map[o], v)
 #define	CSR_READ_2(r, o)	\
 	bus_space_read_2((r)->cr_iot, (r)->cr_ioh, (r)->cr_map[o])
-#define	CSR_WRITE_MULTI(r, o, p, n)	\
-	bus_space_write_multi_1((r)->cr_iot, (r)->cr_ioh, (r)->cr_map[o], p, n)
-
 
 static void com_enable_debugport(struct com_softc *);
 
@@ -169,12 +178,11 @@ int	comcngetc(dev_t);
 void	comcnputc(dev_t, int);
 void	comcnpollc(dev_t, int);
 
-#define	integrate	static inline
 void	comsoft(void *);
-integrate void com_rxsoft(struct com_softc *, struct tty *);
-integrate void com_txsoft(struct com_softc *, struct tty *);
-integrate void com_stsoft(struct com_softc *, struct tty *);
-integrate void com_schedrx(struct com_softc *);
+static inline void com_rxsoft(struct com_softc *, struct tty *);
+static inline void com_txsoft(struct com_softc *, struct tty *);
+static inline void com_stsoft(struct com_softc *, struct tty *);
+static inline void com_schedrx(struct com_softc *);
 void	comdiag(void *);
 
 dev_type_open(comopen);
@@ -275,6 +283,70 @@ static const bus_size_t com_std_map[COM_REGMAP_NENTRIES] = {
 	bus_space_barrier((r)->cr_iot, (r)->cr_ioh, 0, (r)->cr_nports, (f))
 
 /*
+ * com_read_1 --
+ *	Default register read callback using single byte accesses.
+ */
+static uint8_t
+com_read_1(struct com_regs *regs, u_int reg)
+{
+	return bus_space_read_1(regs->cr_iot, regs->cr_ioh, reg);
+}
+
+/*
+ * com_write_1 --
+ *	Default register write callback using single byte accesses.
+ */
+static void
+com_write_1(struct com_regs *regs, u_int reg, uint8_t val)
+{
+	bus_space_write_1(regs->cr_iot, regs->cr_ioh, reg, val);
+}
+
+/*
+ * com_write_multi_1 --
+ *	Default register multi write callback using single byte accesses.
+ */
+static void
+com_write_multi_1(struct com_regs *regs, u_int reg, const uint8_t *datap,
+    bus_size_t count)
+{
+	bus_space_write_multi_1(regs->cr_iot, regs->cr_ioh, reg, datap, count);
+}
+
+/*
+ * com_read_4 --
+ *	Default register read callback using dword accesses.
+ */
+static uint8_t
+com_read_4(struct com_regs *regs, u_int reg)
+{
+	return bus_space_read_4(regs->cr_iot, regs->cr_ioh, reg) & 0xff;
+}
+
+/*
+ * com_write_4 --
+ *	Default register write callback using dword accesses.
+ */
+static void
+com_write_4(struct com_regs *regs, u_int reg, uint8_t val)
+{
+	bus_space_write_4(regs->cr_iot, regs->cr_ioh, reg, val);
+}
+
+/*
+ * com_write_multi_4 --
+ *	Default register multi write callback using dword accesses.
+ */
+static void
+com_write_multi_4(struct com_regs *regs, u_int reg, const uint8_t *datap,
+    bus_size_t count)
+{
+	while (count-- > 0) {
+		bus_space_write_4(regs->cr_iot, regs->cr_ioh, reg, *datap++);
+	}
+}
+
+/*
  * com_init_regs --
  *	Driver front-ends use this to initialize our register map
  *	in the standard fashion.  They may then tailor the map to
@@ -290,6 +362,9 @@ com_init_regs(struct com_regs *regs, bus_space_tag_t st, bus_space_handle_t sh,
 	regs->cr_ioh = sh;
 	regs->cr_iobase = addr;
 	regs->cr_nports = COM_NPORTS;
+	regs->cr_read = com_read_1;
+	regs->cr_write = com_write_1;
+	regs->cr_write_multi = com_write_multi_1;
 	memcpy(regs->cr_map, com_std_map, sizeof(regs->cr_map));
 }
 
@@ -308,6 +383,37 @@ com_init_regs_stride(struct com_regs *regs, bus_space_tag_t st,
 		regs->cr_map[i] <<= regshift;
 	}
 	regs->cr_nports <<= regshift;
+}
+
+/*
+ * com_init_regs_stride_width --
+ *	Convenience function for front-ends that have a stride between
+ *	registers and specific I/O width requirements.
+ */
+void
+com_init_regs_stride_width(struct com_regs *regs, bus_space_tag_t st,
+			   bus_space_handle_t sh, bus_addr_t addr,
+			   u_int regshift, u_int width)
+{
+
+	com_init_regs(regs, st, sh, addr);
+	for (size_t i = 0; i < __arraycount(regs->cr_map); i++) {
+		regs->cr_map[i] <<= regshift;
+	}
+	regs->cr_nports <<= regshift;
+
+	switch (width) {
+	case 1:
+		/* Already set by com_init_regs */
+		break;
+	case 4:
+		regs->cr_read = com_read_4;
+		regs->cr_write = com_write_4;
+		regs->cr_write_multi = com_write_multi_4;
+		break;
+	default:
+		panic("com: unsupported I/O width %d", width);
+	}
 }
 
 /*ARGSUSED*/
@@ -574,6 +680,7 @@ com_attach_subr(struct com_softc *sc)
 			SET(sc->sc_hwflags, COM_HW_FIFO);
 
 			fifo_msg = "ns16550a";
+			sc->sc_fifolen = 16;
 
 			/*
 			 * IIR changes into the EFR if LCR is set to LCR_EERS
@@ -793,19 +900,6 @@ com_config(struct com_softc *sc)
 		com_enable_debugport(sc);
 }
 
-#if 0
-static int
-comcngetc_detached(dev_t dev)
-{
-	return 0;
-}
-
-static void
-comcnputc_detached(dev_t dev, int c)
-{
-}
-#endif
-
 int
 com_detach(device_t self, int flags)
 {
@@ -885,16 +979,14 @@ com_shutdown(struct com_softc *sc)
 	com_break(sc, 0);
 
 	/*
-	 * Hang up if necessary.  Wait a bit, so the other side has time to
-	 * notice even if we immediately open the port again.
-	 * Avoid tsleeping above splhigh().
+	 * Hang up if necessary.  Record when we hung up, so if we
+	 * immediately open the port again, we will wait a bit until
+	 * the other side has had time to notice that we hung up.
 	 */
 	if (ISSET(tp->t_cflag, HUPCL)) {
 		com_modem(sc, 0);
-		mutex_spin_exit(&sc->sc_lock);
-		/* XXX will only timeout */
-		(void) kpause(ttclos, false, hz, NULL);
-		mutex_spin_enter(&sc->sc_lock);
+		microuptime(&sc->sc_hup_pending);
+		sc->sc_hup_pending.tv_sec++;
 	}
 
 	/* Turn off interrupts. */
@@ -967,6 +1059,7 @@ comopen(dev_t dev, int flag, int mode, struct lwp *l)
 	 */
 	if (!ISSET(tp->t_state, TS_ISOPEN) && tp->t_wopen == 0) {
 		struct termios t;
+		struct timeval now, diff;
 
 		tp->t_dev = dev;
 
@@ -982,6 +1075,19 @@ comopen(dev_t dev, int flag, int mode, struct lwp *l)
 			com_config(sc);
 		} else {
 			mutex_spin_enter(&sc->sc_lock);
+		}
+
+		if (timerisset(&sc->sc_hup_pending)) {
+			microuptime(&now);
+			while (timercmp(&now, &sc->sc_hup_pending, <)) {
+				timersub(&sc->sc_hup_pending, &now, &diff);
+				const int ms = diff.tv_sec * 1000 +
+				    diff.tv_usec / 1000;
+				kpause(ttclos, false, uimax(mstohz(ms), 1),
+				    &sc->sc_lock);
+				microuptime(&now);
+			}
+			timerclear(&sc->sc_hup_pending);
 		}
 
 		/* Turn on interrupts. */
@@ -1284,7 +1390,7 @@ comioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 	return (error);
 }
 
-integrate void
+static inline void
 com_schedrx(struct com_softc *sc)
 {
 
@@ -1825,18 +1931,16 @@ comstart(struct tty *tp)
 	struct com_softc *sc =
 	    device_lookup_private(&com_cd, COMUNIT(tp->t_dev));
 	struct com_regs *regsp = &sc->sc_regs;
-	int s;
 
 	if (COM_ISALIVE(sc) == 0)
 		return;
 
-	s = spltty();
 	if (ISSET(tp->t_state, TS_BUSY | TS_TIMEOUT | TS_TTSTOP))
-		goto out;
+		return;
 	if (sc->sc_tx_stopped)
-		goto out;
+		return;
 	if (!ttypull(tp))
-		goto out;
+		return;
 
 	/* Grab the first contiguous region of buffer space. */
 	{
@@ -1874,9 +1978,6 @@ comstart(struct tty *tp)
 	}
 
 	mutex_spin_exit(&sc->sc_lock);
-out:
-	splx(s);
-	return;
 }
 
 /*
@@ -1919,7 +2020,7 @@ comdiag(void *arg)
 	    floods, floods == 1 ? "" : "s");
 }
 
-integrate void
+static inline void
 com_rxsoft(struct com_softc *sc, struct tty *tp)
 {
 	int (*rint)(int, struct tty *) = tp->t_linesw->l_rint;
@@ -2023,7 +2124,7 @@ com_rxsoft(struct com_softc *sc, struct tty *tp)
 	}
 }
 
-integrate void
+static inline void
 com_txsoft(struct com_softc *sc, struct tty *tp)
 {
 
@@ -2035,7 +2136,7 @@ com_txsoft(struct com_softc *sc, struct tty *tp)
 	(*tp->t_linesw->l_start)(tp);
 }
 
-integrate void
+static inline void
 com_stsoft(struct com_softc *sc, struct tty *tp)
 {
 	u_char msr, delta;
@@ -2134,7 +2235,9 @@ comintr(void *arg)
 	/* DesignWare APB UART BUSY interrupt */
 	if (sc->sc_type == COM_TYPE_DW_APB &&
 	    (iir & IIR_BUSY) == IIR_BUSY) {
-		if ((CSR_READ_1(regsp, COM_REG_USR) & 0x1) != 0) {
+		if (ISSET(sc->sc_hwflags, COM_HW_CONSOLE)) {
+			(void)CSR_READ_1(regsp, COM_REG_USR);
+		} else if ((CSR_READ_1(regsp, COM_REG_USR) & 0x1) != 0) {
 			CSR_WRITE_1(regsp, COM_REG_HALT, HALT_CHCFG_EN);
 			CSR_WRITE_1(regsp, COM_REG_LCR, sc->sc_lcr | LCR_DLAB);
 			CSR_WRITE_1(regsp, COM_REG_DLBL, sc->sc_dlbl);
@@ -2415,10 +2518,7 @@ com_common_getc(dev_t dev, struct com_regs *regsp)
 	stat = CSR_READ_1(regsp, COM_REG_IIR);
 	{
 		int cn_trapped = 0;	/* required by cn_trap, see above */
-#ifdef DDB
-		extern int db_active;
 		if (!db_active)
-#endif
 			cn_check_magic(dev, c, com_cnm_state);
 	}
 	splx(s);
@@ -2672,8 +2772,10 @@ com_kgdb_putc(void *arg, int c)
 }
 #endif /* KGDB */
 
-/* helper function to identify the com ports used by
- console or KGDB (and not yet autoconf attached) */
+/*
+ * helper function to identify the com ports used by
+ * console or KGDB (and not yet autoconf attached)
+ */
 int
 com_is_console(bus_space_tag_t iot, bus_addr_t iobase, bus_space_handle_t *ioh)
 {
@@ -2717,11 +2819,6 @@ bool
 com_suspend(device_t self, const pmf_qual_t *qual)
 {
 	struct com_softc *sc = device_private(self);
-
-#if 0
-	if (ISSET(sc->sc_hwflags, COM_HW_CONSOLE) && cn_tab == &comcons)
-		cn_tab = &comcons_suspend;
-#endif
 
 	CSR_WRITE_1(&sc->sc_regs, COM_REG_IER, 0);
 	(void)CSR_READ_1(&sc->sc_regs, COM_REG_IIR);

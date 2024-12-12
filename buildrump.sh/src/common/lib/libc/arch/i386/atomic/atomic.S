@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic.S,v 1.29 2020/05/01 08:32:50 maxv Exp $	*/
+/*	$NetBSD: atomic.S,v 1.37 2024/07/16 22:44:38 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -46,13 +46,9 @@
 #include "opt_xen.h"
 #include <machine/frameasm.h>
 #define LOCK			HOTPATCH(HP_NAME_NOLOCK, 1); lock
-#define HOTPATCH_SSE2_LFENCE	HOTPATCH(HP_NAME_SSE2_LFENCE, 7);
-#define HOTPATCH_SSE2_MFENCE	HOTPATCH(HP_NAME_SSE2_MFENCE, 7);
 #define HOTPATCH_CAS_64		HOTPATCH(HP_NAME_CAS_64, 49);
 #else
 #define LOCK			lock
-#define HOTPATCH_SSE2_LFENCE	/* nothing */
-#define HOTPATCH_SSE2_MFENCE	/* nothing */
 #define HOTPATCH_CAS_64		/* nothing */
 #endif
 
@@ -180,23 +176,44 @@ ENTRY(_atomic_cas_32_ni)
 	ret
 END(_atomic_cas_32_ni)
 
-ENTRY(_membar_consumer)
-	HOTPATCH_SSE2_LFENCE
-	/* 7 bytes of instructions */
-	LOCK
-	addl	$0, -4(%esp)
+ENTRY(_membar_acquire)
+	/*
+	 * Every load from normal memory is a load-acquire on x86, so
+	 * there is never any need for explicit barriers to order
+	 * load-before-anything.
+	 */
 	ret
-END(_membar_consumer)
+END(_membar_acquire)
 
-ENTRY(_membar_producer)
-	/* A store is enough */
-	movl	$0, -4(%esp)
+ENTRY(_membar_release)
+	/*
+	 * Every store to normal memory is a store-release on x86, so
+	 * there is never any need for explicit barriers to order
+	 * anything-before-store.
+	 */
 	ret
-END(_membar_producer)
+END(_membar_release)
 
 ENTRY(_membar_sync)
-	HOTPATCH_SSE2_MFENCE
-	/* 7 bytes of instructions */
+	/*
+	 * MFENCE, or a serializing instruction like a locked ADDL,
+	 * is necessary to order store-before-load.  Every other
+	 * ordering -- load-before-anything, anything-before-store --
+	 * is already guaranteed without explicit barriers.
+	 *
+	 * Empirically it turns out locked ADDL is cheaper than MFENCE,
+	 * so we use that, with an offset below the return address on
+	 * the stack to avoid a false dependency with RET.  (It might
+	 * even be better to use a much lower offset, say -128, to
+	 * avoid false dependencies for subsequent callees of the
+	 * caller.)
+	 *
+	 * https://pvk.ca/Blog/2014/10/19/performance-optimisation-~-writing-an-essay/
+	 * https://shipilev.net/blog/2014/on-the-fence-with-dependencies/
+	 * https://www.agner.org/optimize/instruction_tables.pdf
+	 *
+	 * Sync with xen_mb in sys/arch/i386/i386/cpufunc.S.
+	 */
 	LOCK
 	addl	$0, -4(%esp)
 	ret
@@ -332,10 +349,14 @@ ALIAS(atomic_cas_64_ni,_atomic_cas_64)
 ALIAS(__sync_val_compare_and_swap_8,_atomic_cas_64)
 #endif /* __HAVE_ATOMIC64_OPS || _KERNEL */
 
-ALIAS(membar_consumer,_membar_consumer)
-ALIAS(membar_producer,_membar_producer)
-ALIAS(membar_enter,_membar_consumer)
-ALIAS(membar_exit,_membar_producer)
+ALIAS(membar_acquire,_membar_acquire)
+ALIAS(membar_release,_membar_release)
+ALIAS(membar_sync,_membar_sync)
+
+ALIAS(membar_consumer,_membar_acquire)
+ALIAS(membar_producer,_membar_release)
+ALIAS(membar_enter,_membar_sync)
+ALIAS(membar_exit,_membar_release)
 ALIAS(membar_sync,_membar_sync)
 
 STRONG_ALIAS(_atomic_add_int,_atomic_add_32)
@@ -390,21 +411,7 @@ STRONG_ALIAS(_atomic_cas_uint_ni,_atomic_cas_32_ni)
 STRONG_ALIAS(_atomic_cas_ulong_ni,_atomic_cas_32_ni)
 STRONG_ALIAS(_atomic_cas_ptr_ni,_atomic_cas_32_ni)
 
-STRONG_ALIAS(_membar_enter,_membar_consumer)
-STRONG_ALIAS(_membar_exit,_membar_producer)
-
-#ifdef _HARDKERNEL
-	.section .rodata
-
-LABEL(sse2_lfence)
-	lfence
-	ret
-	nop; nop; nop;
-LABEL(sse2_lfence_end)
-
-LABEL(sse2_mfence)
-	mfence
-	ret
-	nop; nop; nop;
-LABEL(sse2_mfence_end)
-#endif	/* _HARDKERNEL */
+STRONG_ALIAS(_membar_consumer,_membar_acquire)
+STRONG_ALIAS(_membar_producer,_membar_release)
+STRONG_ALIAS(_membar_enter,_membar_sync)
+STRONG_ALIAS(_membar_exit,_membar_release)

@@ -1,4 +1,4 @@
-/*	$NetBSD: cryptodev.h,v 1.42 2021/08/14 20:43:05 andvar Exp $ */
+/*	$NetBSD: cryptodev.h,v 1.51 2023/07/11 10:42:16 riastradh Exp $ */
 /*	$FreeBSD: src/sys/opencrypto/cryptodev.h,v 1.2.2.6 2003/07/02 17:04:50 sam Exp $	*/
 /*	$OpenBSD: cryptodev.h,v 1.33 2002/07/17 23:52:39 art Exp $	*/
 
@@ -85,8 +85,9 @@
 #ifndef _CRYPTO_CRYPTO_H_
 #define _CRYPTO_CRYPTO_H_
 
+#include <sys/types.h>
+
 #include <sys/ioccom.h>
-#include <sys/condvar.h>
 #include <sys/time.h>
 
 #if defined(_KERNEL_OPT)
@@ -409,6 +410,16 @@ struct cryptostats {
 };
 
 #ifdef _KERNEL
+
+#include <sys/condvar.h>
+#include <sys/malloc.h>
+#include <sys/mutex.h>
+#include <sys/queue.h>
+#include <sys/systm.h>
+
+struct cpu_info;
+struct uio;
+
 /* Standard initialization structure beginning */
 struct cryptoini {
 	int		cri_alg;	/* Algorithm to use */
@@ -453,7 +464,7 @@ struct cryptop {
 
 	int		crp_etype;	/*
 					 * Error type (zero means no error).
-					 * All error codes except EAGAIN
+					 * All error codes
 					 * indicate possible data corruption (as in,
 					 * the data have been touched). On all
 					 * errors, the crp_sid may have changed
@@ -469,11 +480,11 @@ struct cryptop {
 #define CRYPTO_F_IOV		0x0002	/* Input/output are uio */
 #define CRYPTO_F_REL		0x0004	/* Must return data in same place */
 #define	CRYPTO_F_BATCH		0x0008	/* Batch op if possible possible */
-#define	CRYPTO_F_CBIMM		0x0010	/* Do callback immediately */
-#define	CRYPTO_F_DONE		0x0020	/* Operation completed */
-#define	CRYPTO_F_CBIFSYNC	0x0040	/* Do CBIMM if op is synchronous */
+#define	CRYPTO_F_UNUSED0	0x0010	/* was CRYPTO_F_CBIMM */
+#define	CRYPTO_F_UNUSED1	0x0020	/* was CRYPTO_F_DONE */
+#define	CRYPTO_F_UNUSED2	0x0040	/* was CRYPTO_F_CBIFSYNC */
 #define	CRYPTO_F_ONRETQ		0x0080	/* Request is on return queue */
-#define	CRYPTO_F_USER		0x0100	/* Request is in user context */
+#define	CRYPTO_F_UNUSED3	0x0100	/* was CRYPTO_F_USER */
 #define	CRYPTO_F_MORE		0x0200	/* more data to follow */
 
 	int		crp_devflags;	/* other than cryptodev.c must not use. */
@@ -483,7 +494,7 @@ struct cryptop {
 	void *		crp_opaque;	/* Opaque pointer, passed along */
 	struct cryptodesc *crp_desc;	/* Linked list of processing descriptors */
 
-	int (*crp_callback)(struct cryptop *); /*
+	void (*crp_callback)(struct cryptop *); /*
 						* Callback function.
 						* That must not sleep as it is
 						* called in softint context.
@@ -538,7 +549,7 @@ struct cryptkop {
 	u_short		krp_oparams;	/* # of output parameters */
 	u_int32_t	krp_hid;
 	struct crparam	krp_param[CRK_MAXPARAM];	/* kvm */
-	int		(*krp_callback)(struct cryptkop *);  /*
+	void		(*krp_callback)(struct cryptkop *);  /*
 							      * Callback function.
 							      * That must not sleep as it is
 							      * called in softint context.
@@ -575,7 +586,7 @@ struct cryptocap {
 	void		*cc_arg;		/* callback argument */
 	int		(*cc_newsession)(void*, u_int32_t*, struct cryptoini*);
 	int		(*cc_process) (void*, struct cryptop *, int);
-	int		(*cc_freesession) (void*, u_int64_t);
+	void		(*cc_freesession) (void *, u_int64_t);
 	void		*cc_karg;		/* callback argument */
 	int		(*cc_kprocess) (void*, struct cryptkop *, int);
 
@@ -589,19 +600,19 @@ struct cryptocap {
  * a copy of the driver's capabilities that can be used by client code to
  * optimize operation.
  */
-#define	CRYPTO_SESID2HID(_sid)	(((_sid) >> 32) & 0xffffff)
+#define	CRYPTO_SESID2HID(_sid)	((((_sid) >> 32) & 0xffffff) - 1)
 #define	CRYPTO_SESID2CAPS(_sid)	(((_sid) >> 56) & 0xff)
 #define	CRYPTO_SESID2LID(_sid)	(((u_int32_t) (_sid)) & 0xffffffff)
 
 MALLOC_DECLARE(M_CRYPTO_DATA);
 
 extern	int crypto_newsession(u_int64_t *sid, struct cryptoini *cri, int hard);
-extern	int crypto_freesession(u_int64_t sid);
+extern	void crypto_freesession(u_int64_t sid);
 extern	int32_t crypto_get_driverid(u_int32_t flags);
 extern	int crypto_register(u_int32_t driverid, int alg, u_int16_t maxoplen,
 	    u_int32_t flags,
 	    int (*newses)(void*, u_int32_t*, struct cryptoini*),
-	    int (*freeses)(void*, u_int64_t),
+	    void (*freeses)(void *, u_int64_t),
 	    int (*process)(void*, struct cryptop *, int),
 	    void *arg);
 extern	int crypto_kregister(u_int32_t, int, u_int32_t,
@@ -609,8 +620,8 @@ extern	int crypto_kregister(u_int32_t, int, u_int32_t,
 	    void *arg);
 extern	int crypto_unregister(u_int32_t driverid, int alg);
 extern	int crypto_unregister_all(u_int32_t driverid);
-extern	int crypto_dispatch(struct cryptop *crp);
-extern	int crypto_kdispatch(struct cryptkop *);
+extern	void crypto_dispatch(struct cryptop *crp);
+extern	void crypto_kdispatch(struct cryptkop *);
 #define	CRYPTO_SYMQ	0x1
 #define	CRYPTO_ASYMQ	0x2
 extern	int crypto_unblock(u_int32_t, int);

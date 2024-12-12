@@ -1,4 +1,4 @@
-/*	$NetBSD: mvxpsec.c,v 1.8 2021/08/13 20:26:07 andvar Exp $	*/
+/*	$NetBSD: mvxpsec.c,v 1.20 2024/02/09 22:08:35 andvar Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -401,9 +401,9 @@ mvxpsec_attach(device_t parent, device_t self, void *aux)
 	/* INTR */
 	MVXPSEC_WRITE(sc, MVXPSEC_INT_MASK, MVXPSEC_DEFAULT_INT);
 	MVXPSEC_WRITE(sc, MV_TDMA_ERR_MASK, MVXPSEC_DEFAULT_ERR);
-	sc->sc_done_ih = 
+	sc->sc_done_ih =
 	    marvell_intr_establish(mva->mva_irq, IPL_NET, mvxpsec_intr, sc);
-	/* XXX: sould pass error IRQ using mva */
+	/* XXX: should pass error IRQ using mva */
 	sc->sc_error_ih = marvell_intr_establish(MVXPSEC_ERR_INT(sc),
 	    IPL_NET, mvxpsec_eintr, sc);
 	aprint_normal_dev(self,
@@ -434,7 +434,7 @@ mvxpsec_attach(device_t parent, device_t self, void *aux)
 	MVXPSEC_WRITE(sc, MV_ACC_COMMAND, MV_ACC_COMMAND_STOP);
 
 	/* Session */
-	sc->sc_session_pool = 
+	sc->sc_session_pool =
 	    pool_cache_init(sizeof(struct mvxpsec_session), 0, 0, 0,
 	    "mvxpsecpl", NULL, IPL_NET,
 	    mvxpsec_session_ctor, mvxpsec_session_dtor, sc);
@@ -442,7 +442,7 @@ mvxpsec_attach(device_t parent, device_t self, void *aux)
 	pool_cache_setlowat(sc->sc_session_pool, MVXPSEC_MAX_SESSIONS / 2);
 	sc->sc_last_session = NULL;
 
-	/* Pakcet */
+	/* Packet */
 	sc->sc_packet_pool =
 	    pool_cache_init(sizeof(struct mvxpsec_session), 0, 0, 0,
 	    "mvxpsec_pktpl", NULL, IPL_NET,
@@ -577,7 +577,7 @@ mvxpsec_timer(void *aux)
 #ifdef MVXPSEC_DEBUG
 	mvxpsec_dump_reg(sc);
 #endif
-	
+
 	s = splnet();
 	/* stop security accelerator */
 	MVXPSEC_WRITE(sc, MV_ACC_COMMAND, MV_ACC_COMMAND_STOP);
@@ -771,7 +771,6 @@ mvxpsec_dma_setup(struct mvxpsec_descriptor_handle *dh,
 #ifdef MVXPSEC_DEBUG
 	mvxpsec_dump_dmaq(dh);
 #endif
-
 }
 
 /*
@@ -889,7 +888,7 @@ mvxpsec_dma_copy_packet(struct mvxpsec_softc *sc, struct mvxpsec_packet *mv_p)
 	 *   |    |
 	 *   v    v
 	 *   +----+--------...
-	 *   |IV  |DATA    
+	 *   |IV  |DATA
 	 *   +----+--------...
 	 */
 	pkt_off = 0;
@@ -909,7 +908,7 @@ mvxpsec_dma_copy_packet(struct mvxpsec_softc *sc, struct mvxpsec_packet *mv_p)
 	if (__predict_false(err))
 		return err;
 
-	/* 
+	/*
 	 * make DMA descriptors to copy session header: DRAM -> SRAM
 	 * we can reuse session header on SRAM if session is not changed.
 	 */
@@ -1026,7 +1025,7 @@ mvxpsec_dma_sync_packet(struct mvxpsec_softc *sc, struct mvxpsec_packet *mv_p)
 /*
  * Initialize MVXPSEC Internal SRAM
  *
- * - must be called after DMA initizlization.
+ * - must be called after DMA initialization.
  * - make VM mapping for SRAM area on MBus.
  */
 STATIC int
@@ -1036,7 +1035,7 @@ mvxpsec_init_sram(struct mvxpsec_softc *sc)
 	vaddr_t va;
 	int window;
 
-	switch (sc->sc_dev->dv_unit) {
+	switch (device_unit(sc->sc_dev)) {
 	case 0:
 		tag = ARMADAXP_TAG_CRYPT0;
 		break;
@@ -1268,7 +1267,7 @@ STATIC uint32_t
 mvxpsec_eintr_ack(struct mvxpsec_softc *sc)
 {
 	uint32_t reg;
- 
+
 	reg  = MVXPSEC_READ(sc, MV_TDMA_ERR_CAUSE);
 	reg &= MVXPSEC_DEFAULT_ERR;
 	MVXPSEC_WRITE(sc, MV_TDMA_ERR_CAUSE, ~reg);
@@ -1280,7 +1279,7 @@ mvxpsec_eintr_ack(struct mvxpsec_softc *sc)
 /*
  * Interrupt statistics
  *
- * this is NOT a statistics of how may times the events 'occured'.
+ * this is NOT a statistics of how many times the events 'occurred'.
  * this ONLY means how many times the events 'handled'.
  */
 INLINE void
@@ -1313,7 +1312,7 @@ mvxpsec_intr_cnt(struct mvxpsec_softc *sc, int cause)
  * Setup MVXPSEC header structure.
  *
  * the header contains descriptor of security accelerator,
- * key material of chiphers, iv of ciphers and macs, ...
+ * key material of ciphers, iv of ciphers and macs, ...
  *
  * the header is transferred to MVXPSEC Internal SRAM by TDMA,
  * and parsed by MVXPSEC H/W.
@@ -1445,7 +1444,7 @@ mvxpsec_packet_ctor(void *arg, void *obj, int flags)
 		log(LOG_ERR, "%s: cannot create DMA map\n", __func__);
 		goto fail;
 	}
-	if (bus_dmamap_load(sc->sc_dmat, mv_p->pkt_header_map, 
+	if (bus_dmamap_load(sc->sc_dmat, mv_p->pkt_header_map,
 	    &mv_p->pkt_header, sizeof(mv_p->pkt_header),
 	    NULL, BUS_DMA_NOWAIT)) {
 		log(LOG_ERR, "%s: cannot load header\n", __func__);
@@ -1499,7 +1498,7 @@ mvxpsec_session_alloc(struct mvxpsec_softc *sc)
 		log(LOG_ERR, "%s: cannot allocate memory\n", __func__);
 		return NULL;
 	}
-	mv_s->refs = 1; /* 0 means session is alredy invalid */
+	mv_s->refs = 1; /* 0 means session is already invalid */
 	mv_s->sflags = 0;
 
 	return mv_s;
@@ -1533,7 +1532,7 @@ mvxpsec_session_ref(struct mvxpsec_session *mv_s)
 
 	refs = atomic_inc_32_nv(&mv_s->refs);
 	if (refs == 1) {
-		/* 
+		/*
 		 * a session with refs == 0 is
 		 * already invalidated. revert it.
 		 * XXX: use CAS ?
@@ -1543,7 +1542,7 @@ mvxpsec_session_ref(struct mvxpsec_session *mv_s)
 		    "%s: session is already invalidated.\n", __func__);
 		return -1;
 	}
-	
+
 	return 0;
 }
 
@@ -1552,9 +1551,12 @@ mvxpsec_session_unref(struct mvxpsec_session *mv_s)
 {
 	uint32_t refs;
 
+	membar_release();
 	refs = atomic_dec_32_nv(&mv_s->refs);
-	if (refs == 0)
+	if (refs == 0) {
+		membar_acquire();
 		pool_cache_put(mv_s->sc->sc_session_pool, mv_s);
+	}
 }
 
 /*
@@ -2008,7 +2010,7 @@ fail:
 	if (mv_s)
 		mvxpsec_session_dealloc(mv_s);
 	log(LOG_WARNING,
-	    "%s: Failed to add H/W crypto sessoin (id:%u): err=%d\n",
+	    "%s: Failed to add H/W crypto session (id:%u): err=%d\n",
 	   __func__, session, err);
 
 	mutex_exit(&sc->sc_session_mtx);
@@ -2018,7 +2020,7 @@ fail:
 /*
  * remove opencrypto session
  */
-int
+void
 mvxpsec_freesession(void *arg, uint64_t tid)
 {
 	struct mvxpsec_softc *sc = arg;
@@ -2027,21 +2029,13 @@ mvxpsec_freesession(void *arg, uint64_t tid)
 	uint32_t sid = ((uint32_t)tid) & 0xffffffff;
 
 	session = MVXPSEC_SESSION(sid);
-	if (session < 0 || session >= MVXPSEC_MAX_SESSIONS) {
-		log(LOG_ERR, "%s: invalid session (id:%u)\n",
-		    __func__, session);
-		return EINVAL;
-	}
+	KASSERTMSG(session >= 0, "session=%d", session);
+	KASSERTMSG(session < MVXPSEC_MAX_SESSIONS, "session=%d max=%d",
+	    session, MVXPSEC_MAX_SESSIONS);
 
 	mutex_enter(&sc->sc_session_mtx);
-	if ( (mv_s = sc->sc_sessions[session]) == NULL) {
-		mutex_exit(&sc->sc_session_mtx);
-#ifdef DEBUG
-		log(LOG_DEBUG, "%s: session %d already inactivated\n",
-		    __func__, session);
-#endif
-		return ENOENT;
-	}
+	mv_s = sc->sc_sessions[session];
+	KASSERT(mv_s != NULL);
 	MVXPSEC_PRINTF(MVXPSEC_DEBUG_OPENCRYPTO,
 	    "%s: inactivate session %d\n", __func__, session);
 
@@ -2062,8 +2056,6 @@ mvxpsec_freesession(void *arg, uint64_t tid)
 	crypto_unblock(sc->sc_cid, CRYPTO_SYMQ|CRYPTO_ASYMQ);
 
 	MVXPSEC_EVCNT_INCR(sc, session_free);
-
-	return 0;
 }
 
 /*
@@ -2125,7 +2117,7 @@ mvxpsec_dispatch(void *arg, struct cryptop *crp, int hint)
 	err = mvxpsec_packet_setcrp(mv_p, crp);
 	if (__predict_false(err))
 		goto fail;
-	
+
 	/*
 	 * Setup DMA descriptor chains
 	 */
@@ -2440,7 +2432,7 @@ mvxpsec_packet_setcrp(struct mvxpsec_packet *mv_p, struct cryptop *crp)
 {
 	int err = EINVAL;
 
-	/* regiseter crp to the MVXPSEC packet */
+	/* register crp to the MVXPSEC packet */
 	if (crp->crp_flags & CRYPTO_F_IMBUF) {
 		err = mvxpsec_packet_setmbuf(mv_p,
 		    (struct mbuf *)crp->crp_buf);
@@ -2657,7 +2649,7 @@ STATIC int
 mvxpsec_packet_write_iv(struct mvxpsec_packet *mv_p, void *iv, int ivlen)
 {
 	uint8_t ivbuf[16];
-	
+
 	KASSERT(ivlen == 8 || ivlen == 16);
 
 	if (iv == NULL) {
@@ -2921,7 +2913,7 @@ static uint8_t AES_SBOX[256] = {
        	  7,  18, 128, 226, 235,  39, 178, 117,   9, 131,  44,  26,  27, 110,
 	 90, 160,  82,  59, 214, 179,  41, 227,  47, 132,  83, 209,   0, 237,
        	 32, 252, 177,  91, 106, 203, 190,  57,  74,  76,  88, 207, 208, 239,
-	170, 251,  67,  77,  51, 133,  69, 249,   2, 127,  80,  60, 159, 168, 
+	170, 251,  67,  77,  51, 133,  69, 249,   2, 127,  80,  60, 159, 168,
 	 81, 163,  64, 143, 146, 157,  56, 245, 188, 182, 218,  33,  16, 255,
 	243, 210, 205,  12,  19, 236,  95, 151,  68,  23, 196, 167, 126,  61,
        	100,  93,  25, 115,  96, 129,  79, 220,  34,  42, 144, 136,  70, 238,
@@ -2935,7 +2927,7 @@ static uint8_t AES_SBOX[256] = {
 	176,  84, 187,  22
 };
 
-static uint32_t AES_RCON[30] = { 
+static uint32_t AES_RCON[30] = {
 	0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8,
        	0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4,
        	0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91
@@ -2943,11 +2935,11 @@ static uint32_t AES_RCON[30] = {
 
 STATIC int
 mv_aes_ksched(uint8_t k[4][MAXKC], int keyBits,
-    uint8_t W[MAXROUNDS+1][4][MAXBC]) 
+    uint8_t W[MAXROUNDS+1][4][MAXBC])
 {
 	int KC, BC, ROUNDS;
 	int i, j, t, rconpointer = 0;
-	uint8_t tk[4][MAXKC];   
+	uint8_t tk[4][MAXKC];
 
 	switch (keyBits) {
 	case 128:
@@ -2975,7 +2967,7 @@ mv_aes_ksched(uint8_t k[4][MAXKC], int keyBits,
 	/* copy values into round key array */
 	for(j = 0; (j < KC) && (t < (ROUNDS+1)*BC); j++, t++)
 		for(i = 0; i < 4; i++) W[t / BC][i][t % BC] = tk[i][j];
-		
+
 	while (t < (ROUNDS+1)*BC) { /* while not enough round key material calculated */
 		/* calculate new values */
 		for(i = 0; i < 4; i++)
@@ -2999,11 +2991,11 @@ mv_aes_ksched(uint8_t k[4][MAXKC], int keyBits,
 	/* copy values into round key array */
 	for(j = 0; (j < KC) && (t < (ROUNDS+1)*BC); j++, t++)
 		for(i = 0; i < 4; i++) W[t / BC][i][t % BC] = tk[i][j];
-	}		
+	}
 
 	return 0;
 }
-      
+
 STATIC int
 mv_aes_deckey(uint8_t *expandedKey, uint8_t *keyMaterial, int keyLen)
 {
@@ -3015,31 +3007,31 @@ mv_aes_deckey(uint8_t *expandedKey, uint8_t *keyMaterial, int keyLen)
 	if (expandedKey == NULL)
 		return -1;
 
-	if (!((keyLen == 128) || (keyLen == 192) || (keyLen == 256))) 
+	if (!((keyLen == 128) || (keyLen == 192) || (keyLen == 256)))
 		return -1;
 
-	if (keyMaterial == NULL) 
+	if (keyMaterial == NULL)
 		return -1;
 
-	/* initialize key schedule: */ 
+	/* initialize key schedule: */
 	for (i=0; i<keyLen/8; i++) {
 		j = keyMaterial[i];
-		k[i % 4][i / 4] = j; 
+		k[i % 4][i / 4] = j;
 	}
 
 	mv_aes_ksched(k, keyLen, W);
 	switch (keyLen) {
-	case 128: 
+	case 128:
 		rounds = 10;
-		KC = 4; 
+		KC = 4;
 		break;
-	case 192: 
+	case 192:
 		rounds = 12;
-		KC = 6; 
+		KC = 6;
 		break;
-	case 256: 
+	case 256:
 		rounds = 14;
-		KC = 8; 
+		KC = 8;
 		break;
 	default:
 		return -1;
@@ -3172,7 +3164,7 @@ STATIC const char *
 s_winreg(uint32_t v)
 {
 	static char buf[80];
-	
+
 	snprintf(buf, sizeof(buf),
 	    "%s TGT 0x%x ATTR 0x%02x size %u(0x%04x)[64KB]",
 	    (v & MV_TDMA_ATTR_ENABLE) ? "EN" : "DIS",
@@ -3186,7 +3178,7 @@ STATIC const char *
 s_ctrlreg(uint32_t reg)
 {
 	static char buf[80];
-	
+
 	snprintf(buf, sizeof(buf),
 	    "%s: %sFETCH DBURST-%u SBURST-%u %sOUTS %sCHAIN %sBSWAP %sACT",
 	    (reg & MV_TDMA_CONTROL_ENABLE) ? "ENABLE" : "DISABLE",
@@ -3268,9 +3260,8 @@ s_xpsec_op(uint32_t reg)
 	default:
 		break;
 	}
-	
-	return "Unknown";
 
+	return "Unknown";
 }
 
 STATIC const char *

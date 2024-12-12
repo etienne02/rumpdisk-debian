@@ -1,4 +1,4 @@
-/*	$NetBSD: ka88.c,v 1.20 2019/12/01 15:34:46 ad Exp $	*/
+/*	$NetBSD: ka88.c,v 1.22 2023/12/20 15:34:45 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2000 Ludd, University of Lule}, Sweden. All rights reserved.
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ka88.c,v 1.20 2019/12/01 15:34:46 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ka88.c,v 1.22 2023/12/20 15:34:45 thorpej Exp $");
 
 #include "opt_multiprocessor.h"
 
@@ -43,7 +43,6 @@ __KERNEL_RCSID(0, "$NetBSD: ka88.c,v 1.20 2019/12/01 15:34:46 ad Exp $");
 #include <sys/cpu.h>
 #include <sys/device.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/lwp.h>
 
 #include <machine/nexus.h>
@@ -149,7 +148,7 @@ ka88_cpu_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 	ci = curcpu();
-	self->dv_private = ci;
+	device_set_private(self, ci);
 	ci->ci_dev = self;
 	ci->ci_cpuid = device_unit(self);
 	ci->ci_slotid = na->na_slot;

@@ -1,4 +1,4 @@
-/*	$NetBSD: hifn7751.c,v 1.74 2020/05/17 16:01:06 riastradh Exp $	*/
+/*	$NetBSD: hifn7751.c,v 1.82 2023/08/04 07:38:53 riastradh Exp $	*/
 /*	$OpenBSD: hifn7751.c,v 1.179 2020/01/11 21:34:03 cheloha Exp $	*/
 
 /*
@@ -47,7 +47,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hifn7751.c,v 1.74 2020/05/17 16:01:06 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hifn7751.c,v 1.82 2023/08/04 07:38:53 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/cprng.h>
@@ -105,7 +105,7 @@ static int	hifn_intr(void *);
 static u_int	hifn_write_command(struct hifn_command *, uint8_t *);
 static uint32_t hifn_next_signature(uint32_t a, u_int cnt);
 static int	hifn_newsession(void*, uint32_t *, struct cryptoini *);
-static int	hifn_freesession(void*, uint64_t);
+static void	hifn_freesession(void*, uint64_t);
 static int	hifn_process(void*, struct cryptop *, int);
 static void	hifn_callback(struct hifn_softc *, struct hifn_command *,
 			      uint8_t *);
@@ -128,7 +128,7 @@ static void	hifn_alloc_slot(struct hifn_softc *, int *, int *, int *,
 static void	hifn_write_4(struct hifn_softc *, int, bus_size_t, uint32_t);
 static uint32_t hifn_read_4(struct hifn_softc *, int, bus_size_t);
 #ifdef CRYPTO_LZS_COMP
-static int	hifn_compression(struct hifn_softc *, struct cryptop *,
+static void	hifn_compression(struct hifn_softc *, struct cryptop *,
 				 struct hifn_command *);
 static struct mbuf *hifn_mkmbuf_chain(int, struct mbuf *);
 static int	hifn_compress_enter(struct hifn_softc *, struct hifn_command *);
@@ -655,7 +655,7 @@ hifn_rng(struct hifn_softc *sc)
 				hexdump(printf, "hifn", num, sizeof num);
 #endif
 			entropybits = NBBY*sizeof(num)/HIFN_RNG_BITSPER;
-			rnd_add_data(&sc->sc_rnd_source, num, sizeof(num),
+			rnd_add_data_intr(&sc->sc_rnd_source, num, sizeof(num),
 			    entropybits);
 			entropybits = MAX(entropybits, 1);
 			entropybits = MIN(entropybits, sc->sc_rng_needbits);
@@ -693,7 +693,7 @@ hifn_rng(struct hifn_softc *sc)
 				hexdump(printf, "hifn", num, sizeof num);
 #endif
 			entropybits = NBBY*sizeof(num)/HIFN_RNG_BITSPER;
-			rnd_add_data(&sc->sc_rnd_source, num, sizeof num,
+			rnd_add_data_intr(&sc->sc_rnd_source, num, sizeof num,
 			    entropybits);
 			entropybits = MAX(entropybits, 1);
 			entropybits = MIN(entropybits, sc->sc_rng_needbits);
@@ -752,7 +752,7 @@ hifn_set_retry(struct hifn_softc *sc)
 }
 
 /*
- * Resets the board.  Values in the regesters are left as is
+ * Resets the board.  Values in the registers are left as is
  * from the reset (i.e. initial values are assigned elsewhere).
  */
 static void
@@ -2076,10 +2076,6 @@ hifn_newsession(void *arg, uint32_t *sidp, struct cryptoini *cri)
 	struct hifn_softc *sc = arg;
 	int i, mac = 0, cry = 0, comp = 0, retval = EINVAL;
 
-	KASSERT(sc != NULL /*, ("hifn_newsession: null softc")*/);
-	if (sidp == NULL || cri == NULL || sc == NULL)
-		return retval;
-
 	mutex_spin_enter(&sc->sc_mtx);
 	for (i = 0; i < sc->sc_maxses; i++)
 		if (isclr(sc->sc_sessions, i))
@@ -2147,26 +2143,21 @@ out:
  * XXX this routine should run a zero'd mac/encrypt key into context ram.
  * XXX to blow away any keys already stored there.
  */
-static int
+static void
 hifn_freesession(void *arg, uint64_t tid)
 {
 	struct hifn_softc *sc = arg;
 	int session;
 	uint32_t sid = ((uint32_t) tid) & 0xffffffff;
 
-	KASSERT(sc != NULL /*, ("hifn_freesession: null softc")*/);
-	if (sc == NULL)
-		return (EINVAL);
-
 	mutex_spin_enter(&sc->sc_mtx);
 	session = HIFN_SESSION(sid);
-	if (session >= sc->sc_maxses) {
-		mutex_spin_exit(&sc->sc_mtx);
-		return (EINVAL);
-	}
+	KASSERTMSG(session >= 0, "session=%d", session);
+	KASSERTMSG(session < sc->sc_maxses, "session=%d maxses=%d",
+	    session, sc->sc_maxses);
+	KASSERT(isset(sc->sc_sessions, session));
 	clrbit(sc->sc_sessions, session);
 	mutex_spin_exit(&sc->sc_mtx);
-	return (0);
 }
 
 static int
@@ -2177,22 +2168,16 @@ hifn_process(void *arg, struct cryptop *crp, int hint)
 	int session, err = 0, ivlen;
 	struct cryptodesc *crd1, *crd2, *maccrd, *enccrd;
 
-	if (crp == NULL || crp->crp_callback == NULL) {
-		hifnstats.hst_invalid++;
-		return (EINVAL);
-	}
-
 	if ((cmd = pool_cache_get(sc->sc_cmd_cache, PR_NOWAIT)) == NULL) {
 		hifnstats.hst_nomem++;
-		return (ENOMEM);
+		err = ENOMEM;
+		goto errout;
 	}
 
 	mutex_spin_enter(&sc->sc_mtx);
 	session = HIFN_SESSION(crp->crp_sid);
-	if (session >= sc->sc_maxses) {
-		err = EINVAL;
-		goto errout;
-	}
+	KASSERTMSG(session < sc->sc_maxses, "session=%d maxses=%d",
+	    session, sc->sc_maxses);
 
 	if (crp->crp_flags & CRYPTO_F_IMBUF) {
 		cmd->srcu.src_m = (struct mbuf *)crp->crp_buf;
@@ -2229,9 +2214,9 @@ hifn_process(void *arg, struct cryptop *crp, int hint)
 			enccrd = crd1;
 #ifdef CRYPTO_LZS_COMP
 		} else if (crd1->crd_alg == CRYPTO_LZS_COMP) {
-			err = hifn_compression(sc, crp, cmd);
+			hifn_compression(sc, crp, cmd);
 			mutex_spin_exit(&sc->sc_mtx);
-			return err;
+			return 0;
 #endif
 		} else {
 			err = EINVAL;
@@ -2412,7 +2397,7 @@ hifn_process(void *arg, struct cryptop *crp, int hint)
 		sc->sc_needwakeup |= CRYPTO_SYMQ;
 		mutex_spin_exit(&sc->sc_mtx);
 		pool_cache_put(sc->sc_cmd_cache, cmd);
-		return (err);
+		return ERESTART;
 	}
 
 errout:
@@ -2430,7 +2415,7 @@ errout:
 		pool_cache_put(sc->sc_cmd_cache, cmd);
 	}
 	crypto_done(crp);
-	return (0);
+	return 0;
 }
 
 static void
@@ -2615,7 +2600,7 @@ hifn_callback(struct hifn_softc *sc, struct hifn_command *cmd, uint8_t *resbuf)
 
 #ifdef CRYPTO_LZS_COMP
 
-static int
+static void
 hifn_compression(struct hifn_softc *sc, struct cryptop *crp,
     struct hifn_command *cmd)
 {
@@ -2631,7 +2616,7 @@ hifn_compression(struct hifn_softc *sc, struct cryptop *crp,
 		 * XXX dynamically resize them.
 		 */
 		err = EINVAL;
-		return (ENOMEM);
+		goto fail;
 	}
 
 	if ((crd->crd_flags & CRD_F_COMP) == 0)
@@ -2705,10 +2690,10 @@ hifn_compression(struct hifn_softc *sc, struct cryptop *crp,
 	cmd->softc = sc;
 
 	err = hifn_compress_enter(sc, cmd);
-
-	if (err != 0)
+	if (err)
 		goto fail;
-	return (0);
+
+	return;
 
 fail:
 	if (cmd->dst_map != NULL) {
@@ -2727,7 +2712,6 @@ fail:
 		hifnstats.hst_nomem++;
 	crp->crp_etype = err;
 	crypto_done(crp);
-	return (0);
 }
 
 static int

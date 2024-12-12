@@ -1,4 +1,4 @@
-/*	$NetBSD: mkmakefile.c,v 1.71 2018/08/27 05:35:00 riastradh Exp $	*/
+/*	$NetBSD: mkmakefile.c,v 1.74 2024/10/04 16:18:45 rillig Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -45,7 +45,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: mkmakefile.c,v 1.71 2018/08/27 05:35:00 riastradh Exp $");
+__RCSID("$NetBSD: mkmakefile.c,v 1.74 2024/10/04 16:18:45 rillig Exp $");
 
 #include <sys/param.h>
 #include <ctype.h>
@@ -78,7 +78,7 @@ static void emitload(FILE *);
 static void emitincludes(FILE *);
 static void emitappmkoptions(FILE *);
 static void emitmkoption(FILE *, const char *, const struct nvlist *);
-static void emitsubs(FILE *, const char *, const char *, int);
+static void emitsubs(FILE *, char *, const char *, int);
 static int  selectopt(const char *, void *);
 
 int has_build_kernel;
@@ -226,7 +226,7 @@ emitmkoption(FILE *fp, const char *ass, const struct nvlist *nv)
 }
 
 static void
-emitsubs(FILE *fp, const char *line, const char *file, int lineno)
+emitsubs(FILE *fp, char *line, const char *file, int lineno)
 {
 	char *nextpct;
 	const char *optname;
@@ -275,6 +275,7 @@ emitsubs(FILE *fp, const char *line, const char *file, int lineno)
 static void
 emitdefs(FILE *fp)
 {
+	struct defoptlist *dl;
 	struct nvlist *nv;
 
 	fprintf(fp, "KERNEL_BUILD=%s\n", conffile);
@@ -308,6 +309,22 @@ emitdefs(FILE *fp)
 	}
 	for (nv = mkoptions; nv != NULL; nv = nv->nv_next)
 		emitmkoption(fp, "=", nv);
+
+	/*
+	 * Go through the options again and emit Makefile variables
+	 * for those specified to get one.
+	 */
+	for (nv = options; nv != NULL; nv = nv->nv_next) {
+
+		dl = find_declared_option_option(nv->nv_name);
+		if (dl != NULL && dl->dl_mkvar) {
+			const char *s = nv->nv_str;
+			if (s == NULL) {
+				s = "1";
+			}
+			fprintf(fp, "KERNEL_OPT_%s=\"%s\"\n", nv->nv_name, s);
+		}
+	}
 }
 
 static void
@@ -396,6 +413,7 @@ emitallkobjscb(const char *name, void *v, void *arg)
 		return 0;
 	if (TAILQ_EMPTY(&a->a_files))
 		return 0;
+	a->a_idx = attridx;
 	attrbuf[attridx++] = a;
 	/* XXX nattrs tracking is not exact yet */
 	if (attridx == nattrs) {
@@ -430,7 +448,21 @@ attrcmp(const void *l, const void *r)
 {
 	const struct attr * const *a = l, * const *b = r;
 	const int wa = (*a)->a_weight, wb = (*b)->a_weight;
-	return (wa > wb) ? -1 : (wa < wb) ? 1 : 0;
+
+	/*
+	 * Higher-weight first; then, among equal weights, earlier
+	 * index first.
+	 */
+	if (wa > wb)
+		return -1;
+	else if (wa < wb)
+		return +1;
+	else if ((*a)->a_idx < (*b)->a_idx)
+		return -1;
+	else if ((*a)->a_idx > (*b)->a_idx)
+		return +1;
+	else
+		abort();	/* no ties possible */
 }
 
 static void

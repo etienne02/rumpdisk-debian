@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.18 2021/02/27 01:31:24 thorpej Exp $	*/
+/*	$NetBSD: machdep.c,v 1.22 2024/03/05 14:15:32 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.18 2021/02/27 01:31:24 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.22 2024/03/05 14:15:32 thorpej Exp $");
 
 #include "opt_compat_netbsd.h"
 
@@ -45,7 +45,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.18 2021/02/27 01:31:24 thorpej Exp $")
 #include <sys/extent.h>
 #include <sys/intr.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mount.h>
 #include <sys/msgbuf.h>
@@ -159,7 +158,7 @@ void
 cpu_startup(void)
 {
 	/*
-	 * Mapping PReP interrput vector register.
+	 * Mapping PReP interrupt vector register.
 	 */
 	prep_intr_reg = (vaddr_t) mapiodev(PREP_INTR_REG, PAGE_SIZE, false);
 	if (!prep_intr_reg)
@@ -210,7 +209,6 @@ cpu_reboot(int howto, char *what)
 	if ((howto & RB_NOSYNC) == 0 && syncing == 0) {
 		syncing = 1;
 		vfs_shutdown();		/* sync */
-		resettodr();		/* set wall clock */
 	}
 
 	/* Disable intr */
@@ -249,13 +247,13 @@ halt_sys:
 	    reg &= ~1UL;
 	    *(volatile u_char *)(PREP_BUS_SPACE_IO + 0x92) = reg;
 
-	    __asm volatile("sync; eieio\n");
+	    __asm volatile("sync; eieio" ::: "memory");
 
 	    reg = *(volatile u_char *)(PREP_BUS_SPACE_IO + 0x92);
 	    reg |= 1;
 	    *(volatile u_char *)(PREP_BUS_SPACE_IO + 0x92) = reg;
 
-	    __asm volatile("sync; eieio\n");
+	    __asm volatile("sync; eieio" ::: "memory");
 	}
 
 	for (;;)

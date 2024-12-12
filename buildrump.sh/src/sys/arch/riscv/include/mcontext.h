@@ -1,4 +1,4 @@
-/* $NetBSD: mcontext.h,v 1.6 2020/03/14 16:12:16 skrll Exp $ */
+/* $NetBSD: mcontext.h,v 1.12 2024/11/30 01:04:13 christos Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -48,7 +48,7 @@ union __fpreg {
 #define _BSD_FPREG_T_	union __fpreg
 #endif
 
-typedef	__uint64_t	__greg_t;
+typedef	long		__greg_t;
 typedef	__greg_t	__gregset_t[_NGREG];
 typedef	__uint32_t	__greg32_t;
 typedef	__greg32_t	__gregset32_t[_NGREG];
@@ -91,9 +91,34 @@ typedef _BSD_FPREG_T_	__fregset_t[_NFREG];
 #define	_REG_SP		_REG_X2
 #define	_REG_GP		_REG_X3
 #define	_REG_TP		_REG_X4
+#define	_REG_T0		_REG_X5
+#define	_REG_T1		_REG_X6
+#define	_REG_T2		_REG_X7
 #define	_REG_S0		_REG_X8
+#define	_REG_S1		_REG_X9
 #define	_REG_RV		_REG_X10
 #define	_REG_A0		_REG_X10
+#define	_REG_A1		_REG_X11
+#define	_REG_A2		_REG_X12
+#define	_REG_A3		_REG_X13
+#define	_REG_A4		_REG_X14
+#define	_REG_A5		_REG_X15
+#define	_REG_A6		_REG_X16
+#define	_REG_A7		_REG_X17
+#define	_REG_S2		_REG_X18
+#define	_REG_S3		_REG_X19
+#define	_REG_S4		_REG_X20
+#define	_REG_S5		_REG_X21
+#define	_REG_S6		_REG_X22
+#define	_REG_S7		_REG_X23
+#define	_REG_S8		_REG_X24
+#define	_REG_S9		_REG_X25
+#define	_REG_S10	_REG_X26
+#define	_REG_S11	_REG_X27
+#define	_REG_T3		_REG_X28
+#define	_REG_T4		_REG_X29
+#define	_REG_T5		_REG_X30
+#define	_REG_T6		_REG_X31
 
 #define	_REG_F0		0
 #define	_REG_FPCSR	32
@@ -101,15 +126,13 @@ typedef _BSD_FPREG_T_	__fregset_t[_NFREG];
 typedef struct {
 	__gregset_t	__gregs;	/* General Purpose Register set */
 	__fregset_t	__fregs;	/* Floating Point Register set */
-	__greg_t	__private;	/* copy of l_private */
-	__greg_t	__spare[8];	/* future proof */
+	__greg_t	__spare[7];	/* future proof */
 } mcontext_t;
 
 typedef struct {
 	__gregset32_t	__gregs;	/* General Purpose Register set */
 	__fregset_t	__fregs;	/* Floating Point Register set */
-	__greg32_t	__private;	/* copy of l_private */
-	__greg32_t	__spare[8];	/* future proof */
+	__greg32_t	__spare[7];	/* future proof */
 } mcontext32_t;
 
 /* Machine-dependent uc_flags */
@@ -117,54 +140,11 @@ typedef struct {
 #define	_UC_CLRSTACK	0x00020000	/* see <sys/ucontext.h> */
 #define	_UC_TLSBASE	0x00080000	/* see <sys/ucontext.h> */
 
-#define _UC_MACHINE_SP(uc)	((uc)->uc_mcontext.__gregs[_REG_SP])
-#define _UC_MACHINE_FP(uc)	((uc)->uc_mcontext.__gregs[_REG_S0])
-#define _UC_MACHINE_PC(uc)	((uc)->uc_mcontext.__gregs[_REG_PC])
-#define _UC_MACHINE_INTRV(uc)	((uc)->uc_mcontext.__gregs[_REG_RV])
+#define _UC_MACHINE_SP(uc)		((uc)->uc_mcontext.__gregs[_REG_SP])
+#define _UC_MACHINE_FP(uc)		((uc)->uc_mcontext.__gregs[_REG_S0])
+#define _UC_MACHINE_PC(uc)		((uc)->uc_mcontext.__gregs[_REG_PC])
+#define _UC_MACHINE_INTRV(uc)		((uc)->uc_mcontext.__gregs[_REG_RV])
 
 #define	_UC_MACHINE_SET_PC(uc, pc)	_UC_MACHINE_PC(uc) = (pc)
-
-#if defined(_RTLD_SOURCE) || defined(_LIBC_SOURCE) || defined(__LIBPTHREAD_SOURCE__)
-#include <sys/tls.h>
-
-/*
- * On RISCV, since displacements are signed 12-bit values, the TCB pointer is
- * not and points to the first static entry.
- */
-#define	TLS_TP_OFFSET	0x0
-#define	TLS_DTV_OFFSET	0x800
-__CTASSERT(TLS_TP_OFFSET + sizeof(struct tls_tcb) < 0x800);
-
-static __inline void *
-__lwp_getprivate_fast(void)
-{
-	void *__tp;
-	__asm("move %0,tp" : "=r"(__tp));
-	return __tp;
-}
-
-static __inline void *
-__lwp_gettcb_fast(void)
-{
-	void *__tcb;
-
-	__asm __volatile(
-		"addi %[__tcb],tp,%[__offset]"
-	    :	[__tcb] "=r" (__tcb)
-	    :	[__offset] "n" (-(TLS_TP_OFFSET + sizeof(struct tls_tcb))));
-
-	return __tcb;
-}
-
-static __inline void
-__lwp_settcb(void *__tcb)
-{
-	__asm __volatile(
-		"addi tp,%[__tcb],%[__offset]"
-	    :
-	    :	[__tcb] "r" (__tcb),
-		[__offset] "n" (TLS_TP_OFFSET + sizeof(struct tls_tcb)));
-}
-#endif /* _RTLD_SOURCE || _LIBC_SOURCE || __LIBPTHREAD_SOURCE__ */
 
 #endif /* !_RISCV_MCONTEXT_H_ */

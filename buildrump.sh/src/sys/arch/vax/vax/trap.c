@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.136 2019/11/21 19:24:02 ad Exp $     */
+/*	$NetBSD: trap.c,v 1.138 2023/10/05 19:41:06 ad Exp $     */
 
 /*
  * Copyright (c) 1994 Ludd, University of Lule}, Sweden.
@@ -28,7 +28,7 @@
  /* All bugs are subject to removal without further notice */
 		
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.136 2019/11/21 19:24:02 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.138 2023/10/05 19:41:06 ad Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -107,7 +107,6 @@ trap(struct trapframe *tf)
 		type |= T_USER;
 		oticks = p->p_sticks;
 		l->l_md.md_utf = tf;
-		LWP_CACHE_CREDS(l, p);
 	}
 
 	type &= ~(T_WRITE|T_PTEFETCH);
@@ -315,6 +314,7 @@ if(faultdebug)printf("trap accflt type %lx, code %lx, pc %lx, psl %lx\n",
 		break;
 
 	case T_ASTFLT|T_USER:
+		pcb->P0LR = (pcb->P0LR & ~AST_MASK) | AST_PCB;
 		mtpr(AST_NO,PR_ASTLVL);
 		trapsig = false;
 		break;

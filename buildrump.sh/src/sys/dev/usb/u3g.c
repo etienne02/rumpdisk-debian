@@ -1,4 +1,4 @@
-/*	$NetBSD: u3g.c,v 1.43 2021/08/07 16:19:17 thorpej Exp $	*/
+/*	$NetBSD: u3g.c,v 1.45 2024/07/04 00:23:48 christos Exp $	*/
 
 /*-
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: u3g.c,v 1.43 2021/08/07 16:19:17 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: u3g.c,v 1.45 2024/07/04 00:23:48 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -234,6 +234,7 @@ static const struct usb_devno u3g_devs[] = {
 	{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_MC5720 },
 	{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_MC5720_2 },
 	{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_MC5725 },
+	{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_MC7304 },
 	{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_MC8755 },
 	{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_MC8755_2 },
 	{ USB_VENDOR_SIERRA, USB_PRODUCT_SIERRA_MC8755_3 },
@@ -252,6 +253,7 @@ static const struct usb_devno u3g_devs[] = {
 	{ USB_VENDOR_ZTE, USB_PRODUCT_ZTE_MF626 },
 	{ USB_VENDOR_ZTE, USB_PRODUCT_ZTE_MF628 },
 	{ USB_VENDOR_ZTE, USB_PRODUCT_ZTE_MF820D },
+	{ USB_VENDOR_ZTE, USB_PRODUCT_ZTE_MF112 },
 
 	/* 4G Systems */
 	{ USB_VENDOR_LONGCHEER, USB_PRODUCT_LONGCHEER_XSSTICK_P14 },
@@ -260,7 +262,41 @@ static const struct usb_devno u3g_devs[] = {
 	/* DLink */
 	{ USB_VENDOR_DLINK, USB_PRODUCT_DLINK_DWM157 },
 	{ USB_VENDOR_DLINK, USB_PRODUCT_DLINK_DWM157E },
+	{ USB_VENDOR_DLINK, USB_PRODUCT_DLINK_DWM222 },
 };
+
+static bool
+ignoreSierra(const struct usbif_attach_arg *uiaa,
+    const usb_interface_descriptor_t *id)
+{
+	if (uiaa->uiaa_vendor != USB_VENDOR_SIERRA)
+		return false;
+
+	if (id->bInterfaceClass != UICLASS_VENDOR)
+		return false;
+
+	switch (uiaa->uiaa_product) {
+	case USB_PRODUCT_SIERRA_MC7304:
+		 /*
+		  * Some modems use the vendor-specific class also for
+		  * ADB/Fastboot interfaces, which we should avoid attaching to.
+		  */
+		if (id->bInterfaceSubClass == 0x42)
+			return true;
+		/*FALLTHROUGH*/
+	case USB_PRODUCT_SIERRA_USB305:
+		/*
+		 * Sierra Wireless modems use the vendor-specific class also
+		 * for Direct IP or QMI interfaces, which we should avoid
+		 * attaching to.
+		 */
+		if (uiaa->uiaa_ifaceno >= 7)
+			return true;
+		/*FALLTHROUGH*/
+	default:
+		return false;
+	}
+}
 
 /*
  * Second personality:
@@ -280,7 +316,8 @@ u3g_match(device_t parent, cfdata_t match, void *aux)
 
 	id = usbd_get_interface_descriptor(iface);
 	if (id == NULL) {
-		printf("u3g_match: failed to get interface descriptor\n");
+		aprint_error("%s: failed to get interface descriptor\n",
+		    __func__);
 		return UMATCH_NONE;
 	}
 
@@ -293,14 +330,7 @@ u3g_match(device_t parent, cfdata_t match, void *aux)
 	    (id->bInterfaceProtocol & 0xf) == 6)	/* 0x16, 0x46, 0x76 */
 		return UMATCH_NONE;
 
-	/*
-	 * Sierra Wireless modems use the vendor-specific class also for
-	 * Direct IP or QMI interfaces, which we should avoid attaching to.
-	 */
-	if (uiaa->uiaa_vendor == USB_VENDOR_SIERRA &&
-	    id->bInterfaceClass == UICLASS_VENDOR &&
-	    uiaa->uiaa_product == USB_PRODUCT_SIERRA_USB305 &&
-	     uiaa->uiaa_ifaceno >= 7)
+	if (ignoreSierra(uiaa, id))
 		return UMATCH_NONE;
 
 	/*

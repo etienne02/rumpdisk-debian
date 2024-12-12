@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.68 2020/09/06 07:20:31 mrg Exp $
+# $NetBSD: Makefile,v 1.76 2023/12/07 16:54:44 riastradh Exp $
 
 MKMAN=	no
 
@@ -16,6 +16,7 @@ TESTS_C+=		t_clock_nanosleep
 TESTS_C+=		t_clone
 TESTS_C+=		t_connect
 TESTS_C+=		t_dup
+TESTS_C+=		t_eventfd
 TESTS_C+=		t_fork
 TESTS_C+=		t_fsync
 TESTS_C+=		t_futex_ops
@@ -81,6 +82,7 @@ TESTS_C+=		t_swapcontext
 TESTS_C+=		t_stat
 TESTS_C+=		t_syscall
 TESTS_C+=		t_timer_create
+TESTS_C+=		t_timerfd
 TESTS_C+=		t_truncate
 TESTS_C+=		t_ucontext
 TESTS_C+=		t_umask
@@ -93,7 +95,10 @@ TESTS_C+=		t_write
 
 SRCS.t_mprotect=	t_mprotect.c ${SRCS_EXEC_PROT} t_mprotect_helper.c
 
-LDADD.t_getpid+=        -lpthread
+LDADD.t_eventfd+=	-lpthread
+LDADD.t_getpid+=	-lpthread
+LDADD.t_mmap+=		-lpthread
+LDADD.t_timerfd+=	-lpthread
 
 LDADD.t_ptrace_sigchld+=	-pthread -lm
 
@@ -113,6 +118,9 @@ LDADD.t_posix_fadvise+= ${LIBRUMPBASE}
 CPPFLAGS.t_futex_ops.c		+= -I${.CURDIR}/../../../../lib
 CPPFLAGS.t_futex_robust.c	+= -I${.CURDIR}/../../../../lib
 
+CPPFLAGS.t_timerfd.c		+= -I${.CURDIR}/../gen
+
+CPPFLAGE.t_clone.c		+= -D_NETBSD_SOURCE -D_GNU_SOURCE
 CPPFLAGS.t_lwp_create.c		+= -D_KERNTYPES
 CPPFLAGS.t_ptrace_sigchld.c	+= -D__TEST_FENV
 CPPFLAGS.t_ptrace_wait.c	+= -D_KERNTYPES -D__TEST_FENV
@@ -145,7 +153,10 @@ truncate_test.root_owned:
 
 WARNS=			4
 
-CWARNFLAGS.gcc+=	${GCC_NO_ADDR_OF_PACKED_MEMBER} \
+CWARNFLAGS.gcc+=	${CC_WNO_ADDRESS_OF_PACKED_MEMBER} \
 			${${ACTIVE_CC} == "gcc" && ${HAVE_GCC:U0} >= 8:? -Wno-error=deprecated :}
+
+# Explicitly breaks this
+COPTS.t_wait.c+=	${CC_WNO_ARRAY_BOUNDS} ${CC_WNO_STRINGOP_OVERFLOW}
 
 .include <bsd.test.mk>

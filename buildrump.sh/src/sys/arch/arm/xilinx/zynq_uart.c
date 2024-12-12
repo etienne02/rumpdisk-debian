@@ -1,4 +1,4 @@
-/*	$NetBSD: zynq_uart.c,v 1.3 2020/11/20 18:49:44 thorpej Exp $	*/
+/*	$NetBSD: zynq_uart.c,v 1.6 2024/05/04 02:04:54 dyoung Exp $	*/
 
 /*
  * Copyright (c) 2012  Genetec Corporation.  All rights reserved.
@@ -96,7 +96,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zynq_uart.c,v 1.3 2020/11/20 18:49:44 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zynq_uart.c,v 1.6 2024/05/04 02:04:54 dyoung Exp $");
 
 #include "opt_soc.h"
 #include "opt_console.h"
@@ -131,6 +131,8 @@ __KERNEL_RCSID(0, "$NetBSD: zynq_uart.c,v 1.3 2020/11/20 18:49:44 thorpej Exp $"
 #include <sys/proc.h>
 #include <sys/systm.h>
 #include <sys/tty.h>
+
+#include <ddb/db_active.h>
 
 #ifdef RND_COM
 #include <sys/rndsource.h>
@@ -1896,18 +1898,15 @@ zynquart_common_getc(dev_t dev, struct zynquart_regs *regsp)
 	}
 
 	/* block until a character becomes available */
-	while ((sts = bus_space_read_4(iot, ioh, UART_CHANNEL_STS)) & STS_REMPTY)
-		;
+	while ((sts = bus_space_read_4(iot, ioh, UART_CHANNEL_STS))
+	    & STS_REMPTY)
+		continue;
 
 	c = 0xff & bus_space_read_4(iot, ioh, UART_TX_RX_FIFO);
 
-	{
-		int __attribute__((__unused__))cn_trapped = 0; /* unused */
-#ifdef DDB
-		extern int db_active;
-		if (!db_active)
-#endif
-			cn_check_magic(dev, c, zynquart_cnm_state);
+	if (!db_active) {
+		int cn_trapped __unused = 0;
+		cn_check_magic(dev, c, zynquart_cnm_state);
 	}
 	splx(s);
 	return (c);
@@ -1923,8 +1922,8 @@ zynquart_common_putc(dev_t dev, struct zynquart_regs *regsp, int c)
 
 	if (!READAHEAD_IS_FULL() &&
 	    !(bus_space_read_4(iot, ioh, UART_CHANNEL_STS) & STS_REMPTY)) {
+		int cn_trapped __unused = 0;
 
-		int __attribute__((__unused__))cn_trapped = 0;
 		cin = bus_space_read_4(iot, ioh, UART_TX_RX_FIFO);
 		cn_check_magic(dev, cin & 0xff, zynquart_cnm_state);
 		zynquart_readahead_in = (zynquart_readahead_in + 1) &
@@ -1975,7 +1974,9 @@ zynquart_init(struct zynquart_regs *regsp, int rate, tcflag_t cflag)
 struct consdev zynquartcons = {
 	.cn_getc = zynquartcngetc,
 	.cn_putc = zynquartcnputc,
-	.cn_pollc = nullcnpollc
+	.cn_pollc = nullcnpollc,
+	.cn_dev = NODEV,
+	.cn_pri = CN_NORMAL,
 };
 
 

@@ -1,7 +1,7 @@
-/*	$NetBSD: machdep.c,v 1.300 2021/08/09 21:08:06 andvar Exp $ */
+/*	$NetBSD: machdep.c,v 1.308 2024/03/05 14:15:35 thorpej Exp $ */
 
 /*-
- * Copyright (c) 1996, 1997, 1998, 2019 The NetBSD Foundation, Inc.
+ * Copyright (c) 1996, 1997, 1998, 2019, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -71,7 +71,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.300 2021/08/09 21:08:06 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.308 2024/03/05 14:15:35 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -102,8 +102,11 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.300 2021/08/09 21:08:06 andvar Exp $")
 #include <sys/cpu.h>
 #include <sys/module.h>
 #include <sys/ksyms.h>
+#include <sys/pserialize.h>
 
 #include <sys/exec_aout.h>
+
+#include <ddb/db_active.h>
 
 #include <dev/mm.h>
 
@@ -555,25 +558,16 @@ cpu_reboot(int howto, char *user_boot_string)
 			syncdone = true;
 			/* XXX used to force unmount as well, here */
 			vfs_sync_all(l);
-			/*
-			 * If we've been adjusting the clock, the todr
-			 * will be out of synch; adjust it now.
-			 *
-			 * resettodr will only do this only if inittodr()
-			 * has already been called.
-			 *
-			 * XXX used to do this after unmounting all
-			 * filesystems with vfs_shutdown().
-			 */
-			resettodr();
 		}
 
 		while (vfs_unmountall1(l, false, false) ||
 		       config_detach_all(boothowto) ||
 		       vfs_unmount_forceone(l))
 			;	/* do nothing */
-	} else
-		suspendsched();
+	} else {
+		if (!db_active)
+			suspendsched();
+	}
 
 	pmf_system_shutdown(boothowto);
 
@@ -836,17 +830,22 @@ get_symbol_and_offset(const char **mod, const char **sym, vaddr_t *offset, vaddr
 {
 	static char symbuf[256];
 	unsigned long symaddr;
+	int s, error;
 
 #if NKSYMS || defined(DDB) || defined(MODULAR)
+	s = pserialize_read_enter();
 	if (ksyms_getname(mod, sym, pc,
 			  KSYMS_CLOSEST|KSYMS_PROC|KSYMS_ANY) == 0) {
-		if (ksyms_getval(*mod, *sym, &symaddr,
-				 KSYMS_CLOSEST|KSYMS_PROC|KSYMS_ANY) != 0)
+		error = ksyms_getval(*mod, *sym, &symaddr,
+		    KSYMS_CLOSEST|KSYMS_PROC|KSYMS_ANY);
+		pserialize_read_exit(s);
+		if (error)
 			goto failed;
 
 		*offset = (vaddr_t)(pc - symaddr);
 		return;
 	}
+	pserialize_read_exit(s);
 #endif
  failed:
 	snprintf(symbuf, sizeof symbuf, "%llx", (unsigned long long)pc);
@@ -1502,7 +1501,7 @@ _bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 }
 
 /*
- * Common functin for mmap(2)'ing DMA-safe memory.  May be called by
+ * Common function for mmap(2)'ing DMA-safe memory.  May be called by
  * bus-specific DMA mmap(2)'ing functions.
  */
 paddr_t
@@ -2658,17 +2657,15 @@ cpu_signotify(struct lwp *l)
 bool
 cpu_intr_p(void)
 {
-	uint64_t ncsw;
 	int idepth;
+	long pctr;
 	lwp_t *l;
 
 	l = curlwp;
 	do {
-		ncsw = l->l_ncsw;
-		__insn_barrier();
+		pctr = lwp_pctr();
 		idepth = l->l_cpu->ci_idepth;
-		__insn_barrier();
-	} while (__predict_false(ncsw != l->l_ncsw));
+	} while (__predict_false(pctr != lwp_pctr()));
 
 	return idepth >= 0;
 }

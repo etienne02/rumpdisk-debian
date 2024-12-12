@@ -1,4 +1,4 @@
-/*	$NetBSD: if_esreg.h,v 1.7 2009/10/21 23:53:38 snj Exp $	*/
+/*	$NetBSD: if_esreg.h,v 1.10 2023/06/24 05:31:04 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1995 Michael L. Hitch
@@ -87,7 +87,7 @@ union smcregs {
 
 /* EPH Status Register */
 #define	EPHSR_16COL	0x1000		/* 16 collisions reached */
-#define	EPHSR_MULCOL	0x0400		/* Multiple collsions */
+#define	EPHSR_MULCOL	0x0400		/* Multiple collisions */
 #define	EPHSR_TX_SUC	0x0100		/* Last transmit successful */
 #define	EPHSR_LOST_CAR	0x0004		/* Lost carrier */
 
@@ -117,7 +117,7 @@ union smcregs {
 /* MMU Command Register */
 #define	MMUCR_NOOP	0x0000		/* No operation */
 #define	MMUCR_ALLOC	0x2000		/* Allocate memory for TX */
-#define	MMUCR_RESET	0x4000		/* Reset to intitial state */
+#define	MMUCR_RESET	0x4000		/* Reset to initial state */
 #define	MMUCR_REM_RX	0x6000		/* Remove frame from top of RX FIFO */
 #define	MMUCR_REMRLS_RX	0x8000		/* Remove & release from top of RX FIFO */
 #define	MMUCR_RLSPKT	0xa000		/* Release specific packet */
@@ -148,7 +148,7 @@ union smcregs {
 #define	IST_TX		0x02		/* TX complete */
 #define	IST_RX		0x01		/* RX complete */
 
-/* Interrupt Acknowlege Register */
+/* Interrupt Acknowledge Register */
 #define	ACK_RX_OVRN	IST_RX_OVRN
 #define	ACK_TX_EMPTY	IST_TX_EMPTY
 #define	ACK_TX		IST_TX

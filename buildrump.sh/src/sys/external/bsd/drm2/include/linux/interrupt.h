@@ -1,4 +1,4 @@
-/*	$NetBSD: interrupt.h,v 1.4 2020/02/14 14:34:59 maya Exp $	*/
+/*	$NetBSD: interrupt.h,v 1.10 2021/12/19 12:44:43 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -32,10 +32,24 @@
 #ifndef _LINUX_INTERRUPT_H_
 #define _LINUX_INTERRUPT_H_
 
+#include <sys/param.h>
+#include <sys/types.h>
+
 #include <sys/cpu.h>
 
+#include <linux/irqreturn.h>
 #include <linux/hardirq.h>
+#include <linux/kernel.h>
+#include <linux/tasklet.h>
 
 #define	in_interrupt()	(cpu_intr_p() || cpu_softintr_p())
+
+#define	disable_irq		linux_disable_irq
+#define	enable_irq		linux_enable_irq
+
+typedef irqreturn_t (*irq_handler_t)(void *);
+
+void	disable_irq(int);
+void	enable_irq(int);
 
 #endif  /* _LINUX_INTERRUPT_H_ */

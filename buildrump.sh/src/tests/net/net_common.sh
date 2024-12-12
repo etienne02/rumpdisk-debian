@@ -1,4 +1,4 @@
-#	$NetBSD: net_common.sh,v 1.42 2021/07/09 05:54:11 yamaguchi Exp $
+#	$NetBSD: net_common.sh,v 1.45 2024/08/09 02:20:13 rin Exp $
 #
 # Copyright (c) 2016 Internet Initiative Japan Inc.
 # All rights reserved.
@@ -139,6 +139,7 @@ start_nc_server()
 	local port=$2
 	local outfile=$3
 	local proto=${4:-ipv4}
+	local extra_opts="$5"
 	local backup=$RUMP_SERVER
 	local opts=
 
@@ -149,6 +150,7 @@ start_nc_server()
 	else
 		opts="-l -6"
 	fi
+	opts="$opts $extra_opts"
 
 	env LD_PRELOAD=/usr/lib/librumphijack.so nc $opts $port > $outfile &
 	echo $! > $NC_PID
@@ -525,7 +527,9 @@ rump_server_dump_buses()
 cleanup()
 {
 
-	rump_server_halt_servers
+	if [ -f $_rump_server_socks ]; then
+		rump_server_halt_servers
+	fi
 }
 
 dump()
@@ -537,7 +541,7 @@ dump()
 
 skip_if_qemu()
 {
-	if sysctl machdep.cpu_brand 2>/dev/null | grep QEMU >/dev/null 2>&1
+	if drvctl -l qemufwcfg0 >/dev/null 2>&1
 	then
 	    atf_skip "unreliable under qemu, skip until PR kern/43997 fixed"
 	fi

@@ -1,4 +1,4 @@
-/*	$NetBSD: db_memrw.c,v 1.11 2019/04/21 06:37:21 maxv Exp $	*/
+/*	$NetBSD: db_memrw.c,v 1.16 2022/08/27 20:40:03 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1996, 2000 The NetBSD Foundation, Inc.
@@ -48,18 +48,21 @@
  * Jason R. Thorpe <thorpej@zembu.com>.
  *
  * Basic copy to amd64 by fvdl.
- * 
+ *
  * i386 and amd64 merge by jym.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_memrw.c,v 1.11 2019/04/21 06:37:21 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_memrw.c,v 1.16 2022/08/27 20:40:03 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
 #include <sys/systm.h>
 
 #include <machine/db_machdep.h>
+#include <machine/pmap_private.h>
+
+#include <x86/bootspace.h>
 
 #include <ddb/db_access.h>
 #include <ddb/db_output.h>
@@ -82,7 +85,7 @@ db_validate_address(vaddr_t addr)
 /*
  * Read bytes from kernel address space for debugger.
  */
-void
+void __noubsan
 db_read_bytes(vaddr_t addr, size_t size, char *data)
 {
 	char *src;
@@ -97,17 +100,17 @@ db_read_bytes(vaddr_t addr, size_t size, char *data)
 	}
 
 	if (size == 8) {
-		*((long *)data) = *((long *)src);
+		*((uint64_t *)data) = *((uint64_t *)src);
 		return;
 	}
 
 	if (size == 4) {
-		*((int *)data) = *((int *)src);
+		*((uint32_t *)data) = *((uint32_t *)src);
 		return;
 	}
 
 	if (size == 2) {
-		*((short *)data) = *((short *)src);
+		*((uint16_t *)data) = *((uint16_t *)src);
 		return;
 	}
 
@@ -202,7 +205,7 @@ db_write_text(vaddr_t addr, size_t size, const char *data)
 /*
  * Write bytes to kernel address space for debugger.
  */
-void
+void __noubsan
 db_write_bytes(vaddr_t addr, size_t size, const char *data)
 {
 	extern struct bootspace bootspace;
@@ -227,17 +230,17 @@ db_write_bytes(vaddr_t addr, size_t size, const char *data)
 	dst = (char *)addr;
 
 	if (size == 8) {
-		*((long *)dst) = *((const long *)data);
+		*((uint64_t *)dst) = *((const uint64_t *)data);
 		return;
 	}
 
 	if (size == 4) {
-		*((int *)dst) = *((const int *)data);
+		*((uint32_t *)dst) = *((const uint32_t *)data);
 		return;
 	}
 
 	if (size == 2) {
-		*((short *)dst) = *((const short *)data);
+		*((uint16_t *)dst) = *((const uint16_t *)data);
 		return;
 	}
 

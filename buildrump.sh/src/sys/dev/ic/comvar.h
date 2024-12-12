@@ -1,4 +1,4 @@
-/*	$NetBSD: comvar.h,v 1.94 2021/03/25 05:34:49 rin Exp $	*/
+/*	$NetBSD: comvar.h,v 1.98 2022/10/08 07:27:03 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All rights reserved.
@@ -29,6 +29,9 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
+#ifndef	_SYS_DEV_IC_COMVAR_H_
+#define	_SYS_DEV_IC_COMVAR_H_
 
 #include "opt_multiprocessor.h"
 #include "opt_lockdebug.h"
@@ -103,12 +106,20 @@ struct com_regs {
 	bus_addr_t		cr_iobase;
 	bus_size_t		cr_nports;
 	bus_size_t		cr_map[COM_REGMAP_NENTRIES];
+	uint8_t			(*cr_read)(struct com_regs *, u_int);
+	void			(*cr_write)(struct com_regs *, u_int, uint8_t);
+	void			(*cr_write_multi)(struct com_regs *, u_int,
+						  const uint8_t *,
+						  bus_size_t);
+	
 };
 
 void	com_init_regs(struct com_regs *, bus_space_tag_t, bus_space_handle_t,
 		      bus_addr_t);
 void	com_init_regs_stride(struct com_regs *, bus_space_tag_t,
 			     bus_space_handle_t, bus_addr_t, u_int);
+void	com_init_regs_stride_width(struct com_regs *, bus_space_tag_t,
+				   bus_space_handle_t, bus_addr_t, u_int, u_int);
 
 struct comcons_info {
 	struct com_regs regs;
@@ -125,6 +136,7 @@ struct com_softc {
 
 	callout_t sc_diag_callout;
 	callout_t sc_poll_callout;
+	struct timeval sc_hup_pending;
 
 	int sc_frequency;
 
@@ -197,9 +209,6 @@ struct com_softc {
 	void (*disable)(struct com_softc *);
 	int enabled;
 
-	/* XXXX: vendor workaround functions */
-	int (*sc_vendor_workaround)(struct com_softc *);
-
 	struct pps_state sc_pps_state;	/* pps state */
 
 #ifdef RND_COM
@@ -221,3 +230,5 @@ bool com_suspend(device_t, const pmf_qual_t *);
 #define	IPL_SERIAL	IPL_TTY
 #define	splserial()	spltty()
 #endif
+
+#endif	/* _SYS_DEV_IC_COMVAR_H_ */

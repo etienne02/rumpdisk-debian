@@ -1,4 +1,4 @@
-/*	$NetBSD: coda_namecache.c,v 1.27 2020/04/13 19:23:17 ad Exp $	*/
+/*	$NetBSD: coda_namecache.c,v 1.30 2024/05/17 23:57:46 thorpej Exp $	*/
 
 /*
  *
@@ -77,11 +77,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: coda_namecache.c,v 1.27 2020/04/13 19:23:17 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: coda_namecache.c,v 1.30 2024/05/17 23:57:46 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/errno.h>
-#include <sys/malloc.h>
 #include <sys/select.h>
 #include <sys/kauth.h>
 
@@ -160,7 +159,7 @@ coda_nc_init(void)
 }
 
 /*
- * Auxillary routines -- shouldn't be entry points
+ * Auxiliary routines -- shouldn't be entry points
  */
 
 static struct coda_cache *
@@ -554,7 +553,7 @@ coda_nc_flush(enum dc_status dcstat)
 	/*
 	 * Go through the whole lru chain and kill everything as we go.
 	 * I don't use remove since that would rebuild the lru chain
-	 * as it went and that seemed unneccesary.
+	 * as it went and that seemed unnecessary.
 	 */
 	struct coda_cache *cncp;
 	int i;

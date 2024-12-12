@@ -1,4 +1,4 @@
-/*	$NetBSD: netinet_component.c,v 1.11 2018/02/24 07:37:08 ozaki-r Exp $	*/
+/*	$NetBSD: netinet_component.c,v 1.13 2022/09/03 02:48:01 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2009 Antti Kantee.  All Rights Reserved.
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netinet_component.c,v 1.11 2018/02/24 07:37:08 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netinet_component.c,v 1.13 2022/09/03 02:48:01 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/domain.h>
@@ -36,7 +36,6 @@ __KERNEL_RCSID(0, "$NetBSD: netinet_component.c,v 1.11 2018/02/24 07:37:08 ozaki
 #include <sys/socketvar.h>
 
 #include <net/if.h>
-#include <net/netisr.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
@@ -51,8 +50,6 @@ RUMP_COMPONENT(RUMP_COMPONENT_NET)
 
 	domain_attach(&arpdomain);
 	domain_attach(&inetdomain);
-
-	rump_netisr_register(NETISR_ARP, arpintr);
 }
 
 int carpattach(int);

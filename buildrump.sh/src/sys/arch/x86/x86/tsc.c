@@ -1,4 +1,4 @@
-/*	$NetBSD: tsc.c,v 1.56 2021/06/02 06:48:10 nia Exp $	*/
+/*	$NetBSD: tsc.c,v 1.61 2024/10/03 12:29:07 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2020 The NetBSD Foundation, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tsc.c,v 1.56 2021/06/02 06:48:10 nia Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tsc.c,v 1.61 2024/10/03 12:29:07 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -132,6 +132,18 @@ tsc_is_invariant(void)
 		 * Manual Volume 3: General-Purpose and System Instructions.
 		 * The check is done below.
 		 */
+
+		/*
+		 * AMD Errata 778: Processor Core Time Stamp Counters May
+		 * Experience Drift
+		 *
+		 * This affects all family 15h and family 16h processors.
+		 */
+		switch (CPUID_TO_FAMILY(ci->ci_signature)) {
+		case 0x15:
+		case 0x16:
+			return false;
+		}
 	}
 
 	/*
@@ -151,7 +163,7 @@ tsc_is_invariant(void)
 	return invariant;
 }
 
-/* Setup function porniters for rdtsc() and timecounter(9). */
+/* Setup function pointers for rdtsc() and timecounter(9). */
 void
 tsc_setfunc(struct cpu_info *ci)
 {
@@ -406,7 +418,7 @@ tsc_delay(unsigned int us)
 static u_int
 tsc_get_timecount(struct timecounter *tc)
 {
-#ifdef _LP64 /* requires atomic 64-bit store */
+#if defined(_LP64) && defined(DIAGNOSTIC) /* requires atomic 64-bit store */
 	static __cpu_simple_lock_t lock = __SIMPLELOCK_UNLOCKED;
 	static int lastwarn;
 	uint64_t cur, prev;
@@ -421,19 +433,17 @@ tsc_get_timecount(struct timecounter *tc)
 	 */
 	prev = l->l_md.md_tsc;
 	cur = cpu_counter();
-	if (__predict_false(cur < prev)) {
-		if ((cur >> 63) == (prev >> 63) &&
-		    __cpu_simple_lock_try(&lock)) {
-			ticks = getticks();
-			if (ticks - lastwarn >= hz) {
-				printf(
-				    "WARNING: TSC time went backwards by %u - "
-				    "change sysctl(7) kern.timecounter?\n",
-				    (unsigned)(prev - cur));
-				lastwarn = ticks;
-			}
-			__cpu_simple_unlock(&lock);
+	if (__predict_false(cur < prev) && (cur >> 63) == (prev >> 63) &&
+	    __cpu_simple_lock_try(&lock)) {
+		ticks = getticks();
+		if (ticks - lastwarn >= hz) {
+			printf(
+			    "WARNING: %s TSC went backwards by %u - "
+			    "change sysctl(7) kern.timecounter?\n",
+			    cpu_name(curcpu()), (unsigned)(prev - cur));
+			lastwarn = ticks;
 		}
+		__cpu_simple_unlock(&lock);
 	}
 	l->l_md.md_tsc = cur;
 	return (uint32_t)cur;

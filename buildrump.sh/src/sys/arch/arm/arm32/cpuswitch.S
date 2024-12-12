@@ -1,4 +1,4 @@
-/*	$NetBSD: cpuswitch.S,v 1.105 2021/05/30 06:53:15 dholland Exp $	*/
+/*	$NetBSD: cpuswitch.S,v 1.107 2023/03/01 08:17:53 riastradh Exp $	*/
 
 /*
  * Copyright 2003 Wasabi Systems, Inc.
@@ -87,7 +87,7 @@
 #include <arm/asm.h>
 #include <arm/locore.h>
 
-	RCSID("$NetBSD: cpuswitch.S,v 1.105 2021/05/30 06:53:15 dholland Exp $")
+	RCSID("$NetBSD: cpuswitch.S,v 1.107 2023/03/01 08:17:53 riastradh Exp $")
 
 /* LINTSTUB: include <sys/param.h> */
 
@@ -189,11 +189,32 @@ ENTRY(cpu_switchto)
 	mcr	p15, 0, r6, c13, c0, 4		/* set current lwp */
 #endif
 
-	/* We have a new curlwp now so make a note of it */
-	str	r6, [r5, #(CI_CURLWP)]
+	/*
+	 * Issue barriers to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
+	 */
 
+	/* We have a new curlwp now so make a note of it */
 #ifdef _ARM_ARCH_7
-	dmb					/* see comments in kern_mutex.c */
+	dmb				/* store-before-store */
+#endif
+	str	r6, [r5, #(CI_CURLWP)]
+#ifdef _ARM_ARCH_7
+	dmb				/* store-before-load */
 #endif
 
 	/* Get the new pcb */
@@ -392,10 +413,17 @@ ENTRY_NP(softint_switch)
 #if defined(TPIDRPRW_IS_CURLWP)
 	mcr	p15, 0, r5, c13, c0, 4	/* save new lwp */
 #endif
-	str	r5, [r7, #(CI_CURLWP)]	/* save new lwp */
 #ifdef _ARM_ARCH_7
-	dmb				/* see comments in kern_mutex.c */
+	dmb				/* for mutex_enter; see cpu_switchto */
 #endif
+	str	r5, [r7, #(CI_CURLWP)]	/* save new lwp */
+	/*
+	 * No need for barrier after ci->ci_curlwp = softlwp -- when we
+	 * enter a softint lwp, it can't be holding any mutexes, so it
+	 * can't release any until after it has acquired them, so we
+	 * need not participate in the protocol with mutex_vector_enter
+	 * barriers here.
+	 */
 
 #ifdef KASAN
 	mov	r0, r5
@@ -428,7 +456,13 @@ ENTRY_NP(softint_switch)
 #if defined(TPIDRPRW_IS_CURLWP)
 	mcr	p15, 0, r4, c13, c0, 4	/* restore pinned lwp */
 #endif
+#ifdef _ARM_ARCH_7
+	dmb				/* for mutex_enter; see cpu_switchto */
+#endif
 	str	r4, [r7, #(CI_CURLWP)]	/* restore pinned lwp */
+#ifdef _ARM_ARCH_7
+	dmb				/* for mutex_enter; see cpu_switchto */
+#endif
 	ldr	sp, [r2, #(PCB_KSP)]	/* now running on the old stack. */
 
 	/* At this point we can allow IRQ's again. */

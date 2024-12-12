@@ -1,4 +1,4 @@
-/*	$NetBSD: if_es.c,v 1.65 2020/01/29 05:23:16 thorpej Exp $ */
+/*	$NetBSD: if_es.c,v 1.70 2023/08/27 22:09:55 andvar Exp $ */
 
 /*
  * Copyright (c) 1995 Michael L. Hitch
@@ -33,7 +33,7 @@
 #include "opt_ns.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_es.c,v 1.65 2020/01/29 05:23:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_es.c,v 1.70 2023/08/27 22:09:55 andvar Exp $");
 
 
 #include <sys/param.h>
@@ -86,6 +86,7 @@ struct	es_softc {
 	void	*sc_base;		/* base address of board */
 	short	sc_iflags;
 	unsigned short sc_intctl;
+	bool	sc_txbusy;
 #ifdef ESDEBUG
 	int	sc_debug;
 	short	sc_intbusy;		/* counter for interrupt rentered */
@@ -101,7 +102,7 @@ int	estxint2 = 0;	/* IST_TX active after IST_TX_EMPTY */
 int	estxint3 = 0;	/* IST_TX interrupt processed */
 int	estxint4 = 0;	/* ~TEMPTY counts */
 int	estxint5 = 0;	/* IST_TX_EMPTY interrupts */
-void	es_dump_smcregs(char *, union smcregs *);
+void	es_dump_smcregs(const char *, union smcregs *);
 #endif
 
 int esintr(void *);
@@ -198,7 +199,7 @@ esattach(device_t parent, device_t self, void *aux)
 
 #ifdef ESDEBUG
 void
-es_dump_smcregs(char *where, union smcregs *smc)
+es_dump_smcregs(const char *where, union smcregs *smc)
 {
 	u_short cur_bank = smc->b0.bsr & BSR_MASK;
 
@@ -289,7 +290,7 @@ esinit(struct es_softc *sc)
 
 	/* Interface is now 'running', with no output active. */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 
 	/* Attempt to start output, if any. */
 	if_schedule_deferred_start(ifp);
@@ -359,7 +360,7 @@ esintr(void *arg)
 			while (smc->b2.mmucr & MMUCR_BUSY)
 				;
 			smc->b2.pnr = save_pnr;
-			ifp->if_flags &= ~IFF_OACTIVE;
+			sc->sc_txbusy = false;
 			ifp->if_timer = 0;
 		}
 #ifdef ESDEBUG
@@ -757,14 +758,13 @@ esstart(struct ifnet *ifp)
 	int i;
 	u_char active_pnr;
 
-	if ((sc->sc_ethercom.ec_if.if_flags & (IFF_RUNNING | IFF_OACTIVE)) !=
-	    IFF_RUNNING)
+	if ((sc->sc_ethercom.ec_if.if_flags & IFF_RUNNING) == 0)
 		return;
 
 #ifdef ESDEBUG
 	if (sc->sc_smcbusy++) {
 		printf("%s: esstart re-entered\n", device_xname(sc->sc_dev));
-		panic("esstart re-entred");
+		panic("esstart re-entered");
 	}
 	while ((smc->b2.bsr & BSR_MASK) != BSR_BANK2) {
 		printf("%s: esstart BSR not 2: %04x\n", device_xname(sc->sc_dev),
@@ -772,15 +772,15 @@ esstart(struct ifnet *ifp)
 		smc->b2.bsr = BSR_BANK2;
 	}
 #endif
-	for (;;) {
-#ifdef ESDEBUG
+	while (!sc->sc_txbusy) {
+#if defined(ESDEBUG) && defined(USEPKTBUF)
 		u_short start_ptr, end_ptr;
 #endif
 		/*
 		 * Sneak a peek at the next packet to get the length
 		 * and see if the SMC 91C90 can accept it.
 		 */
-		m = sc->sc_ethercom.ec_if.if_snd.ifq_head;
+		IF_POLL(&sc->sc_ethercom.ec_if.if_snd, m);
 		if (!m)
 			break;
 #ifdef ESDEBUG
@@ -801,7 +801,7 @@ esstart(struct ifnet *ifp)
 			if ((smc->b2.arr & ARR_FAILED) == 0)
 				break;
 		if (smc->b2.arr & ARR_FAILED) {
-			sc->sc_ethercom.ec_if.if_flags |= IFF_OACTIVE;
+			sc->sc_txbusy = true;
 			sc->sc_intctl |= MSK_ALLOC;
 			sc->sc_ethercom.ec_if.if_timer = 5;
 			break;
@@ -815,7 +815,6 @@ esstart(struct ifnet *ifp)
 			smc->b2.bsr = BSR_BANK2;
 		}
 #endif
-		IF_DEQUEUE(&sc->sc_ethercom.ec_if.if_snd, m);
 		smc->b2.ptr = PTR_AUTOINCR;
 		(void) smc->b2.mmucr;
 		data = (volatile u_short *)&smc->b2.data;
@@ -908,14 +907,16 @@ esstart(struct ifnet *ifp)
 #endif
 			smc->b2.bsr = BSR_BANK2;
 #ifdef ESDEBUG
+#ifdef USEPKTBUF
 			printf("start_ptr %04x end_ptr %04x cur ptr %04x\n",
 			    start_ptr, end_ptr, SWAP(smc->b2.ptr));
+#endif
 			--sc->sc_smcbusy;
 #endif
-			IF_PREPEND(&sc->sc_ethercom.ec_if.if_snd, m0);
 			esinit(sc);	/* It's really hosed - reset */
 			return;
 		}
+		IF_DEQUEUE(&sc->sc_ethercom.ec_if.if_snd, m);
 		smc->b2.mmucr = MMUCR_ENQ_TX;
 		if (smc->b2.pnr != active_pnr)
 			printf("%s: esstart - PNR changed %x->%x\n",

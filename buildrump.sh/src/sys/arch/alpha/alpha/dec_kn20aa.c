@@ -1,4 +1,4 @@
-/* $NetBSD: dec_kn20aa.c,v 1.66 2020/09/04 03:41:49 thorpej Exp $ */
+/* $NetBSD: dec_kn20aa.c,v 1.68 2024/03/31 19:06:31 thorpej Exp $ */
 
 /*
  * Copyright (c) 1995, 1996, 1997 Carnegie-Mellon University.
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: dec_kn20aa.c,v 1.66 2020/09/04 03:41:49 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dec_kn20aa.c,v 1.68 2024/03/31 19:06:31 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -128,7 +128,7 @@ dec_kn20aa_cons_init(void)
 	extern struct cia_config cia_configuration;
 
 	ccp = &cia_configuration;
-	cia_init(ccp, 0);
+	cia_init(ccp);
 
 	ctb = (struct ctb *)(((char *)hwrpb) + hwrpb->rpb_ctb_off);
 
@@ -192,7 +192,7 @@ dec_kn20aa_device_register(device_t dev, void *aux)
 	struct bootdev_data *b = bootdev_data;
 	device_t parent = device_parent(dev);
 
-	if (found)
+	if (b == NULL || found)
 		return;
 
 	if (!initted) {

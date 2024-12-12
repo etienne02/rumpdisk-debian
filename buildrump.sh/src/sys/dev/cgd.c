@@ -1,4 +1,4 @@
-/* $NetBSD: cgd.c,v 1.139 2020/08/01 02:15:49 riastradh Exp $ */
+/* $NetBSD: cgd.c,v 1.146 2022/04/02 09:53:20 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cgd.c,v 1.139 2020/08/01 02:15:49 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cgd.c,v 1.146 2022/04/02 09:53:20 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -529,11 +529,10 @@ static int
 cgd_detach(device_t self, int flags)
 {
 	int ret;
-	const int pmask = 1 << RAW_PART;
 	struct cgd_softc *sc = device_private(self);
 	struct dk_softc *dksc = &sc->sc_dksc;
 
-	if (DK_BUSY(dksc, pmask))
+	if (DK_BUSY(dksc, 0))
 		return EBUSY;
 
 	if (DK_ATTACHED(dksc) &&
@@ -692,14 +691,20 @@ cgd_create_worker(void)
 static void
 cgd_destroy_worker(struct cgd_worker *cw)
 {
+
+	/*
+	 * Wait for all worker threads to complete before destroying
+	 * the rest of the cgd_worker.
+	 */
+	if (cw->cw_wq)
+		workqueue_destroy(cw->cw_wq);
+
 	mutex_destroy(&cw->cw_lock);
 
 	if (cw->cw_cpool) {
 		pool_destroy(cw->cw_cpool);
 		kmem_free(cw->cw_cpool, sizeof(struct pool));
 	}
-	if (cw->cw_wq)
-		workqueue_destroy(cw->cw_wq);
 
 	kmem_free(cw, sizeof(struct cgd_worker));
 }
@@ -1666,7 +1671,7 @@ cgd_selftest(void)
 		int keylen = selftests[i].keylen;
 		int txtlen = selftests[i].txtlen;
 
-		aprint_verbose("cgd: self-test %s-%d%s\n", alg, keylen,
+		aprint_debug("cgd: self-test %s-%d%s\n", alg, keylen,
 		    encblkno8 ? " (encblkno8)" : "");
 
 		memset(&sc, 0, sizeof(sc));
@@ -1715,7 +1720,7 @@ cgd_selftest(void)
 		sc.sc_cfuncs->cf_destroy(sc.sc_cdata.cf_priv);
 	}
 
-	aprint_verbose("cgd: self-tests passed\n");
+	aprint_debug("cgd: self-tests passed\n");
 }
 
 MODULE(MODULE_CLASS_DRIVER, cgd, "blowfish,des,dk_subr,bufq_fcfs");
@@ -1737,31 +1742,34 @@ cgd_modcmd(modcmd_t cmd, void *arg)
 		mutex_init(&cgd_spawning_mtx, MUTEX_DEFAULT, IPL_NONE);
 		cv_init(&cgd_spawning_cv, "cgspwn");
 
-		error = config_cfdriver_attach(&cgd_cd);
-		if (error)
-			break;
-
-		error = config_cfattach_attach(cgd_cd.cd_name, &cgd_ca);
-	        if (error) {
-			config_cfdriver_detach(&cgd_cd);
-			aprint_error("%s: unable to register cfattach for"
-			    "%s, error %d\n", __func__, cgd_cd.cd_name, error);
-			break;
-		}
 		/*
 		 * Attach the {b,c}devsw's
 		 */
 		error = devsw_attach("cgd", &cgd_bdevsw, &cgd_bmajor,
 		    &cgd_cdevsw, &cgd_cmajor);
-
-		/*
-		 * If devsw_attach fails, remove from autoconf database
-		 */
 		if (error) {
-			config_cfattach_detach(cgd_cd.cd_name, &cgd_ca);
-			config_cfdriver_detach(&cgd_cd);
 			aprint_error("%s: unable to attach %s devsw, "
 			    "error %d", __func__, cgd_cd.cd_name, error);
+			break;
+		}
+
+		/*
+		 * Attach to autoconf database
+		 */
+		error = config_cfdriver_attach(&cgd_cd);
+		if (error) {
+			devsw_detach(&cgd_bdevsw, &cgd_cdevsw);
+			aprint_error("%s: unable to register cfdriver for"
+			    "%s, error %d\n", __func__, cgd_cd.cd_name, error);
+			break;
+		}
+
+		error = config_cfattach_attach(cgd_cd.cd_name, &cgd_ca);
+	        if (error) {
+			config_cfdriver_detach(&cgd_cd);
+			devsw_detach(&cgd_bdevsw, &cgd_cdevsw);
+			aprint_error("%s: unable to register cfattach for"
+			    "%s, error %d\n", __func__, cgd_cd.cd_name, error);
 			break;
 		}
 #endif
@@ -1770,17 +1778,10 @@ cgd_modcmd(modcmd_t cmd, void *arg)
 	case MODULE_CMD_FINI:
 #ifdef _MODULE
 		/*
-		 * Remove {b,c}devsw's
-		 */
-		devsw_detach(&cgd_bdevsw, &cgd_cdevsw);
-
-		/*
-		 * Now remove device from autoconf database
+		 * Remove device from autoconf database
 		 */
 		error = config_cfattach_detach(cgd_cd.cd_name, &cgd_ca);
 		if (error) {
-			(void)devsw_attach("cgd", &cgd_bdevsw, &cgd_bmajor,
-			    &cgd_cdevsw, &cgd_cmajor);
 			aprint_error("%s: failed to detach %s cfattach, "
 			    "error %d\n", __func__, cgd_cd.cd_name, error);
  			break;
@@ -1788,12 +1789,15 @@ cgd_modcmd(modcmd_t cmd, void *arg)
 		error = config_cfdriver_detach(&cgd_cd);
 		if (error) {
 			(void)config_cfattach_attach(cgd_cd.cd_name, &cgd_ca);
-			(void)devsw_attach("cgd", &cgd_bdevsw, &cgd_bmajor,
-			    &cgd_cdevsw, &cgd_cmajor);
 			aprint_error("%s: failed to detach %s cfdriver, "
 			    "error %d\n", __func__, cgd_cd.cd_name, error);
 			break;
 		}
+
+		/*
+		 * Remove {b,c}devsw's
+		 */
+		devsw_detach(&cgd_bdevsw, &cgd_cdevsw);
 
 		cv_destroy(&cgd_spawning_cv);
 		mutex_destroy(&cgd_spawning_mtx);

@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_signal.c,v 1.20 2019/08/23 08:31:11 maxv Exp $ */
+/*	$NetBSD: linux32_signal.c,v 1.24 2021/11/26 13:32:38 christos Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux32_signal.c,v 1.20 2019/08/23 08:31:11 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux32_signal.c,v 1.24 2021/11/26 13:32:38 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/ucred.h>
@@ -46,9 +46,11 @@ __KERNEL_RCSID(0, "$NetBSD: linux32_signal.c,v 1.20 2019/08/23 08:31:11 maxv Exp
 
 #include <compat/linux/common/linux_types.h>
 #include <compat/linux/common/linux_signal.h>
+#include <compat/linux/common/linux_sigevent.h>
 
 #include <compat/linux32/common/linux32_types.h>
 #include <compat/linux32/common/linux32_signal.h>
+#include <compat/linux32/common/linux32_sigevent.h>
 #include <compat/linux32/common/linux32_siginfo.h>
 #include <compat/linux32/linux32_syscallargs.h>
 #include <compat/linux32/common/linux32_errno.h>
@@ -215,6 +217,7 @@ linux32_to_native_sigflags(const unsigned long lsf)
 void
 linux32_to_native_sigaction(struct sigaction *bsa, const struct linux32_sigaction *lsa)
 {
+	memset(bsa, 0, sizeof(*bsa));
 	bsa->sa_handler = NETBSD32PTR64(lsa->linux_sa_handler);
 	linux32_to_native_sigset(&bsa->sa_mask, &lsa->linux_sa_mask);
 	bsa->sa_flags = linux32_to_native_sigflags(lsa->linux_sa_flags);
@@ -223,6 +226,7 @@ linux32_to_native_sigaction(struct sigaction *bsa, const struct linux32_sigactio
 void
 native_to_linux32_sigaction(struct linux32_sigaction *lsa, const struct sigaction *bsa)
 {
+	memset(lsa, 0, sizeof(*lsa));
 	NETBSD32PTR32(lsa->linux_sa_handler, bsa->sa_handler);
 	native_to_linux32_sigset(&lsa->linux_sa_mask, &bsa->sa_mask);
 	lsa->linux_sa_flags = native_to_linux32_sigflags(bsa->sa_flags);
@@ -230,7 +234,8 @@ native_to_linux32_sigaction(struct linux32_sigaction *lsa, const struct sigactio
 }
 
 void
-native_to_linux32_sigaltstack(struct linux32_sigaltstack *lss, const struct sigaltstack *bss)
+native_to_linux32_sigaltstack(struct linux32_sigaltstack *lss,
+    const stack_t *bss)
 {
 	memset(lss, 0, sizeof(*lss));
 	NETBSD32PTR32(lss->ss_sp, bss->ss_sp);
@@ -651,4 +656,53 @@ native_to_linux32_si_status(int code, int status)
 	}
 
 	return sts;
+}
+
+int
+linux32_to_native_sigevent(struct sigevent *nsep,
+    const struct linux32_sigevent *lsep)
+{
+	memset(nsep, 0, sizeof(*nsep));
+
+	switch (lsep->sigev_notify) {
+	case LINUX_SIGEV_SIGNAL:
+		nsep->sigev_notify = SIGEV_SIGNAL;
+		break;
+
+	case LINUX_SIGEV_NONE:
+		nsep->sigev_notify = SIGEV_NONE;
+		break;
+
+	case LINUX_SIGEV_THREAD:
+	case LINUX_SIGEV_THREAD_ID:
+	default:
+		return ENOTSUP;
+	}
+
+	nsep->sigev_value.sival_ptr =
+	    NETBSD32PTR64(lsep->sigev_value.sival_ptr);
+
+	if (lsep->sigev_signo < 0 || lsep->sigev_signo >= LINUX32__NSIG) {
+		return EINVAL;
+	}
+	nsep->sigev_signo = linux32_to_native_signo[lsep->sigev_signo];
+
+	return 0;
+}
+
+int
+linux32_sigevent_copyin(const void *src, void *dst, size_t size)
+{
+	struct linux32_sigevent lse;
+	struct sigevent *sep = dst;
+	int error;
+
+	KASSERT(size == sizeof(*sep));
+
+	error = copyin(src, &lse, sizeof(lse));
+	if (error) {
+		return error;
+	}
+
+	return linux32_to_native_sigevent(sep, &lse);
 }

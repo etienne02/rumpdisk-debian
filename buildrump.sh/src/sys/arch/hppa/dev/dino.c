@@ -1,4 +1,4 @@
-/*	$NetBSD: dino.c,v 1.12 2021/08/07 16:18:55 thorpej Exp $ */
+/*	$NetBSD: dino.c,v 1.17 2024/01/28 09:03:22 macallan Exp $ */
 
 /*	$OpenBSD: dino.c,v 1.5 2004/02/13 20:39:31 mickey Exp $	*/
 
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dino.c,v 1.12 2021/08/07 16:18:55 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dino.c,v 1.17 2024/01/28 09:03:22 macallan Exp $");
 
 /* #include "cardbus.h" */
 
@@ -37,7 +37,6 @@ __KERNEL_RCSID(0, "$NetBSD: dino.c,v 1.12 2021/08/07 16:18:55 thorpej Exp $");
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/reboot.h>
-#include <sys/malloc.h>
 #include <sys/extent.h>
 
 #include <machine/iomod.h>
@@ -178,10 +177,16 @@ uint8_t dino_r1(void *, bus_space_handle_t, bus_size_t);
 uint16_t dino_r2(void *, bus_space_handle_t, bus_size_t);
 uint32_t dino_r4(void *, bus_space_handle_t, bus_size_t);
 uint64_t dino_r8(void *, bus_space_handle_t, bus_size_t);
+uint16_t dino_rs2(void *, bus_space_handle_t, bus_size_t);
+uint32_t dino_rs4(void *, bus_space_handle_t, bus_size_t);
+uint64_t dino_rs8(void *, bus_space_handle_t, bus_size_t);
 void dino_w1(void *, bus_space_handle_t, bus_size_t, uint8_t);
 void dino_w2(void *, bus_space_handle_t, bus_size_t, uint16_t);
 void dino_w4(void *, bus_space_handle_t, bus_size_t, uint32_t);
 void dino_w8(void *, bus_space_handle_t, bus_size_t, uint64_t);
+void dino_ws2(void *, bus_space_handle_t, bus_size_t, uint16_t);
+void dino_ws4(void *, bus_space_handle_t, bus_size_t, uint32_t);
+void dino_ws8(void *, bus_space_handle_t, bus_size_t, uint64_t);
 void dino_rm_1(void *, bus_space_handle_t, bus_size_t, uint8_t *, bus_size_t);
 void dino_rm_2(void *, bus_space_handle_t, bus_size_t, uint16_t *, bus_size_t);
 void dino_rm_4(void *, bus_space_handle_t, bus_size_t, uint32_t *, bus_size_t);
@@ -347,8 +352,18 @@ dino_conf_read(void *v, pcitag_t tag, int reg)
 
 	/*
 	 * XXX
-	 * accessing dev 1f / func 7 on the 2nd Dino causes a machine check
-	 * exception on my C200
+	 * thus sayeth the Dino manual:
+	 * 7.7.1 Generating PCI Special Cycles thru PA I/O Space
+	 * When the PCI_CONFIG_ADDR registers BUS_NUM is the equal to the
+	 * DINO’s bus number, 8’h00, DEV_NUM and Function fields are all ones,
+	 * and the REG_NUM field is all zeros the next write to PCI_CONFIG_DATA
+	 * register will generate a special cycle on DINO’s PCI bus. If the
+	 * BUS_NUM field does not equal DINO bus number then a type 1
+	 * transaction will be forwarded to PCI as described above.
+	 * Note: Dino is using a legal PCI configuration address to generate a
+	 * PCI special cycle. System firmware and software should not attempt
+	 * to read or write to this configuration address when walking the
+	 * PCI bus through configuration address space.
 	 */
 	if ((tag & 0xff00) == 0xff00)
 		return -1;
@@ -377,9 +392,7 @@ dino_conf_write(void *v, pcitag_t tag, int reg, pcireg_t data)
 		return;
 
 	/*
-	 * XXX
-	 * accessing dev 1f / func 7 on the 2nd Dino causes a machine check
-	 * exception on my C200
+	 * don't try to access dev 1f / func 7, see comment in dino_conf_read()
 	 */
 	if ((tag & 0xff00) == 0xff00) return;
 
@@ -406,7 +419,7 @@ dino_intr_map(const struct pci_attach_args *pa, pci_intr_handle_t *ihp)
 	if (line == 0xff)
 		return 1;
 
-	*ihp = line;
+	*ihp = line ;
 
 	return 0;
 }
@@ -688,6 +701,59 @@ dino_r8(void *v, bus_space_handle_t h, bus_size_t o)
 	return le64toh(data);
 }
 
+uint16_t
+dino_rs2(void *v, bus_space_handle_t h, bus_size_t o)
+{
+	volatile uint16_t *p;
+
+	h += o;
+	if (h & HPPA_IOSPACE)
+		p = (volatile uint16_t *)h;
+	else {
+		struct dino_softc *sc = v;
+		volatile struct dino_regs *r = sc->sc_regs;
+
+		r->pci_addr = h;
+		p = (volatile uint16_t *)&r->pci_io_data;
+		if (h & 2)
+			p++;
+	}
+	return *p;
+}
+
+uint32_t
+dino_rs4(void *v, bus_space_handle_t h, bus_size_t o)
+{
+	uint32_t data;
+
+	h += o;
+	if (h & HPPA_IOSPACE)
+		data = *(volatile uint32_t *)h;
+	else {
+		struct dino_softc *sc = v;
+		volatile struct dino_regs *r = sc->sc_regs;
+
+		r->pci_addr = h;
+		data = r->pci_io_data;
+	}
+
+	return data;
+}
+
+uint64_t
+dino_rs8(void *v, bus_space_handle_t h, bus_size_t o)
+{
+	uint64_t data;
+
+	h += o;
+	if (h & HPPA_IOSPACE)
+		data = *(volatile uint64_t *)h;
+	else
+		panic("dino_r8: not implemented");
+
+	return data;
+}
+
 void
 dino_w1(void *v, bus_space_handle_t h, bus_size_t o, uint8_t vv)
 {
@@ -750,6 +816,51 @@ dino_w8(void *v, bus_space_handle_t h, bus_size_t o, uint64_t vv)
 		panic("dino_w8: not implemented");
 }
 
+void
+dino_ws2(void *v, bus_space_handle_t h, bus_size_t o, uint16_t vv)
+{
+	volatile uint16_t *p;
+
+	h += o;
+	if (h & HPPA_IOSPACE)
+		p = (volatile uint16_t *)h;
+	else {
+		struct dino_softc *sc = v;
+		volatile struct dino_regs *r = sc->sc_regs;
+
+		r->pci_addr = h;
+		p = (volatile uint16_t *)&r->pci_io_data;
+		if (h & 2)
+			p++;
+	}
+
+	*p = vv;
+}
+
+void
+dino_ws4(void *v, bus_space_handle_t h, bus_size_t o, uint32_t vv)
+{
+	h += o;
+	if (h & HPPA_IOSPACE)
+		*(volatile uint32_t *)h = vv;
+	else {
+		struct dino_softc *sc = v;
+		volatile struct dino_regs *r = sc->sc_regs;
+
+		r->pci_addr = h;
+		r->pci_io_data = vv;
+	}
+}
+
+void
+dino_ws8(void *v, bus_space_handle_t h, bus_size_t o, uint64_t vv)
+{
+	h += o;
+	if (h & HPPA_IOSPACE)
+		*(volatile uint64_t *)h = vv;
+	else
+		panic("dino_w8: not implemented");
+}
 
 void
 dino_rm_1(void *v, bus_space_handle_t h, bus_size_t o, uint8_t *a, bus_size_t c)
@@ -1447,7 +1558,9 @@ const struct hppa_bus_space_tag dino_iomemt = {
 	NULL, dino_unmap, dino_subregion, NULL, dino_free,
 	dino_barrier, dino_vaddr, dino_mmap,
 	dino_r1,    dino_r2,    dino_r4,    dino_r8,
+		    dino_rs2,   dino_rs4,   dino_rs8,
 	dino_w1,    dino_w2,    dino_w4,    dino_w8,
+	            dino_ws2,   dino_ws4,   dino_ws8,
 	dino_rm_1,  dino_rm_2,  dino_rm_4,  dino_rm_8,
 	dino_wm_1,  dino_wm_2,  dino_wm_4,  dino_wm_8,
 	dino_sm_1,  dino_sm_2,  dino_sm_4,  dino_sm_8,
@@ -1589,15 +1702,18 @@ const struct hppa_bus_dma_tag dino_dmat = {
 };
 
 const struct hppa_pci_chipset_tag dino_pc = {
-	NULL,
-	dino_attach_hook, dino_maxdevs, dino_make_tag, dino_decompose_tag,
-	dino_conf_read, dino_conf_write,
-	dino_intr_map, dino_intr_string,
-	dino_intr_establish, dino_intr_disestablish,
+	.pc_attach_hook = dino_attach_hook,
+	.pc_bus_maxdevs = dino_maxdevs,
+	.pc_make_tag = dino_make_tag,
+	.pc_decompose_tag = dino_decompose_tag,
+	.pc_conf_read = dino_conf_read,
+	.pc_conf_write = dino_conf_write,
+	.pc_intr_map = dino_intr_map,
+	.pc_intr_string = dino_intr_string,
+	.pc_intr_establish = dino_intr_establish,
+	.pc_intr_disestablish = dino_intr_disestablish,
 #if NCARDBUS > 0
-	dino_alloc_parent
-#else
-	NULL
+	.pc_alloc_parent = dino_alloc_parent,
 #endif
 };
 
@@ -1644,7 +1760,8 @@ dinoattach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	sc->sc_regs = r = (volatile struct dino_regs *)sc->sc_bh;
+	sc->sc_regs = r = (volatile struct dino_regs *)sc->sc_bh;	
+
 #ifdef trust_the_firmware_to_proper_initialize_everything
 	r->io_addr_en = 0;
 	r->io_control = 0x80;
@@ -1652,7 +1769,7 @@ dinoattach(device_t parent, device_t self, void *aux)
 	r->papr = 0;
 	r->io_fbb_en |= 1;
 	r->damode = 0;
-	r->gmask &= ~1;	/* allow GSC bus req */
+	r->gmask &= ~1; /* allow GSC bus req */
 	r->pciror = 0;
 	r->pciwor = 0;
 	r->brdg_feat = 0xc0000000;

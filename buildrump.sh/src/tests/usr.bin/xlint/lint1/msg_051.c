@@ -1,13 +1,20 @@
-/*	$NetBSD: msg_051.c,v 1.4 2021/04/05 01:35:34 rillig Exp $	*/
+/*	$NetBSD: msg_051.c,v 1.8 2024/12/01 18:37:54 rillig Exp $	*/
 # 3 "msg_051.c"
 
 // Test for message: parameter mismatch: %d declared, %d defined [51]
+
+/* lint1-extra-flags: -X 351 */
 
 void
 example(int, int);
 
 void
-example(a, b, c)		/* expect: 231 *//* expect: 231 *//* expect: 231 */
+/* expect+4: warning: function definition with identifier list is obsolete in C23 [384] */
+/* expect+3: warning: parameter 'a' unused in function 'example' [231] */
+/* expect+2: warning: parameter 'b' unused in function 'example' [231] */
+/* expect+1: warning: parameter 'c' unused in function 'example' [231] */
+example(a, b, c)
     int a, b, c;
-{				/* expect: 51 */
+/* expect+1: error: parameter mismatch: 2 declared, 3 defined [51] */
+{
 }

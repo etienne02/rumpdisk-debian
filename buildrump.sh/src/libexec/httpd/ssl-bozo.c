@@ -1,9 +1,9 @@
-/*	$NetBSD: ssl-bozo.c,v 1.31 2021/08/24 09:53:26 mrg Exp $	*/
+/*	$NetBSD: ssl-bozo.c,v 1.34 2023/12/18 03:48:57 riastradh Exp $	*/
 
 /*	$eterna: ssl-bozo.c,v 1.15 2011/11/18 09:21:15 mrg Exp $	*/
 
 /*
- * Copyright (c) 1997-2020 Matthew R. Green
+ * Copyright (c) 1997-2023 Matthew R. Green
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -121,11 +121,15 @@ bozo_clear_ssl_queue(bozohttpd_t *httpd)
 	do {
 		static const char sslfmt[] = "SSL Error: %s:%s:%s";
 
+		if (httpd->nolog)
+			continue;
+
 		if (httpd->logstderr || isatty(STDERR_FILENO)) {
 			fprintf(stderr, sslfmt,
 			    ERR_lib_error_string(sslcode),
 			    ERR_func_error_string(sslcode),
 			    ERR_reason_error_string(sslcode));
+			fputs("\n", stderr);
 		} else {
 			syslog(LOG_ERR, sslfmt,
 			    ERR_lib_error_string(sslcode),
@@ -144,11 +148,13 @@ bozo_ssl_warn(bozohttpd_t *httpd, const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	if (httpd->logstderr || isatty(STDERR_FILENO)) {
-		vfprintf(stderr, fmt, ap);
-		fputs("\n", stderr);
-	} else
-		vsyslog(LOG_ERR, fmt, ap);
+	if (!httpd->nolog) {
+		if (httpd->logstderr || isatty(STDERR_FILENO)) {
+			vfprintf(stderr, fmt, ap);
+			fputs("\n", stderr);
+		} else
+			vsyslog(LOG_ERR, fmt, ap);
+	}
 	va_end(ap);
 
 	bozo_clear_ssl_queue(httpd);
@@ -164,11 +170,13 @@ bozo_ssl_err(bozohttpd_t *httpd, int code, const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	if (httpd->logstderr || isatty(STDERR_FILENO)) {
-		vfprintf(stderr, fmt, ap);
-		fputs("\n", stderr);
-	} else
-		vsyslog(LOG_ERR, fmt, ap);
+	if (!httpd->nolog) {
+		if (httpd->logstderr || isatty(STDERR_FILENO)) {
+			vfprintf(stderr, fmt, ap);
+			fputs("\n", stderr);
+		} else
+			vsyslog(LOG_ERR, fmt, ap);
+	}
 	va_end(ap);
 
 	bozo_clear_ssl_queue(httpd);

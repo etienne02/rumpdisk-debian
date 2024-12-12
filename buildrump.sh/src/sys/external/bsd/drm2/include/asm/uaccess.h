@@ -1,4 +1,4 @@
-/*	$NetBSD: uaccess.h,v 1.3 2017/09/10 22:51:48 maya Exp $	*/
+/*	$NetBSD: uaccess.h,v 1.11 2022/10/25 23:38:33 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -36,12 +36,13 @@
 #include <sys/errno.h>
 #include <sys/systm.h>
 
+#include <linux/compiler.h>
+
 /* XXX This is a cop-out.  */
 #define	VERIFY_READ	0
 #define	VERIFY_WRITE	1
 static inline bool
-access_ok(int verify_op __unused, const void *uaddr __unused,
-    size_t nbytes __unused)
+access_ok(const void *uaddr __unused, size_t nbytes __unused)
 {
 	return true;
 }
@@ -56,6 +57,22 @@ copy_from_user(void *kernel_addr, const void *user_addr, size_t len)
 	return -copyin(user_addr, kernel_addr, len);
 }
 
+static inline long
+strncpy_from_user(char *kernel_addr, const void *user_addr, long len)
+{
+	size_t done;
+	int error;
+
+	if (len <= 0)
+		return 0;
+	error = copyinstr(user_addr, kernel_addr, len, &done);
+	if (error)
+		return error;
+	KASSERT(done <= (size_t)len);
+	KASSERT(done >= 1);
+	return done - 1;
+}
+
 static inline int
 copy_to_user(void *user_addr, const void *kernel_addr, size_t len)
 {
@@ -63,11 +80,44 @@ copy_to_user(void *user_addr, const void *kernel_addr, size_t len)
 	return -copyout(kernel_addr, user_addr, len);
 }
 
-#define	get_user(KERNEL_LOC, USER_ADDR)					\
-	copy_from_user(&(KERNEL_LOC), (USER_ADDR), sizeof(KERNEL_LOC))
+#define	get_user(KERNEL_LVAL, USER_PTR)					      \
+	copy_from_user(&(KERNEL_LVAL), (USER_PTR), sizeof(*(USER_PTR)) +      \
+	    0*sizeof(&(KERNEL_LVAL) - (USER_PTR)))
 
-#define	put_user(KERNEL_LOC, USER_ADDR)					\
-	copy_to_user((USER_ADDR), &(KERNEL_LOC), sizeof(KERNEL_LOC))
+#define	put_user(KERNEL_RVAL, USER_PTR)	({				      \
+	const typeof(*(USER_PTR)) __put_user_tmp = (KERNEL_RVAL);	      \
+	copy_to_user((USER_PTR), &__put_user_tmp, sizeof(__put_user_tmp));    \
+})
+
+#define	__get_user	get_user
+#define	__put_user	put_user
+
+#define	user_access_begin(P,N)	access_ok(P,N)
+#define	user_access_end()	__nothing
+
+#define	unsafe_put_user(KERNEL_RVAL, USER_PTR, LABEL)	do {		      \
+	if (__put_user(KERNEL_RVAL, USER_PTR))				      \
+		goto LABEL;						      \
+} while (0)
+
+static inline size_t
+clear_user(void __user *user_ptr, size_t size)
+{
+	char __user *p = user_ptr;
+	size_t n = size;
+
+	/*
+	 * This loop which sets up a fault handler on every iteration
+	 * is not going to win any speed records, but it'll do to copy
+	 * out an int.
+	 */
+	while (n --> 0) {
+		if (ustore_char(p, 0) != 0)
+			return ++n;
+	}
+
+	return 0;
+}
 
 #if 0
 /*

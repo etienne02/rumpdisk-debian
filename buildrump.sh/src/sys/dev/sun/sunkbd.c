@@ -1,4 +1,4 @@
-/*	$NetBSD: sunkbd.c,v 1.30 2017/10/31 10:46:47 martin Exp $	*/
+/*	$NetBSD: sunkbd.c,v 1.32 2022/10/26 23:47:55 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -51,14 +51,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunkbd.c,v 1.30 2017/10/31 10:46:47 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunkbd.c,v 1.32 2022/10/26 23:47:55 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/signal.h>
 #include <sys/signalvar.h>
@@ -302,8 +301,8 @@ sunkbd_write_data(struct kbd_sun_softc *k, int c)
 {
 	struct tty *tp = k->k_priv;
 
-	mutex_spin_enter(&tty_lock);
+	ttylock(tp);
 	ttyoutput(c, tp);
 	ttstart(tp);
-	mutex_spin_exit(&tty_lock);
+	ttyunlock(tp);
 }

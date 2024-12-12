@@ -1,4 +1,4 @@
-/*	$NetBSD: md.h,v 1.3 2019/06/12 06:20:21 martin Exp $	*/
+/*	$NetBSD: md.h,v 1.7 2023/01/06 18:14:56 martin Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -43,14 +43,14 @@
 
 #define PART_BOOT	(8 * MEG)	/* for a.out kernel and boot */
 #define PART_BOOT_TYPE	FS_BSDFFS
-#define	PART_BOOT_SUBT	1		/* old 4.3BSD UFS */
+#define PART_BOOT_SUBT	1		/* old 4.3BSD UFS */
 
-#define DEFSWAPRAM	8	/* Assume at least this RAM for swap calc */
-#define DEFROOTSIZE	64	/* Default root size */
-#define DEFVARSIZE	64	/* Default /var size, if created */
-#define DEFUSRSIZE	750	/* Default /usr size, if created */
+#define DEFROOTSIZE	40	/* Default root size */
+#define DEFSWAPSIZE	32	/* Default swap size */
+#define DEFVARSIZE	32	/* Default /var size, if created */
+#define DEFUSRSIZE	700	/* Default /usr size, if created */
 #define XNEEDMB		250	/* Extra megs for full X installation */
-#define DEBNEEDMB	900	/* Extra megs for debug sets */
+#define DEBNEEDMB	800	/* Extra megs for debug sets */
 
 /*
  * Default filesets to fetch and install during installation
@@ -63,4 +63,16 @@
  * If not defined, we assume the port does not support disklabels and
  * the hand-edited disklabel will NOT be written by MI code.
  */
-#define	DISKLABEL_CMD	"disklabel -w -r"
+#define DISKLABEL_CMD	"disklabel -w -r"
+
+/*
+ * Our boot partition is FFSv1, so it will be reported as PT_root
+ * and might take up disklabel slot 0 (partition 'a'), which we would
+ * like to avoid and make it use 'd' instead.
+ * Only allow PT_root partitions for slots before RAW_PART if they
+ * start past the boot partition size.
+ */
+#define	MD_DISKLABEL_PART_INDEX_CHECK(DL,NDX,INFO)	\
+	(((INFO)->nat_type->generic_ptype != PT_root)	\
+	|| (NDX > RAW_PART)				\
+	|| ((INFO)->start >= (PART_BOOT/512)))

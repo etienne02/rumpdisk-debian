@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.32 2021/02/27 01:31:24 thorpej Exp $	*/
+/*	$NetBSD: machdep.c,v 1.36 2024/03/05 14:15:33 thorpej Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,10 +32,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.32 2021/02/27 01:31:24 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.36 2024/03/05 14:15:33 thorpej Exp $");
 
 #include "opt_compat_netbsd.h"
-#include "opt_mvmetype.h"
+#include "opt_mvmeconf.h"
 #include "opt_ddb.h"
 
 #include <sys/param.h>
@@ -47,7 +47,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.32 2021/02/27 01:31:24 thorpej Exp $")
 #include <sys/extent.h>
 #include <sys/intr.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mount.h>
 #include <sys/msgbuf.h>
@@ -162,7 +161,7 @@ cpu_startup(void)
 	char modelbuf[256];
 
 	/*
-	 * Mapping PReP-compatible interrput vector register.
+	 * Mapping PReP-compatible interrupt vector register.
 	 */
 	prep_intr_reg = (vaddr_t) mapiodev(MVMEPPC_INTR_REG, PAGE_SIZE, false);
 	if (!prep_intr_reg)
@@ -271,7 +270,6 @@ cpu_reboot(int howto, char *what)
 	if ((howto & RB_NOSYNC) == 0 && syncing == 0) {
 		syncing = 1;
 		vfs_shutdown();		/* sync */
-		resettodr();		/* set wall clock */
 	}
 
 	/* Disable intr */

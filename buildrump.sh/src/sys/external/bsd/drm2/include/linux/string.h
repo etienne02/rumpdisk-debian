@@ -1,4 +1,4 @@
-/*	$NetBSD: string.h,v 1.5 2018/08/27 06:49:23 riastradh Exp $	*/
+/*	$NetBSD: string.h,v 1.11 2021/12/19 11:45:01 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -34,6 +34,7 @@
 
 #include <sys/types.h>
 #include <sys/cdefs.h>
+#include <sys/errno.h>
 #include <sys/null.h>
 
 #include <linux/slab.h>
@@ -91,6 +92,78 @@ kstrdup(const char *src, gfp_t gfp)
 	if (src == NULL)
 		return NULL;
 	return kstrndup(src, strlen(src), gfp);
+}
+
+static inline ssize_t
+strscpy(char *dst, const char *src, size_t dstsize)
+{
+	size_t n = dstsize;
+
+	/* If no space for a NUL terminator, fail.  */
+	if (n == 0)
+		return -E2BIG;
+
+	/* Copy until we get a NUL terminator or the end of the buffer.  */
+	while ((*dst++ = *src++) != '\0') {
+		if (__predict_false(--n == 0)) {
+			dst[-1] = '\0'; /* NUL-terminate */
+			return -E2BIG;
+		}
+	}
+
+	/* Return the number of bytes copied, excluding NUL.  */
+	return dstsize - n;
+}
+
+static inline void *
+memset32(uint32_t *buf, uint32_t v, size_t n)
+{
+	uint32_t *p = buf;
+
+	while (n --> 0)
+		*p++ = v;
+
+	return buf;
+}
+
+static inline void *
+memset64(uint64_t *buf, uint64_t v, size_t n)
+{
+	uint64_t *p = buf;
+
+	while (n --> 0)
+		*p++ = v;
+
+	return buf;
+}
+
+static inline void *
+memset_p(void **buf, void *v, size_t n)
+{
+	void **p = buf;
+
+	while (n --> 0)
+		*p++ = v;
+
+	return buf;
+}
+
+#define str_has_prefix(str, prefix) strncmp(str, prefix, strlen(prefix))
+
+static inline int
+match_string(const char *const *haystack, size_t n, const char *needle)
+{
+	int i;
+
+	for (i = 0; i < n; i++) {
+		if (haystack[i] == NULL)
+			break;
+		if (strcmp(haystack[i], needle) == 0)
+			return i;
+		if (i == INT_MAX)
+			break;
+	}
+	return -EINVAL;
 }
 
 #endif  /* _LINUX_STRING_H_ */

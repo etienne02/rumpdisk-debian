@@ -1,4 +1,4 @@
-/*	$NetBSD: rcmd.c,v 1.71 2014/11/26 23:44:21 enami Exp $	*/
+/*	$NetBSD: rcmd.c,v 1.73 2024/01/20 14:52:48 christos Exp $	*/
 
 /*
  * Copyright (c) 1983, 1993, 1994
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)rcmd.c	8.3 (Berkeley) 3/26/94";
 #else
-__RCSID("$NetBSD: rcmd.c,v 1.71 2014/11/26 23:44:21 enami Exp $");
+__RCSID("$NetBSD: rcmd.c,v 1.73 2024/01/20 14:52:48 christos Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -370,7 +370,7 @@ rshrcmd(int af, char **ahost, u_int32_t rport, const char *locuser,
 {
 	pid_t pid;
 	int sp[2], ep[2];
-	char *p;
+	const char *p;
 	struct passwd *pw, pwres;
 	char pwbuf[1024];
 
@@ -1009,7 +1009,7 @@ __gethostloop(const struct sockaddr *raddr, socklen_t salen)
 	}
 
 	/*
-	 * either the DNS adminstrator has made a configuration
+	 * either the DNS administrator has made a configuration
 	 * mistake, or someone has attempted to spoof us
 	 */
 	syslog(LOG_NOTICE, "rcmd: address %s not listed for host %s",

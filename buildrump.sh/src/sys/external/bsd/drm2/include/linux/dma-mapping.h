@@ -1,4 +1,4 @@
-/*	$NetBSD: dma-mapping.h,v 1.5 2018/08/27 06:17:40 riastradh Exp $	*/
+/*	$NetBSD: dma-mapping.h,v 1.10 2021/12/19 12:21:30 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -32,15 +32,44 @@
 #ifndef _LINUX_DMA_MAPPING_H_
 #define _LINUX_DMA_MAPPING_H_
 
+#include <sys/param.h>
 #include <sys/bus.h>
 
-typedef bus_addr_t dma_addr_t;
+#include <machine/limits.h>
+
+#include <linux/types.h>
+
+enum dma_data_direction {
+	DMA_NONE		= 0,
+	DMA_TO_DEVICE		= 1,
+	DMA_FROM_DEVICE		= 2,
+	DMA_BIDIRECTIONAL	= 3,
+
+	PCI_DMA_NONE		= DMA_NONE,
+	PCI_TO_DEVICE		= DMA_TO_DEVICE,
+	PCI_FROM_DEVICE		= DMA_FROM_DEVICE,
+	PCI_DMA_BIDIRECTIONAL	= DMA_BIDIRECTIONAL,
+};
+
+enum {
+	DMA_ATTR_NO_WARN	= __BIT(0),
+	DMA_ATTR_SKIP_CPU_SYNC	= __BIT(1),
+};
 
 static inline uintmax_t
 DMA_BIT_MASK(unsigned nbits)
 {
 
+	if (nbits == CHAR_BIT*sizeof(uintmax_t))
+		return ~(uintmax_t)0;
 	return ~(~(uintmax_t)0 << nbits);
+}
+
+static inline bool
+dma_addressing_limited(device_t dev)
+{
+
+	return false;
 }
 
 #endif  /* _LINUX_DMA_MAPPING_H_ */

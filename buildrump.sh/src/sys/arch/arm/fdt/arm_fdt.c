@@ -1,4 +1,4 @@
-/* $NetBSD: arm_fdt.c,v 1.18 2021/08/30 23:20:00 jmcneill Exp $ */
+/* $NetBSD: arm_fdt.c,v 1.21 2023/04/07 08:55:30 skrll Exp $ */
 
 /*-
  * Copyright (c) 2017 Jared D. McNeill <jmcneill@invisible.ca>
@@ -31,7 +31,7 @@
 #include "opt_modular.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm_fdt.c,v 1.18 2021/08/30 23:20:00 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm_fdt.c,v 1.21 2023/04/07 08:55:30 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -44,6 +44,7 @@ __KERNEL_RCSID(0, "$NetBSD: arm_fdt.c,v 1.18 2021/08/30 23:20:00 jmcneill Exp $"
 #include <uvm/uvm_extern.h>
 
 #include <dev/fdt/fdtvar.h>
+
 #include <dev/ofw/openfirm.h>
 
 #include <arm/fdt/arm_fdtvar.h>
@@ -94,7 +95,7 @@ arm_fdt_match(device_t parent, cfdata_t cf, void *aux)
 void
 arm_fdt_attach(device_t parent, device_t self, void *aux)
 {
-	const struct arm_platform *plat = arm_fdt_platform();
+	const struct fdt_platform *plat = fdt_platform_find();
 	struct fdt_attach_args faa;
 
 	aprint_naive("\n");
@@ -106,57 +107,12 @@ arm_fdt_attach(device_t parent, device_t self, void *aux)
 	arm_fdt_efi_init(self);
 #endif
 
-	plat->ap_init_attach_args(&faa);
+	plat->fp_init_attach_args(&faa);
 	faa.faa_name = "";
 	faa.faa_phandle = OF_peer(0);
 
 	config_found(self, &faa, NULL, CFARGS_NONE);
 }
-
-const struct arm_platform *
-arm_fdt_platform(void)
-{
-	static const struct arm_platform_info *booted_platform = NULL;
-	__link_set_decl(arm_platforms, struct arm_platform_info);
-	struct arm_platform_info * const *info;
-
-	if (booted_platform == NULL) {
-		const struct arm_platform_info *best_info = NULL;
-		const int phandle = OF_peer(0);
-		int match, best_match = 0;
-
-		__link_set_foreach(info, arm_platforms) {
-			const struct device_compatible_entry compat_data[] = {
-				{ .compat = (*info)->api_compat },
-				DEVICE_COMPAT_EOL
-			};
-
-			match = of_compatible_match(phandle, compat_data);
-			if (match > best_match) {
-				best_match = match;
-				best_info = *info;
-			}
-		}
-
-		booted_platform = best_info;
-	}
-
-	/*
-	 * No SoC specific platform was found. Try to find a generic
-	 * platform definition and use that if available.
-	 */
-	if (booted_platform == NULL) {
-		__link_set_foreach(info, arm_platforms) {
-			if (strcmp((*info)->api_compat, ARM_PLATFORM_DEFAULT) == 0) {
-				booted_platform = *info;
-				break;
-			}
-		}
-	}
-
-	return booted_platform == NULL ? NULL : booted_platform->api_ops;
-}
-
 void
 arm_fdt_cpu_hatch_register(void *priv, void (*cb)(void *, struct cpu_info *))
 {
@@ -225,29 +181,6 @@ arm_fdt_timer_register(void (*timerfn)(void))
 		return;
 	}
 	_arm_fdt_timer_init = timerfn;
-}
-
-void
-arm_fdt_memory_dump(paddr_t pa)
-{
-	const struct arm_platform *plat = arm_fdt_platform();
-	struct fdt_attach_args faa;
-	bus_space_tag_t bst;
-	bus_space_handle_t bsh;
-
-	plat->ap_init_attach_args(&faa);
-
-	bst = faa.faa_bst;
-	bus_space_map(bst, pa, 0x100, 0, &bsh);
-
-	for (int i = 0; i < 0x100; i += 0x10) {
-		printf("%" PRIxPTR ": %08x %08x %08x %08x\n",
-		    (uintptr_t)(pa + i),
-		    bus_space_read_4(bst, bsh, i + 0),
-		    bus_space_read_4(bst, bsh, i + 4),
-		    bus_space_read_4(bst, bsh, i + 8),
-		    bus_space_read_4(bst, bsh, i + 12));
-	}
 }
 
 #ifdef __HAVE_GENERIC_CPU_INITCLOCKS
@@ -331,7 +264,7 @@ arm_fdt_efi_init(device_t dev)
 
 	aprint_debug_dev(dev, "EFI system table at %#" PRIx64 "\n", efi_system_table);
 
-	if (arm_efirt_gettime(&tm) == 0) {
+	if (arm_efirt_gettime(&tm, NULL) == 0) {
 		aprint_normal_dev(dev, "using EFI runtime services for RTC\n");
 		efi_todr.cookie = NULL;
 		efi_todr.todr_gettime_ymdhms = arm_fdt_efi_rtc_gettime;
@@ -344,11 +277,11 @@ static int
 arm_fdt_efi_rtc_gettime(todr_chip_handle_t tch, struct clock_ymdhms *dt)
 {
 	struct efi_tm tm;
-	int error;
+	efi_status status;
 
-	error = arm_efirt_gettime(&tm);
-	if (error)
-		return error;
+	status = arm_efirt_gettime(&tm, NULL);
+	if (status != 0)
+		return EIO;
 
 	dt->dt_year = tm.tm_year;
 	dt->dt_mon = tm.tm_mon;
@@ -365,6 +298,7 @@ static int
 arm_fdt_efi_rtc_settime(todr_chip_handle_t tch, struct clock_ymdhms *dt)
 {
 	struct efi_tm tm;
+	efi_status status;
 
 	memset(&tm, 0, sizeof(tm));
 	tm.tm_year = dt->dt_year;
@@ -374,6 +308,10 @@ arm_fdt_efi_rtc_settime(todr_chip_handle_t tch, struct clock_ymdhms *dt)
 	tm.tm_min = dt->dt_min;
 	tm.tm_sec = dt->dt_sec;
 
-	return arm_efirt_settime(&tm);
+	status = arm_efirt_settime(&tm);
+	if (status != 0)
+		return EIO;
+
+	return 0;
 }
 #endif

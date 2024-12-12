@@ -1,7 +1,7 @@
-/* $NetBSD: ixgbe_bypass.h,v 1.2 2021/04/30 06:41:36 msaitoh Exp $ */
+/* $NetBSD: ixgbe_bypass.h,v 1.5 2023/10/06 14:48:08 msaitoh Exp $ */
 /******************************************************************************
 
-  Copyright (c) 2001-2017, Intel Corporation
+  Copyright (c) 2001-2020, Intel Corporation
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -36,7 +36,6 @@
 #ifndef _IXGBE_BYPASS_H_
 #define _IXGBE_BYPASS_H_
 
-
 /*
  * The bypass driver needs to set FW to a epoc of the number of
  * seconds we are into this year.  This macro's help support that.
@@ -47,6 +46,6 @@
 #define LEAP_YR(y)      ((y % 400 == 0) || ((y % 4 == 0) && (y % 100 != 0)))
 #define SEC_THIS_YEAR(y)        (LEAP_YR(y) ? SEC_PER_LYEAR : SEC_PER_YEAR)
 
-void ixgbe_bypass_init(struct adapter *);
+void ixgbe_bypass_init(struct ixgbe_softc *);
 
 #endif /* _IXGBE_BYPASS_H_ */

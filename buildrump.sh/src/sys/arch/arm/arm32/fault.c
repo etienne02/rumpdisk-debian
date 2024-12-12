@@ -1,4 +1,4 @@
-/*	$NetBSD: fault.c,v 1.116 2021/02/01 19:31:34 skrll Exp $	*/
+/*	$NetBSD: fault.c,v 1.119 2024/02/02 22:00:32 andvar Exp $	*/
 
 /*
  * Copyright 2003 Wasabi Systems, Inc.
@@ -82,7 +82,7 @@
 #include "opt_multiprocessor.h"
 
 #include <sys/types.h>
-__KERNEL_RCSID(0, "$NetBSD: fault.c,v 1.116 2021/02/01 19:31:34 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fault.c,v 1.119 2024/02/02 22:00:32 andvar Exp $");
 
 #include <sys/param.h>
 
@@ -268,8 +268,6 @@ data_abort_handler(trapframe_t *tf)
 
 	/* Data abort came from user mode? */
 	bool user = (TRAP_USERMODE(tf) != 0);
-	if (user)
-		LWP_CACHE_CREDS(l, l->l_proc);
 
 	/* Grab the current pcb */
 	struct pcb * const pcb = lwp_getpcb(l);
@@ -386,7 +384,7 @@ data_abort_handler(trapframe_t *tf)
 			/*
 			 * Force exit via userret()
 			 * This is necessary as the FPE is an extension to
-			 * userland that actually runs in a priveledged mode
+			 * userland that actually runs in a privileged mode
 			 * but uses USR mode permissions for its accesses.
 			 */
 			user = true;
@@ -821,16 +819,14 @@ prefetch_abort_handler(trapframe_t *tf)
 
 	l = curlwp;
 	pcb = lwp_getpcb(l);
-
-	if ((user = TRAP_USERMODE(tf)) != 0)
-		LWP_CACHE_CREDS(l, l->l_proc);
+	user = TRAP_USERMODE(tf) != 0;
 
 	/*
 	 * Enable IRQ's (disabled by the abort) This always comes
 	 * from user mode so we know interrupts were not disabled.
 	 * But we check anyway.
 	 */
-	KASSERT(!TRAP_USERMODE(tf) || VALID_PSR(tf->tf_spsr));
+	KASSERT(!user || VALID_PSR(tf->tf_spsr));
 #ifdef __NO_FIQ
 	if (__predict_true((tf->tf_spsr & I32_bit) != I32_bit))
 		restore_interrupts(tf->tf_spsr & IF32_bits);

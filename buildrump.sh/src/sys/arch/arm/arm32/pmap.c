@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.430 2021/08/26 08:56:21 skrll Exp $	*/
+/*	$NetBSD: pmap.c,v 1.443 2024/04/13 12:28:01 skrll Exp $	*/
 
 /*
  * Copyright 2003 Wasabi Systems, Inc.
@@ -47,7 +47,7 @@
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  * 3. The name of the company nor the name of the author may be used to
- *   endorse or promote products derived from this software without specific
+ *    endorse or promote products derived from this software without specific
  *    prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR IMPLIED
@@ -184,6 +184,7 @@
 #include "opt_arm_debug.h"
 #include "opt_cpuoptions.h"
 #include "opt_ddb.h"
+#include "opt_efi.h"
 #include "opt_lockdebug.h"
 #include "opt_multiprocessor.h"
 
@@ -192,7 +193,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.430 2021/08/26 08:56:21 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.443 2024/04/13 12:28:01 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -225,6 +226,12 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.430 2021/08/26 08:56:21 skrll Exp $");
 #define VPRINTF(...)	__nothing
 #endif
 
+#if defined(EFI_RUNTIME)
+#if !defined(ARM_MMU_EXTENDED)
+#error EFI_RUNTIME is only supported with ARM_MMU_EXTENDED
+#endif
+#endif
+
 /*
  * pmap_kernel() points here
  */
@@ -238,6 +245,17 @@ static struct pmap	kernel_pmap_store = {
 struct pmap * const	kernel_pmap_ptr = &kernel_pmap_store;
 #undef pmap_kernel
 #define pmap_kernel()	(&kernel_pmap_store)
+
+#if defined(EFI_RUNTIME)
+static struct pmap	efirt_pmap;
+
+struct pmap *
+pmap_efirt(void)
+{
+	return &efirt_pmap;
+}
+#endif
+
 #ifdef PMAP_NEED_ALLOC_POOLPAGE
 int			arm_poolpage_vmfreelist = VM_FREELIST_DEFAULT;
 #endif
@@ -529,13 +547,11 @@ pmap_release_page_lock(struct vm_page_md *md)
 	mutex_exit(&pmap_lock);
 }
 
-#ifdef DIAGNOSTIC
-static inline int
+static inline int __diagused
 pmap_page_locked_p(struct vm_page_md *md)
 {
 	return mutex_owned(&pmap_lock);
 }
-#endif
 
 
 /*
@@ -762,6 +778,9 @@ pv_addrqh_t pmap_boot_freeq = SLIST_HEAD_INITIALIZER(&pmap_boot_freeq);
 pv_addr_t kernelpages;
 pv_addr_t kernel_l1pt;
 pv_addr_t systempage;
+#if defined(EFI_RUNTIME)
+pv_addr_t efirt_l1pt;
+#endif
 
 #ifdef PMAP_CACHE_VIPT
 #define PMAP_VALIDATE_MD_PAGE(md)	\
@@ -2311,15 +2330,10 @@ pmap_clearbit(struct vm_page_md *md, paddr_t pa, u_int maskbits)
 #ifdef PMAP_CACHE_VIPT
 	const bool want_syncicache = PV_IS_EXEC_P(md->pvh_attrs);
 	bool need_syncicache = false;
-#ifdef ARM_MMU_EXTENDED
-	const u_int execbits = (maskbits & PVF_EXEC) ? L2_XS_XN : 0;
-#else
-	const u_int execbits = 0;
+#ifndef ARM_MMU_EXTENDED
 	bool need_vac_me_harder = false;
 #endif
-#else
-	const u_int execbits = 0;
-#endif
+#endif /* PMAP_CACHE_VIPT */
 
 	UVMHIST_FUNC(__func__);
 	UVMHIST_CALLARGS(maphist, "md %#jx pa %#jx maskbits %#jx",
@@ -2402,9 +2416,14 @@ pmap_clearbit(struct vm_page_md *md, paddr_t pa, u_int maskbits)
 
 		pt_entry_t * const ptep = &l2b->l2b_kva[l2pte_index(va)];
 		const pt_entry_t opte = *ptep;
-		pt_entry_t npte = opte | execbits;
+		pt_entry_t npte = opte;
 
-#ifdef ARM_MMU_EXTENDED
+#if defined(ARM_MMU_EXTENDED)
+		if ((maskbits & PVF_EXEC) != 0 && l2pte_valid_p(opte)) {
+			KASSERT((opte & L2_TYPE_S) != 0);
+			npte |= L2_XS_XN;
+		}
+
 		KASSERT((opte & L2_XS_nG) == (pm == pmap_kernel() ? 0 : L2_XS_nG));
 #endif
 
@@ -3077,7 +3096,12 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	struct vm_page *pg, *opg;
 	u_int nflags;
 	u_int oflags;
-	const bool kpm_p = (pm == pmap_kernel());
+	const bool kpm_p = pm == pmap_kernel();
+#if defined(EFI_RUNTIME)
+	const bool efirt_p = pm == pmap_efirt();
+#else
+	const bool efirt_p = false;
+#endif
 #ifdef ARM_HAS_VBAR
 	const bool vector_page_p = false;
 #else
@@ -3300,6 +3324,12 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		if (prot & VM_PROT_WRITE)
 			npte = l2pte_set_writable(npte);
 
+		if (efirt_p) {
+			if (prot & VM_PROT_EXECUTE) {
+				npte &= ~L2_XS_XN;	/* and executable */
+			}
+		}
+
 		/*
 		 * Make sure the vector table is mapped cacheable
 		 */
@@ -3359,6 +3389,7 @@ pmap_enter(pmap_t pm, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	 * If exec protection was requested but the page hasn't been synced,
 	 * sync it now and allow execution from it.
 	 */
+
 	if ((nflags & PVF_EXEC) && (npte & L2_XS_XN)) {
 		struct vm_page_md *md = VM_PAGE_TO_MD(pg);
 		npte &= ~L2_XS_XN;
@@ -3749,9 +3780,7 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 		PMAPCOUNT(kenter_remappings);
 #ifdef PMAP_CACHE_VIPT
 		opg = PHYS_TO_VM_PAGE(l2pte_pa(opte));
-#if !defined(ARM_MMU_EXTENDED) || defined(DIAGNOSTIC)
-		struct vm_page_md *omd __diagused = VM_PAGE_TO_MD(opg);
-#endif
+		struct vm_page_md *omd = VM_PAGE_TO_MD(opg);
 		if (opg && arm_cache_prefer_mask != 0) {
 			KASSERT(opg != pg);
 			KASSERT((omd->pvh_attrs & PVF_KMPAGE) == 0);
@@ -4952,6 +4981,54 @@ pmap_md_pdetab_deactivate(pmap_t pm)
 }
 #endif
 
+
+#if defined(EFI_RUNTIME)
+void
+pmap_activate_efirt(void)
+{
+	struct pmap * const pm = &efirt_pmap;
+
+	UVMHIST_FUNC(__func__);
+	UVMHIST_CALLARGS(maphist, " (pm=%#jx)", (uintptr_t)pm, 0, 0, 0);
+
+	KASSERT(kpreempt_disabled());
+
+	struct cpu_info * const ci = curcpu();
+	struct pmap_asid_info * const pai = PMAP_PAI(pm, cpu_tlb_info(ci));
+
+	PMAPCOUNT(activations);
+
+	/*
+	 * Assume that TTBR1 has only global mappings and TTBR0 only
+	 * has non-global mappings.  To prevent speculation from doing
+	 * evil things we disable translation table walks using TTBR0
+	 * before setting the CONTEXTIDR (ASID) or new TTBR0 value.
+	 * Once both are set, table walks are reenabled.
+	 */
+	const uint32_t old_ttbcr = armreg_ttbcr_read();
+	armreg_ttbcr_write(old_ttbcr | TTBCR_S_PD0);
+	isb();
+
+	armreg_contextidr_write(pai->pai_asid);
+	armreg_ttbr_write(pm->pm_l1_pa |
+	    (ci->ci_mpidr ? TTBR_MPATTR : TTBR_UPATTR));
+	/*
+	 * Now we can reenable tablewalks since the CONTEXTIDR and TTRB0
+	 * have been updated.
+	 */
+	isb();
+
+	armreg_ttbcr_write(old_ttbcr & ~TTBCR_S_PD0);
+
+	ci->ci_pmap_asid_cur = pai->pai_asid;
+	ci->ci_pmap_cur = pm;
+
+	UVMHIST_LOG(maphist, " <-- done", 0, 0, 0, 0);
+}
+
+#endif
+
+
 void
 pmap_activate(struct lwp *l)
 {
@@ -4961,6 +5038,10 @@ pmap_activate(struct lwp *l)
 	UVMHIST_FUNC(__func__);
 	UVMHIST_CALLARGS(maphist, "l=%#jx pm=%#jx", (uintptr_t)l,
 	    (uintptr_t)npm, 0, 0);
+
+#ifdef ARM_MMU_EXTENDED
+	KASSERT(kpreempt_disabled());
+#endif
 
 	struct cpu_info * const ci = curcpu();
 
@@ -5110,6 +5191,7 @@ pmap_activate(struct lwp *l)
 	UVMHIST_LOG(maphist, " <-- done", 0, 0, 0, 0);
 }
 
+
 void
 pmap_deactivate(struct lwp *l)
 {
@@ -5120,6 +5202,7 @@ pmap_deactivate(struct lwp *l)
 		(uintptr_t)pm, 0, 0);
 
 #ifdef ARM_MMU_EXTENDED
+	KASSERT(kpreempt_disabled());
 	pmap_md_pdetab_deactivate(pm);
 #else
 	/*
@@ -5134,6 +5217,35 @@ pmap_deactivate(struct lwp *l)
 #endif
 	UVMHIST_LOG(maphist, "  <-- done", 0, 0, 0, 0);
 }
+
+
+#if defined(EFI_RUNTIME)
+void
+pmap_deactivate_efirt(void)
+{
+	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
+
+	KASSERT(kpreempt_disabled());
+	struct cpu_info * const ci = curcpu();
+
+	/*
+	 * Disable translation table walks from TTBR0 while no pmap has been
+	 * activated.
+	 */
+	const uint32_t old_ttbcr = armreg_ttbcr_read();
+	armreg_ttbcr_write(old_ttbcr | TTBCR_S_PD0);
+	isb();
+
+	armreg_contextidr_write(KERNEL_PID);
+	isb();
+
+	KASSERTMSG(ci->ci_pmap_asid_cur == KERNEL_PID, "ci_pmap_asid_cur %u",
+	    ci->ci_pmap_asid_cur);
+
+	UVMHIST_LOG(maphist, " <-- done", 0, 0, 0, 0);
+}
+#endif
+
 
 void
 pmap_update(pmap_t pm)
@@ -5279,6 +5391,7 @@ pmap_destroy(pmap_t pm)
 	/*
 	 * Drop reference count
 	 */
+	membar_release();
 	if (atomic_dec_uint_nv(&pm->pm_refs) > 0) {
 #ifndef ARM_MMU_EXTENDED
 		if (pmap_is_current(pm)) {
@@ -5289,6 +5402,7 @@ pmap_destroy(pmap_t pm)
 #endif
 		return;
 	}
+	membar_acquire();
 
 	/*
 	 * reference count is zero, free pmap resources and then free pmap.
@@ -6231,6 +6345,7 @@ pmap_bootstrap(vaddr_t vstart, vaddr_t vend)
 	 * Initialise the kernel pmap object
 	 */
 	curcpu()->ci_pmap_cur = pm;
+	pm->pm_refs = 1;
 #ifdef ARM_MMU_EXTENDED
 	pm->pm_l1 = l1pt;
 	pm->pm_l1_pa = kernel_l1pt.pv_pa;
@@ -6244,6 +6359,28 @@ pmap_bootstrap(vaddr_t vstart, vaddr_t vend)
 #else
 	pm->pm_l1 = l1;
 #endif
+	mutex_init(&pm->pm_lock, MUTEX_DEFAULT, IPL_VM);
+
+
+#if defined(EFI_RUNTIME)
+	VPRINTF("efirt ");
+	memset(&efirt_pmap, 0, sizeof(efirt_pmap));
+	struct pmap * const efipm = &efirt_pmap;
+	struct pmap_asid_info * const efipai = PMAP_PAI(efipm, cpu_tlb_info(curcpu()));
+
+	efipai->pai_asid = KERNEL_PID;
+	efipm->pm_refs = 1;
+	efipm->pm_stats.wired_count = 0;
+	efipm->pm_stats.resident_count = 1;
+	efipm->pm_l1 = (pd_entry_t *)efirt_l1pt.pv_va;
+	efipm->pm_l1_pa = efirt_l1pt.pv_pa;
+	// Needed?
+#ifdef MULTIPROCESSOR
+	kcpuset_create(&efipm->pm_active, true);
+	kcpuset_create(&efipm->pm_onproc, true);
+#endif
+	mutex_init(&efipm->pm_lock, MUTEX_DEFAULT, IPL_NONE);
+#endif
 
 	VPRINTF("locks ");
 	/*
@@ -6252,8 +6389,6 @@ pmap_bootstrap(vaddr_t vstart, vaddr_t vend)
 	 */
 	mutex_init(&pmap_lock, MUTEX_DEFAULT, IPL_VM);
 	mutex_init(&kpm_lock, MUTEX_DEFAULT, IPL_NONE);
-	mutex_init(&pm->pm_lock, MUTEX_DEFAULT, IPL_VM);
-	pm->pm_refs = 1;
 
 	VPRINTF("l1pt ");
 	/*
@@ -6340,6 +6475,13 @@ pmap_bootstrap(vaddr_t vstart, vaddr_t vend)
 		printf("pmap_bootstrap: WARNING! wrong cache mode for "
 		    "primary L1 @ 0x%lx\n", kernel_l1pt.pv_va);
 	}
+#if defined(EFI_RUNTIME)
+	if (pmap_set_pt_cache_mode(l1pt, efirt_l1pt.pv_va,
+		    L1_TABLE_SIZE / L2_S_SIZE)) {
+		printf("pmap_bootstrap: WARNING! wrong cache mode for "
+		    "EFI RT L1 @ 0x%lx\n", efirt_l1pt.pv_va);
+	}
+#endif
 
 #ifdef PMAP_CACHE_VIVT
 	cpu_dcache_wbinv_all();
@@ -7069,88 +7211,28 @@ pmap_unmap_chunk(vaddr_t l1pt, vaddr_t va, vsize_t size)
 }
 
 
-
-/********************** Static device map routines ***************************/
-
-static const struct pmap_devmap *pmap_devmap_table;
-
-/*
- * Register the devmap table.  This is provided in case early console
- * initialization needs to register mappings created by bootstrap code
- * before pmap_devmap_bootstrap() is called.
- */
-void
-pmap_devmap_register(const struct pmap_devmap *table)
+vsize_t
+pmap_kenter_range(vaddr_t va, paddr_t pa, vsize_t size, vm_prot_t prot,
+    u_int flags)
 {
+	const vaddr_t root = pmap_devmap_root();
 
-	pmap_devmap_table = table;
-}
-
-/*
- * Map all of the static regions in the devmap table, and remember
- * the devmap table so other parts of the kernel can look up entries
- * later.
- */
-void
-pmap_devmap_bootstrap(vaddr_t l1pt, const struct pmap_devmap *table)
-{
-	int i;
-
-	pmap_devmap_table = table;
-
-	for (i = 0; pmap_devmap_table[i].pd_size != 0; i++) {
-		const struct pmap_devmap *pdp = &pmap_devmap_table[i];
-
-		KASSERTMSG(VADDR_MAX - pdp->pd_va >= pdp->pd_size - 1, "va %" PRIxVADDR
-		    " sz %" PRIxPSIZE, pdp->pd_va, pdp->pd_size);
-		KASSERTMSG(PADDR_MAX - pdp->pd_pa >= pdp->pd_size - 1, "pa %" PRIxPADDR
-		    " sz %" PRIxPSIZE, pdp->pd_pa, pdp->pd_size);
-		VPRINTF("devmap: %08lx -> %08lx @ %08lx\n", pdp->pd_pa,
-		    pdp->pd_pa + pdp->pd_size - 1, pdp->pd_va);
-
-		pmap_map_chunk(l1pt, pdp->pd_va, pdp->pd_pa, pdp->pd_size,
-		    pdp->pd_prot, pdp->pd_cache);
-	}
-}
-
-const struct pmap_devmap *
-pmap_devmap_find_pa(paddr_t pa, psize_t size)
-{
-	uint64_t endpa;
-	int i;
-
-	if (pmap_devmap_table == NULL)
-		return NULL;
-
-	endpa = (uint64_t)pa + (uint64_t)(size - 1);
-
-	for (i = 0; pmap_devmap_table[i].pd_size != 0; i++) {
-		if (pa >= pmap_devmap_table[i].pd_pa &&
-		    endpa <= (uint64_t)pmap_devmap_table[i].pd_pa +
-			     (uint64_t)(pmap_devmap_table[i].pd_size - 1))
-			return &pmap_devmap_table[i];
+	int cache;
+	switch (flags) {
+	case PMAP_DEV:
+		cache = PTE_DEV;
+		break;
+	case PMAP_NOCACHE:
+		cache = PTE_NOCACHE;
+		break;
+	default:
+		cache = PTE_CACHE;
+		break;
 	}
 
-	return NULL;
+	return pmap_map_chunk(root, va, pa, size, prot, cache);
 }
 
-const struct pmap_devmap *
-pmap_devmap_find_va(vaddr_t va, vsize_t size)
-{
-	int i;
-
-	if (pmap_devmap_table == NULL)
-		return NULL;
-
-	for (i = 0; pmap_devmap_table[i].pd_size != 0; i++) {
-		if (va >= pmap_devmap_table[i].pd_va &&
-		    va + size - 1 <= pmap_devmap_table[i].pd_va +
-				     pmap_devmap_table[i].pd_size - 1)
-			return &pmap_devmap_table[i];
-	}
-
-	return NULL;
-}
 
 /********************** PTE initialization routines **************************/
 
@@ -7512,8 +7594,6 @@ pmap_pte_init_xscale(void)
 void
 xscale_setup_minidata(vaddr_t l1pt, vaddr_t va, paddr_t pa)
 {
-	extern vaddr_t xscale_minidata_clean_addr;
-	extern vsize_t xscale_minidata_clean_size; /* already initialized */
 	pd_entry_t *pde = (pd_entry_t *) l1pt;
 	vsize_t size;
 	uint32_t auxctl;

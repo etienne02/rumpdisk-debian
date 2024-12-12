@@ -1,6 +1,6 @@
-# $NetBSD: t_grep.sh,v 1.6 2021/08/30 23:14:14 rillig Exp $
+# $NetBSD: t_grep.sh,v 1.8 2024/11/23 09:38:02 rillig Exp $
 #
-# Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
+# Copyright (c) 2008, 2009, 2021, 2024 The NetBSD Foundation, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@ basic_head()
 	atf_set "descr" "Checks basic functionality"
 }
 basic_body()
-{ 
+{
 	atf_check -o file:"$(atf_get_srcdir)/d_basic.out" -x \
 	    'jot 10000 | grep 123'
 }
@@ -60,6 +60,20 @@ recurse_body()
 	echo -e "cod\nhaddock\nplaice" > recurse/a/f/favourite-fish
 
 	atf_check -o file:"$(atf_get_srcdir)/d_recurse.out" -x "grep -r haddock recurse | sort"
+}
+
+atf_test_case recurse_noarg
+recurse_noarg_head()
+{
+	atf_set "descr" "Checks recursive searching without file argument"
+}
+recurse_noarg_body()
+{
+	mkdir -p recurse/a/f recurse/d
+	echo -e "cod\ndover sole\nhaddock\nhalibut\npilchard" > recurse/d/fish
+	echo -e "cod\nhaddock\nplaice" > recurse/a/f/favourite-fish
+
+	atf_check -o file:"$(atf_get_srcdir)/d_recurse_noarg.out" -x "cd recurse && grep -r haddock | sort"
 }
 
 atf_test_case recurse_symlink
@@ -327,11 +341,30 @@ context2_body()
 	    grep -z -C1 cod test1 test2
 }
 
+atf_test_case pr_58849
+pr_58849_head()
+{
+	atf_set "descr" "Checks overlapping patterns in whole-line search"
+}
+pr_58849_body()
+{
+	printf '%s\n' __bss_start__ __bss_end__ hello > input
+
+	# The line '__bss_end__' must not occur in the output.
+	atf_check -o inline:'__bss_start__\nhello\n' \
+	    grep -Fvx -e _end -e __bss_end__ input
+
+	# Listing the most specific pattern first works around PR bin/58849.
+	atf_check -o inline:'__bss_start__\nhello\n' \
+	    grep -Fvx -e __bss_end__ -e _end input
+}
+
 atf_init_test_cases()
 {
-	atf_add_test_case basic 
+	atf_add_test_case basic
 	atf_add_test_case binary
 	atf_add_test_case recurse
+	atf_add_test_case recurse_noarg
 	atf_add_test_case recurse_symlink
 	atf_add_test_case word_regexps
 	atf_add_test_case word_locale
@@ -348,4 +381,5 @@ atf_init_test_cases()
 	atf_add_test_case zgrep
 	atf_add_test_case nonexistent
 	atf_add_test_case context2
+	atf_add_test_case pr_58849
 }

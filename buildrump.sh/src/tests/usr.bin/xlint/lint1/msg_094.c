@@ -1,12 +1,16 @@
-/*	$NetBSD: msg_094.c,v 1.3 2021/01/31 11:12:07 rillig Exp $	*/
+/*	$NetBSD: msg_094.c,v 1.6 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_094.c"
 
-// Test for message: function has illegal storage class: %s [94]
+// Test for message: function '%s' has illegal storage class [94]
 
+/* lint1-extra-flags: -X 351 */
+
+/* expect+2: error: illegal storage class [8] */
 register int
-global_example(int arg)				/* expect: 8 */
+global_example(int arg)
 {
-	register int register_example(int);	/* expect: 94 */
+	/* expect+1: error: function 'register_example' has illegal storage class [94] */
+	register int register_example(int);
 
 	return arg;
 }

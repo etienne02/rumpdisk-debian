@@ -1,4 +1,4 @@
-/* $NetBSD: dwc_gmac_reg.h,v 1.20 2020/05/17 21:50:47 chs Exp $ */
+/* $NetBSD: dwc_gmac_reg.h,v 1.24 2024/10/19 05:09:03 skrll Exp $ */
 
 /*-
  * Copyright (c) 2013, 2014 The NetBSD Foundation, Inc.
@@ -38,6 +38,8 @@
 #define	AWIN_GMAC_MAC_FLOWCTRL		0x0018
 #define	AWIN_GMAC_MAC_VLANTAG		0x001c
 #define	AWIN_GMAC_MAC_VERSION		0x0020	/* not always implemented? */
+#define	 AWIN_GMAC_MAC_VERSION_USERVER_MASK	__BITS(15, 8)
+#define	 AWIN_GMAC_MAC_VERSION_SNPSVER_MASK	__BITS( 7, 0)
 #define	AWIN_GMAC_MAC_INTR		0x0038
 #define	AWIN_GMAC_MAC_INTMASK		0x003c
 #define	AWIN_GMAC_MAC_ADDR0HI		0x0040
@@ -62,11 +64,11 @@
 #define	AWIN_GMAC_MAC_FFILT_SAF		__BIT(9)  /* source address filter */
 #define	AWIN_GMAC_MAC_FFILT_SAIF	__BIT(8)  /* inverse filtering */
 #define	AWIN_GMAC_MAC_FFILT_DBF		__BIT(5)  /* disable broadcast frames */
-#define	AWIN_GMAC_MAC_FFILT_PM		__BIT(4)  /* promiscious multicast */
+#define	AWIN_GMAC_MAC_FFILT_PM		__BIT(4)  /* promiscuous multicast */
 #define	AWIN_GMAC_MAC_FFILT_DAIF	__BIT(3)  /* DA inverse filtering */
 #define	AWIN_GMAC_MAC_FFILT_HMC		__BIT(2)  /* multicast hash compare */
 #define	AWIN_GMAC_MAC_FFILT_HUC		__BIT(1)  /* unicast hash compare */
-#define	AWIN_GMAC_MAC_FFILT_PR		__BIT(0)  /* promiscious mode */
+#define	AWIN_GMAC_MAC_FFILT_PR		__BIT(0)  /* promiscuous mode */
 
 #define	AWIN_GMAC_MAC_INT_LPI		__BIT(10)
 #define	AWIN_GMAC_MAC_INT_TSI		__BIT(9)
@@ -133,9 +135,7 @@
 #define	AWIN_GMAC_DMA_CUR_RX_BUFADDR	0x1054
 #define	AWIN_GMAC_DMA_HWFEATURES	0x1058	/* not always implemented? */
 
-#define	GMAC_MII_PHY_SHIFT		11
 #define	GMAC_MII_PHY_MASK		__BITS(15,11)
-#define	GMAC_MII_REG_SHIFT		6
 #define	GMAC_MII_REG_MASK		__BITS(10,6)
 
 #define	GMAC_MII_BUSY			__BIT(0)
@@ -210,8 +210,8 @@
 
 #define	GMAC_DMA_INT_MASK	__BITS(0,16)	  /* all possible intr bits */
 
-#define GMAC_DMA_FEAT_ENHANCED_DESC	__BIT(24)
-#define GMAC_DMA_FEAT_RMON		__BIT(11) /* MMC */
+#define	GMAC_DMA_FEAT_ENHANCED_DESC	__BIT(24)
+#define	GMAC_DMA_FEAT_RMON		__BIT(11) /* MMC */
 
 struct dwc_gmac_dev_dmadesc {
 	uint32_t ddesc_status0;		/* Status / TDES0 */
@@ -221,7 +221,6 @@ struct dwc_gmac_dev_dmadesc {
 /* for RX descriptors */
 #define	DDESC_STATUS_DAFILTERFAIL	__BIT(30)
 #define	DDESC_STATUS_FRMLENMSK		__BITS(29,16)
-#define	DDESC_STATUS_FRMLENSHIFT	16
 #define	DDESC_STATUS_RXERROR		__BIT(15)
 #define	DDESC_STATUS_RXTRUNCATED	__BIT(14)
 #define	DDESC_STATUS_SAFILTERFAIL	__BIT(13)
@@ -273,22 +272,22 @@ struct dwc_gmac_dev_dmadesc {
 
 /* Common to enhanced descriptors */
 
-#define DDESC_DES0_OWN			__BIT(31)
+#define	DDESC_DES0_OWN			__BIT(31)
 
-#define DDESC_DES1_SIZE2MASK		__BITS(28,16)
-#define DDESC_DES1_SIZE1MASK		__BITS(12,0)
+#define	DDESC_DES1_SIZE2MASK		__BITS(28,16)
+#define	DDESC_DES1_SIZE1MASK		__BITS(12,0)
 
 /* For enhanced TX descriptors */
 
-#define DDESC_TDES0_IC			__BIT(30)
-#define DDESC_TDES0_LS			__BIT(29)
-#define DDESC_TDES0_FS			__BIT(28)
-#define DDESC_TDES0_TCH			__BIT(20)
+#define	DDESC_TDES0_IC			__BIT(30)
+#define	DDESC_TDES0_LS			__BIT(29)
+#define	DDESC_TDES0_FS			__BIT(28)
+#define	DDESC_TDES0_TCH			__BIT(20)
 
 /* For enhanced RX descriptors */
 
-#define DDESC_RDES0_FL			__BITS(29,16)
-#define DDESC_RDES0_ES			__BIT(15)
-#define DDESC_RDES0_LE			__BIT(12)
+#define	DDESC_RDES0_FL			__BITS(29,16)
+#define	DDESC_RDES0_ES			__BIT(15)
+#define	DDESC_RDES0_LE			__BIT(12)
 
-#define DDESC_RDES1_RCH			__BIT(14)
+#define	DDESC_RDES1_RCH			__BIT(14)

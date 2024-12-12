@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.46 2018/09/22 12:24:04 rin Exp $
+#	$NetBSD: Makefile.inc,v 1.49 2023/08/30 18:47:56 christos Exp $
 #
 #	Configuration variables (default values are below):
 #
@@ -38,13 +38,16 @@ KERNLIB_PROF=	${KERNDST}/libkern_p.a
 LIBKERNLNBN=	llib-lkern.ln
 KERNLIBLN=	${KERNDST}/${LIBKERNLNBN}
 
+LIBKERN_MD_FLAGS?=	none
+
 KERNMAKE= \
-	cd ${KERNDST} && ${MAKE} -f ${KERNDIR:q}/Makefile \
+	cd ${KERNDST} && ${MAKE} -f ${KERNDIR:Q}/Makefile \
 	    KERNDIR=${KERNDIR:q} \
 	    CC=${CC:q} CFLAGS=${CFLAGS:q} CPUFLAGS= \
 	    AS=${AS:q} AFLAGS=${AFLAGS:q} \
 	    LORDER=${LORDER:q} \
 	    TSORT=${TSORT:q} \
+	    COPTS=${COPTS:q} \
 	    LD=${LD:q} STRIP=${STRIP:q} \
 	    AR=${AR:q} NM=${NM:q} \
 	    RANLIB=${RANLIB:q} SIZE=${SIZE:q} \
@@ -54,6 +57,7 @@ KERNMAKE= \
 	    LINTFLAGS=${KERNLINTFLAGS:q} \
 	    LIBKERN_ARCH=${LIBKERN_ARCH:q} \
 	    COMMON_MACHINE_ARCH=${COMMON_MACHINE_ARCH:q} \
+	    LIBKERN_MD_FLAGS=${LIBKERN_MD_FLAGS:q} \
 	    ${KERNMISCMAKEFLAGS}
 
 ${KERNLIB}:		.NOTMAIN .MAKE __always_make_kernlib

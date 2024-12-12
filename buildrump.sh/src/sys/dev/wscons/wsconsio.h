@@ -1,4 +1,4 @@
-/* $NetBSD: wsconsio.h,v 1.125 2021/04/24 00:15:37 macallan Exp $ */
+/* $NetBSD: wsconsio.h,v 1.129 2024/10/20 09:25:00 mlelstv Exp $ */
 
 /*
  * Copyright (c) 1996, 1997 Christopher G. Demetriou.  All rights reserved.
@@ -76,7 +76,8 @@ struct wscons_event {
 #define	WSCONS_EVENT_ASCII		13	/* key code is already ascii */
 #define	WSCONS_EVENT_MOUSE_DELTA_W	14	/* W delta amount */
 #define	WSCONS_EVENT_MOUSE_ABSOLUTE_W	15	/* W location */
-
+#define	WSCONS_EVENT_HSCROLL		16	/* X axis precision scrolling */
+#define	WSCONS_EVENT_VSCROLL		17	/* Y axis precision scrolling */
 
 /*
  * Keyboard ioctls (0 - 31)
@@ -270,6 +271,28 @@ struct wsmouse_repeat {
 #define WSMOUSEIO_SETVERSION	_IOW('W', 41, int)
 #define WSMOUSE_EVENT_VERSION	WSEVENT_VERSION
 
+enum wsmousecfg {
+	WSMOUSECFG_REVERSE_SCROLLING = 0,
+	/* Touchpad parameters */
+	WSMOUSECFG_HORIZSCROLLDIST,
+	WSMOUSECFG_VERTSCROLLDIST
+};
+
+struct wsmouse_param {
+	enum wsmousecfg key;
+	int value;
+};
+
+struct wsmouse_parameters {
+	struct wsmouse_param *params;
+	unsigned int nparams;
+};
+
+#define WSMOUSECFG_MAX		(128) /* maximum number of wsmouse_params */
+
+#define WSMOUSEIO_GETPARAMS	_IOW('W', 42, struct wsmouse_parameters)
+#define WSMOUSEIO_SETPARAMS	_IOW('W', 43, struct wsmouse_parameters)
+
 /*
  * Display ioctls (64 - 95)
  */
@@ -343,6 +366,8 @@ struct wsmouse_repeat {
 #define	WSDISPLAY_TYPE_PLATINUM	64	/* onboard fb in PowerMac 7200 */
 #define	WSDISPLAY_TYPE_PLFB	65	/* ARM PrimeCell PL11x */
 #define	WSDISPLAY_TYPE_SSDFB	66	/* ssdfb(4) */
+#define	WSDISPLAY_TYPE_HOLLYWOOD 67	/* Nintendo Wii "Hollywood" SoC */
+#define	WSDISPLAY_TYPE_VC6	68	/* Broadcom VideoCore 6 */
 
 /* Basic display information.  Not applicable to all display types. */
 struct wsdisplay_fbinfo {
@@ -626,6 +651,7 @@ struct wsdisplayio_edid_info {
 #define WSFB_CI		1	/* colour indexed, see subtype */
 #define WSFB_GREYSCALE	2
 #define WSFB_YUV	3
+#define WSFB_YUY2	4
 
 struct wsdisplayio_fbinfo {
 	uint64_t fbi_fbsize;		/* framebuffer size in bytes */
@@ -703,5 +729,21 @@ struct wsdisplayio_fontinfo {
  */
 
 #define WSDISPLAYIO_LISTFONTS	_IOWR('W', 107, struct wsdisplayio_fontinfo)
+
+struct wsdisplay_getfont {
+	char *gf_name;
+	uint32_t gf_size;
+	uint32_t gf_actual;
+};
+
+/*
+ * return currently active font
+ *
+ * gf_name points to a buffer of gf_size bytes, the result may be truncated
+ * and NUL-terminated.
+ * gf_actual is set to the size of full name.
+ */
+
+#define WSDISPLAYIO_GFONT	_IOWR('W', 108, struct wsdisplay_getfont)
 
 #endif /* _DEV_WSCONS_WSCONSIO_H_ */

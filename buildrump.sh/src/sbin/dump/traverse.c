@@ -1,4 +1,4 @@
-/*	$NetBSD: traverse.c,v 1.54 2021/07/07 11:06:37 christos Exp $	*/
+/*	$NetBSD: traverse.c,v 1.56 2023/08/07 23:26:40 mrg Exp $	*/
 
 /*-
  * Copyright (c) 1980, 1988, 1991, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)traverse.c	8.7 (Berkeley) 6/15/95";
 #else
-__RCSID("$NetBSD: traverse.c,v 1.54 2021/07/07 11:06:37 christos Exp $");
+__RCSID("$NetBSD: traverse.c,v 1.56 2023/08/07 23:26:40 mrg Exp $");
 #endif
 #endif /* not lint */
 
@@ -691,6 +691,7 @@ blksout64(union dinode *dp, int64_t *blkp, int frags, ino_t ino, int last)
 	static int writingextdata = 0;
 
 	blks = howmany(frags * ufsib->ufs_fsize, TP_BSIZE);
+#if 0
 	if (last) {
 		int resid;
 		int extsize = iswap32(spcl.c_extsize);
@@ -703,6 +704,7 @@ blksout64(union dinode *dp, int64_t *blkp, int frags, ino_t ino, int last)
 		if (resid > 0)
 			blks -= howmany(ufsib->ufs_fsize, TP_BSIZE) - resid;
 	}
+#endif
 	tbperdb = ufsib->ufs_bsize >> tp_bshift;
 	for (i = 0; i < blks; i += TP_NINDIR) {
 		if (i + TP_NINDIR > blks)
@@ -778,7 +780,7 @@ appendextdata(union dinode *dp)
 	tbperdb = ufsib->ufs_bsize >> tp_bshift;
 	assert(count + blks < TP_NINDIR);
 	for (i = 0; i < blks; i++)
-		if (&dp->dp2.di_extb[i / tbperdb] != 0)
+		if (dp->dp2.di_extb[i / tbperdb] != 0)
 				spcl.c_addr[count + i] = 1;
 			else
 				spcl.c_addr[count + i] = 0;

@@ -1,4 +1,4 @@
-/*	$NetBSD: e500_intr.c,v 1.44 2020/07/06 10:11:14 rin Exp $	*/
+/*	$NetBSD: e500_intr.c,v 1.49 2024/09/15 19:08:34 andvar Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -37,7 +37,7 @@
 #define __INTR_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: e500_intr.c,v 1.44 2020/07/06 10:11:14 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: e500_intr.c,v 1.49 2024/09/15 19:08:34 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_mpc85xx.h"
@@ -55,6 +55,7 @@ __KERNEL_RCSID(0, "$NetBSD: e500_intr.c,v 1.44 2020/07/06 10:11:14 rin Exp $");
 #include <sys/ipi.h>
 #include <sys/bitops.h>
 #include <sys/interrupt.h>
+#include <sys/systm.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -480,7 +481,7 @@ e500_intr_external_name_lookup(int irq)
 	KASSERT(irqname != NULL);
 	KASSERT(prop_object_type(irqname) == PROP_TYPE_STRING);
 
-	return prop_string_cstring_nocopy(irqname);
+	return prop_string_value(irqname);
 }
 
 static const char *
@@ -551,7 +552,7 @@ e500_splx(int ipl)
 	struct cpu_info * const ci = curcpu();
 	const int old_ipl = ci->ci_cpl;
 
-	/* if we paniced because of watchdog, PSL_CE will be clear.  */
+	/* if we panicked because of watchdog, PSL_CE will be clear.  */
 	KASSERT(wdog_barked || (mfmsr() & PSL_CE));
 
 	if (ipl == old_ipl)
@@ -561,7 +562,7 @@ e500_splx(int ipl)
 		printf("%s: %p: cpl=%u: ignoring splx(%u) to raise ipl\n",
 		    __func__, __builtin_return_address(0), old_ipl, ipl);
 		if (old_ipl == IPL_NONE)
-			Debugger();
+			console_debugger();
 	}
 
 	// const
@@ -590,7 +591,7 @@ e500_splraise(int ipl)
 	struct cpu_info * const ci = curcpu();
 	const int old_ipl = ci->ci_cpl;
 
-	/* if we paniced because of watchdog, PSL_CE will be clear.  */
+	/* if we panicked because of watchdog, PSL_CE will be clear.  */
 	KASSERT(wdog_barked || (mfmsr() & PSL_CE));
 
 	if (old_ipl < ipl) {
@@ -938,7 +939,7 @@ e500_extintr(struct trapframe *tf)
 	struct cpu_softc * const cpu = ci->ci_softc;
 	const int old_ipl = ci->ci_cpl;
 
-	/* if we paniced because of watchdog, PSL_CE will be clear.  */
+	/* if we panicked because of watchdog, PSL_CE will be clear.  */
 	KASSERT(wdog_barked || (mfmsr() & PSL_CE));
 
 #if 0
@@ -981,9 +982,7 @@ e500_extintr(struct trapframe *tf)
 			    __func__, tf, __LINE__, old_ipl, 
 			    15 - IPL_HIGH, openpic_read(cpu, OPENPIC_CTPR));
 		const uint32_t iack = openpic_read(cpu, OPENPIC_IACK);
-#ifdef DIAGNOSTIC
 		const int ipl = iack & 0xf;
-#endif
 		const int irq = (iack >> 4) - 1;
 #if 0
 		printf("%s: iack=%d ipl=%d irq=%d <%s>\n",
@@ -1001,7 +1000,7 @@ e500_extintr(struct trapframe *tf)
 		struct intr_source * const is = &e500_intr_sources[irq];
 		if (__predict_true(is < e500_intr_last_source)) {
 			/*
-			 * Timer interrupts get their argument overriden with
+			 * Timer interrupts get their argument overridden with
 			 * the pointer to the trapframe.
 			 */
 			KASSERTMSG(is->is_ipl == ipl,

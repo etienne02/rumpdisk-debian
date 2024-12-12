@@ -1,4 +1,4 @@
-/* $NetBSD: machdep.c,v 1.375 2021/07/22 01:39:18 thorpej Exp $ */
+/* $NetBSD: machdep.c,v 1.379 2024/03/31 17:13:29 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2019, 2020 The NetBSD Foundation, Inc.
@@ -69,7 +69,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.375 2021/07/22 01:39:18 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.379 2024/03/31 17:13:29 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -156,7 +156,7 @@ int	unusedmem;		/* amount of memory for OS that we don't use */
 int	unknownmem;		/* amount of memory with an unknown use */
 
 int	cputype;		/* system type, from the RPB */
-bool	alpha_is_qemu;		/* true if we've detected runnnig in qemu */
+bool	alpha_is_qemu;		/* true if we've detected running in qemu */
 
 int	bootdev_debug = 0;	/* patchable, or from DDB */
 
@@ -797,6 +797,11 @@ nobootinfo:
 			boothowto |= AB_VERBOSE;
 			break;
 
+		case 'x': /* debug messages */
+		case 'X':
+			boothowto |= AB_DEBUG;
+			break;
+
 		case '-':
 			/*
 			 * Just ignore this.  It's not required, but it's
@@ -1053,11 +1058,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((boothowto & RB_NOSYNC) == 0 && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */
@@ -1652,6 +1652,16 @@ SYSCTL_SETUP(sysctl_machdep_setup, "sysctl machdep subtree setup")
 		       CTLTYPE_INT, "fp_complete_debug", NULL,
 		       NULL, 0, &alpha_fp_complete_debug, 0,
 		       CTL_MACHDEP, CPU_FP_COMPLETE_DEBUG, CTL_EOL);
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT,
+		       CTLTYPE_QUAD, "rpb_type", NULL,
+		       NULL, 0, &hwrpb->rpb_type, 0,
+		       CTL_MACHDEP, CPU_RPB_TYPE, CTL_EOL);
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT,
+		       CTLTYPE_QUAD, "rpb_variation", NULL,
+		       NULL, 0, &hwrpb->rpb_variation, 0,
+		       CTL_MACHDEP, CPU_RPB_VARIATION, CTL_EOL);
 }
 
 /*

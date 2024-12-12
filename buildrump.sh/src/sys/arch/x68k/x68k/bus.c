@@ -1,4 +1,4 @@
-/*	$NetBSD: bus.c,v 1.36 2012/10/02 23:54:54 christos Exp $	*/
+/*	$NetBSD: bus.c,v 1.39 2024/01/07 07:58:35 isaki Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -37,7 +37,7 @@
 #include "opt_m68k_arch.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bus.c,v 1.36 2012/10/02 23:54:54 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus.c,v 1.39 2024/01/07 07:58:35 isaki Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -367,7 +367,7 @@ x68k_bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 		ICIA();		/* no per-page/per-line control */
 		DCIA();
 		return;
-	}		
+	}
 #endif
 	if (offset >= map->dm_mapsize)
 		return;	/* driver bug; warn it? */
@@ -449,7 +449,7 @@ x68k_bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 }
 
 /*
- * Common functin for mmap(2)'ing DMA-safe memory.  May be called by
+ * Common function for mmap(2)'ing DMA-safe memory.  May be called by
  * bus-specific DMA mmap(2)'ing functions.
  */
 paddr_t
@@ -461,7 +461,7 @@ x68k_bus_dmamem_mmap(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
 	rv = _bus_dmamem_mmap_common(t, segs, nsegs, off, prot, flags);
 	if (rv == (bus_addr_t)-1)
 		return (-1);
-	
+
 	return (m68k_btop((char *)rv));
 }
 
@@ -473,7 +473,7 @@ x68k_bus_dmamem_mmap(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
 /*
  * Utility function to load a linear buffer.  lastaddrp holds state
  * between invocations (for multiple-buffer loads).  segp contains
- * the starting segment on entrace, and the ending segment on exit.
+ * the starting segment on entrance, and the ending segment on exit.
  * first indicates if this is the first invocation of this function.
  */
 int

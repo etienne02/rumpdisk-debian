@@ -1,4 +1,4 @@
-/*	$NetBSD: ts.c,v 1.33 2019/12/08 19:52:37 ad Exp $ */
+/*	$NetBSD: ts.c,v 1.36 2022/04/17 21:24:53 andvar Exp $ */
 
 /*-
  * Copyright (c) 1991 The Regents of the University of California.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ts.c,v 1.33 2019/12/08 19:52:37 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ts.c,v 1.36 2022/04/17 21:24:53 andvar Exp $");
 
 #undef	TSDEBUG
 
@@ -215,7 +215,6 @@ const struct cdevsw ts_cdevsw = {
 int
 tsmatch(device_t parent, cfdata_t match, void *aux)
 {
-	struct device tsdev;
 	struct ts_softc ssc;
 	struct ts_softc *sc = &ssc;
 	struct uba_attach_args *ua = aux;
@@ -224,9 +223,7 @@ tsmatch(device_t parent, cfdata_t match, void *aux)
 	sc->sc_iot = ua->ua_iot;
 	sc->sc_ioh = ua->ua_ioh;
 	sc->sc_mapped = 0;
-	sc->sc_dev = &tsdev;
 	sc->sc_uh = device_private(parent);
-	strcpy(sc->sc_dev->dv_xname, "ts");
 
 	/* Try to reset the device */
 	for (i = 0; i < 3; i++) {
@@ -371,7 +368,7 @@ tscommand(struct ts_softc *sc, dev_t dev, int cmd, int count)
 
 	/*
 	 * Load the buffer.  The b_count field gets used to hold the command
-	 * count.  the b_resid field gets used to hold the command mneumonic.
+	 * count.  the b_resid field gets used to hold the command mnemonic.
 	 * These 2 fields are "known" to be "safe" to use for this purpose.
 	 * (Most other drivers also use these fields in this way.)
 	 */
@@ -642,7 +639,7 @@ tsintr(void *arg)
 	case TS_TC_NORM:
 		/*
 		 * Normal termination -- The operation is completed
-		 * witout incident.
+		 * without incident.
 		 */
 		if (sc->sc_state == TS_FASTREPOS) {
 #ifdef TSDEBUG
@@ -792,7 +789,7 @@ tsintr(void *arg)
 
 	case TS_TC_FCE:
 		/*
-		 * Fatal subsytem Error -- The subsytem is incapable
+		 * Fatal subsystem Error -- The subsystem is incapable
 		 * of properly performing commands, or at least its
 		 * integrity is seriously questionable. Refer to the
 		 * fatal class code field in the TSSR register for

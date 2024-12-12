@@ -1,4 +1,4 @@
-/*	$NetBSD: af_inetany.c,v 1.19 2020/06/07 06:02:58 thorpej Exp $	*/
+/*	$NetBSD: af_inetany.c,v 1.23 2022/08/17 23:36:48 nat Exp $	*/
 
 /*-
  * Copyright (c) 2008 David Young.  All rights reserved.
@@ -27,7 +27,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: af_inetany.c,v 1.19 2020/06/07 06:02:58 thorpej Exp $");
+__RCSID("$NetBSD: af_inetany.c,v 1.23 2022/08/17 23:36:48 nat Exp $");
 #endif /* not lint */
 
 #include <sys/param.h>

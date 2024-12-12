@@ -1,4 +1,4 @@
-# LIST OF CHANGES FROM LAST RELEASE:			<$Revision: 1.2826 $>
+# LIST OF CHANGES FROM LAST RELEASE:			<$Revision: 1.3118 $>
 #
 #
 # [Note: This file does not mention every change made to the NetBSD source tree.
@@ -23,395 +23,596 @@
 #
 # ----------------------------------------------------------------------------
 
-Changes from NetBSD 9.0 to NetBSD 10.0:
-	openldap: Import 2.4.48. [christos 20190808]
-	boot(8): GPT and RAIDframe support for x86 bootstrap [manu 20190818]
-	dhcpcd(8): Import dhcpcd-8.0.3 [roy 20190821]
-	inet6: Fix sending RTM_MISS for unresolvable addresses and restore
-		ND6_LLINFO_WAITDELETE so that any send at this point can
-		return EHOSTDOWN to match inet behaviour. [roy 20190901]
-	inet: Fix sending RTM_MISS for unresolvable addresses. [roy 20190901]
-	dhcpcd(8): Import dhcpcd-8.0.4 [roy 20190904]
-	bind: Import version 9.14.5. [christos 20190905]
-	resolvconf(8): Import openresolv-3.9.2 [roy 20190908]
-	boot(8): multiboot 2 support, Xen can now boot from EFI [manu 20190913]
-	dhcpcd(8): Import dhcpcd-8.0.6 [roy 20190913]
-	kernel: Add vHCI, a driver that allows to send and receive USB
-		packets from userland. [maxv 20190914]
-	mos(4): Ported driver for MosChip MCS7730/7830/7832 USB ethernet.
-		[mrg 20190920]
-	gcc(1): Import GCC 8.3. [mrg 20191001]
-	libpcap: Import 1.9.1. [christos 20191001]
-	tcpdump(8): Import 4.9.3. [christos 20191001]
-	rescue(8): Moved into a separate, rescue-only set. [maya 20191001]
-	byacc: Update to 20190617. [christos 20191006]
-	tzdata updates from 2019a to 2019c (incl 2019b) [kre 20191008]
-	services(5): Update to version 2019-10-04 from IANA.
-		[sevan 20191009]
-	dhcpcd(8): Import dhcpcd-8.1.0 [roy 20191011]
-	OpenSSH: Import 8.1. [christos 20191012]
-	acpi(4): Updated ACPICA to 20190816. [christos 20191015]
-	sup: removed, use ftp://ftp.astron.com/pub/sup [christos 20191015]
-	dhcpcd(8): Import dhcpcd-8.1.1 [roy 20191016]
-	evbarm: Add support for the NanoPi R1 and Duo2. [bad 20191016]
-	bind: Import version 9.14.7. [christos 20191017]
-	libc: Changed the iconv(3) function signature to the POSIX variation
-		[kamil 20191024]
-	nct(4): Add Nuvoton NCT5104D GPIO driver. [ad 20191025]
-	vio9p(4): Add virtio-9p front-end driver. [ozaki-r 20191028]
-	mount_9p(8): Enable to mount a filesystem exported via virtio-9p.
-		[ozaki-r 20191028]
-	evbarm: Update TI AM335x SoC support to use FDT based configuration.
-		[jmcneill 20191028]
-	evbarm: Update TI OMAP3 SoC support to use FDT based configuration.
-		[jmcneill 20191101]
-	amd64: Add support for kCSan - Kernel Concurrency Sanitizer.
-		[maxv 20191105]
-	tmux(1): Imported 2.9a. [christos 20191112]
-	dhcpcd(8): Import 8.1.2. [roy 20191113]
-	amd64: Add support for kMSan - Kernel Memory Sanitizer.
-		[maxv 20191114]
-	qat(4): Add opencrypto driver for Intel QuickAssist.
-		Atom C2XXX, C3XXX, Xeon D-21XX and D-15XX, C62X chipsets and
-		QuickAssist Adapter 8960/8970.
-		[hikaru 20191120]
-	select(2), poll(2): Performance and scalability improvements
-		[ad 20191121]
-	amd64, i386: Performance and scalability improvements for TLB
-		shootdown [ad 20191121]
-	bind: Import version 9.14.8. [christos 20191127]
-	terminfo: Import 20190609 [christos 20191127]
-	onewire(4), owtemp(4): Improve reliability and reduce CPU overhead
-		slightly. [ad 20191130]
-	scheduler: Improve performance and interactivity. [ad 20191201]
-	vfs: Reduce false sharing and lock overhead during normal operation.
-		[ad 20191201]
-	evbarm: Added driver for Allwinner Crypto Engine random number
-		generator [riastradh 20191209]
-	ixl(4): Ported driver for Intel Ethernet 700 series
-		[yamaguchi 20191210]
-	acpi(4): Updated ACPICA to 20191213. [christos 20191214]
-	uvm: Replace red-black tree page lookup with radix tree lookup,
-		including tagging and gang lookup of pages.  Original work
-		done by yamt@. [ad 20191214]
-	nsd: Import 4.2.4. [christos 20191215]
-	unbound(8): Import 1.9.6. [christos 20191215]
-	openpam(3): update to 20190224 (tabebuia) [christos 20191215]
- 	kerberos(8): Update to Heimdal-7.7.0 [christos 20191215]
-	file(1): Upgraded to 5.38. [christos 20191216]
-	uvm: Replace global counters with per-CPU counters, significantly
-		reducing system time on workloads that are VM-system heavy.
-		[ad 20191216]
-	anxdp(4): Add driver for Analogix DisplayPort core found in
-		Rockchip RK3399. [jakllsch 20191219]
-	net80211: Require SSID configuration to associate with an open AP.
-		[jakllsch 20191219]
-	dhcpcd(8): Import dhcpcd-8.1.4 [roy 20191220]
-	uvm: Rewrite the page allocator to be more efficient and somewhat CPU
-		topology aware.  Add preliminary NUMA support.  [ad 20191227]
-	crunchgen(1): Added the ability to pass variables in the submake
-		command line, and removed all command like flags that are
-		not needed anymore [christos 20191229]
-	uvm: Reduce lock contention by making the maintentance of page
-		replacement state more concurrent. [ad 20191231]
-	aq(4): Add Aquantia 10G network adapter driver [ryo 20200101]
-	dhcpcd(8): Import dhcpcd-8.1.5 [roy 20200103]
-	tmux(1): Imported 3.0a. [christos 20200106]
-	amd64, i386: Replace the global PV hash table with radix trees,
-		yielding significant performance and scalability benefits.
-		[ad 20200112]
-	scheduler: Make the scheduler topology aware.  It understands and
-		makes good use of HyperThreading/SMT, spreads the load evenly
-		across different physical CPU packages, and can effectively
-		run asymmetric systems with slow and fast CPUs [ad 20200113]
-	evbarm: Add support for NXP i.MX 8M family SoCs. [jmcneill 20200114]
-	arm: Add support for cpu topology for ARMv7 and ARMv8 CPUs.
-		[mrg 20200114]
-	uvm: More precisely track clean/dirty pages, and change how they are
-		indexed, speeding up fsync() on large files by orders of
-		magnitude.  Original work done by yamt@. [ad 20200115]
-	uyurex(4): Removed from the tree. [maya 20200117]
-	strip(4): Removed from the tree. [thorpej 20200118]
-	hippi and esh(4): Removed from the tree. [thorpej 20200118]
-	de(4): Removed from the tree. [thorpej 20200119]
-	token ring and tr(4): Removed from the tree. [thorpej 20200119]
-	fddi, fpa(4), fta(4), fea(4): Removed from the tree. [thorpej 20200120]
-	wm(4): Add Intel I219 LM10-LM15 and V10-V14. [msaitoh 20200121]
-	OpenSSL: Imported 1.1.1d. [christos 20200122]
-	dhcpcd(8): Import dhcpcd-8.1.6 [roy 20200127]
-	openresolv(8): Import openresolv-3.10.0 [roy 20200127]
-	urio(4): Removed from the tree. [maya 20200129]
-	Collect network interface statistics using per-cpu counters
-		that are collated when they are queried. [thorpej 20200201]
-	realpath(1): Ported from FreeBSD. [kamil 20200202]
-	kernel: Remove azalia(4). [jmcneill 20200209]
-	awk(1): Import 20200218 [christos 20200218]
-	genet(4): Add support for Broadcom GENETv5 ethernet controllers, found
-		in the Raspberry Pi 4. [jmcneill 20200222]
-	OpenSSH: Import 8.2. [christos 20200226]
-	ld.elf_so(1): Implement DT_GNU_HASH [kamil 20200229]
-	amiga: Fix word accesses on Gayle (A1200) pcmcia. [is 20200302]
-	libcbor: Import for libfido2 support [christos 20200302]
-	libfido2: Import for pam-u2f support [christos 20200302]
-	pam-u2f: Import token authenticator [christos 20200302]
-	gcc(1): Import GCC 8.4. [mrg 20200311]
-	terminfo: Support numeric parameters as int [roy 20200313]
-	postfix(1): Import version 3.5.0. [christos 20200318]
-	OpenSSL: Imported 1.1.1e. [christos 20200321]
-	amd64, i386: Significant performance improvements in the pmap module
-		[ad 20200322]
-	namecache: Change the namecache to index names using per directory
-		red-black trees. [ad 20200322]
-	uvm: Process concurrent page faults on individual objects in parallel,
-		where the relevant pages are already in-core.  [ad 20200322]
-	bwfm: Update firmware to linux-firmware-20200316. [thorpej 20200322]
-	acpi(4): Updated ACPICA to 20200326. [christos 20200328]
-	ioctlprint(1): Add ioctl descriptive printer. [kamil 20200402]
-	dhcpcd(8): Import version 9.0.0 [roy 20200402]
-	binutils: Updated to FSF binutils 2.34. [christos 20200404]
-	mount_smbfs(8): Removed from the tree [jdolecek 20200404]
-	nsmb(4): Removed from the tree [jdolecek 20200404]
-	xen: remove legacy rx-flip support from xennet(4) and xvif(4)
-		[jdolecek 20200405]
-	OpenSSL: Imported 1.1.1f. [christos 20200405]
-	xennet(4): Make the driver MP-safe [jdolecek 20200406]
-	aarch64: Add support for Pointer Authentication (PAC).
-		[maxv 20200412]
-	aarch64: Add support for Branch Target Identification (BTI).
-		[maxv 20200413]
-	umass(4): Removed obsolete ISD-ATA support [jdolecek 20200413]
-	dhcpcd(8): Import version 9.0.1 [roy 20200413]
-	xbd(4): Make the driver MP-safe [jdolecek 20200413]
-	xbd(4): Support regular 64KB MAXPHYS [jdolecek 20200415]
-	xbd(4): Support indirect segments [jdolecek 20200416]
-	dhcpcd(8): Import version 9.0.2 [roy 20200421]
-	xbdback(4): Support indirect segments [jdolecek 20200421]
-	xbdback(4): Make the driver MP-safe [jdolecek 20200423]
-	OpenSSL: Imported 1.1.1g. [christos 20200424]
-	tzdata updated to 2020a  [kre 20200425]
-	amd64, i386: Added support for Xen PV drivers under HVM guests.
-		[bouyer 20200425]
-	kernel: Overhauled entropy subsystem [riastradh 20200430]
-	xen: Added support for Xen PVH. [bouyer 20200502]
-	hp300: Add bitmap access ops support for EVRX framebuffer on
-		HP9000/425e. [tsutsui 20200504]
-	xennet(4): add support for feature-sg & jumbo frames [jdolecek 20200430]
-	xvif(4): add support for feature-sg & jumbo frames [jdolecek 20200503]
-	kernel: Added support for swap encryption with sysctl -w
-		vm.swap_encrypt=1 [riastradh 20200509]
-	xen: Support MSI for XenPV [jdolecek 20200504]
-	hppa: Enable modules in GENERIC by default.  [skrll 20200511]
-	aarch64: Added support for ARMv8.5-RNG RNDRRS CPU random number
-		generator instructions [riastradh 20200511]
-	xen: enable MULTIPROCESSOR for Xen dom0. [bouyer 20200513]
-	ptrace(2): Add PT_SET_SIGPASS and PT_GET_SIGPASS. [kamil 20200514]
-	evbarm: Added support for EFI RNG firwmare random number generator
-		[riastradh 20200514]
-	ACL: Add FFS support for ACLS via extended attributes, from FreeBSD.
-		[christos 20200516]
-	evbarm: Added support for Rockchip RK3399 crypto random number
-		generator device [riastradh 20200517]
-	libuv: Import version 1.38.0. [christos 20200524]
-	bind: Import version 9.16.3. [christos 20200524]
-	tzcode: Updated to 2020a. [christos 20200525]
-	ntp: Import ntp 4.2.8p14. [christos 20200525]
-	acpi(4): Updated ACPICA to 20200430. [christos 20200525]
-	postfix(1): Import version 3.5.2. [christos 20200525]
-	OpenSSH: Import 8.3. [christos 20200528]
-	evbarm: Add install media for earmv7hf and aarch64. [jmcneill 20200528]
-	dhcpcd: Import version 9.1.1 [roy 20200604]
-	inet6: in-kernel Router Advertisment handling removed. [roy 20200612]
-	file(1): Upgraded to 5.39. [christos 20200614]
-	blocklist: import current version [christos 20200614]
-	dhcpcd: Import version 9.1.2 [roy 20200615]
-	evbarm: Add support for loading modules with the bootloader.
-		[jmcneill 20200221]
-	evbarm: Added boot.cfg support to efiboot [jmcneill 20200211]
-	kernel: Remove all variable-time AES and replace it by constant-time
-		aes_ct from BearSSL or a CPU-dependent implementation,
-		selected at boot time according to CPU capabilities.
-		[riastradh 20200629]
-	amd64: Add support for AES-NI in kernel. [riastradh 20200629]
-	x86: Add support for bitsliced AES with SSE2 in kernel.
-		[riastradh 20200629]
-	x86: Add support for permutation-based AES (vpaes) with SSSE3 in
-		kernel. [riastradh 20200629]
-	x86: Add support for VIA ACE AES in kernel (not just via opencrypto).
-		[riastradh 20200629]
-	arm: Add support for ARMv8.0-AES in kernel. [riastradh 20200629]
-	arm: Add support for permutation-based AES (vpaes) with ARM NEON in
-		kernel. [riastradh 20200629]
-	cgd(4): Add support for Adiantum cipher, providing much better software
-		performance than AES-CBC or AES-XTS. [riastradh 20200629]
-	dhcpcd: Import version 9.1.4 [roy 20200703]
-	x86: Xen kernels now use the same kernel modules as native kernels.
-		[chs 20200704]
-	wskbd(4): Added keyboard layouts for Brazilian Portugese,
-		Canadian French, Estonian, Icelandic, and Latin American
-		Spanish to pckbd(4) and ukbd(4). [nia 20200713]
-	bnx(4): Enable support for MSI/MSI-X [jdolecek 20200714]
-	ciss(4): Add support for PERFORMANT mode, and enable MSI/MSI-X
-		for adapters supporting it [jdolecek 20200714]
-	ciss(4): Match new HP Smart Array adapters [jdolecek 20200714]
-	x86: Introduce per-cpu IDTs [yamaguchi 20200714]
-	evbmips: Renamed kernel config files:
-		ERLITE         -> OCTEON
-		INSTALL_ERLITE -> INSTALL_OCTEON
-		[simonb 20200715]
-	libc: Added ppoll() wrapper around native pollts(2) [kamil 20200717]
-	openresolv: Import version 3.11.0 [roy 20200722]
-	sun3: Add Xorg-Server-1.20'fied ancient monolithc Xsun servers.
-		[tsutsui 20200722]
-	wwanc(4): Add driver for Intel XMM7360 LTE modem [jdolecek 20200726]
-	xen: MSI enabled by default [jdolecek 20200728]
-	kernel: remove the BRIDGE_IPF option, build its code by default
-		unconditionally. [maxv 20200801]
-	aarch64: Add support for Privileged Access Never (PAN).
-		[maxv 20200802]
-	acpi(4): Updated ACPICA to 20200717. [christos 20200802]
-	bind: Import version 9.16.5. [christos 20200803]
-	dhcp: Import version 4.4.2. [christos 20200803]
-	openldap: Import 2.4.50. [christos 20200811]
-	kernel: Add getrandom system call. [riastradh 20200813]
-	kernel: Disable COMPAT_LINUX by default [jdolecek 20200816]
-	mips: Port crash(8) to mips.  [mrg 20200816]
-	wg(4): Add implementation of WireGuard protocol. [ozaki-r 20200820]
-	gcc(1): Import GCC 9.3. [mrg 20200904]
-	dhcpcd: Update to version 9.2.0. [roy 20200906]
-	iavf(4): Add driver for Intel Ethernet Adaptive Virtual Function
-		[yamaguchi 20200908]
-	gcc(1): Install TSan for 64bit CPUs. [kamil 20200913]
-	network: IPv6 Neighor Detection is now address agnostic
-		and is used by ARP. RFC 7048 is included. [roy 20200916]
-	alpha: Fixed several stability problems with MULTIPROCESSOR
-		enabled.  Improved performance of TLB operations in
-		pmap module.  Implemented fast-soft-interrupts.  Enabled
-		MULTIPROCESSOR in GENERIC.  [thorpej 20200918]
-	ld.so(1): Upgrade r_debug to the protocol version 1. [kamil 20200921]
-	vether(4): Imported from OpenBSD. [roy 20200927]
-	dhcpcd: Update to version 9.3.0 [roy 20201005]
-	tzdata updated to 2020b  [kre 20201008]
-	tzcode: Updated to 2020b. [christos 20201009]
-	dhcpcd: Update to version 9.3.1 [roy 20201012]
-	tzdata updated to 2020c  [kre 20201017]
-	tzcode: Updated to 2020c. [christos 20201017]
-	ossaudio(3): Added support for the OSSv4 Mixer API [nia 20201017]
-	tzdata updated to 2020d  [kre 20201022]
-	pcf8574(4): Add a driver for the PCF8574 I/O expander [jdc 20201029]
-	dhcpcd: Update to version 9.3.2 [roy 20201101]
-	tmux(1): Imported 3.1c. [christos 20201101]
-	kernel: Better default for kern.maxfiles for systems with
-		larger RAM [simonb 20201112]
-	acpi(4): Updated ACPICA to 20201113. [christos 20201127]
-	dhcpcd: Update to version 9.3.4 [roy 20201128]
-	arm: Switch earmv6{,hf}eb to BE8. [rin 20201201]
-	evbarm: Support Raspberry Pi 0-3 in big-endian mode. All devices
-		except for vchiq(4) and vcaudio(4) are supported. Pi 3 is
-		capable to run both in aarch64eb and earmv7{,hf}eb modes.
-		[rin 20201201]
-	pkg_install: Updated to 20201202. This changes the default database
-		location from /var/db/pkg to /usr/pkg/pkgdb. [wiz 20201202]
-	libfido2: Update to 1.5.0 for OpenSSH 8.4 support [christos 20201204]
-	OpenSSH: Import 8.4. [christos 20201204]
-	pkg_install: Updated to 20201205. [wiz 20201205]
-	acpicpu(4): Add support for Arm CPUs. [jmcneill 20201207]
-	OpenSSL: Imported 1.1.1i. [christos 20201209]
-	pkg_install: Updated to 20201212. [wiz 20201212]
-	evbarm: Support "boot -d" for early DDB access. [mrg 20201219]
-	sparc64: Add environment monitoring for the E250 [jdc 20201223]
-	sti(4), hp300: Add bitmap access ops support for SGC CRX (A1659-66001)
-		framebuffer for HP9000/425t. [tsutsui 20201223]
-	openresolv: Update to version 3.12.0 [roy 20201227]
-	nvmm: implement support for trapping REP CMPS [reinoud 20201227]
-	resize: Import Xterm's resize(1) for querying (x)terminal sizes in
-		base for headless clients [reinoud 20201227]
-	dhcpcd: Update to version 9.4.0 [roy 20201228]
-	tzdata updated to 2020f (includes update to 2020e)  [kre 20201231] 
-	evbarm: Add support for Amlogic G12 family SoCs. [ryo 20210101]
-	pppd(8): updated to version 2.4.9. [christos 20210109]
-	tzdata updated to 2021a [kre 20210124] 
-	evbmips: Add support for QEMU "mipssim" emulator. [simonb 20210127]
-	x68k: Add Emulate3Buttons support to X68k Xorg based monolithic server.
-		[tsutsui 20210207]
-	bind: Import version 9.16.12. [christos 20210219]
-	OpenSSL: Imported 1.1.1j. [christos 20210219]
-	byacc: Update to 20210109. [christos 20210220]
-	regex(3): Add NLS support and gnu regex extensions (off by default).
-		[christos 20210223]
-	wpa: Import wpa_supplicant and hostapd 2.9. [christos 20210228]
-	tzcode: Updated to 2021a. [christos 20210228]
-	OpenSSH: Import 8.5. [christos 20210304]
-	nsd: Import 4.3.5. [christos 20210315]
-	unbound(8): Import 1.13.1. [christos 20210315]
-	OpenSSL: Imported 1.1.1k. [christos 20210325]
-	evbppc: Add support for DHT Walnut 405GP evaluation board.
-		[rin 20210402]
-	acpi(4): Updated ACPICA to 20210331. [christos 20210403]
-	event(3): Import libevent 2.1.12 [christos 20210406]
-	services(5), protocols(5): Pull iana-generated services and protocols.
-		[christos 20210408]
-	file(1): Upgraded to 5.40. [christos 20210409]
-	pkg_install: Updated to 20210410. This simplifes version checking for
-		NetBSD. [nia 20210410]
-	gcc(1): Import GCC 10.3.  [mrg 20210410]
-	alpha: Switch to GCC 10.  [mrg 20210416]
-	amd64: Switch to GCC 10.  [mrg 20210416]
-	ia64: Switch to GCC 10.  [mrg 20210416]
-	riscv: Switch to GCC 10.  [mrg 20210416]
-	sparc: Switch to GCC 10.  [mrg 20210416]
-	sparc64: Switch to GCC 10.  [mrg 20210416]
-	vax: Switch to GCC 10.  [mrg 20210416]
-	tmux(1): Imported 3.2. [christos 20210417]
-	hppa: Switch to GCC 10.  [skrll 20210418]
-	OpenSSH: Import 8.6. [christos 20210419]
-	powerpc: Switch to GCC 10.  [mrg 20210425]
-	aarch64: Switch to GCC 10.  [mrg 20210425]
-	bind: Import version 9.16.15. [christos 20210429]
-	resolver: The default has been changed to check-names
-		(see resolv.conf(5)), which means that hostnames that
-		contain invalid characters will not resolve. [christos 20210430]
-	evbarm: Add support for Allwinner V3s SoCs. [jmcneill 20210505]
-	aiomixer(1): Added aiomixer, a curses-based mixer for NetBSD's
-		audio API. [nia 20210507]
-	wskbd(4): Added German Neo 2 layout. [nia 20210511]
-	spiflash(4): Add support for Rockchip RK3328. [mrg 20210514]
-	lagg(4): Added a link-aggregation interface. [yamaguchi 20210517]
-	raid(4): Add support for swapped-endian autoconfiguration.
-		[mrg 20210525]
-	dhcp: Import version 4.4.2-P1. [christos 20210526]
-	libsa: Add support for other-endian FFS volumes. [mrg 20210526]
-	efiboot: Add support for other-endian FFS and booting from RAIDframe
-		volumes. [mrg 20210526]
-	mips: Switch to GCC 10. [mrg 20210526]
-	i386: Switch to GCC 10. [mrg 20210526]
-	arm: Remove support for building the old ABI (oabi). [christos 20210607]
-	libfido2: Import 1.7.0 [christos 20210616]
-	m68k: Switch to GCC 10. [mrg 20210619]
-	arm: Switch to GCC 10. [mrg 20210619]
-	uscanner(4): Removed from the tree. [nia 20210629]
-	acpi(4): Updated ACPICA to 20210604. [christos 20210706]
-	hp300: Add support of multiple rd(4) disks on all punits for HPDisk.
-		[tsutsui 20210709]
-	GMP: Import 6.2.1 [mrg 20210711]
-	kernel: Tie the maximum file lock per unprivilegied uid to 
-		kern.maxfiles [manu 20210727]
-	evbppc: Switch ibm4xx to generic evbppc kernel modules. [rin 20210803]
-	evbarm: Add support for Arm PCI Configuration Space Access Firmware
-		Interface (DEN0115). [jmcneill 20210808]
-	evbarm: Add support for Broadcom BCM2838 EMMC2 in ACPI mode, as found
-		on the Raspberry Pi 4. [jmcneill 20210808]
-	evbarm: Add support for shared ACPI platform interrupts.
-		[jmcneill 20210808]
-	evbarm: Improvements in interrupt handling on Arm GIC v2 and v3 systems
-		resulting in better network and storage performance.
-		[jmcneill 20210810]
-	kernel profiling: Improved performance of kernel profiling with
-		MULTIPROCESSOR. [ryo 20210814]
-	kgmon(8): added -c option to get profile information for each cpu.
-		[ryo 20210814]
-	openldap: Import 2.5.6. [christos 20210814]
-	sh3: Switch to GCC 10. [mrg 20210816]
-	bind: Import version 9.16.20. [christos 20210819]
-	evbarm: Support marvell-based machines in big-endian mode. Currently,
-		only KUROBOX_PRO has been tested. [rin 20210830]
-	evbarm: Add support for Apple M1. [jmcneill 20210830]
+Changes from NetBSD 10.0 to NetBSD 11.0:
+	amdsmn(4): added trivial power management support [reinoud 20221218]
+	amdccp(4): added trivial power management support [reinoud 20221218]
+	ppp(4): Remove several non-functioning ioctls. [chs 20221221]
+	dse(4): Added Dayna SCSI/Link ethernet driver. [nat 20221222]
+	binutils: Updated to FSF binutils 2.39. [christos 20221224]
+	cribbage(6): Add -y option to keep playing without asking
+		(from Greywolf in PR 57164) [christos 20230106]
+	x86: Enable the -z separate-code security feature by default in
+		ld(1). Reduces the default max page size from 2M to
+		4K on amd64. [christos 20230106]
+	bind: Import version 9.16.37. [christos 20230125]
+	xfwp(1): remove. [wiz 20230204]
+	wscons(4): Ignore nonsense tab stops in vt100 emulation.
+		[riastradh 20230223]
+	nvmm(4): Filter CR4 bits on x86 SVM (AMD). In particular,
+		prohibit PKE, Protection Key Enable, which requires
+		some additional management of CPU state by nvmm. 
+		[riastradh 20230223]
+	aarch64: Audit use of curcpu(9). [riastradh 20230225]
+	xen: Memory barrier audit. Reduce unnecessary membars.
+		[riastradh 20230225]
+	x86: Mitigate MXCSR Configuration Dependent Timing CPU security
+		flaw in kernel FPU use. [riastradh 20230225]
+	kernel: Optimization: Omit needless membar when triggering softint
+		in various ports. [riastradh 20230301]
+	sh(1): Adjust tilde expansion to comply with upcoming POSIX
+		Issue 8 requirements. [kre 20230306]
+	libm: Add more long double transcendental functions (as aliases of
+		double functions) from C99. [riastradh 20230313]
+	xen: Allow a PVH dom0 to use VGA as console. [bouyer 20230324]
+	vioscsi(4), viornd(4), viomb(4): Mark VirtIO drivers as MPSAFE.
+		[mlelstv 20230325]
+	amiga: Fix bootblocks for Kickstart 3.2. [abs 20230325]
+	libc: Add __atomic_is_lock_free to help stdatomic.h usage with
+		GCC. [riastradh 20230330]
+	uaudio(4): Initial support for USB Audio Class 2.0 devices.
+		[mlelstv 20230402]
+	vacation(1): Check 'Auto-Submitted:' header in addition to
+		'Precedence:', and set 'Precedence:' in addition to
+		'Auto-Submitted:'.  [hauke 20230411]
+	ichsmb(4), tco(4): Add support for TCO on newer Intel chipsets.
+		[riastradh 20230412]
+	audiorecord(1): Add support for recording 24-bit wav files.
+		[mlelstv 20230415]
+	evbarm: Install a boot.cfg file for the EFI bootloader by default.
+		[brook 20230419]
+	dhcpcd: Import version 10.0.1. [roy 20230421]
+	evbarm: Enable rkv1crypto driver on Rock64. [mrg 20230424]
+	worms(6): Add a little bit of optional colour, code and
+		ideas from RVP. [kre 20230426]
+	amiga: Add driver for the MNT ZZ9000 Zorro board - submitted by
+		Alain Runa. [phx 20230503]
+	evbarm: Experimental IMX6SX support - tested on the UDOO Neo Full board.
+		[bouyer 20230504]
+	chown(8): Add a -d flag to avoid changing a file's owner/group to the
+		current value.  This avoids some unnecessary operations on the
+		file. [pgoyette 20230504]
+	riscv: Add RISC-V support that works on QEMU with a single hart.
+		[skrll 20230507]
+	riscv: Add Google Goldfish RTC driver. [skrll 20230508]
+	make(1): Make :mtime operate on each word in variable
+		value. [sjg 20230510]
+	worms(6): When using -H, make the appearance of the worm head
+		depend upon the body (more than it did before). [kre 20230512]
+	amiga: Update loadbsd source and distribution binary to version 3.3.
+		[phx 20230514]
+	i386: Add /dev/efi device. [riastradh 20230522]
+	efi(4): Add EFIIOC_GET_TABLE ioctl support on x86. [riastradh 20230522]
+	ctfmerge(1): Add error handling to pthread APIs.
+		Fix semaphores for macOS host tool.  [lukem 20230523]
+	share/mk: Deprecate non-functional SHAREDSTRINGS. [lukem 20230524]
+	mkstr(1), xstr(1): Obsolete unused PDP-11-era tools. [lukem 20230524]
+	pthread(3): Reduce power consumption when spinning for a lock on
+		arm. [riastradh 20230525]
+	pax(1): Exit 0 if stdin filelist is used and no files are supplied.
+		Don't overwrite existing destination files if -r -w copy
+		fails for any reason. [lukem 20230528]
+	date(1): Add -R option for displaying time in RFC 5322 format,
+		similar to GNU date. [kim 20230531]
+	mk.conf(5): Obsolete non-MK variants MANZ UNPRIVED UPDATE
+		[lukem 20230602]
+	build.sh: Add show-params operation [lukem 20230602]
+	kerberos(8): Update to Heimdal-7.8.0 [christos 20230619]
+	patch(1): Add --backup-if-mismatch and --no-backup-if-mismatch for
+		GNU patch compatibility. These options only make sense in
+		POSIX mode, patch(1) has --backup enabled by default and
+		GNU patch doesn't. [wiz 20230616]
+	indent(1): Remove support for handling ASCII backspace characters
+		in C code. [rillig 20230618]
+	make(1): Recognize include guards. [rillig 20230619]
+	editline(3): Install pkg-config files, same as the portable version.
+		[wiz 20230620]
+	make(1): Speed up pattern matching in the ':M' and ':N' modifiers.
+		[rillig 20230622]
+	paxctl(8): Introduce -0 option to clear all PaX flag bits in ELF note.
+		[rin 20230623]
+	crunchgen(1): Clear PaX flags instead of removing its ELF note section.
+		[rin 20230623]
+	make(1): Warn about malformed patterns in ':M', ':N' and
+		'.if make(...)'  [rillig 20230623]
+	bind: Import version 9.16.42. [christos 20230626]
+	openresolv: Import version 3.13.2 [roy 20230627]
+	tmux(1): Import version 3.3a [wiz 20230628]
+	x86: Primary bootstrap is now enable to read a GPT
+		partition table inside a software raid(4).
+		[manu 20230629]
+	aiomixer(1): Support for the NO_COLOR environment variable.
+		[nia 20230629]
+	openpam(3): update to 20230627 (ximenia) [christos 20230630]
+	entropy(9): Reintroduce netbsd<=9 time-delta estimator for unblocking.
+		[riastradh 20230630]
+	mdnsd(8): Restore NetBSD logging additions lost in merges.
+		[gutteridge 20230630]
+	tetris(6): Support the informal standard of allowing setting NO_COLOR
+		in the environment to disable the use of color. [nia 20230701]
+	lint(1): Initial support for C23. [rillig 20230702]
+	heartbeat(9): New mechanism to check progress of kernel.  This uses
+		hard interrupts to check progress of low-priority soft
+		interrupts, and one CPU to check progress of another CPU.
+		[riastradh 20230707].
+	crashme(9): New crash methods with raised ipl or kpreempt disabled.
+		[riastradh 20230707].
+	versioningsyscalls(9): Document how system call versioning is done.
+		From this summer's compat-linux GSoC, by Theodore Preduta.
+		[christos 20230708].
+	clock_gettime(2): Take greater care to ensure
+		CLOCK_PROCESS/THREAD_CPUTIME_ID do not go backwards.
+		[riastradh 20230708].
+	riscv: Add FDT-based initrd, rndseed, and efirng support.
+		[rin 20230710]
+	kern: Add memfd_create(2) system call from GSoC 2023 by
+		Theodore Preduta.  [christos 20230710]
+	refuse(3): Allow programs using the 3.5, 3.6, and 3.7 FUSE APIs
+		to function at runtime. [pho 20230714]
+	pckbd(4): Work around buggy Chromebook PS/2 keyboard firmware.
+		(from Vladimir 'phcoder' Serbinenko). [christos 20230716]
+	acpiec(4): New ACPIEC_DEBUG option. [riastradh 20230718]
+	dhcpcd: Import version 10.0.2. [roy 20230719]
+	bta2dpd(8): Add throttle when playing from file. [nat 20230720]
+	xen: Enable MKCTF=yes by default. [riastradh 20230721]
+	x86: Turn off Zenbleed chicken bit on Zen2 CPUs. [mrg 20230725]
+	evbmips: Allow ramdisk to handle GPT wedges. [gutteridge 20230725]
+	xbd(4): Properly handle 4k sector size backends. [bouyer 20230725]
+	iostat(8): Add -X option, limited alternative statistics.
+		This is like the "-D" option, except it skips the xfers/s, and
+		reports MB/s instead of KB/s.  Allows for ~50% more devices to
+		be displayed per line by default.  [mrg 20230728]
+	compat_linux(8): Add epoll system calls implemented around kqueue(2),
+		contributed by Theodore Preduta as part of GSoC 2023.
+		[christos 20230728]
+	compat_linux(8): Add/fix statx, readahead, close_range. From GSoC 2023
+		by Theodore Preduta. [christos 20230729]
+	libc: Add wmempcpy(3).  [christos 20230731]
+	libc: Add companion mempcpy(3) to wmempcpy(3).
+		[christos 20230801]
+	all: Fix many small bugs found by GCC 12. [mrg 20230810]
+	gdb(1): Updated to 13.2. [christos 20230811]
+	vis(3): Fixed many implementation issues, expand tests.
+		[riastradh 20230812]
+	libpcap: Import 1.10.4. [christos 20230817]
+	tcpdump(8): Import 4.99.4. [christos 20230817]
+	file(1): Upgraded to 5.45. [christos 20230818]
+	make(1): Show more detail in "invalid line" error messages.
+		[rillig 20230819]
+	compat_linux(8): Add support for Linux waitid syscall.
+		 Contributed by Theodore Preduta. [christos 20230818]
+	compat_linux(8): Add support for Linux inotify syscalls,
+		implemented around kqueue(2). Contributed by
+		Theodore Preduta. [christos 20230819]
+	acpi(4): Updated ACPICA to 20230628. [christos 20230901] 
+	sqlite3(1): Import 3.34.0. [christos 20230904]
+	namecache: Tune the namecache for 32-bit systems [ad 20230909]
+	mips: Add initial support for n64 userland to gprof(1).
+		[rin 20230914]
+	tzcode: Updated to 2023c. [christos 20230916]
+	raidctl(8): Implement command-line configuration of simple RAID sets.
+		[oster 20230921]
+	rc.conf(5): Add support for npf_rules to override the default
+		rules file for npf(7). [abs 20231005]
+	less: Updated to version 643.  [simonb 20231006]
+	ddb(4): Add some simple show commands: condvar, selinfo, sleepq
+		[ad 20231007]
+	mips: Add fma(3) to libm. [he 20231008]
+	heimdal: Disable sqlite3 credential cache (SCC), remove sqlite3
+		dependency. [riastradh 20231011]
+	pipe(2): Improve performance, reduce lock contention. [ad 20231013]
+	vax: Reduce the object size of the malloc(3) code by converting
+		to rbtree, also improve performance and locking.
+		[ad 20231013]
+	uhid(4): Improve hid matching to allow better recognition of
+		collections. [nat 20231017]
+	xen: Support genfb(4) as a console device for dom0, necessary for
+		graphical console on EFI-only hardware. [bouyer 20231017]
+	lagg(4): Copy the MTU of lagg to interfaces added to lagg
+		[yamaguchi 20231018]
+	dhcpcd: Import version 10.0.4. [roy 20231019]
+	gpioirq(4): allow multiple pins per gpioirq instance, add the ability
+		to use a /dev/gpioirqN device to get pin interrupts into
+		userland. [brad 20231105]
+	gpiosim(4): Simulated interrupts [brad 20231108]
+	sparc64: Support for virtio(4). [thorpej 20231119]
+	alpha: Support for virtio(4). [thorpej 20231119]
+	alpha: Support for crash(8). [thorpej 20231122]
+	kernel: Replace the vdrain kernel thread with two threadpool jobs.
+		[hannken 20231127]
+	kernel: Replace various usage of extent(9) with vmem(9).
+		[thorpej 20231201]
+	indent(1): Use line number of the token start in diagnostics
+		[rillig 20231203]
+	vmem(9): Add the notion of "private boundary tags", allowing vmem
+		to be used VERY early in boot. [thorpej 20231203]
+	kernel: Modularize compat90. [pgoyette 20231209]
+	libsa: Add NFSv3 support. [mlelstv 20231212]
+	dhcpcd: Import version 10.0.6. [roy 20231218]
+	tzcode: Updated to 2023d. [christos 20231223]
+	gfpic(4): New driver for the Goldfish virtual programmable
+		interrupt controller. [thorpej 20240102]
+	gftty(4): New driver for the Goldfish virtual tty. [thorpej 20240102]
+	virt68k: Add new port for virtual Motorola 68040 machines in
+		QEMU using VirtIO devices. [thorpej 20240102]
+	urtwn(4): Add Mercusys NW150US V2 USB support. [maya 20240106]
+	riscv: Add a SiFive FU[57]40/ L2 Cache controller driver.
+		[skrll 20240113]
+	cp(1): Always copy regular files, even if they appear to be zero-sized.
+		[christos 20240115]
+	riscv: Add a StarTech JH7100 SoC clock driver, seen in the Beagle-V
+		board. [skrll 20240116]
+	cpuctl(8): Recognize Intel Meteor Lake and Emerald Rapids.
+		[msaitoh 20240118]
+	m68k: Made many ports share common code for interrupt dispatch
+		and vector tables. [thorpej 20240118]
+	libm: Import more long double functions from FreeBSD.
+		[christos 20240121]
+	terminfo: Import 20231209 [christos 20240127]
+	evbppc: Add support for the PAL 576i video mode to wiifb(4).
+		[hgutch 20240127]
+	stat(1): Add symbolic flags printing from FreeBSD via Ricardo Branco.
+		[christos 20240129]
+	next68k: Add WSDISPLAY_GINFO, LINEBYTES, and SMODE ioctl(2)s and
+		mmap(2) support to nextdisplay(4). [tsutsui 20240202]
+	mount_cd9660(8): Add support for mount options mask,dirmask,uid,gid
+		(from Ricardo Branco) [christos 20240202]
+	tzdata: Updated to 2024a (using 2024agtz) [kre 20240205]
+	riscv: Add a driver for the StarFive JH7100 pin controller.
+		[skrll 20240207]
+	touch(1): Properly implement the POSIX format -d option. [kre 20240208]
+	touch(1): Add -R option, which is identical to -r, except that if the
+		reference file is a symbolic link, the times to use are taken
+		from those of the symbolic link itself. [kre 20240209]
+	touch(1): Add -D option, which causes the operation to be a no-op if no
+		change would be made (avoiding updating the file's ctime).
+		[kre 20240210]
+	hppa: Add gftfb(4), an initial driver for PCI Visualize EG cards.
+		[macallan 20240213]
+	bind: Apply bind security patches: CVE-2023-4408 CVE-2023-5517
+		CVE-2023-5679 CVE-2023-6516 CVE-2023-50387 CVE-2023-50868
+		[christos 20240213]
+	tzcode: Updated to 2024a. [christos 20240217]
+	nsd: Import 4.8.0. [christos 20240217]
+	unbound(8): Import 1.19.1. [christos 20240217]
+	bind: Import 9.18.24 [christos 20240221]
+	re(4): Add support for Killer E2600 Ethernet. [jakllsch 20240228]
+	sqlite3(1): Import 3.45.1. [christos 20240301]
+	alpha: Add initial support for the DEC KN7AA ("Ruby") systems,
+		DEC 7000 and DEC 10000. [thorpej 20240302]
+	elftoolchain: Import svn r4037. [christos 20240303]
+	certctl(8): Improve the performance of `certctl list`.
+		[riastradh 20240303]
+	audioplay(1): Add -n flag that doesn't write audio data for the
+		test suite. [mrg 20240304]
+	alpha: Add a bus space implementation for the Gbus, the general
+		8-bit bus present on Laser / TurboLaser CPU modules.
+		[thorpej 20240306]
+	lint(1): Detect more types of integer overflow. [rillig 20240310]
+	lint(1): Add extra details to the message about integer overflow.
+		[rillig 20240310]
+	mac68k: Add ascaudio(4) ASC audio driver. [nat 20240313]
+	x86: Include the cgdroot.fs and zfsroot.fs ramdisks in the release
+		files. [riastradh 20240320]
+	apei(4): New driver for ACPI Platform Error Interfaces.
+		[riastradh 20240320]
+	vmt(4):  Process all queued messages without delay immediately.
+		From OpenBSD. [msaitoh 20240320]
+	acpihed(4): New driver for PNP0C33 to notify apei(4).
+		[riastradh 20240321]
+	echi(4): If device attach fails, install NULL pmf(4) handlers.
+		Allows suspend/resume on ThinkPad A475. [mrg 20240324]
+	uftdi(4): Add a "match quirk" mechanism that allows the driver to
+		selectively reject individual interfaces, allowing them to
+		be matched by ugen(4) and accessed through libusb.
+		[thorpej 20240326]
+	moused(8): Remove undocumented and unused option 'C'.
+		[rillig 20240329]
+	ugen(4): Add a "ugen-unit" device property which devpubd(8) scripts
+		can query to determine which /dev/ugenN.xx nodes a given ugen
+		or ugenif device is using.  [thorpej 20240329]
+	libc: Limit writes to stdio FILE handles via fvwrite to INT_MAX
+		rather than BUFSIZE. Improves performance dramatically.
+		From enh via Apple libc.  [christos 20240329]
+	evbarm: Add interrupt support to the Texas Instruments gpio(4) driver
+		used on the Beaglebone Black.  [jakllsch 20240401]
+	dk(4): Add support for discovering Atari TOS partitions as wedges.
+		[charlotte 20240402]
+	rumpuser(3): New RUMP_STDOUT, RUMP_STDERR environment variables.
+		[riastradh 20240404]
+	config(1): Improve determinism for reproducible builds.
+		[riastradh 20240405]
+	qemufwcfg(4): Add RISC-V support.  [skrll 20240406]
+	vax: Switch vax to X.Org server version 120.  [tsutsui 20240407]
+	evbmips: Following evbarm, document kernel configurations in
+		sys/arch/evbmips/conf/README.evbmips. [andvar 20240407]
+	sysinst(8): Split compatibility libraries into separate sets,
+		base32 and debug32. Split HTML man pages into new manhtml
+		set.  [nia 20240410]
+	amd64: Support EFI as well as BIOS boot in the "live" USB image.
+		This is not the regular installation image, which already
+		supports EFI.  [maya 20240413]
+	uftdi(4): Add support for a range of "Brainboxes" USB serial
+		adapters, from Cameron Williams.  [maya 20240417]
+	x86: Enable ACPI Platform Error Interface support in the GENERIC
+		kernels.  [riastradh 20240421]
+	mips64el, mips64eb: Create "base64" and "debug64" sets that contain
+		the N64 libraries.  [nia 20240422]
+	x86, sparc64: Create "DVD" ISOs that contain all the sets excluded
+		from the normal ISOs for size reasons - also useful on
+		virtual machines.  [nia 20240424]
+	i386: Remove kernel modules, redundant kernels, and amdgpu firmware
+		from the CD-ROM image to help it fit on a CD-ROM
+		once more.  [nia 20240426]
+	httpd(8): Make directory listings mobile-friendly, from D. Bohdan.
+		[maya 20240426]
+	thinkpad(4): Expose a sysctl interface to control some aspects of
+		charging behavior on supported systems, from Malte Dehling.
+		[christos 20240427]
+	i386: Rewrite viac7temp(4) temperature sensor to use MSR, which works
+		on far more CPUs.  [andvar 20240430]
+	hp300: Fix a wrong palette color setting problems on HP98543 4 bpp
+		topcat(4) framebuffer on HP360. [tsutsui 20240501]
+	lint(1): Support _Alignas and attribute aligned.  [rillig 20240501].
+	hp300: Fix "garbage pixels" problems on scrolling ops etc. on
+		HP98543 and HP98547 topcat(4) color framebuffers.
+		[tsutsui 20240501]
+	hp300: Treat HP98542 and HP98543 1024x400 framebuffers as
+		"pseudo doubled" 512x400 bitmap pixels as HP-UX did, because
+		even modern LCDs cannot handle such 1024x400 resolutions
+		properly. [tsutsui 20240501]
+	evbarm: Add device tree for Red Pitaya SDRlab 122-16.
+		[dyoung 20240504]
+	libm: Add an assembly implementation of rintl(3) for x86.
+		[riastradh 20240505]
+	libm: Expose more long double functions on vax.
+		[riastradh 20240506]
+	libm: Expand tests for modf/modff/modfl, nextafter/nexttoward,
+		nearbyint/nearbyintl/rint.  [riastradh 20240506]
+	mk: Use --compress-debug-sections when creating debug files
+		to reduce the size of the installed debug set.
+		[mrg 20240506]
+	makefs(8): Add an option to warn and error out for mtree missing
+		entries.  [christos 20240508]
+	lint(1): Support new keywords in C23 mode, including nullptr.
+		[rillig 20240509]
+	install(1): Support -v (verbose). [wiz 20240510]
+	acpivga(4): Add quirk for machines where the getting the screen
+		brightness always returns the same result.  [maya 20240510]
+	compat_netbsd32(8): Support SIOCGIFDATA and SIOCZIFDATA ioctls on
+		network interfaces.  [martin 20240511]
+	libm: Expand tests for hypotl(3).  [riastradh 20240511]
+	sparc: Add support for 16-bit (RGB565) colour mode in
+		the cgfourteen(4) framebuffer driver.
+		[macallan 20240512]
+	ure(4): Support TP-Link UE300 USB LAN adapter (from RVP).
+		[christos 20240512]
+	procfs: Add support for proc/self/limits as used by Linux.
+		(from Ricardo Branco).  [christos 20240512]
+	procfs: Add support for proc/sysvipc in Linux emulator
+		(from Ricardo Branco).  [christos 20240512]
+	cgdconfig(8): Add zfs verification method (from Malte Dehling)
+		[christos 20240512]
+	curses(3): Constify argument of define_key(3) for compatibility
+		with ncurses.  [uwe 20240514]
+	eap(4): Support monoraual sound at the hardware level and
+		a range of hardware frequencies, as in NetBSD 7
+		and earlier.  [nia 20240517]
+	curses(3): Constify arguments of newterm(3), setterm(3)
+		functions.  [uwe 20240517]
+	hp300: Installation CD ISO image is now bootable. [tsutsui 20240519]
+	tic(1): Honour the user's umask (from RVP).  [christos 20240520]
+	dhcpcd: Import version 10.0.8. [roy 20240524]
+	mkhybrid: Import mkhybrid from OpenBSD 7.3 as a tool to create
+		ISO9660/HFS hybrid ISO images for mac68k and macppc.
+		[tsutsui 20240531]
+	pthread(3): Fix memory leak in pthread_create(). [hannken 20240608]
+	libarchive: Import libarchive-3.7.4. [christos 20240609]
+	ipfilter(4): Mark as MPSAFE.  [mrg 20240609]
+	pkg_install: Import pkg_install-20240307. [wiz 20240611]
+	OpenSSL: Imported 3.0.14. [christos 20240611]
+	sh(1): When a background job is started at the top level (ie: not
+		in any kind of subshell) of an interactive shell, print
+		the job number assigned, and the process id of the lead
+		(or only) process in the job, as required by POSIX.1-2024.
+		[kre 20240615]
+	arm: Switch to GCC 12. [mrg 20240615]
+	alpha: Switch to GCC 12. [mrg 20240615]
+	riscv: Switch to GCC 12. [mrg 20240615]
+	sparc, sparc64: Switch to GCC 12. [mrg 20240615]
+	i386, amd64: Switch to GCC 12. [mrg 20240615]
+	hppa: Switch to GCC 12. [skrll 20240615]
+	lint(1): Accept C23 [[fallthrough]] statements. [rillig 20240617]
+	alpha: Switch to X.Org Server 1.20. [mrg 20240622]
+	tmux(1): Import version 3.4 with Sixel support enabled. [wiz 20240622]
+	pci(4): Allow pci_find_device callers to pass a cookie through to
+		the match function so they can keep state or pass in extra
+		parameters.  [riastradh 20240623]
+	puc(4): Add support for a range of Brainboxes PCI serial cards,
+		from Cameron Williams.  [jakllsch 20240623]
+	OpenSSH: Import 9.6. [christos 20240625]
+	evbarm: Add support for Ampere Altra/Altra Max platforms.
+		[jmcneill 20240630]
+	evbarm: Add NUMA awareness for ACPI based systems. [jmcneill 20240630]
+	compat_linux(8): Add linux POSIX message queue support (from
+		Ricardo Branco) [christos 20240701]
+	u3g(4): add support for Sierra Wireless MC7304 devices
+		(from Reinhard Speyerer) [christos 20240704]
+	mcx(4): Match on ConnectX-6 virtual functions, from OpenBSD.
+		[msaitoh 20240707]
+	OpenSSH: Import 9.8. [christos 20240708]
+	patch(1): Handle lines of length beyond INT16_MAX.  [manu 20240712]
+	sh(1): Implement the HISTFILE and HISTAPPEND variables.  [kre 20240713]
+	mips: Switch to binutils 2.42.  [rin 20240713]
+	riscv: Switch to binutils 2.42.  [skrll 20240714]
+	aarch64: Switch to binutils 2.42.  [skrll 20240714]
+	hppa: Switch to binutils 2.42.  [skrll 20240715]
+	hppa: Add hyperfb, a driver for HCRX video cards.  [macallan 20240717]
+	libblocklist(3): Add blocklist_open2() that can pass a custom logger.
+		[christos 20240802]
+	df(1): Add -M (ignore non-mounted arguments) and
+		-q (suppresses warnings) options.  [kre 20240803]
+	printf(1): Add %C format conversion and -L option.  [kre 20240806]
+	awge(4): MP improvements [skrll 20240810]
+	mk: Add a way to build GCC without the isl library (NOGCCISL).
+		[mrg 20240810]
+	alpha: Switch to binutils 2.42.  [rin 20240813]
+	sh3: Switch to binutils 2.42.  [rin 20240813]
+	riscv: Initial support for Allwinner D1 devices, from
+		Rui-Xiang Guo.  [skrll 20240813]
+	libc: New C11 functions mbrtoc16, mbrtoc32, c16rtomb, c32rtomb.
+		[riastradh 20240815]
+	libc: New C23 functions c8rtomb(3) and mbrtoc8(3).
+		[riastradh 20240815]
+	libc: Make getentropy(3) visible to POSIX.1-2024
+		applications.  [riastradh 20240815]
+	rumphijack(3): Support flock(2) (from k-goda at IIJ)
+		[ozaki-r 20240816]
+	awk(1): Import 20240817 [christos 20240817]
+	ntp: Import ntp 4.2.8p18. [christos 20240818]
+	riscv: Add a clock driver for the JH7110 SoC found in the
+		StarFive VisionFive 2.  [skrll 20240819]
+	gpt(8): Add -U option to specify new UUID, from Anon Ymous.
+		[chirstos 20240819]
+	gpt(8): Recognize OpenBSD UUID.  [christos 20240819]
+	ifconfig(8): Show link state on -v.  [ozaki-r 20240820]
+	tests: Add tests for shmif(4).  [ozaki-r 20240820]
+	syslogd(8): Add -k option. [gutteridge 20240821]
+	gdb(1): Updated to 15.1. [christos 20240825]
+	pkg_install: Import pkg_install-20240821. [wiz 20240825]
+	pkg_install: Import pkg_install-20240826. [wiz 20240826]
+	acpivmgenid(4): New driver for virtual machine generation ID.
+		Used to re-seed random number generators on
+		virtual machine fork.  [riastradh 20240826]
+	toolchain: Switched all remaining ports to binutils-2.42.
+		[christos 20240827]
+	shmif_pcapin(1): New utility program used in tests for
+		networking to send any frames that are stored in a
+		pcap(3) file format to a shmif(4) Ethernet interface.
+		Code from k-goda at IIJ.  [ozaki-r 20240902]
+	libpcap: Import 1.10.5. [christos 20240902]
+	tcpdump(8): Import 4.99.5. [christos 20240902]
+	bridge(4): Implement interface protection, a feature similar to
+		"protected-port" or "isolation" in some router products.
+		When a frame arrives on a protected interface and is being
+		forwarded to another protected interface, the frame will be
+		discarded.  From the SEIL team at IIJ.  [ozaki-r 20240903]
+	brconfig(8): Add protect/-protect commands.  [ozaki-r 20240903]
+	libc: Hide le32enc(3), be32enc(3) in strict standards mode.
+		[riastradh 20240909]
+	libc: Define PTHREAD_STACK_MIN.  [riastradh 20240909]
+	OpenSSL: Imported 3.0.15. [christos 20240908]
+	libm: Define FP_FAST_FMA, FP_FAST_FMAF, FP_FAST_FMAL,
+		MATH_ERRNO, MATH_ERREXCEPT.  [riastradh 20240909]
+	i386: Remove XMS-specific code from dosboot.  [andvar 20240911]
+	tzcode: Updated to 2024a. [christos 20240911]
+	acpi(4): Updated ACPICA to 20240827. [christos 20240913] 
+	dkctl(8): Add new getgeometry command.  [mlelstv 20240914]
+	mac68k: Support for LCD brightness control on PB 1xx.  [nat 20240914]
+	mac68k: Support for power off on PB 1xx.  [nat 20240914]
+	mac68k: Support for the power button on PB 160/180.  [nat 20240914]
+	byacc: Update to 20240109. [christos 20240914]
+	wpa: Import wpa_supplicant and hostapd 2.11. [christos 20240918]
+	bind: Import 9.18.30 [christos 20240921]
+	evbppc: Add ohci(4) support to the Nintendo Wii port.
+		[jmcneill 20240922]
+	zlib: Import 1.3.1 [christos 20240922]
+	jemalloc(3): Import 5.3.0. [christos 20140923]
+	vether(4): allow link state to be toggled by link0. [roy 20240924]
+	OpenSSH: Import 9.9. [christos 20240924]
+	ftp(1): Add flag to allow specifying extra http header fields
+		(from Sunil Nimmagadda).  [christos 20240925]
+	vether(4): Control link state via media rather than flags.
+		This mirrors shmif(4) from rump.  [roy 20240926]
+	lint(1): Handle __attribute__((__unused__)) for functions and
+		variables.  [rillig 20240928]
+	compat_linux(8): Implement renameat2, clone3, sync_file_range, syncfs
+		system calls (from Shivraj Jamgade).  [christos 20240928]
+	udl(4): Add support for SANWA SUPPLY 500-KC002N USB to VGA Adapter.
+		[tsutsui 20241002]
+	kemtimedop(2): New system call, from Shivraj Jamgade (GSoC 2024).
+		[christos 20241003]
+	amdzentemp(4): Add support for Zen 5.  [msaitoh 20241004]
+	evbarm: Make cemac(4) MP safe.  [skrll 20241005]
+	x68k: Add SIXEL graphics sequence support.  [isaki 20241005]
+	pkill(1): Add -F option to use a pidfile and -L to ensure it's
+		locked.  Taken from FreeBSD.  [roy 20241007]
+	sh(1): Implement suspend as a builtin.  [kre 20241009]
+	sh(1): Add -b and -nMAX options to the read builtin.  [kre 20241011]
+	evbppc: Improve hardware initialization so the WII kernel can be
+		launched directly from boot2 and does not rely on any other
+		software to setup the hardware.  [jmcneill 20241013]
+	sh(1): Reject NUL characters in shell input.  [kre 20241014]
+	sh(1): Add an -r option to display version information.  [kre 20241014]
+	amdsmn(4): Add support AMD family F1Ah model 0xh "Turin".
+		[msaitoh 20241017]
+	amdzentemp(4): Add support for Siena, Turin Classic, Turin Dense,
+		Strix Point.  [msaitoh 20241017]
+	libarchive: Import libarchive-3.7.7. [christos 20241017]
+	sdmmc(4): Add support for caches found in Application Class 2 (A2)
+		capable SD memory cards. [jmcneill 20241018]
+	wscons(4): Add WSDISPLAYIO_GFONT ioctl for obtaining information
+		about the current font.  [mlelstv 20241020]
+	hppa: Add a dedicated X.Org driver for HP's NGLE family of
+		graphics devices, supporting acceleration on the
+		Visualize EG.  [macallan 20241022]
+	mcommphy(4): Add support for YT85[23]1, found on a VisionFive2 board.
+		[skrll 20241023]
+	mdnsd(8), dns-sd(1), libdns_sd: import mDNSResponder 2559.1.1
+		[christos 20241026]
+	makefs(8): Document debugging options and allow specifying them
+		by name.  [christos 20241027]
+	zstd(1): import 1.5.6 [christos 20241028]
+	env(1): Implement "env -C dir" to change the current working directory.
+		[kim 20241028]
+	c17(1): Add c17(1) wrapper script for gcc with the ISO 2017 C standard.
+		Required by POSIX.1-2024.  [nia 20241028]
+	tzdata: Updated to 2024b (using 2024bgtz) [kre 20241029]
+	riscv: Import Linux 6.11.5 RISC-V DTS [skrll 20241031]
+	libc: Add ffsl(3), ffsll(3) for POSIX.1-2024 complicance.
+		[riastradh 20241101]
+	memset_explicit(3): Add C23 alias for explicit_memset.
+		[riastradh 20241102]
+	libc: Expose previously non-standard functions to POSIX.1-2024
+		applications.  [nia 20241102]
+	zfs(8): Implement DIOCCACHESYNC in zvol, used by Xen.  [gdt 20241103]
+	gpt(8): Additions to guid printing and an option to print start/size
+		in hex (from Anon Ymous).  [christos 20241104]
+	ds2482ow: Driver for the Maxim DS2482-100 and DS2482-800 I2C
+		to 1-Wire bridge chip.  [brad 20241104]
+	tmux(1): Import version 3.5a. [wiz 20241109]
+	scsictl(8): Add 'identify vpd' to also report Vital Product Data
+		that identifies the device.  [mlelstv 20241109]
+	puc(4): Add support for various Brainboxes cards
+		(from Cameron Williams).  [msaitoh 20241111]
+	riscv: Initial StarFive JH7110 pin controller driver.  [skrll 20241111]
+	riscv: Add a StarFive JH7110 PCIe PHY driver.  [skrll 20241111]
+	riscv: Add a specific driver for the StarFive JH7110 STG system
+		controller.  [skrll 20241111]
+	lint(1): Handle _Noreturn attributes.  [rillig 20241113]
+	hppa: Initial summitfb driver for Visualize FX video cards.
+		[macallan 20241119]
+	printf(1): Improve detection and diagnosis of invalid values for
+		conversions.  [kre 20241124]
+	lib: Add expected symbols lists to many libraries.
+		[riastradh 20241124]
+	riscv: Support the crash(8) kernel debugger.  [skrll 20241125]
+	lint(1): Add queries for typedefs to struct/union and their pointers.
+		[rillig 20241128]
+	build.sh: Experimental new target pkg=CATEGORY/PACKAGE, cross-builds
+		CATEGORY/PACKAGE from pkgsrc, bootstrapping pkgsrc.
+		[riastradh 20241129]
+	amd64: add support for non-Xen PVH guests.  [bouyer 20241202]
+	curses(3): Implement the ncurses extension wgetscrreg which returns
+		the scrolling region of the given window.  [blymn 20241205]
+	editline(3): Print 0 width characters.  [christos 20241205]
+	mac68k: Support for backlight control on PowerBooks.  [nat 20241209]

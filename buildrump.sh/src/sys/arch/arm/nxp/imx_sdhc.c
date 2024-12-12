@@ -1,4 +1,4 @@
-/*	$NetBSD: imx_sdhc.c,v 1.6 2021/01/27 03:10:20 thorpej Exp $	*/
+/*	$NetBSD: imx_sdhc.c,v 1.8 2023/05/04 13:29:33 bouyer Exp $	*/
 
 /*-
  * Copyright (c) 2019 Genetec Corporation.  All rights reserved.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: imx_sdhc.c,v 1.6 2021/01/27 03:10:20 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: imx_sdhc.c,v 1.8 2023/05/04 13:29:33 bouyer Exp $");
 
 #include "opt_fdt.h"
 
@@ -86,6 +86,7 @@ static const struct imx6_sdhc_config imx7d_config = {
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "fsl,imx6q-usdhc",	.data = &imx6q_config },
+	{ .compat = "fsl,imx6sx-usdhc",	.data = &imx6q_config },
 	{ .compat = "fsl,imx7d-usdhc",	.data = &imx7d_config },
 	DEVICE_COMPAT_EOL
 };
@@ -140,7 +141,6 @@ imx_sdhc_attach(device_t parent, device_t self, void *aux)
 	    SDHC_FLAG_NO_PWR0 |
 	    SDHC_FLAG_HAVE_DVS |
 	    SDHC_FLAG_32BIT_ACCESS |
-	    SDHC_FLAG_USE_ADMA2 |
 	    SDHC_FLAG_USDHC;
 	sc->sc_sdhc.sc_flags |= conf->flags;
 

@@ -1,4 +1,5 @@
-/*	$NetBSD: pic.c,v 1.71 2021/08/08 19:28:08 skrll Exp $	*/
+/*	$NetBSD: pic.c,v 1.85 2022/10/30 10:20:45 riastradh Exp $	*/
+
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -33,7 +34,7 @@
 #include "opt_multiprocessor.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pic.c,v 1.71 2021/08/08 19:28:08 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pic.c,v 1.85 2022/10/30 10:20:45 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -46,6 +47,7 @@ __KERNEL_RCSID(0, "$NetBSD: pic.c,v 1.71 2021/08/08 19:28:08 skrll Exp $");
 #include <sys/kmem.h>
 #include <sys/mutex.h>
 #include <sys/once.h>
+#include <sys/sdt.h>
 #include <sys/xcall.h>
 
 #include <arm/armreg.h>
@@ -82,10 +84,7 @@ struct pic_softc *pic_list[PIC_MAXPICS];
 #endif
 struct intrsource *pic_sources[PIC_MAXMAXSOURCES];
 struct intrsource *pic__iplsources[PIC_MAXMAXSOURCES];
-struct intrsource **pic_iplsource[NIPL] = {
-	[0 ... NIPL-1] = pic__iplsources,
-};
-size_t pic_ipl_offset[NIPL+1];
+size_t pic_ipl_offset[NIPL + 1];
 
 static kmutex_t pic_lock;
 static size_t pic_sourcebase;
@@ -96,17 +95,26 @@ EVCNT_ATTACH_STATIC(pic_deferral_ev);
 
 static int pic_init(void);
 
+SDT_PROBE_DEFINE3(sdt, kernel, intr, entry,
+    "void (*)(void *)"/*func*/,
+    "void *"/*arg*/,
+    "struct intrsource *"/*is*/);
+SDT_PROBE_DEFINE4(sdt, kernel, intr, return,
+    "void (*)(void *)"/*func*/,
+    "void *"/*arg*/,
+    "struct intrsource *"/*is*/,
+    "int"/*handled*/);
+
 #ifdef __HAVE_PIC_SET_PRIORITY
 void
 pic_set_priority(struct cpu_info *ci, int newipl)
 {
-	register_t psw = DISABLE_INTERRUPT_SAVE();
-	if (pic_list[0] != NULL)
-		(pic_list[0]->pic_ops->pic_set_priority)(pic_list[0], newipl);
-	ci->ci_cpl = newipl;
-	if ((psw & I32_bit) == 0) {
-		ENABLE_INTERRUPT();
+	if (__predict_false(pic_list[0] == NULL)) {
+		ci->ci_cpl = newipl;
+		return;
 	}
+
+	pic_list[0]->pic_ops->pic_set_priority(pic_list[0], newipl);
 }
 #endif
 
@@ -153,7 +161,9 @@ pic_ipi_ddb(void *arg)
 int
 pic_ipi_kpreempt(void *arg)
 {
-	atomic_or_uint(&curcpu()->ci_astpending, __BIT(1));
+	struct lwp * const l = curlwp;
+
+	l->l_md.md_astpending |= __BIT(1);
 	return 1;
 }
 #endif /* __HAVE_PREEMPTION */
@@ -299,7 +309,7 @@ pic_mark_pending_sources(struct pic_softc *pic, size_t irq_base,
 	return ipl_mask;
 }
 
-uint32_t
+static uint32_t
 pic_find_pending_irqs_by_ipl(struct pic_softc *pic, size_t irq_base,
 	uint32_t pending, int ipl)
 {
@@ -334,6 +344,7 @@ pic_dispatch(struct intrsource *is, void *frame)
 {
 	int (*func)(void *) = is->is_func;
 	void *arg = is->is_arg;
+	int ocpl, ncpl, handled __unused;
 
 	if (__predict_false(arg == NULL)) {
 		if (__predict_false(frame == NULL)) {
@@ -343,18 +354,32 @@ pic_dispatch(struct intrsource *is, void *frame)
 		arg = frame;
 	}
 
+	ocpl = curcpu()->ci_cpl;
 #ifdef MULTIPROCESSOR
-	if (!is->is_mpsafe) {
+	const bool mpsafe = is->is_mpsafe;
+#else
+	const bool mpsafe = true;
+#endif
+	if (!mpsafe) {
 		KERNEL_LOCK(1, NULL);
 		const u_int ci_blcnt __diagused = curcpu()->ci_biglock_count;
 		const u_int l_blcnt __diagused = curlwp->l_blcnt;
-		(void)(*func)(arg);
+		SDT_PROBE3(sdt, kernel, intr, entry,  func, arg, is);
+		handled = (*func)(arg);
+		SDT_PROBE4(sdt, kernel, intr, return,  func, arg, is, handled);
 		KASSERT(ci_blcnt == curcpu()->ci_biglock_count);
 		KASSERT(l_blcnt == curlwp->l_blcnt);
 		KERNEL_UNLOCK_ONE(NULL);
-	} else
-#endif
-		(void)(*func)(arg);
+	} else {
+		SDT_PROBE3(sdt, kernel, intr, entry,  func, arg, is);
+		handled = (*func)(arg);
+		SDT_PROBE4(sdt, kernel, intr, return,  func, arg, is, handled);
+	}
+	ncpl = curcpu()->ci_cpl;
+	KASSERTMSG(ocpl <= ncpl, "pic %s irq %u intrsource %s:"
+	    " cpl slipped %d -> %d",
+	    is->is_pic->pic_name, is->is_irq, is->is_source,
+	    ocpl, ncpl);
 
 	struct pic_percpu * const pcpu = percpu_getref(is->is_pic->pic_percpu);
 	KASSERT(pcpu->pcpu_magic == PICPERCPU_MAGIC);
@@ -363,7 +388,7 @@ pic_dispatch(struct intrsource *is, void *frame)
 }
 
 #if defined(__HAVE_PIC_PENDING_INTRS)
-void
+static void
 pic_deliver_irqs(struct cpu_info *ci, struct pic_softc *pic, int ipl,
     void *frame)
 {
@@ -499,7 +524,7 @@ pic_list_unblock_irqs(struct cpu_info *ci)
 	}
 }
 
-struct pic_softc *
+static struct pic_softc *
 pic_list_find_pic_by_pending_ipl(struct cpu_info *ci, uint32_t ipl_mask)
 {
 	uint32_t pending_pics = ci->ci_pending_pics;
@@ -518,7 +543,7 @@ pic_list_find_pic_by_pending_ipl(struct cpu_info *ci, uint32_t ipl_mask)
 	}
 }
 
-void
+static void
 pic_list_deliver_irqs(struct cpu_info *ci, register_t psw, int ipl,
     void *frame)
 {
@@ -557,7 +582,8 @@ pic_do_pending_ints(register_t psw, int newipl, void *frame)
 	}
 #endif /* __HAVE_PIC_PENDING_INTRS */
 #ifdef __HAVE_PREEMPTION
-	if (newipl == IPL_NONE && (ci->ci_astpending & __BIT(1))) {
+	struct lwp * const l = curlwp;
+	if (newipl == IPL_NONE && (l->l_md.md_astpending & __BIT(1))) {
 		pic_set_priority(ci, IPL_SCHED);
 		kpreempt(0);
 	}
@@ -577,9 +603,7 @@ pic_percpu_allocate(void *v0, void *v1, struct cpu_info *ci)
 	KASSERT(pcpu->pcpu_evs != NULL);
 
 #define	PCPU_NAMELEN	32
-#ifdef DIAGNOSTIC
 	const size_t namelen = strlen(pic->pic_name) + 4 + strlen(ci->ci_data.cpu_name);
-#endif
 
 	KASSERT(namelen < PCPU_NAMELEN);
 	pcpu->pcpu_name = kmem_alloc(PCPU_NAMELEN, KM_SLEEP);
@@ -612,6 +636,8 @@ pic_add(struct pic_softc *pic, int irqbase)
 	int slot, maybe_slot = -1;
 	size_t sourcebase;
 	static ONCE_DECL(pic_once);
+
+	ASSERT_SLEEPABLE();
 
 	RUN_ONCE(&pic_once, pic_init);
 
@@ -704,6 +730,16 @@ pic_percpu_evcnt_attach(void *v0, void *v1, struct cpu_info *ci)
 	    pcpu->pcpu_name, is->is_source);
 }
 
+static void
+pic_unblock_percpu(void *arg1, void *arg2)
+{
+	struct pic_softc *pic = arg1;
+	struct intrsource *is = arg2;
+
+	(*pic->pic_ops->pic_unblock_irqs)(pic, is->is_irq & ~0x1f,
+	    __BIT(is->is_irq & 0x1f));
+}
+
 void *
 pic_establish_intr(struct pic_softc *pic, int irq, int ipl, int type,
 	int (*func)(void *), void *arg, const char *xname)
@@ -744,44 +780,51 @@ pic_establish_intr(struct pic_softc *pic, int irq, int ipl, int type,
 	/*
 	 * First try to use an existing slot which is empty.
 	 */
-	for (off = pic_ipl_offset[ipl]; off < pic_ipl_offset[ipl+1]; off++) {
+	bool found = false;
+	for (off = pic_ipl_offset[ipl]; off < pic_ipl_offset[ipl + 1]; off++) {
 		if (pic__iplsources[off] == NULL) {
-			is->is_iplidx = off - pic_ipl_offset[ipl];
-			pic__iplsources[off] = is;
-			goto unblock;
+			found = true;
+			break;
 		}
 	}
 
-	/*
-	 * Move up all the sources by one.
- 	 */
-	if (ipl < NIPL) {
-		off = pic_ipl_offset[ipl+1];
-		memmove(&pic__iplsources[off+1], &pic__iplsources[off],
-		    sizeof(pic__iplsources[0]) * (pic_ipl_offset[NIPL] - off));
+	if (!found) {
+		/*
+		* Move up all the sources by one.
+		*/
+		if (ipl < NIPL) {
+			off = pic_ipl_offset[ipl + 1];
+			memmove(&pic__iplsources[off + 1], &pic__iplsources[off],
+			    sizeof(pic__iplsources[0]) * (pic_ipl_offset[NIPL] - off));
+		}
+
+		/*
+		* Advance the offset of all IPLs higher than this.  Include an
+		* extra one as well.  Thus the number of sources per ipl is
+		* pic_ipl_offset[ipl + 1] - pic_ipl_offset[ipl].
+		*/
+		for (nipl = ipl + 1; nipl <= NIPL; nipl++)
+			pic_ipl_offset[nipl]++;
+
+		off = pic_ipl_offset[ipl + 1] - 1;
 	}
 
 	/*
-	 * Advance the offset of all IPLs higher than this.  Include an
-	 * extra one as well.  Thus the number of sources per ipl is
-	 * pic_ipl_offset[ipl+1] - pic_ipl_offset[ipl].
+	 * Insert into the 'found' or the just made slot position at the end
+	 * of this IPL's sources.
 	 */
-	for (nipl = ipl + 1; nipl <= NIPL; nipl++)
-		pic_ipl_offset[nipl]++;
-
-	/*
-	 * Insert into the previously made position at the end of this IPL's
-	 * sources.
-	 */
-	off = pic_ipl_offset[ipl + 1] - 1;
 	is->is_iplidx = off - pic_ipl_offset[ipl];
 	pic__iplsources[off] = is;
 
 	(*pic->pic_ops->pic_establish_irq)(pic, is);
 
-unblock:
-	(*pic->pic_ops->pic_unblock_irqs)(pic, is->is_irq & ~0x1f,
-	    __BIT(is->is_irq & 0x1f));
+	if (!mp_online || !is->is_mpsafe || !is->is_percpu) {
+		(*pic->pic_ops->pic_unblock_irqs)(pic, is->is_irq & ~0x1f,
+		    __BIT(is->is_irq & 0x1f));
+	} else {
+		uint64_t xc = xc_broadcast(0, pic_unblock_percpu, pic, is);
+		xc_wait(xc);
+	}
 
 	if (xname) {
 		if (is->is_xname == NULL)

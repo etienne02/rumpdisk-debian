@@ -1,4 +1,4 @@
-/*	$NetBSD: if_emac.c,v 1.56 2021/03/30 02:25:24 rin Exp $	*/
+/*	$NetBSD: if_emac.c,v 1.59 2024/02/10 09:30:05 andvar Exp $	*/
 
 /*
  * Copyright 2001, 2002 Wasabi Systems, Inc.
@@ -52,7 +52,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_emac.c,v 1.56 2021/03/30 02:25:24 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_emac.c,v 1.59 2024/02/10 09:30:05 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_emac.h"
@@ -467,7 +467,7 @@ emac_attach(device_t parent, device_t self, void *aux)
 			opbc = STACR_OPBC_A100MHZ;
 			break;
 		}
-		aprint_error_dev(self, "unsupport OPB frequency %dMHz\n",
+		aprint_error_dev(self, "unsupported OPB frequency %dMHz\n",
 		    opb_freq / 1000 / 1000);
 		goto fail_5;
 	}
@@ -671,7 +671,7 @@ emac_start(struct ifnet *ifp)
 
 	lasttx = 0;	/* XXX gcc */
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	/*
@@ -707,7 +707,7 @@ emac_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we
+		 * didn't fit in the allotted number of segments, or we
 		 * were short on resources.  In this case, we'll copy
 		 * and try again.
 		 */
@@ -740,7 +740,6 @@ emac_start(struct ifnet *ifp)
 			 * layer that there are not more slots left.
 			 *
 			 */
-			ifp->if_flags |= IFF_OACTIVE;
 			bus_dmamap_unload(sc->sc_dmat, dmamap);
 			EMAC_EVCNT_INCR(&sc->sc_ev_txdstall);
 			break;
@@ -830,10 +829,6 @@ emac_start(struct ifnet *ifp)
 		 */
 		bpf_mtap(ifp, m0, BPF_D_OUT);
 	}
-
-	if (sc->sc_txfree == 0)
-		/* No more slots left; notify upper layer. */
-		ifp->if_flags |= IFF_OACTIVE;
 
 	if (sc->sc_txfree != ofree)
 		/* Set a watchdog timer in case the chip flakes out. */
@@ -1050,11 +1045,10 @@ emac_init(struct ifnet *ifp)
 	 * ... all done!
 	 */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
  out:
 	if (error) {
-		ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+		ifp->if_flags &= ~IFF_RUNNING;
 		ifp->if_timer = 0;
 		aprint_error_ifnet(ifp, "interface not running\n");
 	}
@@ -1100,7 +1094,7 @@ emac_stop(struct ifnet *ifp, int disable)
 	/*
 	 * Mark the interface down and cancel the watchdog timer.
 	 */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 }
 
@@ -1267,8 +1261,6 @@ emac_txreap(struct emac_softc *sc)
 
 	EMAC_EVCNT_INCR(&sc->sc_ev_txreap);
 	handled = 0;
-
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	count = 0;
 	/*

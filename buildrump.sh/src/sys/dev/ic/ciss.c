@@ -1,4 +1,4 @@
-/*	$NetBSD: ciss.c,v 1.52 2021/08/07 16:19:12 thorpej Exp $	*/
+/*	$NetBSD: ciss.c,v 1.56 2024/02/19 14:54:04 msaitoh Exp $	*/
 /*	$OpenBSD: ciss.c,v 1.68 2013/05/30 16:15:02 deraadt Exp $	*/
 
 /*
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ciss.c,v 1.52 2021/08/07 16:19:12 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ciss.c,v 1.56 2024/02/19 14:54:04 msaitoh Exp $");
 
 #include "bio.h"
 
@@ -334,8 +334,8 @@ ciss_attach(struct ciss_softc *sc)
 	if ((error = bus_dmamap_load(sc->sc_dmat, sc->cmdmap, sc->ccbs, total,
 	    NULL, BUS_DMA_NOWAIT))) {
 		aprint_error(": cannot load CCBs dmamap (%d)\n", error);
-		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		bus_dmamap_destroy(sc->sc_dmat, sc->cmdmap);
+		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		return -1;
 	}
 
@@ -370,8 +370,8 @@ ciss_attach(struct ciss_softc *sc)
 		aprint_error(": cannot create ccb#%d dmamap (%d)\n", i, error);
 		if (i == 0) {
 			/* TODO leaking cmd's dmamaps and shitz */
-			bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 			bus_dmamap_destroy(sc->sc_dmat, sc->cmdmap);
+			bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 			return -1;
 		}
 	}
@@ -395,8 +395,8 @@ ciss_attach(struct ciss_softc *sc)
 	if (ciss_inq(sc, inq)) {
 		aprint_error(": adapter inquiry failed\n");
 		mutex_exit(&sc->sc_mutex_scratch);
-		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		bus_dmamap_destroy(sc->sc_dmat, sc->cmdmap);
+		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		return -1;
 	}
 
@@ -404,8 +404,8 @@ ciss_attach(struct ciss_softc *sc)
 		aprint_error(": big map is not supported, flags=0x%x\n",
 		    inq->flags);
 		mutex_exit(&sc->sc_mutex_scratch);
-		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		bus_dmamap_destroy(sc->sc_dmat, sc->cmdmap);
+		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		return -1;
 	}
 
@@ -427,6 +427,14 @@ ciss_attach(struct ciss_softc *sc)
 
 	mutex_exit(&sc->sc_mutex_scratch);
 
+	if (sc->maxunits == 0) {
+		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
+		bus_dmamap_destroy(sc->sc_dmat, sc->cmdmap);
+		aprint_error_dev(sc->sc_dev,
+		    "No any LD. This driver can't attach.\n");
+		return -1;
+	}
+
 	callout_init(&sc->sc_hb, 0);
 	callout_setfunc(&sc->sc_hb, ciss_heartbeat, sc);
 	callout_schedule(&sc->sc_hb, hz * 3);
@@ -434,8 +442,8 @@ ciss_attach(struct ciss_softc *sc)
 	/* map LDs */
 	if (ciss_ldmap(sc)) {
 		aprint_error_dev(sc->sc_dev, "adapter LD map failed\n");
-		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		bus_dmamap_destroy(sc->sc_dmat, sc->cmdmap);
+		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		return -1;
 	}
 
@@ -446,8 +454,8 @@ ciss_attach(struct ciss_softc *sc)
 	if (!(sc->sc_sh = shutdownhook_establish(ciss_shutdown, sc))) {
 		aprint_error_dev(sc->sc_dev,
 		    "unable to establish shutdown hook\n");
-		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		bus_dmamap_destroy(sc->sc_dmat, sc->cmdmap);
+		bus_dmamem_free(sc->sc_dmat, sc->cmdseg, 1);
 		return -1;
 	}
 
@@ -665,7 +673,7 @@ ciss_wait(struct ciss_softc *sc, struct ciss_ccb *ccb, int ms)
 }
 
 /*
- * submit a command and optionally wait for completition.
+ * submit a command and optionally wait for completion.
  * wait arg abuses XS_CTL_POLL|XS_CTL_NOSLEEP flags to request
  * to wait (XS_CTL_POLL) and to allow tsleep() (!XS_CTL_NOSLEEP)
  * instead of busy loop waiting
@@ -1233,7 +1241,7 @@ ciss_scsi_cmd(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 	case ADAPTER_REQ_SET_XFER_MODE:
 		/*
 		 * We can't change the transfer mode, but at least let
-		 * scsipi know what the adapter has negociated.
+		 * scsipi know what the adapter has negotiated.
 		 */
 		xm = (struct scsipi_xfer_mode *)arg;
 		xm->xm_mode |= PERIPH_CAP_TQING;
@@ -1405,7 +1413,7 @@ ciss_ioctl(device_t dev, u_long cmd, void *addr)
  * XXX since we don't know how to associate physical drives with logical drives
  * yet, BIOCDISK_NOVOL is equivalent to BIOCDISK to the volume that we've
  * associated all physical drives to.
- * Maybe assoicate all physical drives to all logical volumes, but only return
+ * Maybe associate all physical drives to all logical volumes, but only return
  * physical drives on one logical volume.  Which one?  Either 1st volume that
  * is degraded, rebuilding, or failed?
  */
@@ -1533,7 +1541,7 @@ ciss_ioctl_vol(struct ciss_softc *sc, struct bioc_vol *bv)
 	bv->bv_size = blks * (u_quad_t)le16toh(ldid->blksize);
 	bv->bv_level = ciss_level[ldid->type];
 /*
- * XXX Should only return bv_nodisk for logigal volume that we've associated
+ * XXX Should only return bv_nodisk for logical volume that we've associated
  * the physical drives to:  either the 1st degraded, rebuilding, or failed
  * volume else volume 0?
  */

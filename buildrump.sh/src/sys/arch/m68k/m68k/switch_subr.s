@@ -1,4 +1,4 @@
-/*	$NetBSD: switch_subr.s,v 1.34 2020/01/08 20:59:18 skrll Exp $	*/
+/*	$NetBSD: switch_subr.s,v 1.38 2024/10/31 07:30:28 isaki Exp $	*/
 
 /*
  * Copyright (c) 2001 The NetBSD Foundation.
@@ -88,7 +88,7 @@ GLOBAL(_Idle)				/* For sun2/sun3's clock.c ... */
  * Switch to the specific next LWP.
  */
 ENTRY(cpu_switchto)
-	movl	4(%sp),%a1		| fetch `current' lwp
+	movl	4(%sp),%a1		| fetch outgoing lwp
 	/*
 	 * Save state of previous process in its pcb.
 	 */
@@ -109,21 +109,21 @@ ENTRY(cpu_switchto)
 #if defined(M68020) || defined(M68030) || defined(M68040)
 #if defined(M68060)
 	cmpl	#FPU_68060,_C_LABEL(fputype)
-	jeq	.Lcpu_switch_savfp60                
-#endif  
+	jeq	.Lcpu_switch_savfp60
+#endif
 	tstb	(%a2)			| null state frame?
 	jeq	.Lcpu_switch_nofpsave	| yes, all done
 	fmovem	%fp0-%fp7,FPF_REGS(%a2) | save FP general registers
 	fmovem	%fpcr/%fpsr/%fpi,FPF_FPCR(%a2) | save FP control registers
 #if defined(M68060)
-	jra	.Lcpu_switch_nofpsave 
-#endif  
-#endif  
+	jra	.Lcpu_switch_nofpsave
+#endif
+#endif
 #if defined(M68060)
 .Lcpu_switch_savfp60:
 	tstb	2(%a2)			| null state frame?
-	jeq	.Lcpu_switch_nofpsave	| yes, all done 
-	fmovem	%fp0-%fp7,FPF_REGS(%a2) | save FP general registers 
+	jeq	.Lcpu_switch_nofpsave	| yes, all done
+	fmovem	%fp0-%fp7,FPF_REGS(%a2) | save FP general registers
 	fmovem	%fpcr,FPF_FPCR(%a2)	| save FP control registers
 	fmovem	%fpsr,FPF_FPSR(%a2)
 	fmovem	%fpi,FPF_FPI(%a2)
@@ -133,78 +133,38 @@ ENTRY(cpu_switchto)
 #endif	/* !_M68K_CUSTOM_FPU_CTX */
 
 	movl	8(%sp),%a0		| get newlwp
-	movl	%a0,_C_LABEL(curlwp)
+	movl	%a0,_C_LABEL(curlwp)	| curlwp = new lwp
 	movl	L_PCB(%a0),%a1		| get its pcb
-	movl	%a1,_C_LABEL(curpcb)
-
-#if defined(sun2) || defined(sun3)
-	movl	L_PROC(%a0),%a2
-	movl	P_VMSPACE(%a2),%a2	| vm = p->p_vmspace
-#if defined(DIAGNOSTIC) && !defined(sun2)
-	tstl	%a2			| vm == VM_MAP_NULL?
-	jeq	.Lcpu_switch_badsw	| panic
-#endif
-	pea	(%a0)			| save newlwp
-#if !defined(_SUN3X_) || defined(PMAP_DEBUG)
-	movl	VM_PMAP(%a2),-(%sp)	| push vm->vm_map.pmap
-	jbsr	_C_LABEL(_pmap_switch)	| _pmap_switch(pmap)
-	addql	#4,%sp
-	movl	_C_LABEL(curpcb),%a1	| restore curpcb
-| Note: _pmap_switch() will clear the cache if needed.
-#else
-	/* Use this inline version on sun3x when not debugging the pmap. */
-	lea	_C_LABEL(kernel_crp),%a3 | our CPU Root Ptr. (CRP)
-	movl	VM_PMAP(%a2),%a2 	| pmap = vm->vm_map.pmap
-	movl	PM_A_PHYS(%a2),%d0	| phys = pmap->pm_a_phys
-	cmpl	4(%a3),%d0		|  == kernel_crp.rp_addr ?
-	jeq	.Lsame_mmuctx		| skip loadcrp/flush
-	/* OK, it is a new MMU context.  Load it up. */
-	movl	%d0,4(%a3)
-	movl	#CACHE_CLR,%d0
-	movc	%d0,%cacr		| invalidate cache(s)
-	pflusha				| flush entire TLB
-	pmove	(%a3),%crp		| load new user root pointer
-.Lsame_mmuctx:
-#endif	/* !defined(_SUN3X_) || defined(PMAP_DEBUG) */
-#else	/* !defined(sun2) && !defined(sun3) */
-	/*
-	 * Activate process's address space.
-	 * XXX Should remember the last USTP value loaded, and call this
-	 * XXX only of it has changed.
-	 */
-	pea	(%a0)			| push newlwp
-	jbsr	_C_LABEL(pmap_activate)	| pmap_activate(newlwp)
-	/* Note that newlwp will be popped off the stack later. */
-#endif
+	movl	%a1,_C_LABEL(curpcb)	| curpcb = new pcb
 
 	/*
-	 *  Check for restartable atomic sequences (RAS)
+	 * Check for restartable atomic sequences (RAS)
 	 */
-	movl	_C_LABEL(curlwp),%a0
 	movl	L_PROC(%a0),%a2
-	tstl	P_RASLIST(%a2)
-	jeq	1f
+	tstl	P_RASLIST(%a2)		| p->p_raslist == NULL?
+	jeq	2f			| yes, skip it.
 	movl	L_MD_REGS(%a0),%a1
-	movl	TF_PC(%a1),-(%sp)
-	movl	%a2,-(%sp)
-	jbsr	_C_LABEL(ras_lookup)
+	movl	TF_PC(%a1),-(%sp)	| push return PC
+	movl	%a2,-(%sp)		| push proc
+	jbsr	_C_LABEL(ras_lookup)	| a0 = ras_lookup(p, pc)
 	addql	#8,%sp
 	movql	#-1,%d0
-	cmpl	%a0,%d0
-	jeq	1f
+	cmpl	%a0,%d0			| a0 == -1?
+	jeq	1f			| yes, skip it.
 	movl	_C_LABEL(curlwp),%a1
 	movl	L_MD_REGS(%a1),%a1
-	movl	%a0,TF_PC(%a1)
+	movl	%a0,TF_PC(%a1)		| fixup return PC
 1:
-	movl	(%sp)+,%d0		| restore newlwp
-	movl	_C_LABEL(curpcb),%a1	| restore pcb
+	movl	_C_LABEL(curlwp),%a0	| recover new lwp
+	movl	_C_LABEL(curpcb),%a1	| recover new pcb
+2:
+	movl	%a0,%d0			| free up %a0
+	movl	4(%sp),%d1		| get oldlwp for return value
+	lea	_ASM_LABEL(tmpstk),%sp	| switch to tmp stack in case of NMI
 
-	movl	4(%sp),%d1		| restore oldlwp for a return value
-	lea     _ASM_LABEL(tmpstk),%sp	| now goto a tmp stack for NMI
-
-	moveml	PCB_REGS(%a1),%d2-%d7/%a2-%a7	| and registers
+	moveml	PCB_REGS(%a1),%d2-%d7/%a2-%a7 | restore registers
 	movl	PCB_USP(%a1),%a0
-	movl	%a0,%usp		| and USP
+	movl	%a0,%usp		      | and USP
 
 #ifdef _M68K_CUSTOM_FPU_CTX
 	moveml	%d0/%d1,-(%sp)
@@ -220,7 +180,7 @@ ENTRY(cpu_switchto)
 #if defined(M68060)
 	cmpl	#FPU_68060,_C_LABEL(fputype)
 	jeq	.Lcpu_switch_resfp60rest1
-#endif  
+#endif
 	tstb	(%a0)			| null state frame?
 	jeq	.Lcpu_switch_resfprest	| yes, easy
 	fmovem	FPF_FPCR(%a0),%fpcr/%fpsr/%fpi | restore FP control registers
@@ -245,13 +205,9 @@ ENTRY(cpu_switchto)
 #endif /* !_M68K_CUSTOM_FPU_CTX */
 
 .Lcpu_switch_nofprest:
-	movl	%d1,%d0
-	movl	%d0,%a0
+	movl	%d1,%d0			| return outgoing lwp
+	movl	%d0,%a0			| (in a0, too)
 	rts
-
-.Lcpu_switch_badsw:
-	PANIC("switch")
-	/*NOTREACHED*/
 
 /*
  * savectx(pcb)
@@ -277,7 +233,7 @@ ENTRY(savectx)
 #if defined(M68060)
 	cmpl	#FPU_68060,_C_LABEL(fputype)
 	jeq	.Lsavectx_savfp60
-#endif  
+#endif
 	tstb	(%a0)			| null state frame?
 	jeq	.Lsavectx_nofpsave	| yes, all done
 	fmovem	%fp0-%fp7,FPF_REGS(%a0)	| save FP general registers
@@ -285,7 +241,7 @@ ENTRY(savectx)
 #if defined(M68060)
 	jra	.Lsavectx_nofpsave
 #endif
-#endif  
+#endif
 #if defined(M68060)
 .Lsavectx_savfp60:
 	tstb	2(%a0)			| null state frame?
@@ -294,7 +250,7 @@ ENTRY(savectx)
 	fmovem	%fpcr,FPF_FPCR(%a0)	| save FP control registers
 	fmovem	%fpsr,FPF_FPSR(%a0)
 	fmovem	%fpi,FPF_FPI(%a0)
-#endif  
+#endif
 .Lsavectx_nofpsave:
 #endif /* FPCOPROC */
 #endif /* !_M68K_CUSTOM_FPU_CTX */
@@ -314,7 +270,7 @@ ENTRY(m68k_make_fpu_idle_frame)
 	clrl	-(%sp)
 	fnop
 
-	frestore (%sp)		| Effectively `resets' the FPU
+	frestore (%sp)			| Effectively `resets' the FPU
 	fnop
 
 	/* Loading '0.0' will change FPU to "idle". */
@@ -345,7 +301,7 @@ ENTRY(m68881_save)
 	cmpl	#FPU_68060,_C_LABEL(fputype)
 	jeq	.Lm68060fpsave
 #endif
-.Lm68881fpsave:  
+.Lm68881fpsave:
 	tstb	(%a0)			| null state frame?
 	jeq	.Lm68881sdone		| yes, all done
 	fmovem	%fp0-%fp7,FPF_REGS(%a0)	| save FP general registers
@@ -359,11 +315,11 @@ ENTRY(m68881_save)
 	jeq	.Lm68060sdone		| yes, all done
 	fmovem	%fp0-%fp7,FPF_REGS(%a0)	| save FP general registers
 	fmovem	%fpcr,FPF_FPCR(%a0)	| save FP control registers
-	fmovem	%fpsr,FPF_FPSR(%a0)           
+	fmovem	%fpsr,FPF_FPSR(%a0)
 	fmovem	%fpi,FPF_FPI(%a0)
-.Lm68060sdone:   
+.Lm68060sdone:
         rts
-#endif  
+#endif
 
 ENTRY(m68881_restore)
 	movl	4(%sp),%a0		| save area pointer

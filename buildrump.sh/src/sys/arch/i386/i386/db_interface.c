@@ -1,4 +1,4 @@
-/*	$NetBSD: db_interface.c,v 1.86 2021/02/23 07:13:52 mrg Exp $	*/
+/*	$NetBSD: db_interface.c,v 1.89 2024/09/18 22:29:39 rin Exp $	*/
 
 /*
  * Mach Operating System
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.86 2021/02/23 07:13:52 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.89 2024/09/18 22:29:39 rin Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -61,6 +61,7 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.86 2021/02/23 07:13:52 mrg Exp $"
 #include <machine/i82489var.h>
 #endif
 
+#include <ddb/db_active.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_command.h>
 #include <ddb/db_extern.h>
@@ -122,6 +123,7 @@ db_machine_init(void)
 		handler = &Xintr_x2apic_ddbipi;
 #endif
 	ddb_vec = idt_vec_alloc(iv, 0xf0, 0xff);
+	KASSERT(ddb_vec > 0);
 	idt_vec_set(iv, ddb_vec, handler);
 #else
 	/* Initialised as part of xen_ipi_init() */
@@ -367,7 +369,7 @@ ddb_suspend(struct trapframe *frame)
 	atomic_or_32(&ci->ci_flags, CPUF_PAUSE);
 
 	while (ci->ci_flags & CPUF_PAUSE)
-		;
+		x86_pause();
 	ci->ci_ddb_regs = 0;
 	tlbflushg();
 }

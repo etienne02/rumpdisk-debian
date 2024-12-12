@@ -1,4 +1,4 @@
-/*	$NetBSD: if_pcn.c,v 1.76 2020/03/16 01:54:23 thorpej Exp $	*/
+/*	$NetBSD: if_pcn.c,v 1.80 2024/11/10 11:45:25 mlelstv Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -65,13 +65,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_pcn.c,v 1.76 2020/03/16 01:54:23 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_pcn.c,v 1.80 2024/11/10 11:45:25 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -945,7 +944,7 @@ pcn_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we
+		 * didn't fit in the allotted number of segments, or we
 		 * were short on resources.  In this case, we'll copy
 		 * and try again.
 		 */
@@ -958,6 +957,7 @@ pcn_start(struct ifnet *ifp)
 				    device_xname(sc->sc_dev));
 				break;
 			}
+			MCLAIM(m, &sc->sc_ethercom.ec_rx_mowner);
 			if (m0->m_pkthdr.len > MHLEN) {
 				MCLGET(m, M_DONTWAIT);
 				if ((m->m_flags & M_EXT) == 0) {
@@ -993,8 +993,7 @@ pcn_start(struct ifnet *ifp)
 			 * packet.
 			 */
 			bus_dmamap_unload(sc->sc_dmat, dmamap);
-			if (m != NULL)
-				m_freem(m);
+			m_freem(m);
 			PCN_EVCNT_INCR(&sc->sc_ev_txdstall);
 			break;
 		}
@@ -1497,6 +1496,7 @@ pcn_rxintr(struct pcn_softc *sc)
 			MGETHDR(m, M_DONTWAIT, MT_DATA);
 			if (m == NULL)
 				goto dropit;
+			MCLAIM(m, &sc->sc_ethercom.ec_rx_mowner);
 			m->m_data += 2;
 			memcpy(mtod(m, void *),
 			    mtod(rxs->rxs_mbuf, void *), len);
@@ -1878,6 +1878,7 @@ pcn_add_rxbuf(struct pcn_softc *sc, int idx)
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
 	if (m == NULL)
 		return ENOBUFS;
+	MCLAIM(m, &sc->sc_ethercom.ec_rx_mowner);
 
 	MCLGET(m, M_DONTWAIT);
 	if ((m->m_flags & M_EXT) == 0) {

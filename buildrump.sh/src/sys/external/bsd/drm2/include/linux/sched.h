@@ -1,4 +1,4 @@
-/*	$NetBSD: sched.h,v 1.15 2020/07/03 16:23:02 maxv Exp $	*/
+/*	$NetBSD: sched.h,v 1.23 2021/12/27 13:28:41 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -33,17 +33,28 @@
 #define _LINUX_SCHED_H_
 
 #include <sys/param.h>
-#include <sys/kernel.h>
-#include <sys/proc.h>
 
-#include <asm/param.h>
+#include <sys/cdefs.h>
+#include <sys/kernel.h>
+#include <sys/lwp.h>
+#include <sys/proc.h>
+#include <sys/sched.h>
+
 #include <asm/barrier.h>
+#include <asm/param.h>
 #include <asm/processor.h>
+
+#include <linux/device.h>
 #include <linux/errno.h>
+
+struct seq_file;
 
 #define	TASK_COMM_LEN	MAXCOMLEN
 
 #define	MAX_SCHEDULE_TIMEOUT	(INT_MAX/2)	/* paranoia */
+
+#define	TASK_UNINTERRUPTIBLE	__BIT(0)
+#define	TASK_INTERRUPTIBLE	__BIT(1)
 
 #define	current	curproc
 
@@ -56,14 +67,16 @@ task_pid_nr(struct proc *p)
 static inline long
 schedule_timeout_uninterruptible(long timeout)
 {
-	long remain;
-	int start, end;
+	unsigned start, end;
+
+	KASSERT(timeout >= 0);
+	KASSERT(timeout < MAX_SCHEDULE_TIMEOUT);
 
 	if (cold) {
 		unsigned us;
 		if (hz <= 1000) {
 			unsigned ms = hztoms(MIN((unsigned long)timeout,
-			    mstohz(INT_MAX)));
+			    mstohz(INT_MAX/2)));
 			us = MIN(ms, INT_MAX/1000)*1000;
 		} else if (hz <= 1000000) {
 			us = MIN(timeout, (INT_MAX/1000000)/hz)*hz*1000000;
@@ -76,11 +89,17 @@ schedule_timeout_uninterruptible(long timeout)
 
 	start = getticks();
 	/* Caller is expected to loop anyway, so no harm in truncating.  */
-	(void)kpause("loonix", false /*!intr*/, MIN(timeout, INT_MAX), NULL);
+	(void)kpause("loonix", /*intr*/false, MIN(timeout, INT_MAX/2), NULL);
 	end = getticks();
 
-	remain = timeout - (end - start);
-	return remain > 0 ? remain : 0;
+	return timeout - MIN(timeout, (end - start));
+}
+
+static inline bool
+need_resched(void)
+{
+
+	return preempt_needed();
 }
 
 static inline void
@@ -88,6 +107,31 @@ cond_resched(void)
 {
 
 	preempt_point();
+}
+
+static inline bool
+signal_pending_state(int state, struct proc *p)
+{
+
+	KASSERT(p == current);
+	KASSERT(state & (TASK_INTERRUPTIBLE|TASK_UNINTERRUPTIBLE));
+	if (state & TASK_UNINTERRUPTIBLE)
+		return false;
+	return sigispending(curlwp, 0);
+}
+
+static inline void
+sched_setscheduler(struct proc *p, int class, struct sched_param *param)
+{
+
+	KASSERT(p == curproc);
+	KASSERT(class == SCHED_FIFO);
+	KASSERT(param->sched_priority == 1);
+
+	lwp_lock(curlwp);
+	curlwp->l_class = class;
+	lwp_changepri(curlwp, PRI_KERNEL_RT);
+	lwp_unlock(curlwp);
 }
 
 #endif  /* _LINUX_SCHED_H_ */

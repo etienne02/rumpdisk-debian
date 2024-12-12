@@ -1,4 +1,4 @@
-/* $NetBSD: chk.c,v 1.45 2021/08/29 10:13:02 rillig Exp $ */
+/* $NetBSD: chk.c,v 1.68 2024/11/30 18:17:11 rillig Exp $ */
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All Rights Reserved.
@@ -15,7 +15,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -37,8 +37,8 @@
 #endif
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: chk.c,v 1.45 2021/08/29 10:13:02 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: chk.c,v 1.68 2024/11/30 18:17:11 rillig Exp $");
 #endif
 
 #include <ctype.h>
@@ -48,37 +48,37 @@ __RCSID("$NetBSD: chk.c,v 1.45 2021/08/29 10:13:02 rillig Exp $");
 
 #include "lint2.h"
 
-static	void	chkund(const hte_t *);
-static	void	chkdnu(const hte_t *);
-static	void	chkdnud(const hte_t *);
-static	void	chkmd(const hte_t *);
-static	void	chkvtui(const hte_t *, sym_t *, sym_t *);
-static	void	chkvtdi(const hte_t *, sym_t *, sym_t *);
-static	void	chkfaui(const hte_t *, sym_t *, sym_t *);
-static	void	chkau(const hte_t *, int, sym_t *, sym_t *, pos_t *,
+static void check_used_not_defined(const hte_t *);
+static void check_defined_not_used(const hte_t *);
+static void check_declared_not_used_or_defined(const hte_t *);
+static void check_multiple_definitions(const hte_t *);
+static void chkvtui(const hte_t *, sym_t *, sym_t *);
+static void chkvtdi(const hte_t *, sym_t *, sym_t *);
+static void chkfaui(const hte_t *, sym_t *, sym_t *);
+static void chkau(const hte_t *, int, sym_t *, sym_t *, pos_t *,
 			   fcall_t *, fcall_t *, type_t *, type_t *);
-static	void	chkrvu(const hte_t *, sym_t *);
-static	void	chkadecl(const hte_t *, sym_t *, sym_t *);
-static	void	printflike(const hte_t *, fcall_t *, int, const char *, type_t **);
-static	void	scanflike(const hte_t *, fcall_t *, int, const char *, type_t **);
-static	void	badfmt(const hte_t *, fcall_t *);
-static	void	inconarg(const hte_t *, fcall_t *, int);
-static	void	tofewarg(const hte_t *, fcall_t *);
-static	void	tomanyarg(const hte_t *, fcall_t *);
-static	bool	eqtype(type_t *, type_t *, bool, bool, bool, bool *);
-static	bool	eqargs(type_t *, type_t *, bool *);
-static	bool	mnoarg(type_t *, bool *);
+static void check_return_values(const hte_t *, sym_t *);
+static void check_argument_declarations(const hte_t *, sym_t *, sym_t *);
+static void printflike(const hte_t *, fcall_t *, int, const char *, type_t **);
+static void scanflike(const hte_t *, fcall_t *, int, const char *, type_t **);
+static void bad_format_string(const hte_t *, fcall_t *);
+static void inconsistent_arguments(const hte_t *, fcall_t *, int);
+static void too_few_arguments(const hte_t *, fcall_t *);
+static void too_many_arguments(const hte_t *, fcall_t *);
+static bool types_compatible(type_t *, type_t *, bool, bool, bool, bool *);
+static bool prototypes_compatible(type_t *, type_t *, bool *);
+static bool matches_no_arg_function(type_t *, bool *);
 
 
 /*
  * If there is a symbol named "main", mark it as used.
  */
 void
-mainused(void)
+mark_main_as_used(void)
 {
-	hte_t	*hte;
+	hte_t *hte;
 
-	if ((hte = hsearch("main", false)) != NULL)
+	if ((hte = htab_search("main", false)) != NULL)
 		hte->h_used = true;
 }
 
@@ -86,17 +86,17 @@ mainused(void)
  * Performs all tests for a single name
  */
 void
-chkname(const hte_t *hte)
+check_name(const hte_t *hte)
 {
-	sym_t	*sym, *def, *pdecl, *decl;
+	sym_t *sym, *def, *pdecl, *decl;
 
-	if (uflag) {
-		chkund(hte);
-		chkdnu(hte);
+	if (!uflag) {
+		check_used_not_defined(hte);
+		check_defined_not_used(hte);
 		if (xflag)
-			chkdnud(hte);
+			check_declared_not_used_or_defined(hte);
 	}
-	chkmd(hte);
+	check_multiple_definitions(hte);
 
 	/* Get definition, prototype declaration and declaration */
 	def = pdecl = decl = NULL;
@@ -112,7 +112,7 @@ chkname(const hte_t *hte)
 			decl = sym;
 	}
 
-	/* A prototype is better than an old style declaration. */
+	/* A prototype is better than an old-style declaration. */
 	if (pdecl != NULL)
 		decl = pdecl;
 
@@ -122,28 +122,28 @@ chkname(const hte_t *hte)
 
 	chkfaui(hte, def, decl);
 
-	chkrvu(hte, def);
+	check_return_values(hte, def);
 
-	chkadecl(hte, def, decl);
+	check_argument_declarations(hte, def, decl);
 }
 
 /*
  * Print a warning if the name has been used, but not defined.
  */
 static void
-chkund(const hte_t *hte)
+check_used_not_defined(const hte_t *hte)
 {
-	fcall_t	*fcall;
-	usym_t	*usym;
+	fcall_t *fcall;
+	usym_t *usym;
 
 	if (!hte->h_used || hte->h_def)
 		return;
 
 	if ((fcall = hte->h_calls) != NULL) {
-		/* %s used( %s ), but not defined */
+		/* %s is used in %s but never defined */
 		msg(0, hte->h_name, mkpos(&fcall->f_pos));
 	} else if ((usym = hte->h_usyms) != NULL) {
-		/* %s used( %s ), but not defined */
+		/* %s is used in %s but never defined */
 		msg(0, hte->h_name, mkpos(&usym->u_pos));
 	}
 }
@@ -152,16 +152,16 @@ chkund(const hte_t *hte)
  * Print a warning if the name has been defined, but never used.
  */
 static void
-chkdnu(const hte_t *hte)
+check_defined_not_used(const hte_t *hte)
 {
-	sym_t	*sym;
+	sym_t *sym;
 
 	if (!hte->h_def || hte->h_used)
 		return;
 
 	for (sym = hte->h_syms; sym != NULL; sym = sym->s_next) {
 		if (sym->s_def == DEF || sym->s_def == TDEF) {
-			/* %s defined( %s ), but never used */
+			/* %s is defined in %s but never used */
 			msg(1, hte->h_name, mkpos(&sym->s_pos));
 			break;
 		}
@@ -173,9 +173,9 @@ chkdnu(const hte_t *hte)
  * or defined.
  */
 static void
-chkdnud(const hte_t *hte)
+check_declared_not_used_or_defined(const hte_t *hte)
 {
-	sym_t	*sym;
+	sym_t *sym;
 
 	if (hte->h_syms == NULL || hte->h_used || hte->h_def)
 		return;
@@ -185,8 +185,8 @@ chkdnud(const hte_t *hte)
 		return;
 
 	if (sym->s_def != DECL)
-		errx(1, "internal error: chkdnud() 1");
-	/* %s declared( %s ), but never used or defined */
+		errx(1, "internal error: check_declared_not_used_or_defined");
+	/* %s is declared in %s but never used or defined */
 	msg(2, hte->h_name, mkpos(&sym->s_pos));
 }
 
@@ -195,10 +195,9 @@ chkdnud(const hte_t *hte)
  * this name.
  */
 static void
-chkmd(const hte_t *hte)
+check_multiple_definitions(const hte_t *hte)
 {
-	sym_t	*sym, *def1;
-	char	*pos1;
+	sym_t *sym, *def1;
 
 	if (!hte->h_def)
 		return;
@@ -206,8 +205,8 @@ chkmd(const hte_t *hte)
 	def1 = NULL;
 	for (sym = hte->h_syms; sym != NULL; sym = sym->s_next) {
 		/*
-		 * ANSI C allows tentative definitions of the same name in
-		 * only one compilation unit.
+		 * C90 allows tentative definitions of the same name in only
+		 * one compilation unit.
 		 */
 		if (sym->s_def != DEF && (!sflag || sym->s_def != TDEF))
 			continue;
@@ -217,10 +216,8 @@ chkmd(const hte_t *hte)
 			def1 = sym;
 			continue;
 		}
-		pos1 = xstrdup(mkpos(&def1->s_pos));
-		/* %s multiply defined  \t%s  ::  %s */
-		msg(3, hte->h_name, pos1, mkpos(&sym->s_pos));
-		free(pos1);
+		/* %s has multiple definitions in %s and %s */
+		msg(3, hte->h_name, mkpos(&def1->s_pos), mkpos(&sym->s_pos));
 	}
 }
 
@@ -236,11 +233,10 @@ chkmd(const hte_t *hte)
 static void
 chkvtui(const hte_t *hte, sym_t *def, sym_t *decl)
 {
-	fcall_t	*call;
-	char	*pos1;
-	type_t	*tp1, *tp2;
-	bool	dowarn, eq;
-	tspec_t	t1;
+	fcall_t *call;
+	type_t *tp1, *tp2;
+	bool dowarn, eq;
+	tspec_t t1;
 
 	if (hte->h_calls == NULL)
 		return;
@@ -253,38 +249,36 @@ chkvtui(const hte_t *hte, sym_t *def, sym_t *decl)
 	t1 = (tp1 = TP(def->s_type)->t_subt)->t_tspec;
 	for (call = hte->h_calls; call != NULL; call = call->f_next) {
 		tp2 = TP(call->f_type)->t_subt;
-		eq = eqtype(tp1, tp2,
+		eq = types_compatible(tp1, tp2,
 		    true, false, false, (dowarn = false, &dowarn));
 		if (!call->f_rused) {
 			/* no return value used */
 			if ((t1 == STRUCT || t1 == UNION) && !eq) {
 				/*
-				 * If a function returns a struct or union it
+				 * If a function returns a struct or union, it
 				 * must be declared to return a struct or
-				 * union, also if the return value is ignored.
+				 * union, even if the return value is ignored.
 				 * This is necessary because the caller must
 				 * allocate stack space for the return value.
-				 * If it does not, the return value would over-
-				 * write other data.
-				 * XXX Following massage may be confusing
-				 * because it appears also if the return value
+				 * If it does not, the return value would
+				 * overwrite other data.
+				 *
+				 * XXX: The following message may be confusing
+				 * because it occurs also if the return value
 				 * was declared inconsistently. But this
-				 * behavior matches pcc based lint, so it is
+				 * behavior matches pcc-based lint, so it is
 				 * accepted for now.
 				 */
-				pos1 = xstrdup(mkpos(&def->s_pos));
-				/* %s function value must be declared ... */
+				/* %s's return type in %s must be decl... */
 				msg(17, hte->h_name,
-				    pos1, mkpos(&call->f_pos));
-				free(pos1);
+				    mkpos(&def->s_pos), mkpos(&call->f_pos));
 			}
 			continue;
 		}
 		if (!eq || (sflag && dowarn)) {
-			pos1 = xstrdup(mkpos(&def->s_pos));
-			/* %s value used inconsistently  \t%s  ::  %s */
-			msg(4, hte->h_name, pos1, mkpos(&call->f_pos));
-			free(pos1);
+			/* %s has its return value used inconsistently ... */
+			msg(4, hte->h_name,
+			    mkpos(&def->s_pos), mkpos(&call->f_pos));
 		}
 	}
 }
@@ -297,10 +291,9 @@ chkvtui(const hte_t *hte, sym_t *def, sym_t *decl)
 static void
 chkvtdi(const hte_t *hte, sym_t *def, sym_t *decl)
 {
-	sym_t	*sym;
-	type_t	*tp1, *tp2;
-	bool	eq, dowarn;
-	char	*pos1;
+	sym_t *sym;
+	type_t *tp1, *tp2;
+	bool eq, dowarn;
 
 	if (def == NULL)
 		def = decl;
@@ -315,20 +308,26 @@ chkvtdi(const hte_t *hte, sym_t *def, sym_t *decl)
 		tp2 = TP(sym->s_type);
 		dowarn = false;
 		if (tp1->t_tspec == FUNC && tp2->t_tspec == FUNC) {
-			eq = eqtype(xt1 = tp1->t_subt, xt2 = tp2->t_subt,
-			    true, false, false, &dowarn);
+			eq = types_compatible(xt1 = tp1->t_subt,
+			    xt2 = tp2->t_subt, true, false, false, &dowarn);
 		} else {
-			eq = eqtype(xt1 = tp1, xt2 = tp2,
+			eq = types_compatible(xt1 = tp1, xt2 = tp2,
 			    false, false, false, &dowarn);
 		}
 		if (!eq || (sflag && dowarn)) {
-			pos1 = xstrdup(mkpos(&def->s_pos));
-			/* %s value declared inconsistently (%s != %s) \t... */
-			msg(5, hte->h_name, type_name(xt1), type_name(xt2),
-			    pos1, mkpos(&sym->s_pos));
-			free(pos1);
+			/* %s returns '%s' at %s, versus '%s' at %s */
+			msg(5, hte->h_name, type_name(xt1), mkpos(&def->s_pos),
+			    type_name(xt2), mkpos(&sym->s_pos));
 		}
 	}
+}
+
+static int
+total_args(int n, type_t **tpp)
+{
+	for (; *tpp != NULL; tpp++)
+		n++;
+	return n;
 }
 
 /*
@@ -339,11 +338,10 @@ chkvtdi(const hte_t *hte, sym_t *def, sym_t *decl)
 static void
 chkfaui(const hte_t *hte, sym_t *def, sym_t *decl)
 {
-	type_t	*tp1, *tp2, **ap1, **ap2;
-	pos_t	*pos1p = NULL;
-	fcall_t	*calls, *call, *call1;
-	int	n, as;
-	char	*pos1;
+	type_t *tp1, *tp2, **ap1, **ap2;
+	pos_t *pos1p = NULL;
+	fcall_t *calls, *call, *call1;
+	int n, as;
 	arginf_t *ai;
 
 	if ((calls = hte->h_calls) == NULL)
@@ -351,9 +349,8 @@ chkfaui(const hte_t *hte, sym_t *def, sym_t *decl)
 
 	/*
 	 * If we find a function definition, we use this for comparison,
-	 * otherwise the first prototype we can find. If there is no
-	 * definition or prototype declaration, the first function call
-	 * is used.
+	 * otherwise the first prototype we can find. If there is no definition
+	 * or prototype declaration, the first function call is used.
 	 */
 	tp1 = NULL;
 	call1 = NULL;
@@ -387,30 +384,29 @@ chkfaui(const hte_t *hte, sym_t *def, sym_t *decl)
 				break;
 			n++;
 			chkau(hte, n, def, decl, pos1p, call1, call,
-			      *ap1, *ap2);
+			    *ap1, *ap2);
 			ap1++;
 			ap2++;
 		}
 		if (*ap1 == *ap2) {
 			/* equal # of arguments */
 		} else if (def != NULL && def->s_check_only_first_args &&
-			   n >= def->s_check_num_args) {
+		    n >= def->s_check_num_args) {
 			/*
-			 * function definition with VARARGS; The # of
-			 * arguments of the call must be at least as large
-			 * as the parameter of VARARGS.
+			 * function definition with VARARGS; The # of arguments
+			 * of the call must be at least as large as the
+			 * parameter of VARARGS.
 			 */
 		} else if (*ap2 != NULL && tp1->t_proto && tp1->t_vararg) {
 			/*
-			 * prototype with ... and function call with
-			 * at least the same # of arguments as declared
-			 * in the prototype.
+			 * prototype with ... and function call with at least
+			 * the same # of arguments as declared in the
+			 * prototype.
 			 */
 		} else {
-			pos1 = xstrdup(mkpos(pos1p));
-			/* %s: variable # of args  \t%s  ::  %s */
-			msg(7, hte->h_name, pos1, mkpos(&call->f_pos));
-			free(pos1);
+			/* %s has %d parameters in %s, versus %d ... */
+			msg(7, hte->h_name, total_args(n, ap1), mkpos(pos1p),
+			    total_args(n, ap2), mkpos(&call->f_pos));
 			continue;
 		}
 
@@ -440,9 +436,9 @@ chkfaui(const hte_t *hte, sym_t *def, sym_t *decl)
  *  hte		a pointer to the hash table entry of the function
  *  n		the number of the argument (1..)
  *  def		the function definition or NULL
- *  decl	prototype declaration, old style declaration or NULL
+ *  decl	prototype declaration, old-style declaration or NULL
  *  pos1p	position of definition, declaration of first call
- *  call1	first call, if both def and decl are old style def/decl
+ *  call1	first call, if both def and decl are old-style def/decl
  *  call	checked call
  *  arg1	currently checked argument of def/decl/call1
  *  arg2	currently checked argument of call
@@ -452,50 +448,49 @@ static void
 chkau(const hte_t *hte, int n, sym_t *def, sym_t *decl, pos_t *pos1p,
 	fcall_t *call1, fcall_t *call, type_t *arg1, type_t *arg2)
 {
-	bool	promote, asgn, dowarn;
-	tspec_t	t1, t2;
+	bool promote, asgn, dowarn;
+	tspec_t t1, t2;
 	arginf_t *ai, *ai1;
-	char	*pos1;
 
 	/*
 	 * If a function definition is available (def != NULL), we compare the
 	 * function call (call) with the definition. Otherwise, if a function
-	 * definition is available and it is not an old style definition
-	 * (decl != NULL && TP(decl->s_type)->t_proto), we compare the call
-	 * with this declaration. Otherwise we compare it with the first
-	 * call we have found (call1).
+	 * definition is available and it is not an old-style definition (decl
+	 * != NULL && TP(decl->s_type)->t_proto), we compare the call with this
+	 * declaration. Otherwise we compare it with the first call we have
+	 * found (call1).
 	 */
 
-	/* arg1 must be promoted if it stems from an old style definition */
+	/* arg1 must be promoted if it stems from an old-style definition */
 	promote = def != NULL && def->s_old_style_function;
 
 	/*
-	 * If we compare with a definition or declaration, we must perform
-	 * the same checks for qualifiers in indirected types as in
-	 * assignments.
+	 * If we compare with a definition or declaration, we must perform the
+	 * same checks for qualifiers in indirected types as in assignments.
 	 */
 	asgn = def != NULL || (decl != NULL && TP(decl->s_type)->t_proto);
 
 	dowarn = false;
-	if (eqtype(arg1, arg2, true, promote, asgn, &dowarn) &&
+	if (types_compatible(arg1, arg2, true, promote, asgn, &dowarn) &&
 	    (!sflag || !dowarn))
 		return;
 
-	/*
-	 * Other lint implementations print warnings as soon as the type
-	 * of an argument does not match exactly the expected type. The
-	 * result are lots of warnings which are really not necessary.
+	/*-
+	 * Other lint implementations print warnings as soon as the type of an
+	 * argument does not match exactly the expected type. The result are
+	 * lots of warnings which are really not necessary.
 	 * We print a warning only if
 	 *   (0) at least one type is not an integer type and types differ
 	 *   (1) hflag is set and types differ
 	 *   (2) types differ, except in signedness
+	 *
 	 * If the argument is an integer constant whose msb is not set,
-	 * signedness is ignored (e.g. 0 matches both signed and unsigned
-	 * int). This is with and without hflag.
-	 * If the argument is an integer constant with value 0 and the
-	 * expected argument is of type pointer and the width of the
-	 * integer constant is the same as the width of the pointer,
-	 * no warning is printed.
+	 * signedness is ignored (e.g. 0 matches both signed and unsigned int).
+	 * This is with and without hflag.
+	 *
+	 * If the argument is an integer constant with value 0 and the expected
+	 * argument is of type pointer and the width of the integer constant is
+	 * the same as the width of the pointer, no warning is printed.
 	 */
 	t1 = arg1->t_tspec;
 	t2 = arg2->t_tspec;
@@ -538,17 +533,17 @@ chkau(const hte_t *hte, int n, sym_t *def, sym_t *decl, pos_t *pos1p,
 
 			/*
 			 * if two calls are compared, ai1 is set to the
-			 * information for the n-th argument, if this was
-			 * a constant, otherwise to NULL
+			 * information for the n-th argument, if this was a
+			 * constant, otherwise to NULL
 			 */
 			for ( ; ai1 != NULL; ai1 = ai1->a_next) {
 				if (ai1->a_num == n)
 					break;
 			}
 			/*
-			 * ai is set to the information of the n-th arg
-			 * of the (second) call, if this was a constant,
-			 * otherwise to NULL
+			 * ai is set to the information of the n-th arg of the
+			 * (second) call, if this was a constant, otherwise to
+			 * NULL
 			 */
 			for (ai = call->f_args; ai != NULL; ai = ai->a_next) {
 				if (ai->a_num == n)
@@ -569,9 +564,9 @@ chkau(const hte_t *hte, int n, sym_t *def, sym_t *decl, pos_t *pos1p,
 				/* value (not representation) differently */
 			} else {
 				/*
-				 * two constants, one signed, one unsigned;
-				 * if the msb of one of the constants is set,
-				 * the argument is used inconsistently.
+				 * two constants, one signed, one unsigned; if
+				 * the msb of one of the constants is set, the
+				 * argument is used inconsistently.
 				 */
 				if (!ai1->a_ncon && !ai->a_ncon)
 					return;
@@ -585,18 +580,16 @@ chkau(const hte_t *hte, int n, sym_t *def, sym_t *decl, pos_t *pos1p,
 		}
 		/*
 		 * Vendor implementations of lint (e.g. HP-UX, Digital UNIX)
-		 * don't care about the size of the integer argument,
-		 * only whether or not it is zero.  We do the same.
+		 * don't care about the size of the integer argument, only
+		 * whether or not it is zero.  We do the same.
 		 */
 		if (ai != NULL && ai->a_zero)
 			return;
 	}
 
-	pos1 = xstrdup(mkpos(pos1p));
-	/* %s, arg %d used inconsistently  \t%s[%s]  ::  %s[%s] */
-	msg(6, hte->h_name, n, pos1, type_name(arg1),
-	    mkpos(&call->f_pos), type_name(arg2));
-	free(pos1);
+	/* %s has argument %d with type '%s' at %s, versus '%s' at %s */
+	msg(6, hte->h_name, n, type_name(arg1), mkpos(pos1p),
+	    type_name(arg2), mkpos(&call->f_pos));
 }
 
 /*
@@ -606,11 +599,11 @@ chkau(const hte_t *hte, int n, sym_t *def, sym_t *decl, pos_t *pos1p,
 static void
 printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 {
-	const	char *fp;
-	int	fc;
-	bool	fwidth, prec, left, sign, space, alt, zero;
-	tspec_t	sz, t1, t2 = NOTSPEC;
-	type_t	*tp;
+	const char *fp;
+	char fc;
+	bool fwidth, prec, left, sign, space, alt, zero;
+	tspec_t sz, t1, t2 = NO_TSPEC;
+	type_t *tp;
 
 	fp = fmt;
 	fc = *fp++;
@@ -618,16 +611,16 @@ printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 	for (;;) {
 		if (fc == '\0') {
 			if (*ap != NULL)
-				tomanyarg(hte, call);
+				too_many_arguments(hte, call);
 			break;
 		}
 		if (fc != '%') {
-			badfmt(hte, call);
+			bad_format_string(hte, call);
 			break;
 		}
 		fc = *fp++;
 		fwidth = prec = left = sign = space = alt = zero = false;
-		sz = NOTSPEC;
+		sz = NO_TSPEC;
 
 		/* Flags */
 		for (;;) {
@@ -665,12 +658,12 @@ printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 			fwidth = true;
 			fc = *fp++;
 			if ((tp = *ap++) == NULL) {
-				tofewarg(hte, call);
+				too_few_arguments(hte, call);
 				break;
 			}
 			n++;
 			if ((t1 = tp->t_tspec) != INT && (hflag || t1 != UINT))
-				inconarg(hte, call, n);
+				inconsistent_arguments(hte, call, n);
 		}
 
 		/* precision */
@@ -678,18 +671,20 @@ printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 			fc = *fp++;
 			prec = true;
 			if (ch_isdigit(fc)) {
-				do { fc = *fp++; } while (ch_isdigit(fc));
+				do {
+					fc = *fp++;
+				} while (ch_isdigit(fc));
 			} else if (fc == '*') {
 				fc = *fp++;
 				if ((tp = *ap++) == NULL) {
-					tofewarg(hte, call);
+					too_few_arguments(hte, call);
 					break;
 				}
 				n++;
 				if (tp->t_tspec != INT)
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 			} else {
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 				break;
 			}
 		}
@@ -699,29 +694,29 @@ printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 		} else if (fc == 'l') {
 			sz = LONG;
 		} else if (fc == 'q') {
-			sz = QUAD;
+			sz = LLONG;
 		} else if (fc == 'L') {
 			sz = LDOUBLE;
 		}
-		if (sz != NOTSPEC)
+		if (sz != NO_TSPEC)
 			fc = *fp++;
 
 		if (fc == '%') {
-			if (sz != NOTSPEC || left || sign || space ||
+			if (sz != NO_TSPEC || left || sign || space ||
 			    alt || zero || prec || fwidth) {
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 			}
 			fc = *fp++;
 			continue;
 		}
 
 		if (fc == '\0') {
-			badfmt(hte, call);
+			bad_format_string(hte, call);
 			break;
 		}
 
 		if ((tp = *ap++) == NULL) {
-			tofewarg(hte, call);
+			too_few_arguments(hte, call);
 			break;
 		}
 		n++;
@@ -730,45 +725,45 @@ printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 
 		if (fc == 'd' || fc == 'i') {
 			if (alt || sz == LDOUBLE) {
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 				break;
 			}
 		int_conv:
 			if (sz == LONG) {
 				if (t1 != LONG && (hflag || t1 != ULONG))
-					inconarg(hte, call, n);
-			} else if (sz == QUAD) {
-				if (t1 != QUAD && (hflag || t1 != UQUAD))
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
+			} else if (sz == LLONG) {
+				if (t1 != LLONG && (hflag || t1 != ULLONG))
+					inconsistent_arguments(hte, call, n);
 			} else {
 				/*
-				 * SHORT is always promoted to INT, USHORT
-				 * to INT or UINT.
+				 * SHORT is always promoted to INT, USHORT to
+				 * INT or UINT.
 				 */
 				if (t1 != INT && (hflag || t1 != UINT))
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 			}
 		} else if (fc == 'o' || fc == 'u' || fc == 'x' || fc == 'X') {
 			if ((alt && fc == 'u') || sz == LDOUBLE)
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 		uint_conv:
 			if (sz == LONG) {
 				if (t1 != ULONG && (hflag || t1 != LONG))
-					inconarg(hte, call, n);
-			} else if (sz == QUAD) {
-				if (t1 != UQUAD && (hflag || t1 != QUAD))
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
+			} else if (sz == LLONG) {
+				if (t1 != ULLONG && (hflag || t1 != LLONG))
+					inconsistent_arguments(hte, call, n);
 			} else if (sz == SHORT) {
 				/* USHORT was promoted to INT or UINT */
 				if (t1 != UINT && t1 != INT)
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 			} else {
 				if (t1 != UINT && (hflag || t1 != INT))
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 			}
 		} else if (fc == 'D' || fc == 'O' || fc == 'U') {
-			if ((alt && fc != 'O') || sz != NOTSPEC || !tflag)
-				badfmt(hte, call);
+			if ((alt && fc != 'O') || sz != NO_TSPEC || !tflag)
+				bad_format_string(hte, call);
 			sz = LONG;
 			if (fc == 'D') {
 				goto int_conv;
@@ -776,47 +771,47 @@ printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 				goto uint_conv;
 			}
 		} else if (fc == 'f' || fc == 'e' || fc == 'E' ||
-			   fc == 'g' || fc == 'G') {
-			if (sz == NOTSPEC)
+		    fc == 'g' || fc == 'G') {
+			if (sz == NO_TSPEC)
 				sz = DOUBLE;
 			if (sz != DOUBLE && sz != LDOUBLE)
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 			if (t1 != sz)
-				inconarg(hte, call, n);
+				inconsistent_arguments(hte, call, n);
 		} else if (fc == 'c') {
-			if (sz != NOTSPEC || alt || zero)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || alt || zero)
+				bad_format_string(hte, call);
 			if (t1 != INT)
-				inconarg(hte, call, n);
+				inconsistent_arguments(hte, call, n);
 		} else if (fc == 's') {
-			if (sz != NOTSPEC || alt || zero)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || alt || zero)
+				bad_format_string(hte, call);
 			if (t1 != PTR ||
 			    (t2 != CHAR && t2 != UCHAR && t2 != SCHAR)) {
-				inconarg(hte, call, n);
+				inconsistent_arguments(hte, call, n);
 			}
 		} else if (fc == 'p') {
-			if (fwidth || prec || sz != NOTSPEC || alt || zero)
-				badfmt(hte, call);
+			if (fwidth || prec || sz != NO_TSPEC || alt || zero)
+				bad_format_string(hte, call);
 			if (t1 != PTR || (hflag && t2 != VOID))
-				inconarg(hte, call, n);
+				inconsistent_arguments(hte, call, n);
 		} else if (fc == 'n') {
 			if (fwidth || prec || alt || zero || sz == LDOUBLE)
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 			if (t1 != PTR) {
-				inconarg(hte, call, n);
+				inconsistent_arguments(hte, call, n);
 			} else if (sz == LONG) {
 				if (t2 != LONG && t2 != ULONG)
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 			} else if (sz == SHORT) {
 				if (t2 != SHORT && t2 != USHORT)
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 			} else {
 				if (t2 != INT && t2 != UINT)
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 			}
 		} else {
-			badfmt(hte, call);
+			bad_format_string(hte, call);
 			break;
 		}
 
@@ -831,11 +826,11 @@ printflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 static void
 scanflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 {
-	const	char *fp;
-	int	fc;
-	bool	noasgn, fwidth;
-	tspec_t	sz, t1 = NOTSPEC, t2 = NOTSPEC;
-	type_t	*tp = NULL;
+	const char *fp;
+	char fc;
+	bool noasgn, fwidth;
+	tspec_t sz, t1 = NO_TSPEC, t2 = NO_TSPEC;
+	type_t *tp = NULL;
 
 	fp = fmt;
 	fc = *fp++;
@@ -843,17 +838,17 @@ scanflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 	for (;;) {
 		if (fc == '\0') {
 			if (*ap != NULL)
-				tomanyarg(hte, call);
+				too_many_arguments(hte, call);
 			break;
 		}
 		if (fc != '%') {
-			badfmt(hte, call);
+			bad_format_string(hte, call);
 			break;
 		}
 		fc = *fp++;
 
 		noasgn = fwidth = false;
-		sz = NOTSPEC;
+		sz = NO_TSPEC;
 
 		if (fc == '*') {
 			noasgn = true;
@@ -870,23 +865,23 @@ scanflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 		} else if (fc == 'l') {
 			sz = LONG;
 		} else if (fc == 'q') {
-			sz = QUAD;
+			sz = LLONG;
 		} else if (fc == 'L') {
 			sz = LDOUBLE;
 		}
-		if (sz != NOTSPEC)
+		if (sz != NO_TSPEC)
 			fc = *fp++;
 
 		if (fc == '%') {
-			if (sz != NOTSPEC || noasgn || fwidth)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || noasgn || fwidth)
+				bad_format_string(hte, call);
 			fc = *fp++;
 			continue;
 		}
 
 		if (!noasgn) {
 			if ((tp = *ap++) == NULL) {
-				tofewarg(hte, call);
+				too_few_arguments(hte, call);
 				break;
 			}
 			n++;
@@ -896,122 +891,122 @@ scanflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 
 		if (fc == 'd' || fc == 'i' || fc == 'n') {
 			if (sz == LDOUBLE)
-				badfmt(hte, call);
-			if (sz != SHORT && sz != LONG && sz != QUAD)
+				bad_format_string(hte, call);
+			if (sz != SHORT && sz != LONG && sz != LLONG)
 				sz = INT;
 		conv:
 			if (!noasgn) {
 				if (t1 != PTR) {
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 				} else if (t2 != signed_type(sz)) {
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 				} else if (hflag && t2 != sz) {
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 				} else if (tp->t_subt->t_const) {
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 				}
 			}
 		} else if (fc == 'o' || fc == 'u' || fc == 'x') {
 			if (sz == LDOUBLE)
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 			if (sz == SHORT) {
 				sz = USHORT;
 			} else if (sz == LONG) {
 				sz = ULONG;
-			} else if (sz == QUAD) {
-				sz = UQUAD;
+			} else if (sz == LLONG) {
+				sz = ULLONG;
 			} else {
 				sz = UINT;
 			}
 			goto conv;
 		} else if (fc == 'D') {
-			if (sz != NOTSPEC || !tflag)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || !tflag)
+				bad_format_string(hte, call);
 			sz = LONG;
 			goto conv;
 		} else if (fc == 'O') {
-			if (sz != NOTSPEC || !tflag)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || !tflag)
+				bad_format_string(hte, call);
 			sz = ULONG;
 			goto conv;
 		} else if (fc == 'X') {
 			/*
-			 * XXX valid in ANSI C, but in NetBSD's libc imple-
-			 * mented as "lx". That's why it should be avoided.
+			 * XXX valid in C90, but in NetBSD's libc implemented
+			 * as "lx". That's why it should be avoided.
 			 */
-			if (sz != NOTSPEC || !tflag)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || !tflag)
+				bad_format_string(hte, call);
 			sz = ULONG;
 			goto conv;
 		} else if (fc == 'E') {
 			/*
-			 * XXX valid in ANSI C, but in NetBSD's libc imple-
-			 * mented as "lf". That's why it should be avoided.
+			 * XXX valid in C90, but in NetBSD's libc implemented
+			 * as "lf". That's why it should be avoided.
 			 */
-			if (sz != NOTSPEC || !tflag)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || !tflag)
+				bad_format_string(hte, call);
 			sz = DOUBLE;
 			goto conv;
 		} else if (fc == 'F') {
 			/* XXX only for backward compatibility */
-			if (sz != NOTSPEC || !tflag)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC || !tflag)
+				bad_format_string(hte, call);
 			sz = DOUBLE;
 			goto conv;
 		} else if (fc == 'G') {
 			/*
-			 * XXX valid in ANSI C, but in NetBSD's libc not
+			 * XXX valid in C90, but in NetBSD's libc not
 			 * implemented
 			 */
-			if (sz != NOTSPEC && sz != LONG && sz != LDOUBLE)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC && sz != LONG && sz != LDOUBLE)
+				bad_format_string(hte, call);
 			goto fconv;
 		} else if (fc == 'e' || fc == 'f' || fc == 'g') {
 		fconv:
-			if (sz == NOTSPEC) {
+			if (sz == NO_TSPEC) {
 				sz = FLOAT;
 			} else if (sz == LONG) {
 				sz = DOUBLE;
 			} else if (sz != LDOUBLE) {
-				badfmt(hte, call);
+				bad_format_string(hte, call);
 				sz = FLOAT;
 			}
 			goto conv;
 		} else if (fc == 's' || fc == '[' || fc == 'c') {
-			if (sz != NOTSPEC)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC)
+				bad_format_string(hte, call);
 			if (fc == '[') {
 				if ((fc = *fp++) == '-') {
-					badfmt(hte, call);
+					bad_format_string(hte, call);
 					fc = *fp++;
 				}
 				if (fc != ']') {
-					badfmt(hte, call);
+					bad_format_string(hte, call);
 					if (fc == '\0')
 						break;
 				}
 			}
 			if (!noasgn) {
 				if (t1 != PTR) {
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 				} else if (t2 != CHAR && t2 != UCHAR &&
-					   t2 != SCHAR) {
-					inconarg(hte, call, n);
+				    t2 != SCHAR) {
+					inconsistent_arguments(hte, call, n);
 				}
 			}
 		} else if (fc == 'p') {
-			if (sz != NOTSPEC)
-				badfmt(hte, call);
+			if (sz != NO_TSPEC)
+				bad_format_string(hte, call);
 			if (!noasgn) {
 				if (t1 != PTR || t2 != PTR) {
-					inconarg(hte, call, n);
+					inconsistent_arguments(hte, call, n);
 				} else if (tp->t_subt->t_subt->t_tspec!=VOID) {
 					if (hflag)
-						inconarg(hte, call, n);
+						inconsistent_arguments(hte, call, n);
 				}
 			}
 		} else {
-			badfmt(hte, call);
+			bad_format_string(hte, call);
 			break;
 		}
 
@@ -1020,34 +1015,34 @@ scanflike(const hte_t *hte, fcall_t *call, int n, const char *fmt, type_t **ap)
 }
 
 static void
-badfmt(const hte_t *hte, fcall_t *call)
+bad_format_string(const hte_t *hte, fcall_t *call)
 {
 
-	/* %s: malformed format string  \t%s */
+	/* %s is called with a malformed format string in %s */
 	msg(13, hte->h_name, mkpos(&call->f_pos));
 }
 
 static void
-inconarg(const hte_t *hte, fcall_t *call, int n)
+inconsistent_arguments(const hte_t *hte, fcall_t *call, int n)
 {
 
-	/* %s, arg %d inconsistent with format  \t%s */
-	msg(14, hte->h_name, n, mkpos(&call->f_pos));
+	/* %s is called in %s with argument %d being incompatible with ... */
+	msg(14, hte->h_name, mkpos(&call->f_pos), n);
 }
 
 static void
-tofewarg(const hte_t *hte, fcall_t *call)
+too_few_arguments(const hte_t *hte, fcall_t *call)
 {
 
-	/* %s: too few args for format  \t%s */
+	/* %s is called in %s with too few arguments for format string */
 	msg(15, hte->h_name, mkpos(&call->f_pos));
 }
 
 static void
-tomanyarg(const hte_t *hte, fcall_t *call)
+too_many_arguments(const hte_t *hte, fcall_t *call)
 {
 
-	/* %s: too many args for format  \t%s */
+	/* %s is called in %s with too many arguments for format string */
 	msg(16, hte->h_name, mkpos(&call->f_pos));
 }
 
@@ -1066,14 +1061,14 @@ static const char ignorelist[][8] = {
 };
 
 /*
- * Print warnings for return values which are used, but not returned,
+ * Print warnings for return values which are used but not returned,
  * or return values which are always or sometimes ignored.
  */
 static void
-chkrvu(const hte_t *hte, sym_t *def)
+check_return_values(const hte_t *hte, sym_t *def)
 {
-	fcall_t	*call;
-	bool	used, ignored;
+	fcall_t *call;
+	bool used, ignored;
 
 	if (def == NULL)
 		/* don't know whether or not the functions returns a value */
@@ -1084,15 +1079,16 @@ chkrvu(const hte_t *hte, sym_t *def)
 
 	if (def->s_function_has_return_value) {
 		/*
-		 * XXX as soon as we are able to disable single warnings
-		 * the following dependencies from hflag should be removed.
-		 * but for now I don't want to be bothered by this warnings
-		 * which are almost always useless.
+		 * XXX as soon as we are able to disable single warnings, the
+		 * following dependencies from hflag should be removed. But for
+		 * now I don't want to be bothered by these warnings which are
+		 * almost always useless.
 		 */
 		if (!hflag)
 			return;
 		if (hflag && bsearch(hte->h_name, ignorelist,
-		    __arraycount(ignorelist), sizeof(ignorelist[0]),
+		    sizeof(ignorelist) / sizeof(ignorelist[0]),
+		    sizeof(ignorelist[0]),
 		    (int (*)(const void *, const void *))strcmp) != NULL)
 			return;
 
@@ -1103,17 +1099,17 @@ chkrvu(const hte_t *hte, sym_t *def)
 			ignored |= !call->f_rused && !call->f_rdisc;
 		}
 		if (!used && ignored) {
-			/* %s returns value which is always ignored */
+			/* %s returns a value that is always ignored */
 			msg(8, hte->h_name);
 		} else if (used && ignored) {
-			/* %s returns value which is sometimes ignored */
+			/* %s returns a value that is sometimes ignored */
 			msg(9, hte->h_name);
 		}
 	} else {
 		/* function has no return value */
 		for (call = hte->h_calls; call != NULL; call = call->f_next) {
 			if (call->f_rused)
-				/* %s value is used( %s ), but none returned */
+				/* %s has its return value used in %s but doesn't return one */
 				msg(10, hte->h_name, mkpos(&call->f_pos));
 		}
 	}
@@ -1123,14 +1119,12 @@ chkrvu(const hte_t *hte, sym_t *def)
  * Print warnings for inconsistent argument declarations.
  */
 static void
-chkadecl(const hte_t *hte, sym_t *def, sym_t *decl)
+check_argument_declarations(const hte_t *hte, sym_t *def, sym_t *decl)
 {
-	bool	osdef, eq, dowarn;
-	int	n;
-	sym_t	*sym1, *sym;
-	type_t	**ap1, **ap2, *tp1, *tp2;
-	char	*pos1;
-	const	char *pos2;
+	bool osdef, eq, dowarn;
+	int n;
+	sym_t *sym1, *sym;
+	type_t **ap1, **ap2, *tp1, *tp2;
 
 	osdef = false;
 	if (def != NULL) {
@@ -1145,7 +1139,7 @@ chkadecl(const hte_t *hte, sym_t *def, sym_t *decl)
 		return;
 
 	/*
-	 * XXX Prototypes should also be compared with old style function
+	 * XXX Prototypes should also be compared with old-style function
 	 * declarations.
 	 */
 
@@ -1158,15 +1152,13 @@ chkadecl(const hte_t *hte, sym_t *def, sym_t *decl)
 		while (*ap1 != NULL && *ap2 != NULL) {
 			type_t *xt1, *xt2;
 			dowarn = false;
-			eq = eqtype(xt1 = *ap1, xt2 = *ap2,
+			eq = types_compatible(xt1 = *ap1, xt2 = *ap2,
 			    true, osdef, false, &dowarn);
 			if (!eq || dowarn) {
-				pos1 = xstrdup(mkpos(&sym1->s_pos));
-				pos2 = mkpos(&sym->s_pos);
-				/* %s, arg %d declared inconsistently ... */
+				/* %s has parameter %d declared as '%s' ... */
 				msg(11, hte->h_name, n + 1,
-				    type_name(xt1), type_name(xt2), pos1, pos2);
-				free(pos1);
+				    type_name(xt1), mkpos(&sym1->s_pos),
+				    type_name(xt2), mkpos(&sym->s_pos));
 			}
 			n++;
 			ap1++;
@@ -1182,10 +1174,10 @@ chkadecl(const hte_t *hte, sym_t *def, sym_t *decl)
 				continue;
 			}
 		}
-		pos1 = xstrdup(mkpos(&sym1->s_pos));
-		/* %s: variable # of args declared  \t%s  ::  %s */
-		msg(12, hte->h_name, pos1, mkpos(&sym->s_pos));
-		free(pos1);
+		/* %s has %d parameters in %s, versus %d in %s */
+		msg(12, hte->h_name,
+		    total_args(n, ap1), mkpos(&sym1->s_pos),
+		    total_args(n, ap2), mkpos(&sym->s_pos));
 	}
 }
 
@@ -1196,22 +1188,22 @@ chkadecl(const hte_t *hte, sym_t *def, sym_t *decl)
  * ignqual	if set, ignore qualifiers of outermost type; used for
  *		function arguments
  * promote	if set, promote left type before comparison; used for
- *		comparisons of arguments with parameters of old style
+ *		comparisons of arguments with parameters of old-style
  *		definitions
  * asgn		left indirected type must have at least the same qualifiers
  *		like right indirected type (for assignments and function
  *		arguments)
- * *dowarn	set to true if an old style declaration was compared with
+ * *dowarn	set to true if an old-style declaration was compared with
  *		an incompatible prototype declaration
  */
 static bool
-eqtype(type_t *tp1, type_t *tp2, bool ignqual, bool promot, bool asgn,
-       bool *dowarn)
+types_compatible(type_t *tp1, type_t *tp2,
+		 bool ignqual, bool promot, bool asgn, bool *dowarn)
 {
-	tspec_t	t, to;
-	int	indir;
+	tspec_t t, to;
+	int indir;
 
-	to = NOTSPEC;
+	to = NO_TSPEC;
 	indir = 0;
 
 	while (tp1 != NULL && tp2 != NULL) {
@@ -1266,8 +1258,8 @@ eqtype(type_t *tp1, type_t *tp2, bool ignqual, bool promot, bool asgn,
 		}
 
 		/*
-		 * XXX Handle combinations of enum and int if eflag is set.
-		 * But note: enum and 0 should be allowed.
+		 * XXX Handle combinations of enum and int if eflag is set. But
+		 * note: enum and 0 should be allowed.
 		 */
 
 		if (asgn && indir == 1) {
@@ -1306,13 +1298,13 @@ eqtype(type_t *tp1, type_t *tp2, bool ignqual, bool promot, bool asgn,
 
 		if (t == FUNC) {
 			if (tp1->t_proto && tp2->t_proto) {
-				if (!eqargs(tp1, tp2, dowarn))
+				if (!prototypes_compatible(tp1, tp2, dowarn))
 					return false;
 			} else if (tp1->t_proto) {
-				if (!mnoarg(tp1, dowarn))
+				if (!matches_no_arg_function(tp1, dowarn))
 					return false;
 			} else if (tp2->t_proto) {
-				if (!mnoarg(tp2, dowarn))
+				if (!matches_no_arg_function(tp2, dowarn))
 					return false;
 			}
 		}
@@ -1322,7 +1314,6 @@ eqtype(type_t *tp1, type_t *tp2, bool ignqual, bool promot, bool asgn,
 		ignqual = promot = false;
 		to = t;
 		indir++;
-
 	}
 
 	return tp1 == tp2;
@@ -1332,9 +1323,9 @@ eqtype(type_t *tp1, type_t *tp2, bool ignqual, bool promot, bool asgn,
  * Compares arguments of two prototypes
  */
 static bool
-eqargs(type_t *tp1, type_t *tp2, bool *dowarn)
+prototypes_compatible(type_t *tp1, type_t *tp2, bool *dowarn)
 {
-	type_t	**a1, **a2;
+	type_t **a1, **a2;
 
 	if (tp1->t_vararg != tp2->t_vararg)
 		return false;
@@ -1344,32 +1335,31 @@ eqargs(type_t *tp1, type_t *tp2, bool *dowarn)
 
 	while (*a1 != NULL && *a2 != NULL) {
 
-		if (!eqtype(*a1, *a2, true, false, false, dowarn))
+		if (!types_compatible(*a1, *a2, true, false, false, dowarn))
 			return false;
 
 		a1++;
 		a2++;
-
 	}
 
 	return *a1 == *a2;
 }
 
 /*
- * mnoarg() (matches functions with no argument type information)
- * returns true if all parameters of a prototype are compatible with
- * and old style function declaration.
- * This is the case if following conditions are met:
+ * Returns whether all parameters of a prototype are compatible with an
+ * old-style function declaration.
+ *
+ * This is the case if the following conditions are met:
  *	1. the prototype must have a fixed number of parameters
  *	2. no parameter is of type float
  *	3. no parameter is converted to another type if integer promotion
  *	   is applied on it
  */
 static bool
-mnoarg(type_t *tp, bool *dowarn)
+matches_no_arg_function(type_t *tp, bool *dowarn)
 {
-	type_t	**arg;
-	tspec_t	t;
+	type_t **arg;
+	tspec_t t;
 
 	if (tp->t_vararg && dowarn != NULL)
 		*dowarn = true;

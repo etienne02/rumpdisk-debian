@@ -1,4 +1,4 @@
-/* $NetBSD: gsckbc.c,v 1.1 2014/02/24 07:23:43 skrll Exp $ */
+/* $NetBSD: gsckbc.c,v 1.3 2022/06/13 17:26:34 andvar Exp $ */
 /*
  * Copyright (c) 2004 Jochen Kunz.
  * All rights reserved.
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gsckbc.c,v 1.1 2014/02/24 07:23:43 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gsckbc.c,v 1.3 2022/06/13 17:26:34 andvar Exp $");
 
 /* autoconfig and device stuff */
 #include <sys/param.h>
@@ -65,7 +65,7 @@ __KERNEL_RCSID(0, "$NetBSD: gsckbc.c,v 1.1 2014/02/24 07:23:43 skrll Exp $");
 #define	REG_RESET	0x0	/* W: reset port */
 #define	REG_RCVDATA	0x4	/* R: received data (4 byte FIFO) */
 #define	REG_XMITDATA	0x4	/* W: data to transmit */
-#define	REG_CONTROL	0x8	/* Controll Bits */
+#define	REG_CONTROL	0x8	/* Control Bits */
 #define	REG_STATUS	0xc	/* Status Bits */
 #define	REG_SZ		0xc	/* Size of register set */
 #define	REG_OFFSET	0x100	/* Address Offset of the two ports */
@@ -246,7 +246,7 @@ gsckbc_attach(device_t parent, device_t self, void *aux)
 	int i;
 
 	/*
-	 * On hppa bus_space_map(9) mapes whole pages. (surprise, surprise)
+	 * On hppa bus_space_map(9) maps whole pages. (surprise, surprise)
 	 * The registers are within the same page so we can do only a single
 	 * mapping for both devices. Also both devices use the same IRQ.
 	 * Actually you can think of the two PS/2 ports to be a single
@@ -254,7 +254,7 @@ gsckbc_attach(device_t parent, device_t self, void *aux)
 	 * firmware device tree so we keep this illusion to map the firmware
 	 * device tree as close as possible to the kernel device tree.
 	 * So we do one mapping and IRQ for both devices. The first device
-	 * is caled "master", gets the IRQ and the other is the "slave".
+	 * is called "master", gets the IRQ and the other is the "slave".
 	 *
 	 * Assumption: Master attaches first, gets the IRQ and has lower HPA.
 	 */

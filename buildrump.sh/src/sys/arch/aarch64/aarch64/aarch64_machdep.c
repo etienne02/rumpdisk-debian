@@ -1,4 +1,4 @@
-/* $NetBSD: aarch64_machdep.c,v 1.61 2021/06/03 07:02:59 skrll Exp $ */
+/* $NetBSD: aarch64_machdep.c,v 1.70 2023/07/16 21:36:40 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: aarch64_machdep.c,v 1.61 2021/06/03 07:02:59 skrll Exp $");
+__KERNEL_RCSID(1, "$NetBSD: aarch64_machdep.c,v 1.70 2023/07/16 21:36:40 riastradh Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_cpuoptions.h"
@@ -42,6 +42,7 @@ __KERNEL_RCSID(1, "$NetBSD: aarch64_machdep.c,v 1.61 2021/06/03 07:02:59 skrll E
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/asan.h>
+#include <sys/boot_flag.h>
 #include <sys/bus.h>
 #include <sys/core.h>
 #include <sys/conf.h>
@@ -73,6 +74,7 @@ __KERNEL_RCSID(1, "$NetBSD: aarch64_machdep.c,v 1.61 2021/06/03 07:02:59 skrll E
 #include <aarch64/kcore.h>
 
 #include <arm/fdt/arm_fdtvar.h>
+#include <dev/fdt/fdtvar.h>
 #include <dev/fdt/fdt_memory.h>
 
 #ifdef VERBOSE_INIT_ARM
@@ -287,7 +289,6 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 	paddr_t kernstart_phys __unused = KERN_VTOPHYS(kernstart);
 	paddr_t kernend_phys __unused = KERN_VTOPHYS(kernend);
 
-	/* XXX: arm/arm32/bus_dma.c refers physical_{start,end} */
 	physical_start = bootconfig.dram[0].address;
 	physical_end = bootconfig.dram[bootconfig.dramblocks - 1].address +
 		       ptoa(bootconfig.dram[bootconfig.dramblocks - 1].pages);
@@ -354,11 +355,11 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 	    module_end,
 #endif
 	    VM_KERNEL_VM_BASE,
-	    VM_KERNEL_IO_ADDRESS,
+	    VM_KERNEL_IO_BASE,
 	    VM_MAX_KERNEL_ADDRESS);
 
 #ifdef DDB
-	db_machdep_init();
+	db_machdep_cpu_init();
 #endif
 
 	uvm_md_init();
@@ -453,18 +454,17 @@ initarm_common(vaddr_t kvm_base, vsize_t kvm_size,
 /*
  * machine dependent system variables.
  */
-static xcfunc_t
+static void
 set_user_tagged_address(void *arg1, void *arg2)
 {
 	uint64_t enable = PTRTOUINT64(arg1);
 	uint64_t tcr = reg_tcr_el1_read();
+
 	if (enable)
 		tcr |= TCR_TBI0;
 	else
 		tcr &= ~TCR_TBI0;
 	reg_tcr_el1_write(tcr);
-
-	return 0;
 }
 
 static int
@@ -486,8 +486,8 @@ sysctl_machdep_tagged_address(SYSCTLFN_ARGS)
 		return EINVAL;
 
 	if (cur != val) {
-		uint64_t where = xc_broadcast(0,
-		    (xcfunc_t)set_user_tagged_address, UINT64TOPTR(val), NULL);
+		uint64_t where = xc_broadcast(0, set_user_tagged_address,
+		    UINT64TOPTR(val), NULL);
 		xc_wait(where);
 	}
 
@@ -532,29 +532,39 @@ SYSCTL_SETUP(sysctl_machdep_setup, "sysctl machdep subtree setup")
 	    NULL, 0,
 	    &aarch64_bti_enabled, 0,
 	    CTL_MACHDEP, CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, NULL, NULL,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_INT, "hafdbs",
+	    SYSCTL_DESCR("Whether Hardware updates to Access flag and Dirty state is enabled"),
+	    NULL, 0,
+	    &aarch64_hafdbs_enabled, 0,
+	    CTL_MACHDEP, CTL_CREATE, CTL_EOL);
 }
 
 void
 parse_mi_bootargs(char *args)
 {
-	int val;
+	const char *p = args;
 
-	if (get_bootconf_option(args, "-1", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= RB_MD1;
-	if (get_bootconf_option(args, "-s", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= RB_SINGLE;
-	if (get_bootconf_option(args, "-d", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= RB_KDB;
-	if (get_bootconf_option(args, "-a", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= RB_ASKNAME;
-	if (get_bootconf_option(args, "-q", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= AB_QUIET;
-	if (get_bootconf_option(args, "-v", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= AB_VERBOSE;
-	if (get_bootconf_option(args, "-x", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= AB_DEBUG;
-	if (get_bootconf_option(args, "-z", BOOTOPT_TYPE_BOOLEAN, &val) && val)
-		boothowto |= AB_SILENT;
+	while (*p != '\0') {
+		while (isspace(*p))
+			p++;
+
+		/* parse single dash (`-') options */
+		if (*p == '-') {
+			p++;
+			while (!isspace(*p) && *p != '\0') {
+				BOOT_FLAG(*p, boothowto);
+				p++;
+			}
+			continue;
+		}
+
+		/* skip normal argument */
+		while (!isspace(*p) && *p != '\0')
+			p++;
+	}
 }
 
 void
@@ -607,6 +617,9 @@ mm_md_physacc(paddr_t pa, vm_prot_t prot)
 {
 	if (in_dram_p(pa, 0))
 		return 0;
+
+	if (pa >= AARCH64_MAX_PA)
+		return EFAULT;
 
 	return kauth_authorize_machdep(kauth_cred_get(),
 	    KAUTH_MACHDEP_UNMANAGEDMEM, NULL, NULL, NULL, NULL);
@@ -663,8 +676,9 @@ cpu_startup(void)
 	consinit();
 
 #ifdef FDT
-	if (arm_fdt_platform()->ap_startup != NULL)
-		arm_fdt_platform()->ap_startup();
+	const struct fdt_platform * const plat = fdt_platform_find();
+	if (plat->fp_startup != NULL)
+		plat->fp_startup();
 #endif
 
 	/*

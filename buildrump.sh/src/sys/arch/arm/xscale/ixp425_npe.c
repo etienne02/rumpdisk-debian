@@ -1,4 +1,4 @@
-/*	$NetBSD: ixp425_npe.c,v 1.15 2021/08/07 16:18:46 thorpej Exp $	*/
+/*	$NetBSD: ixp425_npe.c,v 1.17 2023/06/17 11:57:49 rin Exp $	*/
 
 /*-
  * Copyright (c) 2006 Sam Leffler, Errno Consulting
@@ -62,7 +62,7 @@
 #if 0
 __FBSDID("$FreeBSD: src/sys/arm/xscale/ixp425/ixp425_npe.c,v 1.1 2006/11/19 23:55:23 sam Exp $");
 #endif
-__KERNEL_RCSID(0, "$NetBSD: ixp425_npe.c,v 1.15 2021/08/07 16:18:46 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ixp425_npe.c,v 1.17 2023/06/17 11:57:49 rin Exp $");
 
 /*
  * Intel XScale Network Processing Engine (NPE) support.
@@ -85,7 +85,6 @@ __KERNEL_RCSID(0, "$NetBSD: ixp425_npe.c,v 1.15 2021/08/07 16:18:46 thorpej Exp 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/time.h>
 #include <sys/proc.h>
@@ -106,21 +105,7 @@ __KERNEL_RCSID(0, "$NetBSD: ixp425_npe.c,v 1.15 2021/08/07 16:18:46 thorpej Exp 
 
 #include "locators.h"
 
-/*
- * IXP425_NPE_MICROCODE will be defined by ixp425-fw.mk IFF the
- * microcode object file exists in sys/arch/arm/xscale.
- *
- * To permit building the NPE drivers without microcode (so they
- * don't bitrot due to lack of use), we use "empty" microcode so
- * that the NPE drivers will simply fail to start at runtime.
- */
-#ifdef IXP425_NPE_MICROCODE
-extern char	_binary_IxNpeMicrocode_dat_start[];
-#else
-static char	_binary_IxNpeMicrocode_dat_start[] = {
-	0xfe, 0xed, 0xf0, 0x0d, 0xfe, 0xed, 0xf0, 0x0d
-};
-#endif
+extern char _binary_IxNpeMicrocode_dat_start[];
 
 #define	IX_NPEDL_NPEIMAGE_FIELD_MASK	0xff
 

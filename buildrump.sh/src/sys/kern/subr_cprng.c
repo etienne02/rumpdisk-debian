@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_cprng.c,v 1.41 2021/07/21 06:35:45 skrll Exp $	*/
+/*	$NetBSD: subr_cprng.c,v 1.44 2023/08/05 11:21:24 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2019 The NetBSD Foundation, Inc.
@@ -44,7 +44,7 @@
  *	This code serves the first two categories without having extra
  *	logic for /dev/random.
  *
- *	kern_cprng - available at IPL_VM or lower
+ *	kern_cprng - available at IPL_SOFTSERIAL or lower
  *	user_cprng - available only at IPL_NONE in thread context
  *
  *	The name kern_cprng is for hysterical raisins.  The name
@@ -52,7 +52,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_cprng.c,v 1.41 2021/07/21 06:35:45 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_cprng.c,v 1.44 2023/08/05 11:21:24 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -88,7 +88,6 @@ struct cprng_cpu {
 	struct nist_hash_drbg	*cc_drbg;
 	struct {
 		struct evcnt	reseed;
-		struct evcnt	intr;
 	}			*cc_evcnt;
 	unsigned		cc_epoch;
 };
@@ -99,7 +98,7 @@ static void	cprng_init_cpu(void *, void *, struct cpu_info *);
 static void	cprng_fini_cpu(void *, void *, struct cpu_info *);
 
 /* Well-known CPRNG instances */
-struct cprng_strong *kern_cprng __read_mostly; /* IPL_VM */
+struct cprng_strong *kern_cprng __read_mostly; /* IPL_SOFTSERIAL */
 struct cprng_strong *user_cprng __read_mostly; /* IPL_NONE */
 
 static struct sysctllog *cprng_sysctllog __read_mostly;
@@ -112,12 +111,12 @@ cprng_init(void)
 		panic("NIST Hash_DRBG failed self-test");
 
 	/*
-	 * Create CPRNG instances at two IPLs: IPL_VM for kernel use
-	 * that may occur inside IPL_VM interrupt handlers (!!??!?!?),
+	 * Create CPRNG instances at two IPLs: IPL_SOFTSERIAL for
+	 * kernel use that may occur inside soft interrupt handlers,
 	 * and IPL_NONE for userland use which need not block
 	 * interrupts.
 	 */
-	kern_cprng = cprng_strong_create("kern", IPL_VM, 0);
+	kern_cprng = cprng_strong_create("kern", IPL_SOFTSERIAL, 0);
 	user_cprng = cprng_strong_create("user", IPL_NONE, 0);
 
 	/* Create kern.urandom and kern.arandom sysctl nodes.  */
@@ -246,8 +245,6 @@ cprng_init_cpu(void *ptr, void *cookie, struct cpu_info *ci)
 	/* Attach the event counters.  */
 	/* XXX ci_cpuname may not be initialized early enough.  */
 	cpuname = ci->ci_cpuname[0] == '\0' ? "cpu0" : ci->ci_cpuname;
-	evcnt_attach_dynamic(&cc->cc_evcnt->intr, EVCNT_TYPE_MISC, NULL,
-	    cpuname, "cprng_strong intr");
 	evcnt_attach_dynamic(&cc->cc_evcnt->reseed, EVCNT_TYPE_MISC, NULL,
 	    cpuname, "cprng_strong reseed");
 
@@ -261,7 +258,6 @@ cprng_fini_cpu(void *ptr, void *cookie, struct cpu_info *ci)
 	struct cprng_cpu *cc = ptr;
 
 	evcnt_detach(&cc->cc_evcnt->reseed);
-	evcnt_detach(&cc->cc_evcnt->intr);
 	if (__predict_false(nist_hash_drbg_destroy(cc->cc_drbg)))
 		panic("nist_hash_drbg_destroy");
 
@@ -269,13 +265,45 @@ cprng_fini_cpu(void *ptr, void *cookie, struct cpu_info *ci)
 	kmem_free(cc->cc_drbg, sizeof(*cc->cc_drbg));
 }
 
+static void
+cprng_strong_reseed(struct cprng_strong *cprng, unsigned epoch,
+    struct cprng_cpu **ccp, int *sp)
+{
+	uint8_t seed[NIST_HASH_DRBG_SEEDLEN_BYTES];
+
+	/*
+	 * Drop everything to extract a fresh seed from the entropy
+	 * pool.  entropy_extract may sleep on an adaptive lock, which
+	 * invalidates our percpu(9) reference.
+	 *
+	 * This may race with reseeding in another thread, which is no
+	 * big deal -- worst case, we rewind the entropy epoch here and
+	 * cause the next caller to reseed again, and in the end we
+	 * just reseed a couple more times than necessary.
+	 */
+	splx(*sp);
+	percpu_putref(cprng->cs_percpu);
+	entropy_extract(seed, sizeof seed, 0);
+	*ccp = percpu_getref(cprng->cs_percpu);
+	*sp = splraiseipl(cprng->cs_iplcookie);
+
+	(*ccp)->cc_evcnt->reseed.ev_count++;
+	if (__predict_false(nist_hash_drbg_reseed((*ccp)->cc_drbg,
+		    seed, sizeof seed, NULL, 0)))
+		panic("nist_hash_drbg_reseed");
+	explicit_memset(seed, 0, sizeof seed);
+	(*ccp)->cc_epoch = epoch;
+}
+
 size_t
 cprng_strong(struct cprng_strong *cprng, void *buf, size_t len, int flags)
 {
-	uint32_t seed[NIST_HASH_DRBG_SEEDLEN_BYTES];
 	struct cprng_cpu *cc;
 	unsigned epoch;
 	int s;
+
+	/* Not allowed in hard interrupt context.  */
+	KASSERT(!cpu_intr_p());
 
 	/*
 	 * Verify maximum request length.  Caller should really limit
@@ -292,30 +320,15 @@ cprng_strong(struct cprng_strong *cprng, void *buf, size_t len, int flags)
 	cc = percpu_getref(cprng->cs_percpu);
 	s = splraiseipl(cprng->cs_iplcookie);
 
-	if (cpu_intr_p())
-		cc->cc_evcnt->intr.ev_count++;
-
 	/* If the entropy epoch has changed, (re)seed.  */
 	epoch = entropy_epoch();
-	if (__predict_false(epoch != cc->cc_epoch)) {
-		entropy_extract(seed, sizeof seed, 0);
-		cc->cc_evcnt->reseed.ev_count++;
-		if (__predict_false(nist_hash_drbg_reseed(cc->cc_drbg,
-			    seed, sizeof seed, NULL, 0)))
-			panic("nist_hash_drbg_reseed");
-		explicit_memset(seed, 0, sizeof seed);
-		cc->cc_epoch = epoch;
-	}
+	if (__predict_false(epoch != cc->cc_epoch))
+		cprng_strong_reseed(cprng, epoch, &cc, &s);
 
 	/* Generate data.  Failure here means it's time to reseed.  */
 	if (__predict_false(nist_hash_drbg_generate(cc->cc_drbg, buf, len,
 		    NULL, 0))) {
-		entropy_extract(seed, sizeof seed, 0);
-		cc->cc_evcnt->reseed.ev_count++;
-		if (__predict_false(nist_hash_drbg_reseed(cc->cc_drbg,
-			    seed, sizeof seed, NULL, 0)))
-			panic("nist_hash_drbg_reseed");
-		explicit_memset(seed, 0, sizeof seed);
+		cprng_strong_reseed(cprng, epoch, &cc, &s);
 		if (__predict_false(nist_hash_drbg_generate(cc->cc_drbg,
 			    buf, len, NULL, 0)))
 			panic("nist_hash_drbg_generate");

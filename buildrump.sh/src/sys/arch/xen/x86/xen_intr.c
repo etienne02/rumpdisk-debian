@@ -1,4 +1,4 @@
-/*	$NetBSD: xen_intr.c,v 1.29 2021/08/09 21:20:50 andvar Exp $	*/
+/*	$NetBSD: xen_intr.c,v 1.31 2023/02/25 00:32:13 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2001 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xen_intr.c,v 1.29 2021/08/09 21:20:50 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xen_intr.c,v 1.31 2023/02/25 00:32:13 riastradh Exp $");
 
 #include "opt_multiprocessor.h"
 #include "opt_pci.h"
@@ -83,19 +83,28 @@ static const char *xen_ipi_names[XEN_NIPIS] = XEN_IPI_NAMES;
 void
 x86_disable_intr(void)
 {
+
+	kpreempt_disable();
 	curcpu()->ci_vcpu->evtchn_upcall_mask = 1;
-	x86_lfence();
+	kpreempt_enable();
+
+	__insn_barrier();
 }
 
 void
 x86_enable_intr(void)
 {
-	volatile struct vcpu_info *_vci = curcpu()->ci_vcpu;
+	struct cpu_info *ci;
+
 	__insn_barrier();
-	_vci->evtchn_upcall_mask = 0;
-	x86_lfence(); /* unmask then check (avoid races) */
-	if (__predict_false(_vci->evtchn_upcall_pending))
+
+	kpreempt_disable();
+	ci = curcpu();
+	ci->ci_vcpu->evtchn_upcall_mask = 0;
+	__insn_barrier();
+	if (__predict_false(ci->ci_vcpu->evtchn_upcall_pending))
 		hypervisor_force_callback();
+	kpreempt_enable();
 }
 
 #endif /* !XENPVHVM */
@@ -103,20 +112,27 @@ x86_enable_intr(void)
 u_long
 xen_read_psl(void)
 {
+	u_long psl;
 
-	return (curcpu()->ci_vcpu->evtchn_upcall_mask);
+	kpreempt_disable();
+	psl = curcpu()->ci_vcpu->evtchn_upcall_mask;
+	kpreempt_enable();
+
+	return psl;
 }
 
 void
 xen_write_psl(u_long psl)
 {
-	struct cpu_info *ci = curcpu();
+	struct cpu_info *ci;
 
+	kpreempt_disable();
+	ci = curcpu();
 	ci->ci_vcpu->evtchn_upcall_mask = psl;
-	xen_rmb();
-	if (ci->ci_vcpu->evtchn_upcall_pending && psl == 0) {
+	__insn_barrier();
+	if (__predict_false(ci->ci_vcpu->evtchn_upcall_pending) && psl == 0)
 	    	hypervisor_force_callback();
-	}
+	kpreempt_enable();
 }
 
 void *
@@ -167,6 +183,8 @@ xen_intr_establish_xname(int legacy_irq, struct pic *pic, int pin,
 	    "non-legacy IRQon i8259 ");
 
 	gsi = xen_pic_to_gsi(pic, pin);
+	if (gsi < 0)
+		return NULL;
 	KASSERTMSG(gsi < NR_EVENT_CHANNELS, "gsi %d >= NR_EVENT_CHANNELS %u",
 	    gsi, (int)NR_EVENT_CHANNELS);
 
@@ -195,6 +213,8 @@ xen_intr_establish_xname(int legacy_irq, struct pic *pic, int pin,
 	pih = pirq_establish(gsi, evtchn, handler, arg, level,
 			     intrstr, xname, mpsafe);
 	pih->pic = pic;
+	if (msipic_is_msi_pic(pic))
+		pic->pic_hwunmask(pic, pin);
 	return pih;
 #endif /* NPCI > 0 || NISA > 0 */
 

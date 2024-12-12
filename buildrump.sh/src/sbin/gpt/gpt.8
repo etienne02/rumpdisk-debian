@@ -1,4 +1,4 @@
-.\" $NetBSD: gpt.8,v 1.74 2020/07/27 20:54:18 christos Exp $
+.\" $NetBSD: gpt.8,v 1.84 2024/11/04 18:36:16 christos Exp $
 .\"
 .\" Copyright (c) 2002 Marcel Moolenaar
 .\" All rights reserved.
@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD: src/sbin/gpt/gpt.8,v 1.17 2006/06/22 22:22:32 marcel Exp $
 .\"
-.Dd July 27, 2020
+.Dd November 4, 2024
 .Dt GPT 8
 .Os
 .Sh NAME
@@ -59,11 +59,6 @@ tables
 but see
 .Sx BUGS
 below for how and where functionality is missing.
-The basic usage model of the
-.Nm
-tool follows that of the
-.Xr cvs 1
-tool.
 The general options are described in the following paragraph.
 The remaining paragraphs describe the individual commands with their options.
 Here we conclude by mentioning that a
@@ -165,7 +160,7 @@ or
 .Sq S
 then size is in sectors, otherwise size is in bytes which must be
 a multiple of the device's sector size.
-Accepted suffix units are
+Accepted suffix units (case insensitive) are
 .Sq b
 to denote bytes,
 .Sq k
@@ -173,13 +168,19 @@ to denote kilobytes,
 .Sq m
 to denote megabytes and
 .Sq g
-to denote gigabytes.
+to denote gigabytes,
+.Sq t
+to denote terabytes,
+.Sq p
+to denote petabytes, and
+.Sq e
+to denote exabytes.
 The minimum size is 1 sector.
 .Pp
 The
 .Fl t Ar type
 option allows the user to specify the partition type.
-The type is given as an UUID, but
+The type is given as a UUID, but
 .Nm
 accepts
 .Bl -tag -width "windows-reserved" -compact -offset indent
@@ -215,10 +216,12 @@ Linux RAID
 Linux swap
 .It Cm linux-lvm
 Linux LVM
+.It Cm obsd
+OpenBSD data
 .It Cm windows
-Windows basic data
+Microsoft basic data - NTFS, FAT32 ("msdos"), FAT16, also used for UDF
 .It Cm windows-reserved
-Windows reserved
+Microsoft reserved
 .It Cm ccd
 .Nx
 ccd component
@@ -263,28 +266,43 @@ primary bootstrap program, used during
 The
 .Fl A
 options sets the PMBR partition active.
+This should not normally be necessary,
+but some firmware might require it.
+If
+.Fl A
+is omitted, the active flag will be cleared from the PMBR label.
 .Pp
 The
 .Fl c
-option allows the user to specify the filename that
+option allows the user to specify the filename from which
 .Nm
-should read the bootcode from.
+should read the bootcode.
 The default is to read from
 .Pa /usr/mdec/gptmbr.bin .
 .Pp
+The partition that should contain the primary bootstrap code,
+.Pq similar to that installed via Xr installboot 8
+is selected using the
+.Fl i ,
+.Fl L
+and
+.Fl b
+options.
+One of these three options is required.
 The
 .Fl i
-option selects the partition that should contain the primary
-bootstrap code, as installed via
-.Xr installboot 8 .
+option selects the partition given by the
+.Ar index .
 The
 .Fl L
-option selects the partition by label.
-If there are multiple partitions with the same label, the
-first one found will be used.
+option selects the partition by
+.Ar label .
+If there are multiple partitions with the same label,
+the first one found will be used.
 The
 .Fl b
-options selects the partition by start block.
+option selects the partition starting at block
+.Ar startsec .
 .\" ==== create ====
 .It Nm Ic create Oo Fl AfP Oc Oo Fl p Ar partitions Oc
 The
@@ -371,7 +389,7 @@ This can cause multiple partitions to be labeled.
 The
 .Fl t Ar type
 option selects all partitions that have the given type.
-The type is given as an UUID or by the aliases that the
+The type is given as a UUID or by the aliases that the
 .Ic add
 command accepts.
 This can cause multiple partitions to be labeled.
@@ -614,7 +632,7 @@ They may be used by
 .Nx
 in the future.
 .\" ==== show ====
-.It Nm Ic show Oo Fl aglu Oc Oo Fl i Ar index Oc Oo Fl b Ar startsec Oc
+.It Nm Ic show Oo Fl aglux Oc Oo Fl i Ar index Oc Oo Fl b Ar startsec Oc
 The
 .Ic show
 command displays the current partitioning on the listed devices and gives
@@ -629,7 +647,7 @@ option the GPT partition label will be displayed instead of the GPT partition
 type.
 With the
 .Fl u
-option the GPT partition type is displayed as an UUID instead of in a
+option the GPT partition type is displayed as a UUID instead of in a
 user friendly form.
 With the
 .Fl i
@@ -642,13 +660,17 @@ With the
 option, all information for all GPT partitions (just like with
 .Fl i Ar index )
 will be printed.
+The
+.Fl x
+option prints start/size in hex.
 None of the options have any effect on non-GPT partitions.
-The order of precedence for the options are:
+The order of precedence for the options is:
 .Fl a ,
 .Fl i ,
 .Fl l ,
 .Fl g ,
-.Fl u .
+.Fl u ,
+.Fl x .
 .\" ==== type ====
 .It Nm Ic type Oo Fl a Oc Fl T Ar newtype
 .It Nm Ic type Oo Fl b Ar blocknr Oc Oo Fl i Ar index Oc \
@@ -706,8 +728,9 @@ They may be used by
 code in the future.
 .\" ==== uuid ====
 .It Nm Ic uuid Oo Fl a Oc
-.It Nm Ic uuid Oo Fl b Ar blocknr Oc Oo Fl i Ar index Oc \
-Oo Fl L Ar label Oc Oo Fl s Ar sectors Oc Oo Fl t Ar type Oc
+.It Nm Ic uuid Oo Fl b Ar blocknr Oc Oo Fl i Ar index Ar Oc \
+Oo Fl L Ar label Oc Oo Fl s Ar sectors Oc Oo Fl t Ar type Oc \
+Oo Fl U Ar newuuid Oc
 The
 .Ic uuid
 command allows the user to change the UUID of any and all partitions
@@ -716,6 +739,13 @@ It uses the same selection options as the
 .Ic label
 command.
 See above for a description of these options.
+If
+.Ar newuuid
+is not specified, a random UUID value is derived from the timestamp
+.Po see the
+.Fl T
+option
+.Pc .
 If
 .Fl a
 is used, then the header UUID is changed as well.
@@ -816,7 +846,7 @@ However, it is believed that the currently present functionality is reliable
 and stable enough that this tool can be used without bullet-proof footware if
 one thinks one does not make mistakes.
 .Pp
-It is expected that the basic usage model does not change, but it is
+It is expected that the basic usage model will not change, but it is
 possible that future versions will not be compatible in the strictest sense
 of the word.
 Also, options primarily intended for diagnostic or debug purposes may be

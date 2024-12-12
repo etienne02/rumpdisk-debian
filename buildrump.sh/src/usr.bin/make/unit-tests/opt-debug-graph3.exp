@@ -50,12 +50,14 @@ all             : made-target error-target aborted-target
 #*** Global Variables:
 .ALLTARGETS      =  made-target error-target aborted-target aborted-target-dependency all .END
 .CURDIR          = <curdir>
-.INCLUDES        = 
-.LIBS            = 
+.INCLUDES        = # (empty)
+.LIBS            = # (empty)
 .MAKE            = <details omitted>
 .MAKE.DEPENDFILE = <details omitted>
 .MAKE.GID        = <details omitted>
+.MAKE.JOBS.C     = <details omitted>
 .MAKE.LEVEL      = <details omitted>
+.MAKE.LEVEL.ENV  = MAKELEVEL
 .MAKE.MAKEFILES  = <details omitted>
 .MAKE.MAKEFILE_PREFERENCE = <details omitted>
 .MAKE.OS         = <details omitted>
@@ -64,18 +66,17 @@ all             : made-target error-target aborted-target
 .MAKE.PPID       = <details omitted>
 .MAKE.UID        = <details omitted>
 .MAKEFLAGS       =  -r -k -d g3
-.MAKEOVERRIDES   = 
+.MAKEOVERRIDES   = # (empty)
 .OBJDIR          = <curdir>
 .PATH            = . <curdir>
 .TARGETS         =  all
 .newline         = 
-
+# (ends with space)
 MACHINE          = <details omitted>
 MACHINE_ARCH     = <details omitted>
 MAKE             = <details omitted>
 MFLAGS           =   -r -k -d g3
 #*** Command-line Variables:
-.MAKE.LEVEL.ENV  = MAKELEVEL
 .SHELL           = <details omitted>
 
 #*** Directory Cache:
@@ -83,11 +84,11 @@ MFLAGS           =   -r -k -d g3
 #  refs  hits  directory
 #     1     0  <curdir>
 #     1     0  .
-#     1     0  <defsyspath>
+#     2     0  <defsyspath>
 
 #*** Suffixes:
 #*** Transformations:
 
 Stop.
-make: stopped in unit-tests
+make: stopped making "all" in unit-tests
 exit status 1

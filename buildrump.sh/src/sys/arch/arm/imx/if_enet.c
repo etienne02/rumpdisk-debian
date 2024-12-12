@@ -1,7 +1,7 @@
-/*	$NetBSD: if_enet.c,v 1.33 2020/12/31 02:16:14 uwe Exp $	*/
+/*	$NetBSD: if_enet.c,v 1.37 2024/02/07 04:20:26 msaitoh Exp $	*/
 
 /*
- * Copyright (c) 2014 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2014 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_enet.c,v 1.33 2020/12/31 02:16:14 uwe Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_enet.c,v 1.37 2024/02/07 04:20:26 msaitoh Exp $");
 
 #include "vlan.h"
 
@@ -498,7 +498,7 @@ enet_tx_intr(void *arg)
 	sc->sc_tx_considx = idx;
 
 	if (sc->sc_tx_free > 0)
-		ifp->if_flags &= ~IFF_OACTIVE;
+		sc->sc_txbusy = false;
 
 	/*
 	 * No more pending TX descriptor,
@@ -823,7 +823,7 @@ enet_init(struct ifnet *ifp)
 
 	/* update if_flags */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 
 	/* update local copy of if_flags */
 	sc->sc_if_flags = ifp->if_flags;
@@ -850,18 +850,18 @@ enet_start(struct ifnet *ifp)
 	struct mbuf *m;
 	int npkt;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	sc = ifp->if_softc;
-	for (npkt = 0; ; npkt++) {
+	for (npkt = 0; !sc->sc_txbusy; npkt++) {
 		IFQ_POLL(&ifp->if_snd, m);
 		if (m == NULL)
 			break;
 
 		if (sc->sc_tx_free <= 0) {
 			/* no tx descriptor now... */
-			ifp->if_flags |= IFF_OACTIVE;
+			sc->sc_txbusy = true;
 			DEVICE_DPRINTF("TX descriptor is full\n");
 			break;
 		}
@@ -870,7 +870,7 @@ enet_start(struct ifnet *ifp)
 
 		if (enet_encap_txring(sc, &m) != 0) {
 			/* too many mbuf chains? */
-			ifp->if_flags |= IFF_OACTIVE;
+			sc->sc_txbusy = true;
 			DEVICE_DPRINTF(
 			    "TX descriptor is full. dropping packet\n");
 			m_freem(m);
@@ -909,8 +909,9 @@ enet_stop(struct ifnet *ifp, int disable)
 	ENET_REG_WRITE(sc, ENET_ECR, v & ~ENET_ECR_ETHEREN);
 
 	/* Mark the interface as down and cancel the watchdog timer. */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
+	sc->sc_txbusy = false;
 
 	if (disable) {
 		enet_drain_txbuf(sc);
@@ -1027,7 +1028,7 @@ enet_ioctl(struct ifnet *ifp, u_long command, void *data)
 		error = 0;
 		switch (command) {
 		case SIOCSIFCAP:
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 			break;
 		case SIOCADDMULTI:
 		case SIOCDELMULTI:
@@ -1537,7 +1538,7 @@ enet_encap_mbufalign(struct mbuf **mp)
 					if (chiplen &&
 					    (M_TRAILINGSPACE(mt) < chiplen)) {
 						/*
-						 * move data to the begining of
+						 * move data to the beginning of
 						 * m_dat[] (aligned) to en-
 						 * large trailingspace
 						 */

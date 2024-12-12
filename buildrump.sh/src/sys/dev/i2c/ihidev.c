@@ -1,4 +1,4 @@
-/* $NetBSD: ihidev.c,v 1.20 2021/08/07 16:19:11 thorpej Exp $ */
+/* $NetBSD: ihidev.c,v 1.33 2024/12/09 22:06:31 jmcneill Exp $ */
 /* $OpenBSD ihidev.c,v 1.13 2017/04/08 02:57:23 deraadt Exp $ */
 
 /*-
@@ -53,26 +53,30 @@
  *
  */
 
+#include "gpio.h"
+#include "acpica.h"
+
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ihidev.c,v 1.20 2021/08/07 16:19:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ihidev.c,v 1.33 2024/12/09 22:06:31 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/kmem.h>
-
+#include <sys/workqueue.h>
 
 #include <dev/i2c/i2cvar.h>
 #include <dev/i2c/ihidev.h>
 
 #include <dev/hid/hid.h>
 
-#if defined(__i386__) || defined(__amd64__)
-#  include "acpica.h"
-#endif
 #if NACPICA > 0
 #include <dev/acpi/acpivar.h>
 #include <dev/acpi/acpi_intr.h>
+#include <dev/acpi/acpi_gpio.h>
+#endif
+#if NGPIO > 0
+#include <dev/gpio/gpiovar.h>
 #endif
 
 #include "locators.h"
@@ -110,14 +114,17 @@ static int	ihidev_detach(device_t, int);
 CFATTACH_DECL_NEW(ihidev, sizeof(struct ihidev_softc),
     ihidev_match, ihidev_attach, ihidev_detach, NULL);
 
-static bool	ihiddev_intr_init(struct ihidev_softc *);
-static void	ihiddev_intr_fini(struct ihidev_softc *);
+static bool	ihidev_intr_init(struct ihidev_softc *);
+static void	ihidev_intr_fini(struct ihidev_softc *);
 
 static bool	ihidev_suspend(device_t, const pmf_qual_t *);
 static bool	ihidev_resume(device_t, const pmf_qual_t *);
 static int	ihidev_hid_command(struct ihidev_softc *, int, void *, bool);
+#if NACPICA > 0
 static int	ihidev_intr(void *);
-static void	ihidev_softintr(void *);
+static void	ihidev_work(struct work *, void *);
+#endif
+static int	ihidev_poweron(struct ihidev_softc *, bool);
 static int	ihidev_reset(struct ihidev_softc *, bool);
 static int	ihidev_hid_desc_parse(struct ihidev_softc *);
 
@@ -141,7 +148,7 @@ ihidev_match(device_t parent, cfdata_t match, void *aux)
 	int match_result;
 
 	if (iic_use_direct_match(ia, match, compat_data, &match_result))
-		return I2C_MATCH_DIRECT_COMPATIBLE;
+		return match_result;
 
 	return 0;
 }
@@ -160,14 +167,14 @@ ihidev_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->sc_tag = ia->ia_tag;
 	sc->sc_addr = ia->ia_addr;
-	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_VM);
+	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
 
 	sc->sc_phandle = ia->ia_cookie;
 	if (ia->ia_cookietype != I2C_COOKIE_ACPI) {
 		aprint_error(": unsupported device tree type\n");
 		return;
 	}
-	if (! ihidev_acpi_get_info(sc)) {
+	if (!ihidev_acpi_get_info(sc)) {
 		return;
 	}
 
@@ -204,11 +211,11 @@ ihidev_attach(device_t parent, device_t self, void *aux)
 		if (isize > sc->sc_isize)
 			sc->sc_isize = isize;
 
-		DPRINTF(("%s: repid %d size %d\n", sc->sc_dev.dv_xname, repid,
-		    repsz));
+		DPRINTF(("%s: repid %d size %d\n",
+		    device_xname(sc->sc_dev), repid, repsz));
 	}
 	sc->sc_ibuf = kmem_zalloc(sc->sc_isize, KM_SLEEP);
-	if (! ihiddev_intr_init(sc)) {
+	if (!ihidev_intr_init(sc)) {
 		return;
 	}
 
@@ -220,7 +227,8 @@ ihidev_attach(device_t parent, device_t self, void *aux)
 	locs[IHIDBUSCF_REPORTID] = IHIDEV_CLAIM_ALLREPORTID;
 	dev = config_found(self, &iha, ihidev_print,
 	    CFARGS(.submatch = ihidev_submatch,
-		   .locators = locs));
+		   .locators = locs,
+		   .iattr = "ihidbus"));
 	if (dev != NULL) {
 		for (repid = 0; repid < sc->sc_nrepid; repid++)
 			sc->sc_subdevs[repid] = device_private(dev);
@@ -240,12 +248,14 @@ ihidev_attach(device_t parent, device_t self, void *aux)
 		locs[IHIDBUSCF_REPORTID] = repid;
 		dev = config_found(self, &iha, ihidev_print,
 		    CFARGS(.submatch = ihidev_submatch,
-			   .locators = locs));
+			   .locators = locs,
+			   .iattr = "ihidbus"));
 		sc->sc_subdevs[repid] = device_private(dev);
 	}
 
 	/* power down until we're opened */
-	if (ihidev_hid_command(sc, I2C_HID_CMD_SET_POWER, &I2C_HID_POWER_OFF, false)) {
+	if (ihidev_hid_command(sc, I2C_HID_CMD_SET_POWER, &I2C_HID_POWER_OFF,
+		false)) {
 		aprint_error_dev(sc->sc_dev, "failed to power down\n");
 		return;
 	}
@@ -257,13 +267,19 @@ static int
 ihidev_detach(device_t self, int flags)
 {
 	struct ihidev_softc *sc = device_private(self);
+	int error;
 
-	mutex_enter(&sc->sc_intr_lock);
-	ihiddev_intr_fini(sc);
-	if (ihidev_hid_command(sc, I2C_HID_CMD_SET_POWER,
-	    &I2C_HID_POWER_OFF, true))
-	aprint_error_dev(sc->sc_dev, "failed to power down\n");
-	mutex_exit(&sc->sc_intr_lock);
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
+
+	pmf_device_deregister(self);
+	ihidev_intr_fini(sc);
+
+	if (ihidev_hid_command(sc, I2C_HID_CMD_SET_POWER, &I2C_HID_POWER_OFF,
+		true))
+		aprint_error_dev(sc->sc_dev, "failed to power down\n");
+
 	if (sc->sc_ibuf != NULL) {
 		kmem_free(sc->sc_ibuf, sc->sc_isize);
 		sc->sc_ibuf = NULL;
@@ -272,8 +288,9 @@ ihidev_detach(device_t self, int flags)
 	if (sc->sc_report != NULL)
 		kmem_free(sc->sc_report, sc->sc_reportlen);
 
-	pmf_device_deregister(self);
-	return (0);
+	mutex_destroy(&sc->sc_lock);
+
+	return 0;
 }
 
 static bool
@@ -281,14 +298,14 @@ ihidev_suspend(device_t self, const pmf_qual_t *q)
 {
 	struct ihidev_softc *sc = device_private(self);
 
-	mutex_enter(&sc->sc_intr_lock);
+	mutex_enter(&sc->sc_lock);
 	if (sc->sc_refcnt > 0) {
 		printf("ihidev power off\n");
 		if (ihidev_hid_command(sc, I2C_HID_CMD_SET_POWER,
 		    &I2C_HID_POWER_OFF, true))
 		aprint_error_dev(sc->sc_dev, "failed to power down\n");
 	}
-	mutex_exit(&sc->sc_intr_lock);
+	mutex_exit(&sc->sc_lock);
 	return true;
 }
 
@@ -297,12 +314,12 @@ ihidev_resume(device_t self, const pmf_qual_t *q)
 {
 	struct ihidev_softc *sc = device_private(self);
 
-	mutex_enter(&sc->sc_intr_lock);
+	mutex_enter(&sc->sc_lock);
 	if (sc->sc_refcnt > 0) {
 		printf("ihidev power reset\n");
 		ihidev_reset(sc, true);
 	}
-	mutex_exit(&sc->sc_intr_lock);
+	mutex_exit(&sc->sc_lock);
 	return true;
 }
 
@@ -326,14 +343,14 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		};
 
 		DPRINTF(("%s: HID command I2C_HID_CMD_DESCR at 0x%x\n",
-		    sc->sc_dev.dv_xname, htole16(sc->sc_hid_desc_addr)));
+		    device_xname(sc->sc_dev), htole16(sc->sc_hid_desc_addr)));
 
 		/* 20 00 */
 		res = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_addr,
 		    &cmd, sizeof(cmd), &sc->hid_desc_buf,
 		    sizeof(struct i2c_hid_desc), flags);
 
-		DPRINTF(("%s: HID descriptor:", sc->sc_dev.dv_xname));
+		DPRINTF(("%s: HID descriptor:", device_xname(sc->sc_dev)));
 		for (i = 0; i < sizeof(struct i2c_hid_desc); i++)
 			DPRINTF((" %.2x", sc->hid_desc_buf[i]));
 		DPRINTF(("\n"));
@@ -349,7 +366,7 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		};
 
 		DPRINTF(("%s: HID command I2C_HID_CMD_RESET\n",
-		    sc->sc_dev.dv_xname));
+		    device_xname(sc->sc_dev)));
 
 		/* 22 00 00 01 */
 		res = iic_exec(sc->sc_tag, I2C_OP_WRITE_WITH_STOP, sc->sc_addr,
@@ -377,7 +394,7 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		uint8_t *tmprep;
 
 		DPRINTF(("%s: HID command I2C_HID_CMD_GET_REPORT %d "
-		    "(type %d, len %d)\n", sc->sc_dev.dv_xname, report_id,
+		    "(type %d, len %d)\n", device_xname(sc->sc_dev), report_id,
 		    rreq->type, rreq->len));
 
 		/*
@@ -408,6 +425,13 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		 */
 		report_len += report_id_len;
 		tmprep = kmem_zalloc(report_len, KM_NOSLEEP);
+		if (tmprep == NULL) {
+			/* XXX pool or preallocate? */
+			DPRINTF(("%s: out of memory\n",
+				device_xname(sc->sc_dev)));
+			res = ENOMEM;
+			break;
+		}
 
 		/* type 3 id 8: 22 00 38 02 23 00 */
 		res = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_addr,
@@ -416,7 +440,7 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		d = tmprep[0] | tmprep[1] << 8;
 		if (d != report_len) {
 			DPRINTF(("%s: response size %d != expected length %d\n",
-			    sc->sc_dev.dv_xname, d, report_len));
+			    device_xname(sc->sc_dev), d, report_len));
 		}
 
 		if (report_id_len == 2)
@@ -426,13 +450,13 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 
 		if (d != rreq->id) {
 			DPRINTF(("%s: response report id %d != %d\n",
-			    sc->sc_dev.dv_xname, d, rreq->id));
+			    device_xname(sc->sc_dev), d, rreq->id));
 			iic_release_bus(sc->sc_tag, 0);
 			kmem_free(tmprep, report_len);
 			return (1);
 		}
 
-		DPRINTF(("%s: response:", sc->sc_dev.dv_xname));
+		DPRINTF(("%s: response:", device_xname(sc->sc_dev)));
 		for (i = 0; i < report_len; i++)
 			DPRINTF((" %.2x", tmprep[i]));
 		DPRINTF(("\n"));
@@ -460,7 +484,7 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		uint8_t *finalcmd;
 
 		DPRINTF(("%s: HID command I2C_HID_CMD_SET_REPORT %d "
-		    "(type %d, len %d):", sc->sc_dev.dv_xname, report_id,
+		    "(type %d, len %d):", device_xname(sc->sc_dev), report_id,
 		    rreq->type, rreq->len));
 		for (i = 0; i < rreq->len; i++)
 			DPRINTF((" %.2x", ((uint8_t *)rreq->data)[i]));
@@ -499,6 +523,10 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		cmd[dataoff] = rreq->id;
 
 		finalcmd = kmem_zalloc(cmdlen + rreq->len, KM_NOSLEEP);
+		if (finalcmd == NULL) {
+			res = ENOMEM;
+			break;
+		}
 
 		memcpy(finalcmd, cmd, cmdlen);
 		memcpy(finalcmd + cmdlen, rreq->data, rreq->len);
@@ -521,7 +549,7 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		};
 
 		DPRINTF(("%s: HID command I2C_HID_CMD_SET_POWER(%d)\n",
-		    sc->sc_dev.dv_xname, power));
+		    device_xname(sc->sc_dev), power));
 
 		/* 22 00 00 08 */
 		res = iic_exec(sc->sc_tag, I2C_OP_WRITE_WITH_STOP, sc->sc_addr,
@@ -536,14 +564,15 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 		};
 
 		DPRINTF(("%s: HID command I2C_HID_REPORT_DESCR at 0x%x with "
-		    "size %d\n", sc->sc_dev.dv_xname, cmd[0],
+		    "size %d\n", device_xname(sc->sc_dev), cmd[0],
 		    sc->sc_reportlen));
 
 		/* 20 00 */
 		res = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_addr,
 		    &cmd, sizeof(cmd), sc->sc_report, sc->sc_reportlen, flags);
 
-		DPRINTF(("%s: HID report descriptor:", sc->sc_dev.dv_xname));
+		DPRINTF(("%s: HID report descriptor:",
+		    device_xname(sc->sc_dev)));
 		for (i = 0; i < sc->sc_reportlen; i++)
 			DPRINTF((" %.2x", sc->sc_report[i]));
 		DPRINTF(("\n"));
@@ -561,9 +590,9 @@ ihidev_hid_command(struct ihidev_softc *sc, int hidcmd, void *arg, bool poll)
 }
 
 static int
-ihidev_reset(struct ihidev_softc *sc, bool poll)
+ihidev_poweron(struct ihidev_softc *sc, bool poll)
 {
-	DPRINTF(("%s: resetting\n", sc->sc_dev.dv_xname));
+	DPRINTF(("%s: poweron\n", device_xname(sc->sc_dev)));
 
 	if (ihidev_hid_command(sc, I2C_HID_CMD_SET_POWER,
 	    &I2C_HID_POWER_ON, poll)) {
@@ -572,6 +601,14 @@ ihidev_reset(struct ihidev_softc *sc, bool poll)
 	}
 
 	DELAY(1000);
+
+	return (0);
+}
+
+static int
+ihidev_reset(struct ihidev_softc *sc, bool poll)
+{
+	DPRINTF(("%s: resetting\n", device_xname(sc->sc_dev)));
 
 	if (ihidev_hid_command(sc, I2C_HID_CMD_RESET, 0, poll)) {
 		aprint_error_dev(sc->sc_dev, "failed to reset hardware\n");
@@ -635,7 +672,7 @@ ihidev_hid_desc_parse(struct ihidev_softc *sc)
 	}
 
 	sc->sc_reportlen = le16toh(sc->hid_desc.wReportDescLength);
-	sc->sc_report = kmem_zalloc(sc->sc_reportlen, KM_NOSLEEP);
+	sc->sc_report = kmem_zalloc(sc->sc_reportlen, KM_SLEEP);
 
 	if (ihidev_hid_command(sc, I2C_HID_REPORT_DESCR, 0, false)) {
 		aprint_error_dev(sc->sc_dev, "failed fetching HID report\n");
@@ -646,7 +683,7 @@ ihidev_hid_desc_parse(struct ihidev_softc *sc)
 }
 
 static bool
-ihiddev_intr_init(struct ihidev_softc *sc)
+ihidev_intr_init(struct ihidev_softc *sc)
 {
 #if NACPICA > 0
 	ACPI_HANDLE hdl = (void *)(uintptr_t)sc->sc_phandle;
@@ -663,9 +700,13 @@ ihiddev_intr_init(struct ihidev_softc *sc)
 
 	const struct acpi_irq * const irq = acpi_res_irq(&res, 0);
 	if (irq == NULL) {
-		aprint_error_dev(sc->sc_dev, "no IRQ resource\n");
+		aprint_debug_dev(sc->sc_dev, "no IRQ resource\n");
 		acpi_resource_cleanup(&res);
+#if NGPIO > 0
+		goto try_gpioint;
+#else
 		return false;
+#endif
 	}
 
 	sc->sc_intr_type =
@@ -682,12 +723,50 @@ ihiddev_intr_init(struct ihidev_softc *sc)
 	aprint_normal_dev(sc->sc_dev, "interrupting at %s\n",
 	    acpi_intr_string(sc->sc_ih, buf, sizeof(buf)));
 
-	sc->sc_sih = softint_establish(SOFTINT_SERIAL, ihidev_softintr, sc);
-	if (sc->sc_sih == NULL) {
+#if NGPIO > 0
+try_gpioint:
+	if (sc->sc_ih == NULL) {
+		int pin, irqmode, error;
+
+		rv = acpi_gpio_get_int(hdl, 0, &sc->sc_ih_gpio, &pin, &irqmode);
+		if (ACPI_FAILURE(rv)) {
+			aprint_error_dev(sc->sc_dev,
+			    "can't find gpioint resource\n");
+			return false;
+		}
+
+		sc->sc_ih_gpiomap.pm_map = sc->sc_ih_gpiopins;
+		error = gpio_pin_map(sc->sc_ih_gpio, pin, 1,
+		    &sc->sc_ih_gpiomap);
+		if (error) {
+			aprint_error_dev(sc->sc_dev, "can't map pin %d\n", pin);
+			return false;
+		}
+
+		sc->sc_ih = gpio_intr_establish(sc->sc_ih_gpio,
+		    &sc->sc_ih_gpiomap, 0, IPL_VM, irqmode, ihidev_intr, sc);
+		if (sc->sc_ih == NULL) {
+			aprint_error_dev(sc->sc_dev,
+			    "can't establish gpio interrupt\n");
+			return false;
+		}
+
+		sc->sc_intr_type = (irqmode & GPIO_INTR_LEVEL_MASK) ?
+		    IST_LEVEL : IST_EDGE;
+
+		gpio_intr_str(sc->sc_ih_gpio, &sc->sc_ih_gpiomap, 0,
+		    irqmode, buf, sizeof(buf));
+		aprint_normal_dev(sc->sc_dev, "interrupting at %s\n", buf);
+	}
+#endif
+
+	if (workqueue_create(&sc->sc_wq, device_xname(sc->sc_dev), ihidev_work,
+		sc, PRI_NONE, IPL_TTY, WQ_MPSAFE)) {
 		aprint_error_dev(sc->sc_dev,
-		    "can't establish soft interrupt\n");
+		    "can't establish workqueue\n");
 		return false;
 	}
+	sc->sc_work_pending = 0;
 
 	return true;
 #else
@@ -697,26 +776,37 @@ ihiddev_intr_init(struct ihidev_softc *sc)
 }
 
 static void
-ihiddev_intr_fini(struct ihidev_softc *sc)
+ihidev_intr_fini(struct ihidev_softc *sc)
 {
 #if NACPICA > 0
 	if (sc->sc_ih != NULL) {
-		acpi_intr_disestablish(sc->sc_ih);
+		if (sc->sc_ih_gpio != NULL) {
+#if NGPIO > 0
+			gpio_intr_disestablish(sc->sc_ih_gpio, sc->sc_ih);
+#endif
+		} else {
+			acpi_intr_disestablish(sc->sc_ih);
+		}
 	}
-	if (sc->sc_sih != NULL) {
-		softint_disestablish(sc->sc_sih);
+	if (sc->sc_wq != NULL) {
+		workqueue_destroy(sc->sc_wq);
 	}
 #endif
 }
 
+#if NACPICA > 0
 static void
 ihidev_intr_mask(struct ihidev_softc * const sc)
 {
 
 	if (sc->sc_intr_type == IST_LEVEL) {
-#if NACPICA > 0
-		acpi_intr_mask(sc->sc_ih);
+		if (sc->sc_ih_gpio != NULL) {
+#if NGPIO > 0
+			gpio_intr_mask(sc->sc_ih_gpio, sc->sc_ih);
 #endif
+		} else {
+			acpi_intr_mask(sc->sc_ih);
+		}
 	}
 }
 
@@ -725,9 +815,13 @@ ihidev_intr_unmask(struct ihidev_softc * const sc)
 {
 
 	if (sc->sc_intr_type == IST_LEVEL) {
-#if NACPICA > 0
-		acpi_intr_unmask(sc->sc_ih);
+		if (sc->sc_ih_gpio != NULL) {
+#if NGPIO > 0
+			gpio_intr_unmask(sc->sc_ih_gpio, sc->sc_ih);
 #endif
+		} else {
+			acpi_intr_unmask(sc->sc_ih);
+		}
 	}
 }
 
@@ -736,23 +830,19 @@ ihidev_intr(void *arg)
 {
 	struct ihidev_softc * const sc = arg;
 
-	mutex_enter(&sc->sc_intr_lock);
-
 	/*
-	 * Schedule our soft interrupt handler.  If we're using a level-
-	 * triggered interrupt, we have to mask it off while we wait
-	 * for service.
+	 * Schedule our work.  If we're using a level-triggered
+	 * interrupt, we have to mask it off while we wait for service.
 	 */
-	softint_schedule(sc->sc_sih);
+	if (atomic_swap_uint(&sc->sc_work_pending, 1) == 0)
+		workqueue_enqueue(sc->sc_wq, &sc->sc_work, NULL);
 	ihidev_intr_mask(sc);
-
-	mutex_exit(&sc->sc_intr_lock);
 
 	return 1;
 }
 
 static void
-ihidev_softintr(void *arg)
+ihidev_work(struct work *wk, void *arg)
 {
 	struct ihidev_softc * const sc = arg;
 	struct ihidev *scd;
@@ -761,13 +851,14 @@ ihidev_softintr(void *arg)
 	u_char *p;
 	u_int rep = 0;
 
-	mutex_enter(&sc->sc_intr_lock);
+	atomic_store_relaxed(&sc->sc_work_pending, 0);
+
+	mutex_enter(&sc->sc_lock);
+
 	iic_acquire_bus(sc->sc_tag, 0);
 	res = iic_exec(sc->sc_tag, I2C_OP_READ_WITH_STOP, sc->sc_addr, NULL, 0,
 	    sc->sc_ibuf, sc->sc_isize, 0);
 	iic_release_bus(sc->sc_tag, 0);
-	mutex_exit(&sc->sc_intr_lock);
-
 	if (res != 0)
 		goto out;
 
@@ -778,7 +869,7 @@ ihidev_softintr(void *arg)
 	psize = sc->sc_ibuf[0] | sc->sc_ibuf[1] << 8;
 	if (!psize || psize > sc->sc_isize) {
 		DPRINTF(("%s: %s: invalid packet size (%d vs. %d)\n",
-		    sc->sc_dev.dv_xname, __func__, psize, sc->sc_isize));
+		    device_xname(sc->sc_dev), __func__, psize, sc->sc_isize));
 		goto out;
 	}
 
@@ -794,7 +885,7 @@ ihidev_softintr(void *arg)
 		goto out;
 	}
 
-	DPRINTF(("%s: %s: hid input (rep %d):", sc->sc_dev.dv_xname,
+	DPRINTF(("%s: %s: hid input (rep %d):", device_xname(sc->sc_dev),
 	    __func__, rep));
 	for (i = 0; i < sc->sc_isize; i++)
 		DPRINTF((" %.2x", sc->sc_ibuf[i]));
@@ -807,11 +898,14 @@ ihidev_softintr(void *arg)
 	scd->sc_intr(scd, p, psize);
 
  out:
+	mutex_exit(&sc->sc_lock);
+
 	/*
 	 * If our interrupt is level-triggered, re-enable it now.
 	 */
 	ihidev_intr_unmask(sc);
 }
+#endif
 
 static int
 ihidev_maxrepid(void *buf, int len)
@@ -837,7 +931,7 @@ ihidev_print(void *aux, const char *pnp)
 
 	if (iha->reportid == IHIDEV_CLAIM_ALLREPORTID)
 		return (QUIET);
-		
+
 	if (pnp)
 		aprint_normal("hid at %s", pnp);
 
@@ -863,22 +957,31 @@ int
 ihidev_open(struct ihidev *scd)
 {
 	struct ihidev_softc *sc = scd->sc_parent;
+	int error;
 
-	DPRINTF(("%s: %s: state=%d refcnt=%d\n", sc->sc_dev.dv_xname,
+	DPRINTF(("%s: %s: state=%d refcnt=%d\n", device_xname(sc->sc_dev),
 	    __func__, scd->sc_state, sc->sc_refcnt));
 
-	if (scd->sc_state & IHIDEV_OPEN)
-		return (EBUSY);
+	mutex_enter(&sc->sc_lock);
+
+	if (scd->sc_state & IHIDEV_OPEN || sc->sc_refcnt == INT_MAX) {
+		error = EBUSY;
+		goto out;
+	}
 
 	scd->sc_state |= IHIDEV_OPEN;
 
-	if (sc->sc_refcnt++ || sc->sc_isize == 0)
-		return (0);
+	if (sc->sc_refcnt++ || sc->sc_isize == 0) {
+		error = 0;
+		goto out;
+	}
 
 	/* power on */
-	ihidev_reset(sc, false);
+	ihidev_poweron(sc, false);
+	error = 0;
 
-	return (0);
+out:	mutex_exit(&sc->sc_lock);
+	return error;
 }
 
 void
@@ -886,20 +989,25 @@ ihidev_close(struct ihidev *scd)
 {
 	struct ihidev_softc *sc = scd->sc_parent;
 
-	DPRINTF(("%s: %s: state=%d refcnt=%d\n", sc->sc_dev.dv_xname,
+	DPRINTF(("%s: %s: state=%d refcnt=%d\n", device_xname(sc->sc_dev),
 	    __func__, scd->sc_state, sc->sc_refcnt));
 
-	if (!(scd->sc_state & IHIDEV_OPEN))
-		return;
+	mutex_enter(&sc->sc_lock);
 
+	KASSERTMSG(scd->sc_state & IHIDEV_OPEN,
+	    "%s: closing %s when not open",
+	    device_xname(scd->sc_idev),
+	    device_xname(sc->sc_dev));
 	scd->sc_state &= ~IHIDEV_OPEN;
 
 	if (--sc->sc_refcnt)
-		return;
+		goto out;
 
 	if (ihidev_hid_command(sc, I2C_HID_CMD_SET_POWER,
 	    &I2C_HID_POWER_OFF, false))
 		aprint_error_dev(sc->sc_dev, "failed to power down\n");
+
+out:	mutex_exit(&sc->sc_lock);
 }
 
 void
@@ -974,7 +1082,8 @@ ihidev_set_report(struct device *dev, int type, int id, void *data,
 
 static bool
 ihidev_acpi_get_info(struct ihidev_softc *sc)
-{               
+{
+#if NACPICA > 0
 	ACPI_HANDLE hdl = (void *)(uintptr_t)sc->sc_phandle;
 	ACPI_STATUS status;
 	ACPI_INTEGER val;
@@ -992,11 +1101,14 @@ ihidev_acpi_get_info(struct ihidev_softc *sc)
 	if (ACPI_FAILURE(status)) {
 		aprint_error_dev(sc->sc_dev,
 		    "failed to get HidDescriptorAddress: %s\n",
-		    AcpiFormatException(status)); 
+		    AcpiFormatException(status));
 		return false;
 	}
 
 	sc->sc_hid_desc_addr = (u_int)val;
 
 	return true;
+#else
+	return false;
+#endif
 }

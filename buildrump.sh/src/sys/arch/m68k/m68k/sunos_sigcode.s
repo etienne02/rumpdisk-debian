@@ -1,4 +1,4 @@
-/*	$NetBSD: sunos_sigcode.s,v 1.6 2013/08/01 13:42:52 matt Exp $	*/
+/*	$NetBSD: sunos_sigcode.s,v 1.8 2024/01/17 12:33:50 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -40,16 +40,10 @@
 
 #include <machine/asm.h>
 
-/*
- * NOTICE: This is typically included in port's locore.s, like so:
- *
- *	#ifdef COMPAT_SUNOS
- *	#include <m68k/m68k/sunos_sigcode.s>
- *	#endif
- */
+	.file	"sunos_sigcode.s"
 
- 	.data
- 	.align	2
+	.data
+	.align	2
 GLOBAL(sunos_sigcode)
 	movl	12(%sp),%a0	| signal handler addr	(4 bytes)
 	jsr	(%a0)		| call signal handler	(2 bytes)

@@ -163,7 +163,7 @@ void pmap_procwr(struct proc *, vaddr_t, vsize_t);
  * Note that we if we access the kernel pmap in interrupt context, it
  * is only to update statistics.  Since stats are updated using atomic
  * operations, locking the kernel pmap is not necessary.  Therefore,
- * it is not necessary to block interrupts when locking pmap strucutres.
+ * it is not necessary to block interrupts when locking pmap structures.
  */
 /* XXX
 #define	PMAP_LOCK(pmap)		mutex_enter(&(pmap)->pm_slock)
@@ -178,10 +178,10 @@ void pmap_procwr(struct proc *, vaddr_t, vsize_t);
 struct vm_page_md {
 	TAILQ_HEAD(,pv_entry)	pv_list;
 	vm_memattr_t		memattr;
-#if 0 /* XXX freebsd */	
+#if 0 /* XXX freebsd */
 	uint8_t		pv_flags;
 	uint8_t		aflags;
-#endif	
+#endif
 };
 
 #define	VM_MDPAGE_INIT(pg)						\

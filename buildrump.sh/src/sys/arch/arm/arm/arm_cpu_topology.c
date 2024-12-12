@@ -1,4 +1,4 @@
-/*	$NetBSD: arm_cpu_topology.c,v 1.5 2020/03/29 08:27:41 skrll Exp $	*/
+/*	$NetBSD: arm_cpu_topology.c,v 1.9 2024/12/10 11:27:29 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 2020 Matthew R. Green
@@ -12,8 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
@@ -33,7 +31,7 @@
 #include "opt_multiprocessor.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm_cpu_topology.c,v 1.5 2020/03/29 08:27:41 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm_cpu_topology.c,v 1.9 2024/12/10 11:27:29 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -50,9 +48,14 @@ void
 arm_cpu_topology_set(struct cpu_info * const ci, mpidr_t mpidr)
 {
 #ifdef MULTIPROCESSOR
-	uint pkgid, coreid, smtid, numaid = 0;
+	uint pkgid, coreid, smtid, numaid;
+	bool use_aff0 = (mpidr & MPIDR_MT) != 0 ||
+			CPU_ID_ORYON_P(ci->ci_midr);
 
-	if (mpidr & MPIDR_MT) {
+	/* NUMA info comes from firmware tables (ACPI or FDT). */
+	numaid = ci->ci_numa_id;
+
+	if (use_aff0) {
 		pkgid = __SHIFTOUT(mpidr, MPIDR_AFF2);
 		coreid = __SHIFTOUT(mpidr, MPIDR_AFF1);
 		smtid = __SHIFTOUT(mpidr, MPIDR_AFF0);

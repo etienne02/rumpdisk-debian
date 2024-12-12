@@ -1,6 +1,6 @@
-# $NetBSD: t_make.sh,v 1.15 2021/04/17 11:36:34 rillig Exp $
+# $NetBSD: t_make.sh,v 1.17 2023/02/25 19:37:33 sjg Exp $
 #
-# Copyright (c) 2008, 2010, 2014 The NetBSD Foundation, Inc.
+# Copyright (c) 2008, 2010, 2014, 2023 The NetBSD Foundation, Inc.
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -71,9 +71,8 @@ atf_init_test_cases()
 		basename="${filename##*/}"
 		basename="${basename%.mk}"
 
-		# skip files that are not test cases on their own
 		case "${basename}" in
-		include-sub*) continue;;
+		varname-dot-make-meta-ignore*) continue;; # won't work
 		esac
 
 		atfname=${basename}

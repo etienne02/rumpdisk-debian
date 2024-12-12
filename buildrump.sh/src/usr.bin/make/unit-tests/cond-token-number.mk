@@ -1,4 +1,4 @@
-# $NetBSD: cond-token-number.mk,v 1.5 2020/11/15 14:58:14 rillig Exp $
+# $NetBSD: cond-token-number.mk,v 1.11 2024/08/06 18:00:17 rillig Exp $
 #
 # Tests for number tokens in .if conditions.
 #
@@ -12,6 +12,7 @@
 # accepted by the condition parser.
 #
 # See the ch_isdigit call in CondParser_String.
+# expect+1: Malformed conditional '-0'
 .if -0
 .  error
 .else
@@ -22,6 +23,7 @@
 # accepted by the condition parser.
 #
 # See the ch_isdigit call in CondParser_String.
+# expect+1: Malformed conditional '+0'
 .if +0
 .  error
 .else
@@ -32,6 +34,7 @@
 # accepted by the condition parser.
 #
 # See the ch_isdigit call in CondParser_String.
+# expect+1: Malformed conditional '!-1'
 .if !-1
 .  error
 .else
@@ -42,19 +45,20 @@
 # accepted by the condition parser.
 #
 # See the ch_isdigit call in CondParser_String.
+# expect+1: Malformed conditional '!+1'
 .if !+1
 .  error
 .else
 .  error
 .endif
 
-# When the number comes from a variable expression though, it may be signed.
+# When the number comes from an expression though, it may be signed.
 # XXX: This is inconsistent.
 .if ${:U+0}
 .  error
 .endif
 
-# When the number comes from a variable expression though, it may be signed.
+# When the number comes from an expression though, it may be signed.
 # XXX: This is inconsistent.
 .if !${:U+1}
 .  error
@@ -69,14 +73,37 @@
 .  error
 .endif
 
-# This is not a hexadecimal number, even though it has an x.
-# It is interpreted as a string instead, effectively meaning defined(3x4).
+# This is not a hexadecimal number, even though it has an x.  It is
+# interpreted as a string instead.  In a plain '.if', such a token evaluates
+# to true if it is non-empty.  In other '.if' directives, such a token is
+# evaluated by either FuncDefined or FuncMake.
 .if 3x4
 .else
 .  error
 .endif
 
-# Ensure that parsing continues until here.
-.info End of the tests.
+# Make can do radix conversion from hex.
+HEX=	dead
+.if 0x${HEX} == 57005
+.else
+.  error
+.endif
 
-all: # nothing
+# Very small numbers round to 0.
+.if 12345e-400
+.  error
+.endif
+.if 12345e-200
+.else
+.  error
+.endif
+
+# Very large numbers round up to infinity on IEEE 754 implementations, or to
+# the largest representable number (VAX); in particular, make does not fall
+# back to checking whether a variable of that name is defined.
+.if 12345e400
+.else
+.  error
+.endif
+
+all:

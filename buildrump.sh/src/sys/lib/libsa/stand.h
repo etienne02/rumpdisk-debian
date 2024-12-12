@@ -1,4 +1,4 @@
-/*	$NetBSD: stand.h,v 1.83 2021/05/17 08:50:36 mrg Exp $	*/
+/*	$NetBSD: stand.h,v 1.87 2022/04/30 09:24:05 rin Exp $	*/
 
 /*
  * Copyright (c) 1999 Christopher G. Demetriou.  All rights reserved.
@@ -64,16 +64,13 @@
 #ifndef _LIBSA_STAND_H_
 #define	_LIBSA_STAND_H_
 
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/cdefs.h>
 #include <sys/stat.h>
 #include <sys/stdarg.h>
 #include "saioctl.h"
 #include "saerrno.h"
-
-#ifndef NULL
-#define	NULL	0
-#endif
 
 #ifdef LIBSA_RENAME_PRINTF
 #define getchar		libsa_getchar
@@ -319,5 +316,27 @@ void	bcopy(const void *, void *, size_t);
 void	bzero(void *, size_t);
 
 int	atoi(const char *);
+
+#if !defined(SA_HARDCODED_SECSIZE)
+#define	GETSECSIZE(f)	getsecsize(f)
+static inline u_int
+getsecsize(struct open_file *f)
+{
+	int rc;
+	u_int secsize = 0;
+
+	rc = DEV_IOCTL(f->f_dev)(f, SAIOSECSIZE, &secsize);
+	if (rc != 0 || secsize == 0)
+		secsize = DEV_BSIZE;
+
+	return secsize;
+}
+#else
+/*
+ * For some archs, divdi3 and friends are required to support variable
+ * sector sizes. Shave them off by making secsize compile-time constant.
+ */
+#define	GETSECSIZE(f)	DEV_BSIZE
+#endif
 
 #endif /* _LIBSA_STAND_H_ */

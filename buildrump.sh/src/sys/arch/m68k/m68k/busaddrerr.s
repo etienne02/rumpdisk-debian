@@ -1,4 +1,4 @@
-/*	$NetBSD: busaddrerr.s,v 1.1 2014/03/15 09:22:36 tsutsui Exp $	*/
+/*	$NetBSD: busaddrerr.s,v 1.3 2024/01/13 18:40:12 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -159,6 +159,8 @@ Lberr40:
  */
 #if defined(M68020) || defined(M68030)
 ENTRY_NOPROFILE(busaddrerr2030)
+GLOBAL(buserr2030)
+GLOBAL(addrerr2030)
 	clrl	%sp@-			| stack adjust count
 	moveml	%d0-%d7/%a0-%a7,%sp@-	| save user registers
 	movl	%usp,%a0		| save the user SP
@@ -219,7 +221,12 @@ Lbe10:
 	jeq	Lbe10a			| if no, done
 	movql	#5,%d0			| else supervisor program access
 Lbe10a:
-	ptestr	%d0,%a0@,#7		| do a table search
+	ptestr	%d0,%a0@,#0		| only PTEST #0 can detect transparent
+	pmove	%psr,%sp@		|   translation (TT0 or TT1).
+	movw	%sp@,%d1
+	btst	#6,%d1			| transparent (TT0 or TT1)?
+	jne	Lisberr1		| yes -> bus error
+	ptestr	%d0,%a0@,#7		| no, do a table search
 	pmove	%psr,%sp@		| save result
 	movb	%sp@,%d1
 	btst	#2,%d1			| invalid (incl. limit viol. and berr)?

@@ -1,4 +1,4 @@
-/*	$NetBSD: ipsecif.c,v 1.19 2020/01/31 06:54:19 knakahara Exp $  */
+/*	$NetBSD: ipsecif.c,v 1.22 2023/09/01 11:23:39 andvar Exp $  */
 
 /*
  * Copyright (c) 2017 Internet Initiative Japan Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ipsecif.c,v 1.19 2020/01/31 06:54:19 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ipsecif.c,v 1.22 2023/09/01 11:23:39 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -243,7 +243,7 @@ ipsecif4_flowinfo(struct mbuf *m, int family, int *proto0, u_int8_t *tos0)
 		}
 		ip = mtod(m, const struct ip *);
 		tos = ip->ip_tos;
-		/* TODO: support ALTQ for innner packet */
+		/* TODO: support ALTQ for inner packet */
 		break;
 #ifdef INET6
 	case AF_INET6: {
@@ -259,7 +259,7 @@ ipsecif4_flowinfo(struct mbuf *m, int family, int *proto0, u_int8_t *tos0)
 		}
 		ip6 = mtod(m, const struct ip6_hdr *);
 		tos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
-		/* TODO: support ALTQ for innner packet */
+		/* TODO: support ALTQ for inner packet */
 		break;
 	}
 #endif /* INET6 */
@@ -395,7 +395,10 @@ ipsecif4_output(struct ipsec_variant *var, int family, struct mbuf *m)
 	/*
 	 * The SPs in ipsec_variant are prevented from freed by
 	 * ipsec_variant->iv_psref. So, KEY_SP_REF() is unnecessary here.
+	 *
+	 * However, lastused should be updated.
 	 */
+	key_sp_touch(sp);
 
 	KASSERT(sp->policy != IPSEC_POLICY_NONE);
 	KASSERT(sp->policy != IPSEC_POLICY_ENTRUST);
@@ -546,7 +549,7 @@ ipsecif6_output(struct ipsec_variant *var, int family, struct mbuf *m)
 		}
 		ip = mtod(m, struct ip *);
 		itos = ip->ip_tos;
-		/* TODO: support ALTQ for innner packet */
+		/* TODO: support ALTQ for inner packet */
 		break;
 	    }
 #endif /* INET */
@@ -561,7 +564,7 @@ ipsecif6_output(struct ipsec_variant *var, int family, struct mbuf *m)
 		}
 		xip6 = mtod(m, struct ip6_hdr *);
 		itos = (ntohl(xip6->ip6_flow) >> 20) & 0xff;
-		/* TODO: support ALTQ for innner packet */
+		/* TODO: support ALTQ for inner packet */
 		break;
 	    }
 	default:
@@ -937,8 +940,10 @@ ipsecif4_attach(struct ipsec_variant *var)
 
 	if (var->iv_encap_cookie4 != NULL)
 		return EALREADY;
-	var->iv_encap_cookie4 = encap_attach_func(AF_INET, -1, if_ipsec_encap_func,
-	    &ipsecif4_encapsw, sc);
+
+	var->iv_encap_cookie4 = encap_attach_addr(AF_INET, -1,
+	    var->iv_psrc, var->iv_pdst, if_ipsec_encap_func, &ipsecif4_encapsw,
+	    sc);
 	if (var->iv_encap_cookie4 == NULL)
 		return EEXIST;
 
@@ -971,8 +976,9 @@ ipsecif6_attach(struct ipsec_variant *var)
 	KASSERT(if_ipsec_variant_is_configured(var));
 	KASSERT(var->iv_encap_cookie6 == NULL);
 
-	var->iv_encap_cookie6 = encap_attach_func(AF_INET6, -1, if_ipsec_encap_func,
-	    &ipsecif6_encapsw, sc);
+	var->iv_encap_cookie6 = encap_attach_addr(AF_INET6, -1,
+	    var->iv_psrc, var->iv_pdst, if_ipsec_encap_func, &ipsecif6_encapsw,
+	    sc);
 	if (var->iv_encap_cookie6 == NULL)
 		return EEXIST;
 

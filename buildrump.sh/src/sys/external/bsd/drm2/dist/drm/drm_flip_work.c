@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_flip_work.c,v 1.4 2020/02/14 14:34:57 maya Exp $	*/
+/*	$NetBSD: drm_flip_work.c,v 1.6 2021/12/19 12:32:01 riastradh Exp $	*/
 
 /*
  * Copyright (C) 2013 Red Hat
@@ -24,10 +24,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_flip_work.c,v 1.4 2020/02/14 14:34:57 maya Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_flip_work.c,v 1.6 2021/12/19 12:32:01 riastradh Exp $");
 
-#include <drm/drmP.h>
+#include <linux/slab.h>
+
 #include <drm/drm_flip_work.h>
+#include <drm/drm_print.h>
+#include <drm/drm_util.h>
 
 /**
  * drm_flip_work_allocate_task - allocate a flip-work task
@@ -168,5 +171,6 @@ EXPORT_SYMBOL(drm_flip_work_init);
 void drm_flip_work_cleanup(struct drm_flip_work *work)
 {
 	WARN_ON(!list_empty(&work->queued) || !list_empty(&work->commited));
+	spin_lock_destroy(&work->lock);
 }
 EXPORT_SYMBOL(drm_flip_work_cleanup);

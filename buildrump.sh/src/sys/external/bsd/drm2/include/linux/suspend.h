@@ -1,4 +1,4 @@
-/*	$NetBSD: suspend.h,v 1.2 2014/03/18 18:20:43 riastradh Exp $	*/
+/*	$NetBSD: suspend.h,v 1.4 2022/10/25 23:37:24 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -31,5 +31,12 @@
 
 #ifndef _LINUX_SUSPEND_H_
 #define _LINUX_SUSPEND_H_
+
+#include <sys/cdefs.h>
+
+#define	ksys_sync_helper()	__nothing
+
+#define	register_pm_notifier(n)		__nothing
+#define	unregister_pm_notifier(n)	__nothing
 
 #endif  /* _LINUX_SUSPEND_H_ */

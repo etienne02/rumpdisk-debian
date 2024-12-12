@@ -1,4 +1,4 @@
-/*	$NetBSD: event.h,v 1.40 2020/10/31 14:55:52 christos Exp $	*/
+/*	$NetBSD: event.h,v 1.55 2023/07/28 18:19:01 christos Exp $	*/
 
 /*-
  * Copyright (c) 1999,2000,2001 Jonathan Lemon <jlemon@FreeBSD.org>
@@ -45,7 +45,8 @@
 #define	EVFILT_TIMER		6U	/* arbitrary timer (in ms) */
 #define	EVFILT_FS		7U	/* filesystem events */
 #define	EVFILT_USER		8U	/* user events */
-#define	EVFILT_SYSCOUNT		9U	/* number of filters */
+#define	EVFILT_EMPTY		9U
+#define	EVFILT_SYSCOUNT		10U	/* number of filters */
 
 #ifdef EVFILT_NAMES
 static const char *evfiltnames[] = {
@@ -58,6 +59,7 @@ static const char *evfiltnames[] = {
 	"EVFILT_TIMER",
 	"EVFILT_FS",
 	"EVFILT_USER",
+	"EVFILT_EMPTY",
 };
 #endif
 
@@ -68,6 +70,7 @@ struct kevent {
 	uint32_t	fflags;		/* filter flag value */
 	int64_t		data;		/* filter data value */
 	void		*udata;		/* opaque user data identifier */
+	uint64_t	ext[4];		/* extensions */
 };
 
 static __inline void
@@ -145,6 +148,10 @@ _EV_SET(struct kevent *_kevp, uintptr_t _ident, uint32_t _filter,
 #define	NOTE_LINK	0x0010U			/* link count changed */
 #define	NOTE_RENAME	0x0020U			/* vnode was renamed */
 #define	NOTE_REVOKE	0x0040U			/* vnode access was revoked */
+#define	NOTE_OPEN	0x0080U			/* vnode was opened */
+#define	NOTE_CLOSE	0x0100U			/* file closed (no FWRITE) */
+#define	NOTE_CLOSE_WRITE 0x0200U		/* file closed (FWRITE) */
+#define	NOTE_READ	0x0400U			/* file was read */
 
 /*
  * data/hint flags for EVFILT_PROC, shared with userspace
@@ -159,6 +166,16 @@ _EV_SET(struct kevent *_kevp, uintptr_t _ident, uint32_t _filter,
 #define	NOTE_TRACK	0x00000001U		/* follow across forks */
 #define	NOTE_TRACKERR	0x00000002U		/* could not track child */
 #define	NOTE_CHILD	0x00000004U		/* am a child process */
+
+/* additional flags for EVFILT_TIMER */
+#define	NOTE_MSECONDS	0x00000000U		/* data is milliseconds */
+#define	NOTE_SECONDS	0x00000001U		/* data is seconds */
+#define	NOTE_USECONDS	0x00000002U		/* data is microseconds */
+#define	NOTE_NSECONDS	0x00000003U		/* data is nanoseconds */
+#define	NOTE_ABSTIME	0x00000010U		/* timeout is absolute */
+#ifdef _KERNEL
+#define	NOTE_TIMER_UNITMASK 0x0003U
+#endif /* _KERNEL */
 
 /*
  * This is currently visible to userland to work around broken
@@ -209,15 +226,19 @@ struct kfilter_mapping {
  * Callback methods for each filter type.
  */
 struct filterops {
-	int	f_isfd;			/* true if ident == filedescriptor */
+	int	f_flags;		/* flags; see below */
 	int	(*f_attach)	(struct knote *);
 					/* called when knote is ADDed */
 	void	(*f_detach)	(struct knote *);
 					/* called when knote is DELETEd */
 	int	(*f_event)	(struct knote *, long);
 					/* called when event is triggered */
-	void	(*f_touch)	(struct knote *, struct kevent *, long);
+	int	(*f_touch)	(struct knote *, struct kevent *, long);
 };
+
+/* filterops flags */
+#define	FILTEROP_ISFD	__BIT(0)	/* ident == file descriptor */
+#define	FILTEROP_MPSAFE	__BIT(1)	/* does not require KERNEL_LOCK */
 
 /*
  * Field locking:
@@ -233,7 +254,7 @@ struct knote {
 	SLIST_ENTRY(knote)	kn_selnext;	/* o: for struct selinfo */
 	TAILQ_ENTRY(knote)	kn_tqe;		/* q: for struct kqueue */
 	struct kqueue		*kn_kq;		/* q: which queue we are on */
-	struct kevent		kn_kevent;
+	struct kevent		kn_kevent;	/* (see below for locking) */
 	uint32_t		kn_status;	/* q: flags below */
 	uint32_t		kn_sfflags;	/*    saved filter flags */
 	uintptr_t		kn_sdata;	/*    saved data field */
@@ -249,6 +270,7 @@ struct knote {
 #define	KN_DETACHED	0x08U			/* knote is detached */
 #define	KN_MARKER	0x10U			/* is a marker */
 #define	KN_BUSY		0x20U			/* is being scanned */
+#define	KN_WILLDETACH	0x40U			/* being detached imminently */
 /* Toggling KN_BUSY also requires kn_kq->kq_fdp->fd_lock. */
 #define __KN_FLAG_BITS \
     "\20" \
@@ -257,17 +279,24 @@ struct knote {
     "\3DISABLED" \
     "\4DETACHED" \
     "\5MARKER" \
-    "\6BUSY"
+    "\6BUSY" \
+    "\7WILLDETACH"
 
 
+/*
+ * The only time knote::kn_flags can be modified without synchronization
+ * is during filter attach, because the knote has not yet been published.
+ * This is usually to set EV_CLEAR or EV_ONESHOT as mandatory flags for
+ * that filter.
+ */
 #define	kn_id		kn_kevent.ident
 #define	kn_filter	kn_kevent.filter
-#define	kn_flags	kn_kevent.flags
-#define	kn_fflags	kn_kevent.fflags
-#define	kn_data		kn_kevent.data
+#define	kn_flags	kn_kevent.flags		/* q */
+#define	kn_fflags	kn_kevent.fflags	/* o */
+#define	kn_data		kn_kevent.data		/* o */
 };
 
-#include <sys/systm.h> /* for copyin_t */
+#include <sys/systm.h>	/* for copyin_t */
 
 struct lwp;
 struct timespec;
@@ -275,6 +304,8 @@ struct timespec;
 void	kqueue_init(void);
 void	knote(struct klist *, long);
 void	knote_fdclose(int);
+void	knote_set_eof(struct knote *, uint32_t);
+void	knote_clear_eof(struct knote *);
 
 typedef	int (*kevent_fetch_changes_t)(void *, const struct kevent *,
     struct kevent *, size_t, int);
@@ -303,7 +334,10 @@ int	kfilter_unregister(const char *);
 int	filt_seltrue(struct knote *, long);
 extern const struct filterops seltrue_filtops;
 
-extern struct klist fs_klist;	/* EVFILT_FS */
+void	klist_init(struct klist *);
+void	klist_fini(struct klist *);
+void	klist_insert(struct klist *, struct knote *);
+bool	klist_remove(struct klist *, struct knote *);
 
 #else 	/* !_KERNEL */
 
@@ -316,7 +350,7 @@ int	kqueue(void);
 int	kqueue1(int);
 #ifndef __LIBC12_SOURCE__
 int	kevent(int, const struct kevent *, size_t, struct kevent *, size_t,
-		    const struct timespec *) __RENAME(__kevent50);
+		    const struct timespec *) __RENAME(__kevent100);
 #endif
 #endif /* !_POSIX_C_SOURCE */
 __END_DECLS

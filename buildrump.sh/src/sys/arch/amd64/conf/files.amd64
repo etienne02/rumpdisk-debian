@@ -1,4 +1,4 @@
-#	$NetBSD: files.amd64,v 1.120 2020/10/21 13:31:51 christos Exp $
+#	$NetBSD: files.amd64,v 1.123 2024/02/23 22:10:39 andvar Exp $
 #
 # new style config file for amd64 architecture
 #
@@ -14,11 +14,14 @@ defparam		CPURESET_DELAY
 # The REAL{BASE,EXT}MEM options
 defparam opt_realmem.h	REALBASEMEM REALEXTMEM
 
-# The PHYSMEM_MAX_{SIZE,ADDR} optionms
+# The PHYSMEM_MAX_{SIZE,ADDR} options
 defparam opt_physmem.h	PHYSMEM_MAX_ADDR PHYSMEM_MAX_SIZE
 
 # Enable GCC spectre V2 mitigation options
 defflag opt_spectre.h	SPECTRE_V2_GCC_MITIGATION
+
+# Enable kernel self-relocation at bootstrap
+defflag opt_selfreloc.h SELFRELOC
 
 #
 # XXX these are just here at the moment so that we can share files
@@ -193,5 +196,8 @@ include "dev/hyperv/files.hyperv"
 
 attach	vmbus at acpinodebus with vmbus_acpi
 file	dev/acpi/vmbus_acpi.c			vmbus_acpi
+
+# VMEbus support
+include "dev/vme/files.vme"
 
 include	"arch/amd64/conf/majors.amd64"

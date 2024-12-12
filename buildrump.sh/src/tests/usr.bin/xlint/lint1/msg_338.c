@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_338.c,v 1.5 2021/08/22 22:15:07 rillig Exp $	*/
+/*	$NetBSD: msg_338.c,v 1.9 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_338.c"
 
 // Test for message: option '%c' should be handled in the switch [338]
+
+/* lint1-extra-flags: -X 351 */
 
 int getopt(int, char *const *, const char *);
 extern char *optarg;
@@ -11,7 +13,9 @@ main(int argc, char **argv)
 {
 	int o;
 
-	while ((o = getopt(argc, argv, "a:bc:d")) != -1) { /* expect: 338 *//* expect: 338 */
+	/* expect+2: warning: option 'c' should be handled in the switch [338] */
+	/* expect+1: warning: option 'd' should be handled in the switch [338] */
+	while ((o = getopt(argc, argv, "a:bc:d")) != -1) {
 		switch (o) {
 		case 'a':
 			break;
@@ -23,9 +27,11 @@ main(int argc, char **argv)
 			while (optarg[0] != '\0')
 				optarg++;
 			break;
-		case 'e':	/* expect: option 'e' should be listed */
+		case 'e':
+			/* expect-1: warning: option 'e' should be listed in the options string [339] */
 			break;
-		case 'f':	/* expect: option 'f' should be listed */
+		case 'f':
+			/* expect-1: warning: option 'f' should be listed in the options string [339] */
 			/*
 			 * The case labels in nested switch statements are
 			 * ignored by the check for getopt options.
@@ -75,6 +81,77 @@ question_option(int argc, char **argv)
 		default:
 			usage();
 			return 1;
+		}
+	}
+	return 0;
+}
+
+/*
+ * If the first character of the options string is ':', getopt does not print
+ * its own error messages. Getopt returns ':' if an option is missing its
+ * argument; that is handled by the 'default:' already.
+ */
+int
+suppress_errors(int argc, char **argv)
+{
+	int c;
+
+	/* expect+1: warning: option 'o' should be handled in the switch [338] */
+	while ((c = getopt(argc, argv, ":b:o")) != -1) {
+		switch (c) {
+		case 'b':
+			return 'b';
+		default:
+			usage();
+		}
+	}
+	return 0;
+}
+
+/*
+ * If the first character of the options string is ':', getopt returns ':'
+ * if an option is missing its argument. This condition can be handled
+ * separately from '?', which getopt returns for unknown options.
+ */
+int
+missing_argument(int argc, char **argv)
+{
+	int c;
+
+	/* expect+1: warning: option 'o' should be handled in the switch [338] */
+	while ((c = getopt(argc, argv, ":b:o")) != -1) {
+		switch (c) {
+		case 'b':
+			return 'b';
+		case ':':
+			return 'm';
+		default:
+			usage();
+		}
+	}
+	return 0;
+}
+
+/*
+ * Getopt only returns ':' if ':' is the first character in the options
+ * string. Everywhere else, a ':' marks the preceding option as having a
+ * required argument. In theory, if the options string contained "a::x",
+ * that could be interpreted as '-a argument', followed by '-:' and '-x',
+ * but nobody does that.
+ */
+int
+unreachable_colon(int argc, char **argv)
+{
+	int c;
+
+	/* expect+1: warning: option 'b' should be handled in the switch [338] */
+	while ((c = getopt(argc, argv, "b:")) != -1) {
+		switch (c) {
+		/* expect+1: warning: option ':' should be listed in the options string [339] */
+		case ':':
+			return 'm';
+		default:
+			usage();
 		}
 	}
 	return 0;

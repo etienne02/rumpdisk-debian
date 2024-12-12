@@ -1,4 +1,4 @@
-/*	$NetBSD: radeon_module.c,v 1.5 2018/08/28 03:35:08 riastradh Exp $	*/
+/*	$NetBSD: radeon_module.c,v 1.8 2022/07/17 15:36:59 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: radeon_module.c,v 1.5 2018/08/28 03:35:08 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radeon_module.c,v 1.8 2022/07/17 15:36:59 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/module.h>
@@ -39,12 +39,13 @@ __KERNEL_RCSID(0, "$NetBSD: radeon_module.c,v 1.5 2018/08/28 03:35:08 riastradh 
 #endif
 #include <sys/systm.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_sysctl.h>
 
 #include "radeon_drv.h"
 
-MODULE(MODULE_CLASS_DRIVER, radeon, "drmkms,drmkms_pci"); /* XXX drmkms_i2c, drmkms_ttm */
+MODULE(MODULE_CLASS_DRIVER, radeon, "drmkms,drmkms_pci,drmkms_ttm"); /* XXX drmkms_i2c */
 
 #ifdef _MODULE
 #include "ioconf.c"

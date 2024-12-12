@@ -1,4 +1,4 @@
-/*	$NetBSD: hdlg_machdep.c,v 1.31 2021/08/17 22:00:28 andvar Exp $	*/
+/*	$NetBSD: hdlg_machdep.c,v 1.35 2023/10/12 11:33:38 skrll Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003 Wasabi Systems, Inc.
@@ -73,7 +73,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hdlg_machdep.c,v 1.31 2021/08/17 22:00:28 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hdlg_machdep.c,v 1.35 2023/10/12 11:33:38 skrll Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -171,37 +171,25 @@ static const struct pmap_devmap hdlg_devmap[] = {
      * Map the on-board devices VA == PA so that we can access them
      * with the MMU on or off.
      */
-    {
+    DEVMAP_ENTRY(
 	HDLG_OBIO_BASE,
 	HDLG_OBIO_BASE,
-	HDLG_OBIO_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
+	HDLG_OBIO_SIZE
+    ),
 
-    {
+    DEVMAP_ENTRY(
 	HDLG_IOW_VBASE,
 	VERDE_OUT_XLATE_IO_WIN0_BASE,
-	VERDE_OUT_XLATE_IO_WIN_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-   },
+	VERDE_OUT_XLATE_IO_WIN_SIZE
+    ),
 
-   {
+    DEVMAP_ENTRY(
 	HDLG_80321_VBASE,
 	VERDE_PMMR_BASE,
-	VERDE_PMMR_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-   },
+	VERDE_PMMR_SIZE
+    ),
 
-   {
-	0,
-	0,
-	0,
-	0,
-	0,
-    }
+    DEVMAP_ENTRY_END
 };
 
 static void
@@ -227,10 +215,6 @@ hardclock_hook(void)
 vaddr_t
 initarm(void *arg)
 {
-	extern vaddr_t xscale_cache_clean_addr;
-#ifdef DIAGNOSTIC
-	extern vsize_t xscale_minidata_clean_size;
-#endif
 	int loop;
 	int loop1;
 	u_int l1pagetable;
@@ -305,7 +289,7 @@ initarm(void *arg)
 
 #ifdef VERBOSE_INIT_ARM
 	/* Tell the user about the memory */
-	printf("physmemory: %d pages at 0x%08lx -> 0x%08lx\n", physmem,
+	printf("physmemory: %ld pages at 0x%08lx -> 0x%08lx\n", physmem,
 	    physical_start, physical_end - 1);
 #endif
 

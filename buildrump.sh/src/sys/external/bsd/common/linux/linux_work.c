@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_work.c,v 1.45 2020/02/01 22:38:05 riastradh Exp $	*/
+/*	$NetBSD: linux_work.c,v 1.61 2022/04/09 23:43:31 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_work.c,v 1.45 2020/02/01 22:38:05 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_work.c,v 1.61 2022/04/09 23:43:31 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/atomic.h>
@@ -56,6 +56,7 @@ struct workqueue_struct {
 	kmutex_t		wq_lock;
 	kcondvar_t		wq_cv;
 	struct dwork_head	wq_delayed; /* delayed work scheduled */
+	struct work_head	wq_rcu;	    /* RCU work scheduled */
 	struct work_head	wq_queue;   /* work to run */
 	struct work_head	wq_dqueue;  /* delayed work to run now */
 	struct work_struct	*wq_current_work;
@@ -63,6 +64,7 @@ struct workqueue_struct {
 	bool			wq_dying;
 	uint64_t		wq_gen;
 	struct lwp		*wq_lwp;
+	const char		*wq_name;
 };
 
 static void __dead	linux_workqueue_thread(void *);
@@ -90,6 +92,8 @@ SDT_PROBE_DEFINE2(sdt, linux, work, release,
     "struct work_struct *"/*work*/, "struct workqueue_struct *"/*wq*/);
 SDT_PROBE_DEFINE2(sdt, linux, work, queue,
     "struct work_struct *"/*work*/, "struct workqueue_struct *"/*wq*/);
+SDT_PROBE_DEFINE2(sdt, linux, work, rcu,
+    "struct rcu_work *"/*work*/, "struct workqueue_struct *"/*wq*/);
 SDT_PROBE_DEFINE2(sdt, linux, work, cancel,
     "struct work_struct *"/*work*/, "struct workqueue_struct *"/*wq*/);
 SDT_PROBE_DEFINE3(sdt, linux, work, schedule,
@@ -109,6 +113,8 @@ SDT_PROBE_DEFINE1(sdt, linux, work, batch__start,
     "struct workqueue_struct *"/*wq*/);
 SDT_PROBE_DEFINE1(sdt, linux, work, batch__done,
     "struct workqueue_struct *"/*wq*/);
+SDT_PROBE_DEFINE1(sdt, linux, work, flush__self,
+    "struct workqueue_struct *"/*wq*/);
 SDT_PROBE_DEFINE1(sdt, linux, work, flush__start,
     "struct workqueue_struct *"/*wq*/);
 SDT_PROBE_DEFINE1(sdt, linux, work, flush__done,
@@ -116,9 +122,11 @@ SDT_PROBE_DEFINE1(sdt, linux, work, flush__done,
 
 static specificdata_key_t workqueue_key __read_mostly;
 
-struct workqueue_struct	*system_wq __read_mostly;
+struct workqueue_struct	*system_highpri_wq __read_mostly;
 struct workqueue_struct	*system_long_wq __read_mostly;
 struct workqueue_struct	*system_power_efficient_wq __read_mostly;
+struct workqueue_struct	*system_unbound_wq __read_mostly;
+struct workqueue_struct	*system_wq __read_mostly;
 
 static inline uintptr_t
 atomic_cas_uintptr(volatile uintptr_t *p, uintptr_t old, uintptr_t new)
@@ -140,34 +148,56 @@ linux_workqueue_init0(void)
 
 	error = lwp_specific_key_create(&workqueue_key, NULL);
 	if (error)
-		goto fail0;
+		goto out;
 
-	system_wq = alloc_ordered_workqueue("lnxsyswq", 0);
-	if (system_wq == NULL) {
+	system_highpri_wq = alloc_ordered_workqueue("lnxhipwq", 0);
+	if (system_highpri_wq == NULL) {
 		error = ENOMEM;
-		goto fail1;
+		goto out;
 	}
 
 	system_long_wq = alloc_ordered_workqueue("lnxlngwq", 0);
 	if (system_long_wq == NULL) {
 		error = ENOMEM;
-		goto fail2;
+		goto out;
 	}
 
 	system_power_efficient_wq = alloc_ordered_workqueue("lnxpwrwq", 0);
-	if (system_long_wq == NULL) {
+	if (system_power_efficient_wq == NULL) {
 		error = ENOMEM;
-		goto fail3;
+		goto out;
 	}
 
-	return 0;
+	system_unbound_wq = alloc_ordered_workqueue("lnxubdwq", 0);
+	if (system_unbound_wq == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
 
-fail4: __unused
-	destroy_workqueue(system_power_efficient_wq);
-fail3:	destroy_workqueue(system_long_wq);
-fail2:	destroy_workqueue(system_wq);
-fail1:	lwp_specific_key_delete(workqueue_key);
-fail0:	KASSERT(error);
+	system_wq = alloc_ordered_workqueue("lnxsyswq", 0);
+	if (system_wq == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
+
+	/* Success!  */
+	error = 0;
+
+out:	if (error) {
+		if (system_highpri_wq)
+			destroy_workqueue(system_highpri_wq);
+		if (system_long_wq)
+			destroy_workqueue(system_long_wq);
+		if (system_power_efficient_wq)
+			destroy_workqueue(system_power_efficient_wq);
+		if (system_unbound_wq)
+			destroy_workqueue(system_unbound_wq);
+		if (system_wq)
+			destroy_workqueue(system_wq);
+		if (workqueue_key)
+			lwp_specific_key_delete(workqueue_key);
+	}
+
 	return error;
 }
 
@@ -215,25 +245,27 @@ linux_workqueue_fini(void)
  */
 
 /*
- * alloc_ordered_workqueue(name, flags)
+ * alloc_workqueue(name, flags, max_active)
  *
- *	Create a workqueue of the given name.  No flags are currently
- *	defined.  Return NULL on failure, pointer to struct
- *	workqueue_struct object on success.
+ *	Create a workqueue of the given name.  max_active is the
+ *	maximum number of work items in flight, or 0 for the default.
+ *	Return NULL on failure, pointer to struct workqueue_struct
+ *	object on success.
  */
 struct workqueue_struct *
-alloc_ordered_workqueue(const char *name, int flags)
+alloc_workqueue(const char *name, int flags, unsigned max_active)
 {
 	struct workqueue_struct *wq;
 	int error;
 
-	KASSERT(flags == 0);
+	KASSERT(max_active == 0 || max_active == 1);
 
 	wq = kmem_zalloc(sizeof(*wq), KM_SLEEP);
 
 	mutex_init(&wq->wq_lock, MUTEX_DEFAULT, IPL_VM);
 	cv_init(&wq->wq_cv, name);
 	TAILQ_INIT(&wq->wq_delayed);
+	TAILQ_INIT(&wq->wq_rcu);
 	TAILQ_INIT(&wq->wq_queue);
 	TAILQ_INIT(&wq->wq_dqueue);
 	wq->wq_current_work = NULL;
@@ -241,6 +273,7 @@ alloc_ordered_workqueue(const char *name, int flags)
 	wq->wq_dying = false;
 	wq->wq_gen = 0;
 	wq->wq_lwp = NULL;
+	wq->wq_name = name;
 
 	error = kthread_create(PRI_NONE,
 	    KTHREAD_MPSAFE|KTHREAD_TS|KTHREAD_MUSTJOIN, NULL,
@@ -252,11 +285,24 @@ alloc_ordered_workqueue(const char *name, int flags)
 
 fail0:	KASSERT(TAILQ_EMPTY(&wq->wq_dqueue));
 	KASSERT(TAILQ_EMPTY(&wq->wq_queue));
+	KASSERT(TAILQ_EMPTY(&wq->wq_rcu));
 	KASSERT(TAILQ_EMPTY(&wq->wq_delayed));
 	cv_destroy(&wq->wq_cv);
 	mutex_destroy(&wq->wq_lock);
 	kmem_free(wq, sizeof(*wq));
 	return NULL;
+}
+
+/*
+ * alloc_ordered_workqueue(name, flags)
+ *
+ *	Same as alloc_workqueue(name, flags, 1).
+ */
+struct workqueue_struct *
+alloc_ordered_workqueue(const char *name, int flags)
+{
+
+	return alloc_workqueue(name, flags, 1);
 }
 
 /*
@@ -307,6 +353,12 @@ destroy_workqueue(struct workqueue_struct *wq)
 	}
 	mutex_exit(&wq->wq_lock);
 
+	/* Wait for all scheduled RCU work to complete.  */
+	mutex_enter(&wq->wq_lock);
+	while (!TAILQ_EMPTY(&wq->wq_rcu))
+		cv_wait(&wq->wq_cv, &wq->wq_lock);
+	mutex_exit(&wq->wq_lock);
+
 	/*
 	 * At this point, no new work can be put on the queue.
 	 */
@@ -325,6 +377,7 @@ destroy_workqueue(struct workqueue_struct *wq)
 	KASSERT(wq->wq_current_work == NULL);
 	KASSERT(TAILQ_EMPTY(&wq->wq_dqueue));
 	KASSERT(TAILQ_EMPTY(&wq->wq_queue));
+	KASSERT(TAILQ_EMPTY(&wq->wq_rcu));
 	KASSERT(TAILQ_EMPTY(&wq->wq_delayed));
 	cv_destroy(&wq->wq_cv);
 	mutex_destroy(&wq->wq_lock);
@@ -410,7 +463,7 @@ linux_workqueue_thread(void *cookie)
 			TAILQ_REMOVE(q[i], &marker, work_entry);
 		}
 
-		/* Notify flush that we've completed a batch of work.  */
+		/* Notify cancel that we've completed a batch of work.  */
 		wq->wq_gen++;
 		cv_broadcast(&wq->wq_cv);
 		SDT_PROBE1(sdt, linux, work, batch__done,  wq);
@@ -526,7 +579,20 @@ work_claimed(struct work_struct *work, struct workqueue_struct *wq)
 	KASSERT(work_queue(work) == wq);
 	KASSERT(mutex_owned(&wq->wq_lock));
 
-	return work->work_owner & 1;
+	return atomic_load_relaxed(&work->work_owner) & 1;
+}
+
+/*
+ * work_pending(work)
+ *
+ *	True if work is currently claimed by any workqueue, scheduled
+ *	to run on that workqueue.
+ */
+bool
+work_pending(const struct work_struct *work)
+{
+
+	return atomic_load_relaxed(&work->work_owner) & 1;
 }
 
 /*
@@ -539,7 +605,8 @@ static struct workqueue_struct *
 work_queue(struct work_struct *work)
 {
 
-	return (struct workqueue_struct *)(work->work_owner & ~(uintptr_t)1);
+	return (struct workqueue_struct *)
+	    (atomic_load_relaxed(&work->work_owner) & ~(uintptr_t)1);
 }
 
 /*
@@ -562,7 +629,7 @@ acquire_work(struct work_struct *work, struct workqueue_struct *wq)
 
 	owner = (uintptr_t)wq | 1;
 	do {
-		owner0 = work->work_owner;
+		owner0 = atomic_load_relaxed(&work->work_owner);
 		if (owner0 & 1) {
 			KASSERT((owner0 & ~(uintptr_t)1) == (uintptr_t)wq);
 			return false;
@@ -572,7 +639,7 @@ acquire_work(struct work_struct *work, struct workqueue_struct *wq)
 	    owner0);
 
 	KASSERT(work_queue(work) == wq);
-	membar_enter();
+	membar_acquire();
 	SDT_PROBE2(sdt, linux, work, acquire,  work, wq);
 	return true;
 }
@@ -593,14 +660,15 @@ release_work(struct work_struct *work, struct workqueue_struct *wq)
 	KASSERT(mutex_owned(&wq->wq_lock));
 
 	SDT_PROBE2(sdt, linux, work, release,  work, wq);
-	membar_exit();
+	membar_release();
 
 	/*
 	 * Non-interlocked r/m/w is safe here because nobody else can
-	 * write to this while the claimed bit is setand the workqueue
+	 * write to this while the claimed bit is set and the workqueue
 	 * lock is held.
 	 */
-	work->work_owner &= ~(uintptr_t)1;
+	atomic_store_relaxed(&work->work_owner,
+	    atomic_load_relaxed(&work->work_owner) & ~(uintptr_t)1);
 }
 
 /*
@@ -1362,44 +1430,22 @@ flush_scheduled_work(void)
 	flush_workqueue(system_wq);
 }
 
-/*
- * flush_workqueue_locked(wq)
- *
- *	Wait for all work queued on wq to complete.  This does not
- *	include delayed work.
- *
- *	Caller must hold wq's lock.
- */
+struct flush_work {
+	kmutex_t		fw_lock;
+	kcondvar_t		fw_cv;
+	struct work_struct	fw_work;
+	bool			fw_done;
+};
+
 static void
-flush_workqueue_locked(struct workqueue_struct *wq)
+flush_work_cb(struct work_struct *work)
 {
-	uint64_t gen;
+	struct flush_work *fw = container_of(work, struct flush_work, fw_work);
 
-	KASSERT(mutex_owned(&wq->wq_lock));
-
-	/* Get the current generation number.  */
-	gen = wq->wq_gen;
-
-	/*
-	 * If there's a batch of work in progress, we must wait for the
-	 * worker thread to finish that batch.
-	 */
-	if (wq->wq_current_work != NULL)
-		gen++;
-
-	/*
-	 * If there's any work yet to be claimed from the queue by the
-	 * worker thread, we must wait for it to finish one more batch
-	 * too.
-	 */
-	if (!TAILQ_EMPTY(&wq->wq_queue) || !TAILQ_EMPTY(&wq->wq_dqueue))
-		gen++;
-
-	/* Wait until the generation number has caught up.  */
-	SDT_PROBE1(sdt, linux, work, flush__start,  wq);
-	while (wq->wq_gen < gen)
-		cv_wait(&wq->wq_cv, &wq->wq_lock);
-	SDT_PROBE1(sdt, linux, work, flush__done,  wq);
+	mutex_enter(&fw->fw_lock);
+	fw->fw_done = true;
+	cv_broadcast(&fw->fw_cv);
+	mutex_exit(&fw->fw_lock);
 }
 
 /*
@@ -1411,10 +1457,56 @@ flush_workqueue_locked(struct workqueue_struct *wq)
 void
 flush_workqueue(struct workqueue_struct *wq)
 {
+	struct flush_work fw;
 
-	mutex_enter(&wq->wq_lock);
-	flush_workqueue_locked(wq);
-	mutex_exit(&wq->wq_lock);
+	if (lwp_getspecific(workqueue_key) == wq) {
+		SDT_PROBE1(sdt, linux, work, flush__self,  wq);
+		return;
+	}
+
+	mutex_init(&fw.fw_lock, MUTEX_DEFAULT, IPL_VM);
+	cv_init(&fw.fw_cv, "lxwqflsh");
+	INIT_WORK(&fw.fw_work, &flush_work_cb);
+	fw.fw_done = false;
+
+	SDT_PROBE1(sdt, linux, work, flush__start,  wq);
+	queue_work(wq, &fw.fw_work);
+
+	mutex_enter(&fw.fw_lock);
+	while (!fw.fw_done)
+		cv_wait(&fw.fw_cv, &fw.fw_lock);
+	mutex_exit(&fw.fw_lock);
+	SDT_PROBE1(sdt, linux, work, flush__done,  wq);
+
+	KASSERT(fw.fw_done);
+	/* no DESTROY_WORK */
+	cv_destroy(&fw.fw_cv);
+	mutex_destroy(&fw.fw_lock);
+}
+
+/*
+ * drain_workqueue(wq)
+ *
+ *	Repeatedly flush wq until there is no more work.
+ */
+void
+drain_workqueue(struct workqueue_struct *wq)
+{
+	unsigned ntries = 0;
+	bool done;
+
+	do {
+		if (ntries++ == 10 || (ntries % 100) == 0)
+			printf("linux workqueue %s"
+			    ": still clogged after %u flushes",
+			    wq->wq_name, ntries);
+		flush_workqueue(wq);
+		mutex_enter(&wq->wq_lock);
+		done = wq->wq_current_work == NULL;
+		done &= TAILQ_EMPTY(&wq->wq_queue);
+		done &= TAILQ_EMPTY(&wq->wq_dqueue);
+		mutex_exit(&wq->wq_lock);
+	} while (!done);
 }
 
 /*
@@ -1422,17 +1514,21 @@ flush_workqueue(struct workqueue_struct *wq)
  *
  *	If work is queued or currently executing, wait for it to
  *	complete.
+ *
+ *	Return true if we waited to flush it, false if it was already
+ *	idle.
  */
-void
+bool
 flush_work(struct work_struct *work)
 {
 	struct workqueue_struct *wq;
 
 	/* If there's no workqueue, nothing to flush.  */
 	if ((wq = work_queue(work)) == NULL)
-		return;
+		return false;
 
 	flush_workqueue(wq);
+	return true;
 }
 
 /*
@@ -1442,14 +1538,15 @@ flush_work(struct work_struct *work)
  *	instead.  Then, if dw is queued or currently executing, wait
  *	for it to complete.
  */
-void
+bool
 flush_delayed_work(struct delayed_work *dw)
 {
 	struct workqueue_struct *wq;
+	bool waited = false;
 
 	/* If there's no workqueue, nothing to flush.  */
 	if ((wq = work_queue(&dw->work)) == NULL)
-		return;
+		return false;
 
 	mutex_enter(&wq->wq_lock);
 	if (__predict_false(work_queue(&dw->work) != wq)) {
@@ -1458,6 +1555,7 @@ flush_delayed_work(struct delayed_work *dw)
 		 * queue, though that would be ill-advised), so it must
 		 * have completed, and we have nothing more to do.
 		 */
+		waited = false;
 	} else {
 		switch (dw->dw_state) {
 		case DELAYED_WORK_IDLE:
@@ -1505,7 +1603,74 @@ flush_delayed_work(struct delayed_work *dw)
 		 * Waiting for the whole queue to flush is overkill,
 		 * but doesn't hurt.
 		 */
-		flush_workqueue_locked(wq);
+		mutex_exit(&wq->wq_lock);
+		flush_workqueue(wq);
+		mutex_enter(&wq->wq_lock);
+		waited = true;
+	}
+	mutex_exit(&wq->wq_lock);
+
+	return waited;
+}
+
+/*
+ * delayed_work_pending(dw)
+ *
+ *	True if dw is currently scheduled to execute, false if not.
+ */
+bool
+delayed_work_pending(const struct delayed_work *dw)
+{
+
+	return work_pending(&dw->work);
+}
+
+/*
+ * INIT_RCU_WORK(rw, fn)
+ *
+ *	Initialize rw for use with a workqueue to call fn in a worker
+ *	thread after an RCU grace period.  There is no corresponding
+ *	destruction operation.
+ */
+void
+INIT_RCU_WORK(struct rcu_work *rw, void (*fn)(struct work_struct *))
+{
+
+	INIT_WORK(&rw->work, fn);
+}
+
+static void
+queue_rcu_work_cb(struct rcu_head *r)
+{
+	struct rcu_work *rw = container_of(r, struct rcu_work, rw_rcu);
+	struct workqueue_struct *wq = work_queue(&rw->work);
+
+	mutex_enter(&wq->wq_lock);
+	KASSERT(work_pending(&rw->work));
+	KASSERT(work_queue(&rw->work) == wq);
+	destroy_rcu_head(&rw->rw_rcu);
+	TAILQ_REMOVE(&wq->wq_rcu, &rw->work, work_entry);
+	TAILQ_INSERT_TAIL(&wq->wq_queue, &rw->work, work_entry);
+	cv_broadcast(&wq->wq_cv);
+	SDT_PROBE2(sdt, linux, work, queue,  &rw->work, wq);
+	mutex_exit(&wq->wq_lock);
+}
+
+/*
+ * queue_rcu_work(wq, rw)
+ *
+ *	Schedule rw to run on wq after an RCU grace period.
+ */
+void
+queue_rcu_work(struct workqueue_struct *wq, struct rcu_work *rw)
+{
+
+	mutex_enter(&wq->wq_lock);
+	if (acquire_work(&rw->work, wq)) {
+		init_rcu_head(&rw->rw_rcu);
+		SDT_PROBE2(sdt, linux, work, rcu,  rw, wq);
+		TAILQ_INSERT_TAIL(&wq->wq_rcu, &rw->work, work_entry);
+		call_rcu(&rw->rw_rcu, &queue_rcu_work_cb);
 	}
 	mutex_exit(&wq->wq_lock);
 }

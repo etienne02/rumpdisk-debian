@@ -1,4 +1,4 @@
-/*	$NetBSD: defs.h,v 1.72 2021/08/12 09:33:59 martin Exp $	*/
+/*	$NetBSD: defs.h,v 1.92 2024/04/22 14:41:26 nia Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -59,6 +59,7 @@ const char *getfslabelname(uint, uint);
 #define STRSIZE		255
 #define	MENUSTRSIZE	80
 #define SSTRSIZE	30
+#define	DISKNAMESIZE	24	/* max(strlen("/dev/rsd22c")) */
 
 /* these are used for different alignment defaults */
 #define	HUGE_DISK_SIZE	(daddr_t)(128 * (GIG / 512))
@@ -107,14 +108,16 @@ const char *getfslabelname(uint, uint);
 #define RUN_PROGRESS	0x0080		/* Output is just progess test */
 #define RUN_NO_CLEAR	0x0100		/* Leave program output after error */
 #define RUN_XFER_DIR	0x0200		/* cd to xfer_dir in child */
+#define	RUN_STDSCR	0x0400		/* run program in standard screen */
 
 /* for bsddisklabel.c */
 enum layout_type {
-	LY_KEEPEXISTING,	/* keep exisiting partitions */
+	LY_KEEPEXISTING,	/* keep existing partitions */
 	LY_OTHERSCHEME,		/* delete all, select new partitioning scheme */
 	LY_SETSIZES,		/* edit sizes */
 	LY_USEDEFAULT,		/* use default sizes */
 	LY_USEFULL,		/* use full disk for NetBSD */
+	LY_USENONE,		/* start with empty partitions, manual mode */
 	LY_ERROR		/* used for "abort" in menu */
 };
 
@@ -137,11 +140,15 @@ enum {
 
     /* System sets */
     SET_BASE,		/* base */
+    SET_BASE32,		/* base 32-bit compat libs */
+    SET_BASE64,		/* base 64-bit compat libs */
     SET_ETC,		/* /etc */
     SET_COMPILER,	/* compiler tools */
     SET_DTB,		/* devicetree hardware descriptions */
     SET_GAMES,		/* text games */
-    SET_MAN_PAGES,	/* online manual pages */
+    SET_GPUFW,		/* GPU firmware files */
+    SET_MAN_PAGES,	/* manual pages */
+    SET_MAN_PAGES_HTML,	/* manual pages (HTML) */
     SET_MISC,		/* miscellaneuous */
     SET_MODULES,	/* kernel modules */
     SET_RESCUE,		/* /rescue recovery tools */
@@ -172,6 +179,8 @@ enum {
 
     /* Debug sets */
     SET_DEBUG,
+    SET_DEBUG32,
+    SET_DEBUG64,
     SET_X11_DEBUG,
 
     SET_LAST,
@@ -191,13 +200,15 @@ enum {
 #endif
 /* Core system sets */
 #ifdef HAVE_DTB
-#define SET_CORE WITH_MODULES SET_BASE, SET_DTB, SET_ETC
+#define	WITH_DTB	SET_DTB,
 #else
-#define SET_CORE WITH_MODULES SET_BASE, SET_ETC
+#define	WITH_DTB
 #endif
+#define SET_CORE WITH_MODULES SET_BASE, WITH_DTB SET_GPUFW, SET_ETC
 /* All system sets */
-#define SET_SYSTEM SET_CORE, SET_COMPILER, SET_GAMES, \
-		    SET_MAN_PAGES, SET_MISC, SET_RESCUE, \
+#define SET_SYSTEM SET_CORE, SET_BASE32, SET_BASE64, SET_COMPILER, SET_GAMES, \
+		    SET_MAN_PAGES, SET_MAN_PAGES_HTML, \
+                    SET_MISC, SET_RESCUE, \
 		    SET_TESTS, SET_TEXT_TOOLS
 /* All X11 sets */
 #define SET_X11_NOSERVERS SET_X11_BASE, SET_X11_FONTS, SET_X11_PROG, SET_X11_ETC
@@ -382,7 +393,7 @@ struct single_part_fs_edit {
 
 /*
  * Description of a full target installation, all partitions and
- * devices (may be accross several struct pm_devs / disks).
+ * devices (may be across several struct pm_devs / disks).
  */
 struct install_partition_desc {
 	size_t num;				/* how many entries in infos */
@@ -393,7 +404,7 @@ struct install_partition_desc {
 						 * updating, even if no
 						 * active partition remains. */
 	size_t num_write_back;			/* number of write_back */
-	bool cur_system;			/* target is the life system */
+	bool cur_system;			/* target is the live system */
 };
 
 /* variables */
@@ -499,6 +510,7 @@ struct part_entry {
 	part_id id;
 	struct disk_partitions *parts;
 	void *dev_ptr;
+	struct install_partition_desc *install;
 	size_t index;	/* e.g. if PM_RAID: this is raids[index] */
 	int dev_ptr_delta;
 	char fullname[SSTRSIZE];
@@ -593,10 +605,13 @@ extern const char *ushell;
 
 #define	XFER_FTP	0
 #define	XFER_HTTP	1
-#define	XFER_MAX	XFER_HTTP
+#define	XFER_HTTPS	2
+#define	XFER_MAX	XFER_HTTPS
+#define	XFER_HOST_MAX	XFER_HTTP	/* http and https share a server name */
+#define	XFER_HOST(XFER)	((XFER) == XFER_FTP ? 0 : 1)
 
 struct ftpinfo {
-	char xfer_host[XFER_MAX+1][STRSIZE];
+	char xfer_host[XFER_HOST_MAX+1][STRSIZE];
 	char dir[STRSIZE] ;
 	char user[SSTRSIZE];
 	char pass[STRSIZE];
@@ -630,6 +645,10 @@ extern char dist_tgz_postfix[SSTRSIZE];
 /* needed prototypes */
 void set_menu_numopts(int, int);
 void remove_color_options(void);
+#ifdef CHECK_ENTROPY
+bool do_add_entropy(void);
+size_t entropy_needed(void);
+#endif
 void remove_raid_options(void);
 void remove_lvm_options(void);
 void remove_cgd_options(void);
@@ -659,9 +678,10 @@ bool	md_gpt_post_write(struct disk_partitions*, part_id root_id,
  */
 bool	md_pre_disklabel(struct install_partition_desc*, struct disk_partitions*);
 bool	md_post_disklabel(struct install_partition_desc*, struct disk_partitions*);
+bool	md_disklabel_is_default(const struct disklabel *);
 int	md_pre_mount(struct install_partition_desc*, size_t);
 int	md_post_newfs(struct install_partition_desc*);
-int	md_post_extract(struct install_partition_desc*);
+int	md_post_extract(struct install_partition_desc*, bool upgrade);
 void	md_cleanup_install(struct install_partition_desc*);
 
  /* MD functions if user selects upgrade - in order called */
@@ -710,6 +730,7 @@ bool	clone_partition_data(struct disk_partitions *dest_parts, part_id did,
 
 struct menudesc;
 void	disp_cur_fspart(int, int);
+bool	can_newfs_fstype(unsigned int);
 int	make_filesystems(struct install_partition_desc *);
 int	make_fstab(struct install_partition_desc *);
 int	mount_disks(struct install_partition_desc *);
@@ -781,7 +802,7 @@ extern int network_up;
 extern char net_namesvr[STRSIZE];
 int	get_via_ftp(unsigned int);
 int	get_via_nfs(void);
-int	config_network(void);
+int	config_network(int force);
 void	mnt_net_config(void);
 void	make_url(char *, struct ftpinfo *, const char *);
 int	get_pkgsrc(void);
@@ -883,14 +904,20 @@ int set_menu_select(menudesc *, void *);
 const char *safectime(time_t *);
 bool	use_tgz_for_set(const char*);
 const char *set_postfix(const char*);
+bool	empty_usage_set_from_parts(struct partition_usage_set*,
+	    struct disk_partitions*);
 bool	usage_set_from_parts(struct partition_usage_set*,
 	    struct disk_partitions*);
+bool	usage_set_from_install_desc(struct partition_usage_set*,
+	    const struct install_partition_desc*,
+	    struct disk_partitions*);
+bool	merge_usage_set_into_install_desc(struct install_partition_desc*,
+	    const struct partition_usage_set*);
 void	free_usage_set(struct partition_usage_set*);
 bool	install_desc_from_parts(struct install_partition_desc *,
 	    struct disk_partitions*);
 void	free_install_desc(struct install_partition_desc*);
 bool	may_swap_if_not_sdmmc(const char*);
-bool	do_check_entropy(void);
 
 /* from target.c */
 #if defined(DEBUG)  ||	defined(DEBUG_ROOT)
@@ -916,23 +943,25 @@ void	dup_file_into_target(const char *);
 void	mv_within_target_or_die(const char *, const char *);
 int	cp_within_target(const char *, const char *, int);
 int	target_mount(const char *, const char *, const char *);
+int	target_unmount(const char *);
 int	target_mount_do(const char *, const char *, const char *);
 int	target_test(unsigned int, const char *);
 int	target_dir_exists_p(const char *);
 int	target_file_exists_p(const char *);
 int	target_symlink_exists_p(const char *);
 void	unwind_mounts(void);
+void	register_post_umount_delwedge(const char *disk, const char *wedge);
 int	target_mounted(void);
 void	umount_root(void);
 
 /* from partman.c */
 #ifndef NO_PARTMAN
-int partman(void);
+int partman(struct install_partition_desc*);
 int pm_getrefdev(struct pm_devs *);
 void update_wedges(const char *);
 void pm_destroy_all(void);
 #else
-static inline int partman(void) { return -1; }
+static inline int partman(struct install_partition_desc *i __unused) { return -1; }
 static inline int pm_getrefdev(struct pm_devs *x __unused) { return -1; }
 #define update_wedges(x) __nothing
 #endif
@@ -996,6 +1025,7 @@ void	save_kb_encoding(void);
 
 /* from configmenu.c */
 void	do_configmenu(struct install_partition_desc*);
+void	root_pw_setup(void);
 
 /* from checkrc.c */
 int	check_rcvar(const char *);

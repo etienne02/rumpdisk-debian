@@ -1,4 +1,4 @@
-/*	$NetBSD: if.h,v 1.5 2019/12/15 16:48:26 tsutsui Exp $	*/
+/*	$NetBSD: if.h,v 1.7 2022/09/28 15:32:09 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001 The NetBSD Foundation, Inc.
@@ -63,7 +63,38 @@
 #ifndef _COMPAT_NET_IF_H_
 #define _COMPAT_NET_IF_H_
 
+#include <net/route.h>
 #include <compat/sys/time.h>
+
+#define OIFNAMSIZ	16
+
+struct oifreq {
+	char	ifr_name[OIFNAMSIZ];		/* if name, e.g. "en0" */
+	union {
+		struct	sockaddr ifru_addr;
+		struct	sockaddr ifru_dstaddr;
+		struct	sockaddr ifru_broadaddr;
+		short	ifru_flags;
+		int	ifru_metric;
+		int	ifru_mtu;
+		int	ifru_dlt;
+		u_int	ifru_value;
+		void *	ifru_data;
+		struct {
+			uint32_t	b_buflen;
+			void		*b_buf;
+		} ifru_b;
+	} ifr_ifru;
+};
+struct	oifconf {
+	int	ifc_len;		/* size of associated buffer */
+	union {
+		void *	ifcu_buf;
+		struct	oifreq *ifcu_req;
+	} ifc_ifcu;
+#define	ifc_buf	ifc_ifcu.ifcu_buf	/* buffer address */
+#define	ifc_req	ifc_ifcu.ifcu_req	/* array of structures returned */
+};
 
 /* Pre-1.5 if_data struct */
 struct if_data14 {
@@ -114,22 +145,31 @@ struct if_data50 {
 	u_char	ifi_addrlen;		/* media address length */
 	u_char	ifi_hdrlen;		/* media header length */
 	int	ifi_link_state;		/* current link state */
-	u_quad_t ifi_mtu;		/* maximum transmission unit */
-	u_quad_t ifi_metric;		/* routing metric (external only) */
-	u_quad_t ifi_baudrate;		/* linespeed */
+	uint64_t ifi_mtu;		/* maximum transmission unit */
+	uint64_t ifi_metric;		/* routing metric (external only) */
+	uint64_t ifi_baudrate;		/* linespeed */
 	/* volatile statistics */
-	u_quad_t ifi_ipackets;		/* packets received on interface */
-	u_quad_t ifi_ierrors;		/* input errors on interface */
-	u_quad_t ifi_opackets;		/* packets sent on interface */
-	u_quad_t ifi_oerrors;		/* output errors on interface */
-	u_quad_t ifi_collisions;	/* collisions on csma interfaces */
-	u_quad_t ifi_ibytes;		/* total number of octets received */
-	u_quad_t ifi_obytes;		/* total number of octets sent */
-	u_quad_t ifi_imcasts;		/* packets received via multicast */
-	u_quad_t ifi_omcasts;		/* packets sent via multicast */
-	u_quad_t ifi_iqdrops;		/* dropped on input, this interface */
-	u_quad_t ifi_noproto;		/* destined for unsupported protocol */
+	uint64_t ifi_ipackets;		/* packets received on interface */
+	uint64_t ifi_ierrors;		/* input errors on interface */
+	uint64_t ifi_opackets;		/* packets sent on interface */
+	uint64_t ifi_oerrors;		/* output errors on interface */
+	uint64_t ifi_collisions;	/* collisions on csma interfaces */
+	uint64_t ifi_ibytes;		/* total number of octets received */
+	uint64_t ifi_obytes;		/* total number of octets sent */
+	uint64_t ifi_imcasts;		/* packets received via multicast */
+	uint64_t ifi_omcasts;		/* packets sent via multicast */
+	uint64_t ifi_iqdrops;		/* dropped on input, this interface */
+	uint64_t ifi_noproto;		/* destined for unsupported protocol */
 	struct	timeval50 ifi_lastchange;/* last operational state change */
+};
+
+/*
+ * Structure defining statistics and other data kept regarding a network
+ * interface.
+ */
+struct ifdatareq50 {
+	char	ifdr_name[OIFNAMSIZ];		/* if name, e.g. "en0" */
+	struct	if_data50 ifdr_data;
 };
 
 /*

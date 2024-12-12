@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.h,v 1.1 2014/02/24 07:23:43 skrll Exp $	*/
+/*	$NetBSD: intr.h,v 1.4 2023/07/12 06:45:24 mrg Exp $	*/
 /*	$OpenBSD: intr.h,v 1.26 2009/12/29 13:11:40 jsing Exp $	*/
 
 /*-
@@ -39,6 +39,13 @@
 #include <sys/evcnt.h>
 
 #ifndef _LOCORE
+
+#if defined(_KERNEL) || defined(_KMEMUSER)
+typedef int ipl_t;
+typedef struct {
+	ipl_t _ipl;
+} ipl_cookie_t;
+#endif
 
 #ifdef _KERNEL
 
@@ -92,6 +99,8 @@ struct hppa_interrupt_register {
 #define	IR_BIT_UNUSED		IR_BIT_REG(0)
 #define	IR_BIT_USED_P(x)	(((x) & IR_BIT_MASK) != IR_BIT_MASK)
 #define	IR_BIT_NESTED_P(x)	(((x) & IR_BIT_MASK) == IR_BIT_MASK)
+/* true if not used for interrupt or nested interrupt register */
+#define	IR_BIT_UNUSED_P(x)	((x) == IR_BIT_MASK)
 
 	int ir_bits;		/* mask of allocatable bit numbers */
 	int ir_rbits;		/* mask of reserved (for lasi/asp) bit numbers */
@@ -153,11 +162,6 @@ void spllower(int);
  */
 #define	spl0()		spllower(0)
 #define	splx(x)		spllower(x)
-
-typedef int ipl_t;
-typedef struct {
-	ipl_t _ipl;
-} ipl_cookie_t;
 
 static inline ipl_cookie_t
 makeiplcookie(ipl_t ipl)

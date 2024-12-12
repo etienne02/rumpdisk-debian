@@ -1,9 +1,9 @@
 #! /usr/bin/lua
--- $NetBSD: check-msgs.lua,v 1.11 2021/06/15 08:37:56 rillig Exp $
+-- $NetBSD: check-msgs.lua,v 1.22 2024/03/01 17:22:55 rillig Exp $
 
 --[[
 
-usage: lua ./check-msgs.lua *.c
+usage: lua ./check-msgs.lua *.c *.y
 
 Check that the message text in the comments of the C source code matches the
 actual user-visible message text in err.c.
@@ -11,14 +11,14 @@ actual user-visible message text in err.c.
 ]]
 
 
-local function load_messages(fname)
-  local msgs = {} ---@type table<number>string
+local function load_messages()
+  local msgs = {} ---@type table<string>string
 
-  local f = assert(io.open(fname, "r"))
+  local f = assert(io.open("err.c"))
   for line in f:lines() do
-    local msg, id = line:match("%s*\"(.+)\",%s*/%*%s*(%d+)%s*%*/$")
+    local msg, id = line:match("%s*\"(.+)\",%s*// (Q?%d+)$")
     if msg ~= nil then
-      msgs[tonumber(id)] = msg
+      msgs[id] = msg
     end
   end
 
@@ -40,29 +40,13 @@ local function check_message(fname, lineno, id, comment, msgs)
   local msg = msgs[id]
 
   if msg == nil then
-    print_error("%s:%d: id=%d not found", fname, lineno, id)
+    print_error("%s:%d: id=%s not found", fname, lineno, id)
     return
   end
 
   msg = msg:gsub("/%*", "**")
   msg = msg:gsub("%*/", "**")
   msg = msg:gsub("\\(.)", "%1")
-
-  -- allow a few abbreviations to be used in the code
-  comment = comment:gsub("arg%.", "argument")
-  comment = comment:gsub("comb%.", "combination")
-  comment = comment:gsub("conv%.", "conversion")
-  comment = comment:gsub("decl%.", "declaration")
-  comment = comment:gsub("defn%.", "definition")
-  comment = comment:gsub("des%.s", "designators")
-  comment = comment:gsub("expr%.", "expression")
-  comment = comment:gsub("func%.", "function")
-  comment = comment:gsub("incomp%.", "incompatible")
-  comment = comment:gsub("init%.", "initialize")
-  comment = comment:gsub("param%.", "parameter")
-  comment = comment:gsub("req%.", "requires")
-  comment = comment:gsub("poss%.", "possibly")
-  comment = comment:gsub("trad%.", "traditional")
 
   if comment == msg then
     return
@@ -73,10 +57,21 @@ local function check_message(fname, lineno, id, comment, msgs)
     return
   end
 
-  print_error("%s:%d:   id=%-3d   msg=%-40s   comment=%s",
+  print_error("%s:%d:   id=%-3s   msg=%-40s   comment=%s",
     fname, lineno, id, msg, comment)
 end
 
+local message_prefix = {
+  error = "",
+  error_at = "",
+  warning = "",
+  warning_at = "",
+  query_message = "Q",
+  c99ism = "",
+  c11ism = "",
+  c23ism = "",
+  gnuism = "",
+}
 
 local function check_file(fname, msgs)
   local f = assert(io.open(fname, "r"))
@@ -85,16 +80,15 @@ local function check_file(fname, msgs)
   for line in f:lines() do
     lineno = lineno + 1
 
-    local func, id = line:match("^%s+(%w+)%((%d+)[),]")
-    id = tonumber(id)
-    if func == "error" or func == "warning" or
-       func == "c99ism" or func == "c11ism" or
-       func == "gnuism" or func == "message" then
+    local func, id = line:match("^%s+([%w_]+)%((%d+)[),]")
+    local prefix = message_prefix[func]
+    if prefix then
+      id = prefix .. id
       local comment = prev:match("^%s+/%* (.+) %*/$")
       if comment ~= nil then
         check_message(fname, lineno, id, comment, msgs)
       else
-        print_error("%s:%d: missing comment for %d: /* %s */",
+        print_error("%s:%d: missing comment for %s: /* %s */",
           fname, lineno, id, msgs[id])
       end
     end
@@ -114,28 +108,77 @@ local function file_contains(filename, text)
 end
 
 
+-- Ensure that each test file for a particular message mentions the full text
+-- of that message and the message ID.
 local function check_test_files(msgs)
-
-  local msgids = {}
-  for msgid, _ in pairs(msgs) do
-    table.insert(msgids, msgid)
-  end
-  table.sort(msgids)
-
   local testdir = "../../../tests/usr.bin/xlint/lint1"
-  for _, msgid in ipairs(msgids) do
-    local msg = msgs[msgid]:gsub("\\(.)", "%1")
-    local filename = ("%s/msg_%03d.c"):format(testdir, msgid)
-    if not file_contains(filename, msg) then
-      print_error("%s must contain: %s", filename, msg)
+  local cmd = ("cd '%s' && printf '%%s\\n' msg_[0-9][0-9][0-9]*.c"):format(testdir)
+  local filenames = assert(io.popen(cmd))
+  for filename in filenames:lines() do
+    local msgid = filename:match("^msg_(%d%d%d)")
+    if msgs[msgid] then
+      local unescaped_msg = msgs[msgid]:gsub("\\(.)", "%1")
+      local expected_text = ("Test for message: %s [%s]"):format(unescaped_msg, msgid)
+      local fullname = ("%s/%s"):format(testdir, filename)
+      if not file_contains(fullname, expected_text) then
+        print_error("%s must contain: // %s", fullname, expected_text)
+      end
     end
   end
+  filenames:close()
+end
+
+local function check_yacc_file(filename)
+  local decl = {}
+  local decl_list = {}
+  local decl_list_index = 1
+  local f = assert(io.open(filename, "r"))
+  local lineno = 0
+  for line in f:lines() do
+    lineno = lineno + 1
+    local type = line:match("^%%type%s+<[%w_]+>%s+(%S+)$") or
+      line:match("^/%* No type for ([%w_]+)%. %*/$")
+    if type then
+      if decl[type] then
+        print_error("%s:%d: duplicate type declaration for rule %q",
+          filename, lineno, type)
+      end
+      decl[type] = lineno
+      table.insert(decl_list, { lineno = lineno, rule = type })
+    end
+    local rule = line:match("^([%w_]+):")
+    if rule then
+      if decl[rule] then
+        decl[rule] = nil
+      else
+        print_error("%s:%d: missing type declaration for rule %q",
+          filename, lineno, rule)
+      end
+      if decl_list_index > 0 then
+        local expected = decl_list[decl_list_index]
+        if expected.rule == rule then
+          decl_list_index = decl_list_index + 1
+        else
+          print_error("%s:%d: expecting rule %q (from line %d), got %q",
+              filename, lineno, expected.rule, expected.lineno, rule)
+          decl_list_index = 0
+        end
+      end
+    end
+  end
+  for rule, decl_lineno in pairs(decl) do
+    print_error("%s:%d: missing rule %q", filename, decl_lineno, rule)
+  end
+  f:close()
 end
 
 local function main(arg)
-  local msgs = load_messages("err.c")
+  local msgs = load_messages()
   for _, fname in ipairs(arg) do
     check_file(fname, msgs)
+    if fname:match("%.y$") then
+      check_yacc_file(fname)
+    end
   end
   check_test_files(msgs)
 end

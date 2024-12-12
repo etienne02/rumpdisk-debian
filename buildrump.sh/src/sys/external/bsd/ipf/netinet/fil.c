@@ -1,4 +1,4 @@
-/*	$NetBSD: fil.c,v 1.33 2020/04/09 18:20:40 christos Exp $	*/
+/*	$NetBSD: fil.c,v 1.37 2023/06/24 05:16:15 msaitoh Exp $	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -141,7 +141,7 @@ extern struct timeout ipf_slowtimer_ch;
 #if !defined(lint)
 #if defined(__NetBSD__)
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fil.c,v 1.33 2020/04/09 18:20:40 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fil.c,v 1.37 2023/06/24 05:16:15 msaitoh Exp $");
 #else
 static const char sccsid[] = "@(#)fil.c	1.36 6/5/96 (C) 1993-2000 Darren Reed";
 static const char rcsid[] = "@(#)Id: fil.c,v 1.1.1.2 2012/07/22 13:45:07 darrenr Exp $";
@@ -611,7 +611,7 @@ ipf_pr_ipv6hdr(fr_info_t *fin)
 
 	/*
 	 * IPv6 fragment case 1 - see comment for ipf_pr_fragment6().
-	 * "go != 0" imples the above loop hasn't arrived at a layer 4 header.
+	 * "go != 0" implies the above loop hasn't arrived at a layer 4 header.
 	 */
 	if ((go != 0) && (fin->fin_flx & FI_FRAG) && (fin->fin_off == 0)) {
 		ipf_main_softc_t *softc = fin->fin_main_soft;
@@ -1142,8 +1142,10 @@ ipf_pr_pullup(fr_info_t *fin, int plen)
 		if (M_LEN(fin->fin_m) < plen + fin->fin_ipoff) {
 #if defined(_KERNEL)
 			if (ipf_pullup(fin->fin_m, fin, plen) == NULL) {
-				DT(ipf_pullup_fail);
+				DT1(ipf_pullup_fail, fr_info_t *, fin);
 				LBUMP(ipf_stats[fin->fin_out].fr_pull[1]);
+				fin->fin_reason = FRB_PULLUP;
+				fin->fin_flx |= FI_BAD;
 				return -1;
 			}
 			LBUMP(ipf_stats[fin->fin_out].fr_pull[0]);
@@ -1156,6 +1158,7 @@ ipf_pr_pullup(fr_info_t *fin, int plen)
 			*fin->fin_mp = NULL;
 			fin->fin_m = NULL;
 			fin->fin_ip = NULL;
+			fin->fin_flx |= FI_BAD;
 			return -1;
 #endif
 		}
@@ -2362,7 +2365,7 @@ ipf_check_ipf(fr_info_t *fin, frentry_t *fr, int portcmp)
 /* If a match is found, the value of fr_flags from the rule becomes the     */
 /* return value and fin->fin_fr points to the matched rule.                 */
 /*                                                                          */
-/* This function may be called recusively upto 16 times (limit inbuilt.)    */
+/* This function may be called recursively upto 16 times (limit inbuilt.)   */
 /* When unwinding, it should finish up with fin_depth as 0.                 */
 /*                                                                          */
 /* Could be per interface, but this gets real nasty when you don't have,    */
@@ -3213,6 +3216,13 @@ finished:
 	}
 
 	SPL_X(s);
+
+	if (fin->fin_m == NULL && fin->fin_flx & FI_BAD &&
+	    fin->fin_reason == FRB_PULLUP) {
+		/* m_pullup() has freed the mbuf */
+		LBUMP(ipf_stats[out].fr_blocked[fin->fin_reason]);
+		return (-1);
+	}
 
 #ifdef _KERNEL
 	if (FR_ISPASS(pass))
@@ -5933,7 +5943,7 @@ ipf_movequeue(u_long ticks, ipftqent_t *tqe, ipftq_t *oifq, ipftq_t *nifq)
 
 /* ------------------------------------------------------------------------ */
 /* Function:    ipf_updateipid                                              */
-/* Returns:     int - 0 == success, -1 == error (packet should be droppped) */
+/* Returns:     int - 0 == success, -1 == error (packet should be dropped)  */
 /* Parameters:  fin(I) - pointer to packet information                      */
 /*                                                                          */
 /* When we are doing NAT, change the IP of every packet to represent a      */

@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_machdep.h,v 1.2 2017/10/31 12:37:23 martin Exp $	*/
+/*	$NetBSD: netbsd32_machdep.h,v 1.4 2021/11/06 20:42:56 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -34,6 +34,10 @@
 
 #include <sys/types.h>
 
+#ifdef __aarch64__
+#error You have wandered from the path of righteousness.
+#endif
+
 #define	NETBSD32_POINTER_TYPE			uint32_t
 typedef struct { NETBSD32_POINTER_TYPE i32; }	netbsd32_pointer_t;
 
@@ -55,6 +59,12 @@ typedef netbsd32_pointer_t			netbsd32_sigcontextp_t;
 #define	netbsd32_esigcode			esigcode
 
 /*
+ * Using the entirety of COMPAT_NETBSD32 to support the OABI was
+ * a gigantic mistake, but here we are.
+ */
+#define	__HAVE_MD_NETBSD32_SENDSIG
+
+/*
  * Note: syscall_intern and setregs do not care about COMPAT_NETBSD32.
  */
 #define	netbsd32_syscall_intern			syscall_intern
@@ -64,9 +74,9 @@ typedef netbsd32_pointer_t			netbsd32_sigcontextp_t;
 #define	NETBSD32_MID_MACHINE	MID_MACHINE
 #define	USRSTACK32		USRSTACK
 #define	MAXTSIZ32		MAXTSIZ
-#define	DFLDSIZ32		DFLDSIZ		
-#define	MAXDSIZ32		MAXDSIZ	
-#define	DFLSSIZ32		DFLSSIZ		
-#define	MAXSSIZ32		MAXSSIZ		
+#define	DFLDSIZ32		DFLDSIZ
+#define	MAXDSIZ32		MAXDSIZ
+#define	DFLSSIZ32		DFLSSIZ
+#define	MAXSSIZ32		MAXSSIZ
 
 #endif /* _ARM_NETBSD32_H_ */

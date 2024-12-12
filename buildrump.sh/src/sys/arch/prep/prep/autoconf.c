@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.28 2014/10/18 08:33:26 snj Exp $	*/
+/*	$NetBSD: autoconf.c,v 1.30 2023/12/20 15:29:06 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.28 2014/10/18 08:33:26 snj Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.30 2023/12/20 15:29:06 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -43,7 +43,6 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.28 2014/10/18 08:33:26 snj Exp $");
 #include <sys/conf.h>
 #include <sys/reboot.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/queue.h>
 
 #include <machine/pte.h>
@@ -296,7 +295,7 @@ build_fwpath(void)
 
 	for (dev = deviter_first(&di, DEVITER_F_ROOT_FIRST); dev != NULL;
 	     dev = deviter_next(&di)) {
-		/* skip the ones we allready computed above */
+		/* skip the ones we already computed above */
 		if (device_is_a(dev, "pci") || device_is_a(dev, "pcib") ||
 		    device_is_a(dev, "pceb") || device_is_a(dev, "isa") ||
 		    device_is_a(dev, "ppb"))

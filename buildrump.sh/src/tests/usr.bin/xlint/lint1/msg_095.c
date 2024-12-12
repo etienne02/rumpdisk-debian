@@ -1,9 +1,9 @@
-/*	$NetBSD: msg_095.c,v 1.3 2021/01/31 11:12:07 rillig Exp $	*/
+/*	$NetBSD: msg_095.c,v 1.8 2024/01/28 08:17:27 rillig Exp $	*/
 # 3 "msg_095.c"
 
-// Test for message: declaration hides earlier one: %s [95]
+// Test for message: declaration of '%s' hides earlier one [95]
 
-/* lint1-flags: -ghSw */
+/* lint1-flags: -ghSw -X 351 */
 
 int identifier;
 
@@ -12,7 +12,9 @@ example(int identifier)
 {
 
 	{
-		int identifier = 3;	/* expect: 95 */
+		/* expect+2: warning: declaration of 'identifier' hides earlier one [95] */
+		/* expect+1: warning: 'identifier' set but not used in function 'example' [191] */
+		int identifier = 3;
 	}
 
 	return identifier;

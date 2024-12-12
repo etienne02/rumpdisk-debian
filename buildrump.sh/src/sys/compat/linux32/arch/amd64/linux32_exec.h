@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_exec.h,v 1.7 2017/04/26 22:41:59 christos Exp $ */
+/*	$NetBSD: linux32_exec.h,v 1.10 2021/11/26 08:56:28 ryo Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -40,19 +40,17 @@
 #define LINUX32_USRSTACK	0xC0000000
 
 #define LINUX32_DEBUGLINK_SIGNATURE	1
+#define LINUX32_GO_RT0_SIGNATURE	1
 
 /* Counted from common/linux32_exec_elf32.c */
-#define LINUX32_ELF_AUX_ENTRIES 15
-
-#define LINUX32_RANDOM_BYTES 16		/* 16 bytes for AT_RANDOM */
-
-#if 0
+#define LINUX32_ELF_AUX_ENTRIES	20
 
 /* Hardware platform identifier string */
-#define LINUX32_PLATFORM "i686" 
+#define LINUX32_PLATFORM "i686"
 
 #define LINUX32_CPUCAP (cpu_feature[0])
 
+#if 0
 /* vsyscall assembly */
 static char linux32_kernel_vsyscall[] = {
 	0x55,				/* push   %ebp */		\
@@ -64,26 +62,21 @@ static char linux32_kernel_vsyscall[] = {
 	0x5d,				/* pop    %ebp */		\
 	0xc3,				/* ret */			\
 };
+#endif
  
 /* The extra data (ELF auxiliary table and platform name) on stack */  
 struct linux32_extra_stack_data {
-        Aux32Info ai[LINUX32_ELF_AUX_ENTRIES];
-        char hw_platform[sizeof(LINUX32_PLATFORM)];
-	int pad;
+	Aux32Info ai[LINUX32_ELF_AUX_ENTRIES];
+	uint32_t randbytes[4];
+	char hw_platform[8];	/* sizeof(LINUX32_PLATFORM) + align */
+#if 0 /* notyet */
 	Elf32_Ehdr elfhdr;
 	char kernel_vsyscall[sizeof(linux32_kernel_vsyscall)];
-};      
+#endif
+};
+
 #define LINUX32_ELF_AUX_ARGSIZ sizeof(struct linux32_extra_stack_data)
 
-#else
-
-#define LINUX32_ELF_AUX_ARGSIZ \
-    (LINUX32_ELF_AUX_ENTRIES * sizeof(Aux32Info) + LINUX32_RANDOM_BYTES)
-
-#endif
-
-#ifdef _KERNEL
-int linux32_exec_setup_stack(struct lwp *, struct exec_package *);
-#endif
+#define linux32_exec_setup_stack	linux_exec_setup_stack
 
 #endif /* !_AMD64_LINUX32_EXEC_H */

@@ -1,7 +1,15 @@
-/*	$NetBSD: msg_237.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_237.c,v 1.4 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_237.c"
 
-// Test for message: redeclaration of formal parameter %s [237]
+// Test for message: redeclaration of formal parameter '%s' [237]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* See also message 21, which has the same text. */
+
+/* lint1-extra-flags: -X 351 */
+
+/*ARGSUSED*/
+void
+/* expect+1: error: redeclaration of formal parameter 'param' [237] */
+prototype_with_duplicate_parameter(int param, int param)
+{
+}

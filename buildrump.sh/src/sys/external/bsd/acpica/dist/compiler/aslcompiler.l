@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -330,6 +330,7 @@ NamePathTail                [.]{NameSeg}
 "DMA"                       { count (1); return (PARSEOP_DMA); }
 "DWordIO"                   { count (1); return (PARSEOP_DWORDIO); }
 "DWordMemory"               { count (1); return (PARSEOP_DWORDMEMORY); }
+"DWordPcc"                  { count (1); return (PARSEOP_DWORDPCC); }
 "DWordSpace"                { count (1); return (PARSEOP_DWORDSPACE); }
 "EndDependentFn"            { count (1); return (PARSEOP_ENDDEPENDENTFN); }
 "ExtendedIO"                { count (1); return (PARSEOP_EXTENDEDIO); }
@@ -353,8 +354,10 @@ NamePathTail                [.]{NameSeg}
 "PinGroup"                  { count (1); return (PARSEOP_PINGROUP); }
 "PinGroupConfig"            { count (1); return (PARSEOP_PINGROUPCONFIG); }
 "PinGroupFunction"          { count (1); return (PARSEOP_PINGROUPFUNCTION); }
+"ClockInput"                { count (1); return (PARSEOP_CLOCKINPUT); }
 "QWordIO"                   { count (1); return (PARSEOP_QWORDIO); }
 "QWordMemory"               { count (1); return (PARSEOP_QWORDMEMORY); }
+"QWordPcc"                  { count (1); return (PARSEOP_DWORDPCC); }
 "QWordSpace"                { count (1); return (PARSEOP_QWORDSPACE); }
 "Register"                  { count (1); return (PARSEOP_REGISTER); }
 "SpiSerialBus"              { count (1); return (PARSEOP_SPI_SERIALBUS); }
@@ -367,6 +370,7 @@ NamePathTail                [.]{NameSeg}
 "VendorShort"               { count (1); return (PARSEOP_VENDORSHORT); }
 "WordBusNumber"             { count (1); return (PARSEOP_WORDBUSNUMBER); }
 "WordIO"                    { count (1); return (PARSEOP_WORDIO); }
+"WordPcc"                   { count (1); return (PARSEOP_DWORDPCC); }
 "WordSpace"                 { count (1); return (PARSEOP_WORDSPACE); }
 
 
@@ -556,6 +560,17 @@ NamePathTail                [.]{NameSeg}
 "PullUp"                    { count (0); return (PARSEOP_PIN_PULLUP); }
 "PullDown"                  { count (0); return (PARSEOP_PIN_PULLDOWN); }
 "PullNone"                  { count (0); return (PARSEOP_PIN_NOPULL); }
+
+    /* ClockScaleKeyword: Resource Descriptors (ACPI 6.5) */
+
+"Hz"               { count (0); return (PARSEOP_CLOCK_HZ); }
+"KHz"              { count (0); return (PARSEOP_CLOCK_KHZ); }
+"MHz"              { count (0); return (PARSEOP_CLOCK_MHZ); }
+
+    /* ClockModeKeyword: Resource Descriptors (ACPI 6.5) */
+
+"Fixed"               { count (0); return (PARSEOP_CLOCK_FIXED); }
+"Variable"            { count (0); return (PARSEOP_CLOCK_VARIABLE); }
 
     /* PolarityKeyword: Resource Descriptors (ACPI 5.0) */
 

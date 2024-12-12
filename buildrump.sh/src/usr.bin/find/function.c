@@ -1,4 +1,4 @@
-/*	$NetBSD: function.c,v 1.79 2021/03/18 18:24:14 cheusov Exp $	*/
+/*	$NetBSD: function.c,v 1.81 2024/02/05 21:46:07 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "from: @(#)function.c	8.10 (Berkeley) 5/4/95";
 #else
-__RCSID("$NetBSD: function.c,v 1.79 2021/03/18 18:24:14 cheusov Exp $");
+__RCSID("$NetBSD: function.c,v 1.81 2024/02/05 21:46:07 andvar Exp $");
 #endif
 #endif /* not lint */
 
@@ -641,7 +641,8 @@ f_exec(PLAN *plan, FTSENT *entry)
 			err(1, "vfork");
 			/* NOTREACHED */
 		case 0:
-			if (fchdir(dotfd)) {
+			/* change dir back from where we started */
+			if (!(ftsoptions & FTS_NOCHDIR) && fchdir(dotfd)) {
 				warn("chdir");
 				_exit(1);
 			}
@@ -673,7 +674,8 @@ run_f_exec(PLAN *plan)
 		err(1, "vfork");
 		/* NOTREACHED */
 	case 0:
-		if (fchdir(dotfd)) {
+		/* change dir back from where we started */
+		if (!(ftsoptions & FTS_NOCHDIR) && fchdir(dotfd)) {
 			warn("chdir");
 			_exit(1);
 		}
@@ -1012,7 +1014,7 @@ c_follow(char ***argvp, int isok, char *opt)
 
 /* -fprint functions --
  *
- *	Causes the current pathame to be written to the defined output file.
+ *	Causes the current pathname to be written to the defined output file.
  */
 int
 f_fprint(PLAN *plan, FTSENT *entry)
@@ -1563,7 +1565,7 @@ c_perm(char ***argvp, int isok, char *opt)
 /*
  * -print functions --
  *
- *	Always true, causes the current pathame to be written to
+ *	Always true, causes the current pathname to be written to
  *	standard output.
  */
 int
@@ -1999,7 +2001,7 @@ c_null(char ***argvp, int isok, char *opt)
  *
  *	At the moment, only N_EXEC has state. Two kinds: 1)
  * 	lists of files to feed to subprocesses 2) State on exit
- *	statusses of past subprocesses.
+ *	status of past subprocesses.
  */
 /* ARGSUSED1 */
 int

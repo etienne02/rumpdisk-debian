@@ -1,4 +1,4 @@
-/*	$NetBSD: emit.c,v 1.5 2021/08/30 21:23:37 rillig Exp $	*/
+/*	$NetBSD: emit.c,v 1.18 2024/06/09 16:49:40 rillig Exp $	*/
 # 3 "emit.c"
 
 /*
@@ -7,8 +7,8 @@
  * consistently across different translation units.
  */
 
-/* Do not warn about unused parameters. */
-/* lint1-extra-flags: -X 231 */
+/* Do not warn about unused parameters or 'extern' declarations. */
+/* lint1-extra-flags: -X 231 -X 351 */
 
 /*
  * Define some derived types.
@@ -45,7 +45,7 @@ typedef enum {
  */
 
 extern _Bool			extern__Bool;
-extern float _Complex 		extern__Complex_float;
+extern float _Complex		extern__Complex_float;
 extern double _Complex		extern__Complex_double;
 extern long double _Complex	extern__Complex_long_double;
 extern char			extern_char;
@@ -104,7 +104,8 @@ extern enum {
 
 extern int			declared_int;
 int				defined_int;
-static int			static_int;		/* expect: unused */
+/* expect+1: warning: static variable 'static_int' unused [226] */
+static int			static_int;
 
 /*
  * Type qualifiers.
@@ -120,11 +121,12 @@ extern const volatile int	extern_const_volatile_int;
 
 extern void return_void_unknown_parameters();
 extern /* implicit int */ return_implicit_int_unknown_parameters();
-
+/* expect-1: error: old-style declaration; add 'int' [1] */
 /* For function declarations, the keyword 'extern' is optional. */
 extern void extern_return_void_no_parameters(void);
 /* implicit extern */ void return_void_no_parameters(void);
-static void static_return_void_no_parameters(void);	/* expect: declared */
+/* expect+1: warning: static function 'static_return_void_no_parameters' declared but not defined [290] */
+static void static_return_void_no_parameters(void);
 
 void taking_int(int);
 /* The 'const' parameter does not make a difference. */
@@ -143,9 +145,11 @@ void taking_varargs(const char *, ...);
  * is nevertheless recorded.  There's probably a good reason for recording
  * it.
  */
-static int static_function(void);			/* expect: declared */
+/* expect+1: warning: static function 'static_function' declared but not defined [290] */
+static int static_function(void);
 
 void my_printf(const char *, ...);
+void my_scanf(const char *, ...);
 
 /*
  * String literals that occur in function calls are written to the .ln file,
@@ -161,7 +165,14 @@ cover_outqchar(void)
 	my_printf("%s", "%");
 	my_printf("%s", "%s");
 	my_printf("%s", "%%");
-	my_printf("%s", "%\a %\b %\f %\n %\r %\t %\v %\177");
+	my_printf("%s", "%\\ %\" %' %\a %\b %\f %\n %\r %\t %\v %\177");
+}
+
+void
+cover_outfstrg(void)
+{
+	my_printf("%s", "%-3d %+3d % d %#x %03d %*.*s %6.2f %hd %ld %Ld %qd");
+	my_scanf("%s", "%[0-9]s %[^A-Za-z]s %[][A-Za-z0-9]s %[+-]s");
 }
 
 /*
@@ -262,4 +273,54 @@ inline_function(void)
 	used_function();
 	(void)used_function();
 	return used_function();
+}
+
+extern int declared_used_var;
+int defined_used_var;
+
+/*
+ * When a function is used, that usage is output as a 'c' record.
+ * When a variable is used, that usage is output as a 'u' record.
+ */
+void
+use_vars(void)
+{
+	declared_used_var++;
+	defined_used_var++;
+}
+
+/*
+ * Since C99, an initializer may contain a compound expression. This allows
+ * to create trees of pointer data structures at compile time.
+ *
+ * The objects that are created for these compound literals are unnamed,
+ * therefore there is no point in exporting them to the .ln file.
+ *
+ * Before emit1.c 1.60 from 2021-11-28, lint exported them.
+ */
+struct compound_expression_in_initializer {
+	const char * const *info;
+};
+
+struct compound_expression_in_initializer compound = {
+	.info = (const char *[16]){
+		[0] = "zero",
+	},
+};
+
+/*
+ * Before decl.c 1.312 and init.c 1.242 from 2023-05-22, the type that ended up
+ * in the .ln file was 'A0cC', which was wrong as it had array size 0 instead
+ * of the correct 8.  That type had been taken too early, before looking at the
+ * initializer.
+ */
+const char array_of_unknown_size[] = "unknown";
+
+int used_and_using(int);
+int only_used(void);
+
+int
+only_using(void)
+{
+	return used_and_using(only_used());
 }

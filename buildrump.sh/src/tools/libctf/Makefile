@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.8 2018/05/01 19:59:47 christos Exp $
+#	$NetBSD: Makefile,v 1.10 2024/04/01 18:33:24 riastradh Exp $
 
 HOSTLIB=	ctf
 
@@ -34,7 +34,8 @@ CPPFLAGS+=	-I${.CURDIR}/../compat \
 		-I${OPENSOLARIS_DISTDIR}/common/ctf \
 		-I${OPENSOLARIS_DISTDIR}/lib/libctf/common \
 		-I${OPENSOLARIS_DISTDIR}/uts/common \
-		-I${LIBELF_DIR}
+		-I${LIBELF_DIR} \
+		-I${TOOLDIR}/include
 
 BUILD_OSTYPE!=  uname -s
 
@@ -61,5 +62,4 @@ ${TOOLDIR}/lib/libctf.a:: libctf.a
 	mkdir -p ${TOOLDIR}/lib
 	${HOST_INSTALL_FILE} -m ${BINMODE} libctf.a ${.TARGET}
 
-.include "${.CURDIR}/../Makefile.nbincludes"
 .include <bsd.hostlib.mk>

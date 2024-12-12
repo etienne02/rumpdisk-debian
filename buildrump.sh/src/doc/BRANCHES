@@ -1,4 +1,4 @@
-#	$NetBSD: BRANCHES,v 1.364 2021/08/09 20:49:08 andvar Exp $
+#	$NetBSD: BRANCHES,v 1.368 2024/06/29 18:44:36 perseant Exp $
 #
 # This file contains a list of branches that exist in the NetBSD CVS
 # tree and their current state.
@@ -328,6 +328,17 @@ Status:		Active
 Start Date:	2019-07-30
 End Date:
 Base Tag:	netbsd-9-base
+Maintainer:	Release Engineering <releng@NetBSD.org>
+Scope:		Entire tree. (src + xsrc)
+Notes:
+		Commits restricted to Release Engineering.
+
+Branch:		netbsd-10
+Description:	The NetBSD 10 release branch
+Status:		Active
+Start Date:	2022-12-16
+End Date:
+Base Tag:	netbsd-10-base
 Maintainer:	Release Engineering <releng@NetBSD.org>
 Scope:		Entire tree. (src + xsrc)
 Notes:
@@ -747,13 +758,13 @@ Notes:
 
 Branch:		thorpej-futex
 Description:	Overhaul of futex operations to fix thread priority issues
-Status:		Active
+Status:		Partially merged
 Start Date:	Sun Nov 1 2020
-End Date:
+End Date:	Sun Aug 19 2021
 Base Tag:	thorpej-futex-base
 Maintainer:	Jason Thorpe <thorpej@netbsd.org>
 Scope:		src/sys src/tests/lib/libc/sys src/distrib/sets/lists
-Notes:		Normal futex operataions pass the test suite, but there are
+Notes:		Normal futex operations pass the test suite, but there are
 		issues with Linux compatibility currently, that need to be
 		addressed before merging.  Also includes new NetBSD extensions
 		to the futex interface to support reader/writer locks.  Those
@@ -761,6 +772,8 @@ Notes:		Normal futex operataions pass the test suite, but there are
 		futex operations with respect to Linux compatibility.
 		Also includes implementations of eventfd and timerfd, as
 		well as some additional improvements to COMPAT_LINUX{,32}.
+		Branch was partially merged, with follow-ups to take place
+		on thorpej-futex2.
 
 Branch:		thorpej-futex2
 Description:	Overhaul of futex operations to fix thread priority issues
@@ -1436,6 +1449,26 @@ Base Tag:	nick-csl-alignment-base5
 Maintainer:	Nick Hudson <skrll@NetBSD.org>
 Scope:		sys, lib/libpthread, lib/libpthread_dbg
 Notes:	
+
+Branch:		perseant-exfatfs
+Description:	exFAT filesystem development
+Status:		Active
+Start Date:	29 June 2024
+End Date:	
+Base Tag:	perseant-exfatfs-base
+Maintainer:	Konrad Schroder <perseant@NetBSD.org>
+Scope:		kernel & userland
+Notes:		
+
+Branch:		perseant-iso10646
+Description:	Implement __STDC_ISO_10646__.
+Status:		Dormant
+Start Date:	14 July 2017
+End Date:	
+Base Tag:	perseant-iso10646-base
+Maintainer:	Konrad Schroder <perseant@NetBSD.org>
+Scope:		lib/libc/citrus lib/libc/locale usr.bin/localedef
+Notes:		
 
 Branch:		perseant-lfsv2
 Description:	LFS incompatible on-disk data structure changes

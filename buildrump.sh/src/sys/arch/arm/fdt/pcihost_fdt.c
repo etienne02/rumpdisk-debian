@@ -1,4 +1,4 @@
-/* $NetBSD: pcihost_fdt.c,v 1.26 2021/08/07 16:18:43 thorpej Exp $ */
+/* $NetBSD: pcihost_fdt.c,v 1.33 2024/01/12 11:24:48 skrll Exp $ */
 
 /*-
  * Copyright (c) 2018 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcihost_fdt.c,v 1.26 2021/08/07 16:18:43 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcihost_fdt.c,v 1.33 2024/01/12 11:24:48 skrll Exp $");
 
 #include <sys/param.h>
 
@@ -101,6 +101,12 @@ static const struct device_compatible_entry compat_data[] = {
 	DEVICE_COMPAT_EOL
 };
 
+struct pcihost_msi_handler {
+	LIST_ENTRY(pcihost_msi_handler) pmh_next;
+	void *pmh_ih;
+};
+
+
 static int
 pcihost_match(device_t parent, cfdata_t cf, void *aux)
 {
@@ -126,9 +132,10 @@ pcihost_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->sc_dmat = faa->faa_dmat;
 	sc->sc_bst = faa->faa_bst;
+	sc->sc_pci_bst = faa->faa_bst;
 	sc->sc_phandle = faa->faa_phandle;
 	error = bus_space_map(sc->sc_bst, cs_addr, cs_size,
-	    _ARM_BUS_SPACE_MAP_STRONGLY_ORDERED, &sc->sc_bsh);
+	    BUS_SPACE_MAP_NONPOSTED, &sc->sc_bsh);
 	if (error) {
 		aprint_error(": couldn't map registers: %d\n", error);
 		return;
@@ -176,6 +183,8 @@ pcihost_init2(struct pcihost_softc *sc)
 	 */
 	if (of_getprop_uint32(sc->sc_phandle, "linux,pci-domain", &sc->sc_seg))
 		sc->sc_seg = pcihost_segment++;
+
+	mutex_init(&sc->sc_msi_handlers_mutex, MUTEX_DEFAULT, IPL_NONE);
 
 	if (pcihost_config(sc) != 0)
 		return;
@@ -230,14 +239,14 @@ pcihost_config(struct pcihost_softc *sc)
 	bool swap;
 
 	struct pcih_bus_space * const pibs = &sc->sc_io;
-	pibs->bst = *sc->sc_bst;
+	pibs->bst = *sc->sc_pci_bst;
 	pibs->bst.bs_cookie = pibs;
 	pibs->map = pibs->bst.bs_map;
 	pibs->flags = PCI_FLAGS_IO_OKAY;
 	pibs->bst.bs_map = pcihost_bus_space_map;
 
 	struct pcih_bus_space * const pmbs = &sc->sc_mem;
-	pmbs->bst = *sc->sc_bst;
+	pmbs->bst = *sc->sc_pci_bst;
 	pmbs->bst.bs_cookie = pmbs;
 	pmbs->map = pmbs->bst.bs_map;
 	pmbs->flags = PCI_FLAGS_MEM_OKAY;
@@ -249,8 +258,6 @@ pcihost_config(struct pcihost_softc *sc)
 	const int chosen = OF_finddevice("/chosen");
 	if (chosen <= 0 || of_getprop_uint32(chosen, "linux,pci-probe-only", &probe_only))
 		probe_only = 0;
-	if (probe_only)
-		return 0;
 
 	if (sc->sc_pci_ranges != NULL) {
 		ranges = sc->sc_pci_ranges;
@@ -349,8 +356,12 @@ pcihost_config(struct pcihost_softc *sc)
 		}
 	}
 
-	error = pci_configure_bus(&sc->sc_pc, pcires, sc->sc_bus_min,
-	    PCIHOST_CACHELINE_SIZE);
+	if (probe_only) {
+		error = 0;
+	} else {
+		error = pci_configure_bus(&sc->sc_pc, pcires, sc->sc_bus_min,
+		    PCIHOST_CACHELINE_SIZE);
+	}
 
 	pciconf_resource_fini(pcires);
 
@@ -495,8 +506,8 @@ pcihost_intr_map(const struct pci_attach_args *pa, pci_intr_handle_t *ih)
 	index = 0;
 	while (imaplen >= 20) {
 		const int map_ihandle = fdtbus_get_phandle_from_native(be32toh(imap[4]));
-	        if (of_getprop_uint32(map_ihandle, "#address-cells", &addr_cells))
-                	addr_cells = 2;
+		if (of_getprop_uint32(map_ihandle, "#address-cells", &addr_cells))
+			addr_cells = 2;
 		if (of_getprop_uint32(map_ihandle, "#interrupt-cells", &interrupt_cells))
 			interrupt_cells = 0;
 		if (imaplen < (addr_cells + interrupt_cells) * 4)
@@ -531,8 +542,8 @@ pcihost_find_intr(struct pcihost_softc *sc, pci_intr_handle_t ih, int *pihandle)
 	index = 0;
 	while (imaplen >= 20) {
 		const int map_ihandle = fdtbus_get_phandle_from_native(be32toh(imap[4]));
-	        if (of_getprop_uint32(map_ihandle, "#address-cells", &addr_cells))
-                	addr_cells = 2;
+		if (of_getprop_uint32(map_ihandle, "#address-cells", &addr_cells))
+			addr_cells = 2;
 		if (of_getprop_uint32(map_ihandle, "#interrupt-cells", &interrupt_cells))
 			interrupt_cells = 0;
 		if (imaplen < (addr_cells + interrupt_cells) * 4)
@@ -598,18 +609,30 @@ pcihost_intr_setattr(void *v, pci_intr_handle_t *ih, int attr, uint64_t data)
 }
 
 static void *
-pcihost_intr_establish(void *v, pci_intr_handle_t ih, int ipl,
+pcihost_intr_establish(void *v, pci_intr_handle_t pih, int ipl,
     int (*callback)(void *), void *arg, const char *xname)
 {
 	struct pcihost_softc *sc = v;
-	const int flags = (ih & ARM_PCI_INTR_MPSAFE) ? FDT_INTR_MPSAFE : 0;
+	const int flags = (pih & ARM_PCI_INTR_MPSAFE) ? FDT_INTR_MPSAFE : 0;
 	const u_int *specifier;
 	int ihandle;
 
-	if ((ih & (ARM_PCI_INTR_MSI | ARM_PCI_INTR_MSIX)) != 0)
-		return arm_pci_msi_intr_establish(&sc->sc_pc, ih, ipl, callback, arg, xname);
+	if ((pih & (ARM_PCI_INTR_MSI | ARM_PCI_INTR_MSIX)) != 0) {
+		void *ih = arm_pci_msi_intr_establish(&sc->sc_pc, pih, ipl,
+		    callback, arg, xname);
 
-	specifier = pcihost_find_intr(sc, ih & ARM_PCI_INTR_IRQ, &ihandle);
+		if (ih) {
+			struct pcihost_msi_handler * const pmh =
+			    kmem_alloc(sizeof(*pmh), KM_SLEEP);
+			pmh->pmh_ih = ih;
+			mutex_enter(&sc->sc_msi_handlers_mutex);
+			LIST_INSERT_HEAD(&sc->sc_msi_handlers, pmh, pmh_next);
+			mutex_exit(&sc->sc_msi_handlers_mutex);
+		}
+		return ih;
+	}
+
+	specifier = pcihost_find_intr(sc, pih & ARM_PCI_INTR_IRQ, &ihandle);
 	if (specifier == NULL)
 		return NULL;
 
@@ -622,6 +645,18 @@ pcihost_intr_disestablish(void *v, void *vih)
 {
 	struct pcihost_softc *sc = v;
 
+	mutex_enter(&sc->sc_msi_handlers_mutex);
+	struct pcihost_msi_handler *pmh;
+	LIST_FOREACH(pmh, &sc->sc_msi_handlers, pmh_next) {
+		if (pmh->pmh_ih == vih) {
+			LIST_REMOVE(pmh, pmh_next);
+			mutex_exit(&sc->sc_msi_handlers_mutex);
+			kmem_free(pmh, sizeof(*pmh));
+			return;
+		}
+	}
+	mutex_exit(&sc->sc_msi_handlers_mutex);
+
 	fdtbus_intr_disestablish(sc->sc_phandle, vih);
 }
 
@@ -633,7 +668,7 @@ pcihost_bus_space_map(void *t, bus_addr_t bpa, bus_size_t size, int flag,
 
 	if ((pbs->flags & PCI_FLAGS_IO_OKAY) != 0) {
 		/* Force strongly ordered mapping for all I/O space */
-		flag = _ARM_BUS_SPACE_MAP_STRONGLY_ORDERED;
+		flag = BUS_SPACE_MAP_NONPOSTED;
 	}
 
 	for (size_t i = 0; i < pbs->nranges; i++) {

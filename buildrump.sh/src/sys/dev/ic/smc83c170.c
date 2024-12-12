@@ -1,4 +1,4 @@
-/*	$NetBSD: smc83c170.c,v 1.95 2020/03/15 22:19:00 thorpej Exp $	*/
+/*	$NetBSD: smc83c170.c,v 1.99 2024/09/07 06:17:37 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999 The NetBSD Foundation, Inc.
@@ -36,14 +36,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: smc83c170.c,v 1.95 2020/03/15 22:19:00 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: smc83c170.c,v 1.99 2024/09/07 06:17:37 andvar Exp $");
 
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -398,7 +397,7 @@ epic_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of frags, or we were
+		 * didn't fit in the allotted number of frags, or we were
 		 * short on resources.	In this case, we'll copy and try
 		 * again.
 		 */
@@ -761,11 +760,11 @@ epic_intr(void *arg)
 			 */
 			net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 			if ((txstatus & ET_TXSTAT_PACKETTX) == 0)
-				if_statinc_ref(nsr, if_oerrors);
+				if_statinc_ref(ifp, nsr, if_oerrors);
 			else
-				if_statinc_ref(nsr, if_opackets);
+				if_statinc_ref(ifp, nsr, if_opackets);
 			if (TXSTAT_COLLISIONS(txstatus))
-				if_statadd_ref(nsr, if_collisions,
+				if_statadd_ref(ifp, nsr, if_collisions,
 				    TXSTAT_COLLISIONS(txstatus));
 			if (txstatus & ET_TXSTAT_CARSENSELOST)
 				printf("%s: lost carrier\n",
@@ -1401,7 +1400,7 @@ epic_statchg(struct ifnet *ifp)
 		txcon &= ~(TXCON_LOOPBACK_D1 | TXCON_LOOPBACK_D2);
 	bus_space_write_4(sc->sc_st, sc->sc_sh, EPIC_TXCON, txcon);
 
-	/* On some cards we need manualy set fullduplex led */
+	/* On some cards we need manually set fullduplex led */
 	if (sc->sc_hwflags & EPIC_DUPLEXLED_ON_694) {
 		miicfg = bus_space_read_4(sc->sc_st, sc->sc_sh, EPIC_MIICFG);
 		if (IFM_OPTIONS(sc->sc_mii.mii_media_active) & IFM_FDX)

@@ -1,4 +1,4 @@
-/* $NetBSD: intr.h,v 1.2 2015/03/28 16:13:56 matt Exp $ */
+/* $NetBSD: intr.h,v 1.7 2024/11/19 08:28:01 skrll Exp $ */
 
 /*-
  * Copyright (c) 2009, 2010 The NetBSD Foundation, Inc.
@@ -41,20 +41,23 @@
  */
 
 #define	IPL_NONE	0
-#define	IPL_SOFTCLOCK	(IPL_NONE+1)
-#define	IPL_SOFTBIO	(IPL_SOFTCLOCK)	/* shares SWINT with softclock */
-#define	IPL_SOFTNET	(IPL_SOFTBIO+1)
-#define	IPL_SOFTSERIAL	(IPL_SOFTNET)	/* shares SWINT with softnet */
-#define	IPL_VM		(IPL_SOFTSERIAL+1)
-#define	IPL_SCHED	(IPL_VM+1)
-#define	IPL_DDB		(IPL_SCHED+1)
-#define	IPL_HIGH	(IPL_DDB+1)
+#define	IPL_SOFTCLOCK	(IPL_NONE + 1)
+#define	IPL_SOFTBIO	(IPL_SOFTCLOCK + 1)
+#define	IPL_SOFTNET	(IPL_SOFTBIO + 1)
+#define	IPL_SOFTSERIAL	(IPL_SOFTNET + 1)
+#define	IPL_VM		(IPL_SOFTSERIAL + 1)
+#define	IPL_SCHED	(IPL_VM + 1)
+//#define	IPL_DDB		(IPL_SCHED + 1)
+#define	IPL_HIGH	(IPL_SCHED + 1)
 
 #define	IPL_SAFEPRI	IPL_SOFTSERIAL
 
-#define	_IPL_N		(IPL_HIGH+1)
+#define	_IPL_N		(IPL_HIGH + 1)
+
+#if 0
 #define	_IPL_NAMES(pfx)	{ pfx"none", pfx"softclock/bio", pfx"softnet/serial", \
 			  pfx"vm", pfx"sched", pfx"ddb", pfx"high" }
+#endif
 
 #define	IST_UNUSABLE	-1		/* interrupt cannot be used */
 #define	IST_NONE	0		/* none (dummy) */
@@ -63,17 +66,16 @@
 #define	IST_LEVEL	3		/* level-triggered */
 #define	IST_LEVEL_HIGH	4		/* level triggered, active high */
 #define	IST_LEVEL_LOW	5		/* level triggered, active low */
+#define	IST_MPSAFE	0x100
 
 #define	IPI_NOP		0		/* do nothing, interrupt only */
 #define	IPI_AST		1		/* force ast */
-#define	IPI_SHOOTDOWN	2		/* do a tlb shootdown */
-#define	IPI_SYNCICACHE	3		/* sync icache for pages */
-#define	IPI_KPREEMPT	4		/* schedule a kernel preemption */
-#define	IPI_SUSPEND	5		/* DDB suspend signaling */
-#define	IPI_HALT	6		/* halt cpu */
-#define	IPI_XCALL	7		/* xcall */
-#define	IPI_GENERIC	8		/* generic IPI */
-#define	NIPIS		9
+#define	IPI_KPREEMPT	2		/* schedule a kernel preemption */
+#define	IPI_SUSPEND	3		/* DDB suspend signaling */
+#define	IPI_HALT	4		/* halt cpu */
+#define	IPI_XCALL	5		/* xcall */
+#define	IPI_GENERIC	6		/* generic IPI */
+#define	NIPIS		7
 
 #ifdef __INTR_PRIVATE
 #if 0
@@ -104,7 +106,7 @@ struct splsw;
 
 typedef int ipl_t;
 typedef struct {
-        ipl_t _spl;
+	ipl_t _spl;
 } ipl_cookie_t;
 
 #ifdef _KERNEL
@@ -133,14 +135,20 @@ int	splraise(int);
 void	splx(int);
 void	splx_noprof(int);
 void	spl0(void);
-int	splintr(uint32_t *);
+int	splintr(unsigned long *);
 
 void	softint_deliver(void);
 
 struct cpu_info;
 
+#define ENABLE_INTERRUPTS()	csr_sstatus_set(SR_SIE)
+
+#define DISABLE_INTERRUPTS()	csr_sstatus_clear(SR_SIE)
+
 void	ipi_init(struct cpu_info *);
-void	ipi_process(struct cpu_info *, uint64_t);
+void	ipi_process(struct cpu_info *, unsigned long);
+
+int	riscv_ipi_intr(void *arg);
 
 /*
  * These make no sense *NOT* to be inlined.
@@ -156,6 +164,10 @@ splraiseipl(ipl_cookie_t icookie)
 {
 	return splraise(icookie._spl);
 }
+
+void *intr_establish(int, int, int, int (*)(void *), void *);
+void *intr_establish_xname(int, int, int, int (*)(void *), void *, const char *);
+void intr_disestablish(void *);
 
 #endif /* _KERNEL */
 #endif /* _RISCV_INTR_H_ */

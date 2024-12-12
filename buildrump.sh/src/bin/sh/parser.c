@@ -1,4 +1,4 @@
-/*	$NetBSD: parser.c,v 1.171 2020/08/19 22:41:47 kre Exp $	*/
+/*	$NetBSD: parser.c,v 1.184 2024/10/21 15:57:45 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)parser.c	8.7 (Berkeley) 5/16/95";
 #else
-__RCSID("$NetBSD: parser.c,v 1.171 2020/08/19 22:41:47 kre Exp $");
+__RCSID("$NetBSD: parser.c,v 1.184 2024/10/21 15:57:45 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -55,6 +55,7 @@ __RCSID("$NetBSD: parser.c,v 1.171 2020/08/19 22:41:47 kre Exp $");
 #include "options.h"
 #include "input.h"
 #include "output.h"
+#include "redir.h"	/* defines max_user_fd */
 #include "var.h"
 #include "error.h"
 #include "memalloc.h"
@@ -361,7 +362,7 @@ command(void)
 	}
 	tokpushback++;
 
-#ifdef BOGUS_NOT_COMMAND		/* only in pileline() */
+#ifdef BOGUS_NOT_COMMAND		/* only in pipeline() */
 	while (readtoken() == TNOT) {
 		CTRACE(DBG_PARSE, ("command: TNOT (bogus) recognized\n"));
 		negate++;
@@ -410,6 +411,7 @@ command(void)
 		n1 = stalloc(sizeof(struct nfor));
 		n1->type = NFOR;
 		n1->nfor.var = wordtext;
+		n1->nfor.lineno = startlinno;
 		linebreak();
 		if (lasttoken==TWORD && !quoteflag && equal(wordtext,"in")) {
 			app = &ap;
@@ -422,6 +424,8 @@ command(void)
 			n1->nfor.args = ap;
 			if (lasttoken != TNL && lasttoken != TSEMI)
 				synexpect(TSEMI, 0);
+			if (lasttoken == TNL)
+				readheredocs();
 		} else {
 			static char argvars[5] = {
 			    CTLVAR, VSNORMAL|VSQUOTE, '@', '=', '\0'
@@ -597,7 +601,7 @@ command(void)
 		n1->nredir.redirect = redir;
 	}
 
- checkneg:
+ checkneg:;
 #ifdef BOGUS_NOT_COMMAND
 	if (negate) {
 		VTRACE(DBG_PARSE, ("bogus %snegate command\n",
@@ -669,7 +673,7 @@ simplecmd(union node **rpp, union node *redir)
 			/*
 			 * Make sure there are no unquoted $'s in the
 			 * name (allowing those, not expanding them,
-			 * simply treating '$' as a character, is desireable
+			 * simply treating '$' as a character, is desirable
 			 * but the parser has converted them to CTLxxx
 			 * chars, and that's not what we want
 			 *
@@ -706,7 +710,7 @@ simplecmd(union node **rpp, union node *redir)
 	n->ncmd.redirect = redir;
 	n->ncmd.lineno = startlinno;
 
- checkneg:
+ checkneg:;
 #ifdef BOGUS_NOT_COMMAND
 	if (negate) {
 		VTRACE(DBG_PARSE, ("bogus %snegate simplecmd\n",
@@ -743,9 +747,12 @@ fixredir(union node *n, const char *text, int err)
 	if (!err)
 		n->ndup.vname = NULL;
 
-	if (is_number(text))
+	if (is_number(text)) {
 		n->ndup.dupfd = number(text);
-	else if (text[0] == '-' && text[1] == '\0')
+		if (n->ndup.dupfd < user_fd_limit &&
+		    n->ndup.dupfd > max_user_fd)
+			max_user_fd = n->ndup.dupfd;
+	} else if (text[0] == '-' && text[1] == '\0')
 		n->ndup.dupfd = -1;
 	else {
 
@@ -788,7 +795,8 @@ parsefname(void)
 		 * So, leave it like this until the rest of the parser is fixed.
 		 */
 		if (!noexpand(wordtext))
-			synerror("Illegal eof marker for << redirection");
+			synerror("Unimplemented form of eof marker"
+			    " for << redirection");
 
 		rmescapes(wordtext);
 		here->eofmark = wordtext;
@@ -883,7 +891,7 @@ slurp_heredoc(char *const eofmark, const int striptabs, const int sq)
 				/*
 				 * in single quoted mode (eofmark quoted)
 				 * all we look for is \n so we can check
-				 * for the epfmark - everything saved literally.
+				 * for the eofmark - everything saved literally.
 				 */
 				STPUTC(c, out);
 				if (c == '\n') {
@@ -1013,7 +1021,7 @@ readtoken(void)
 #endif
 	struct alias *ap;
 
- top:
+ top:;
 	t = xxreadtoken();
 
 	if (checkkwd & CHKNL) {
@@ -1050,7 +1058,7 @@ readtoken(void)
 			goto top;
 		}
 	}
- out:
+ out:;
 	if (t != TNOT)
 		checkkwd = 0;
 
@@ -1348,7 +1356,7 @@ cleanup_state_stack(VSS *stack)
 #define	PARSEARITH()	{goto parsearith; parsearith_return:;}
 
 /*
- * The following macros all assume the existance of a local var "stack"
+ * The following macros all assume the existence of a local var "stack"
  * which contains a pointer to the current struct stackstate
  */
 
@@ -1500,7 +1508,7 @@ parsebackq(VSS *const stack, char * const in,
 		VTRACE(DBG_PARSE|DBG_LEXER, (" produced %d\n", psavelen));
 		if (psavelen > 0) {
 			pstr = grabstackstr(out);
-			CTRACE(DBG_LEXER, 
+			CTRACE(DBG_LEXER,
 			    ("parsebackq() reprocessing as $(%s)\n", pstr));
 			setinputstring(pstr, 1, line1);
 		}
@@ -1587,7 +1595,10 @@ parseredir(const char *out,  int c)
 	fd = (*out == '\0') ? -1 : number(out);		/* number(out) >= 0 */
 	np->nfile.fd = fd;	/* do this again later with updated fd */
 	if (fd != np->nfile.fd)
-		error("file descriptor (%d) out of range", fd);
+		error("file descriptor (%d) out of range (max %ld)",
+		    fd, user_fd_limit - 1);
+	if (fd < user_fd_limit && fd > max_user_fd)
+		max_user_fd = fd;
 
 	VTRACE(DBG_LEXER, ("parseredir after '%s%c' ", out, c));
 	if (c == '>') {
@@ -1731,7 +1742,7 @@ readcstyleesc(char *out)
 		goto hexval;
 	case 'U':
 		n = 8;
-	hexval:
+	hexval:;
 		v = 0;
 		for (i = 0; i < n; i++) {
 			c = pgetc();
@@ -1756,7 +1767,7 @@ readcstyleesc(char *out)
 /*
  * Add a byte to output string, while checking if it needs to
  * be escaped -- if its value happens to match the value of one
- * of our internal CTL* chars - which would (at a minumum) be
+ * of our internal CTL* chars - which would (at a minimum) be
  * summarily removed later, if not escaped.
  *
  * The current definition of ISCTL() allows the compiler to
@@ -2204,8 +2215,8 @@ parsesub: {
 	int subtype;
 	int typeloc;
 	int flags;
-	char *p;
-	static const char types[] = "}-+?=";
+	const char *p;
+	static const char types[] = "}-+?=";	/* see parser.h VSXYZ defs */
 
 	c = pgetc_linecont();
 	VTRACE(DBG_LEXER, ("\"$%c\"(%#.2x)", c&0xFF, c&0x1FF));
@@ -2312,10 +2323,8 @@ parsesub: {
 			c = pgetc_linecont();
 		}
 		else {
-			VTRACE(DBG_LEXER, ("\"$%c(%#.2x)??\n", c&0xFF,c&0x1FF));
- badsub:
-			cleanup_state_stack(stack);
-			synerror("Bad substitution");
+			VTRACE(DBG_LEXER, ("\"$%c(%#.2x)??", c&0xFF, c&0xFF));
+			subtype = VSUNKNOWN;
 		}
 
 		STPUTC('=', out);
@@ -2327,9 +2336,29 @@ parsesub: {
 				/*FALLTHROUGH*/
 			default:
 				p = strchr(types, c);
-				if (p == NULL)
-					goto badsub;
-				subtype = p - types + VSNORMAL;
+				if (__predict_false(p == NULL)) {
+					subtype = VSUNKNOWN;
+						/*
+						 * keep the unknown modifier
+						 * for the error message.
+						 *
+						 * Note that if we came from
+						 * the case ':' above, that
+						 * is the unknown modifier,
+						 * not the following character
+						 *
+						 * It is not important that
+						 * we keep the remaining word
+						 * intact, it will never be
+						 * used.
+						 */
+					if (flags & VSNUL)
+						/* (ie: lose c) */
+						STPUTC(':', out);
+					else
+						STPUTC(c, out);
+				} else
+					subtype = p - types + VSNORMAL;
 				break;
 			case '%':
 			case '#':
@@ -2346,8 +2375,10 @@ parsesub: {
 				}
 			}
 		} else {
-			if (subtype == VSLENGTH && c != /*{*/ '}')
-				synerror("no modifiers allowed with ${#var}");
+			if (subtype == VSLENGTH && c != /*{*/ '}') {
+				STPUTC('#', out);
+				subtype = VSUNKNOWN;
+			}
 			pungetc();
 		}
 		if (quoted || arinest)
@@ -2506,7 +2537,7 @@ STATIC void
 linebreak(void)
 {
 	while (readtoken() == TNL)
-		;
+		readheredocs();
 }
 
 /*
@@ -2664,7 +2695,7 @@ getprompt(void *unused)
  * expanded half way through reading a "command line")
  *
  * on error, expandonstack() cleans up the parser state, but then
- * simply jumps out through expandstr() withut doing any stack cleanup,
+ * simply jumps out through expandstr() without doing any stack cleanup,
  * which is OK, as the error handler must deal with that anyway.
  *
  * The split into two funcs is to avoid problems with setjmp/longjmp
@@ -2678,6 +2709,7 @@ expandonstack(char *ps, int cmdsub, int lineno)
 	struct jmploc jmploc;
 	struct jmploc *const savehandler = handler;
 	struct parsefile *const savetopfile = getcurrentfile();
+	char * const save_ps = ps;
 	const int save_x = xflag;
 	const int save_e_s = errors_suppressed;
 	struct parse_state new_state = init_parse_state;
@@ -2693,9 +2725,9 @@ expandonstack(char *ps, int cmdsub, int lineno)
 
 		readtoken1(pgetc(), DQSYNTAX, 1);
 		if (backquotelist != NULL) {
-			if (!cmdsub) 
+			if (!cmdsub)
 				result = ps;
-			else if (!promptcmds)
+			else if (cmdsub == 1 && !promptcmds)
 				result = "-o promptcmds not set: ";
 		}
 		if (result == NULL) {
@@ -2729,7 +2761,7 @@ expandonstack(char *ps, int cmdsub, int lineno)
 	errors_suppressed = save_e_s;
 
 	if (result == NULL)
-		result = ps;
+		result = save_ps;
 
 	return result;
 }
@@ -2801,6 +2833,81 @@ expandstr(char *ps, int lineno)
 
 	return result;
 }
+
+#ifndef SMALL
+/*
+ * A version of the above which isn't tailored to expanding prompts,
+ * but can be used for expanding other expandable variables when
+ * they need to be used.   ${LINENO} will always expand to 0 in this case.
+ */
+
+const char *
+expandvar(char *var, int flags)
+{
+	const char *result = NULL;
+	struct stackmark smark;
+	static char *buffer = NULL;	/* storage for result */
+	static size_t bufferlen = 0;
+
+	setstackmark(&smark);
+	/*
+	 * At this point we anticipate that there may be a string
+	 * growing on the stack, [...]   [see expandstr() above].
+	 */
+	(void) stalloc(stackblocksize());
+
+	result = expandonstack(var, (flags & VUNSAFE ? 0 : 2), 0);
+	if (__predict_false(result == NULL || *result == '\0')) {
+		result = NULL;
+		goto getout;
+	}
+
+	if (__predict_true(result == stackblock())) {
+		size_t len = strlen(result) + 1;
+
+		/*
+		 * the result is on the stack, so we
+		 * need to move it somewhere safe first.
+		 */
+
+		if (__predict_false(len > bufferlen)) {
+			char *new;
+			size_t newlen = bufferlen;
+
+			if (__predict_false(len > (SIZE_MAX >> 4))) {
+				result = "";
+				goto getout;
+			}
+
+			if (__predict_false(newlen == 0))
+				newlen = 32;
+			while (newlen <= len)
+				newlen <<= 1;
+
+			new = (char *)realloc(buffer, newlen);
+
+			if (__predict_false(new == NULL)) {
+				/*
+				 * this should rarely (if ever) happen
+				 * but we must do something when it does...
+				 */
+				result = "";
+				goto getout;
+			} else {
+				buffer = new;
+				bufferlen = newlen;
+			}
+		}
+		(void)memcpy(buffer, result, len);
+		result = buffer;
+	}
+
+  getout:;
+	popstackmark(&smark);
+
+	return result;
+}
+#endif
 
 /*
  * and a simpler version, which does no $( ) expansions, for

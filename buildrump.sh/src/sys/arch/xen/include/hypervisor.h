@@ -1,4 +1,4 @@
-/*	$NetBSD: hypervisor.h,v 1.52 2020/05/02 16:44:36 bouyer Exp $	*/
+/*	$NetBSD: hypervisor.h,v 1.60 2024/07/16 22:44:38 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -26,21 +26,21 @@
  */
 
 /*
- * 
+ *
  * Communication to/from hypervisor.
- * 
+ *
  * Copyright (c) 2002-2004, K A Fraser
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this source file (the "Software"), to deal in the Software without
  * restriction, including without limitation the rights to use, copy, modify,
  * merge, publish, distribute, sublicense, and/or sell copies of the Software,
  * and to permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -57,6 +57,8 @@
 #include "opt_xen.h"
 #include "isa.h"
 #include "pci.h"
+
+#include <machine/vmparam.h>
 
 struct cpu_info;
 
@@ -110,9 +112,9 @@ struct xen_npx_attach_args {
 #undef xen_rmb
 #undef xen_wmb
 
-#define xen_mb()  membar_sync()
-#define xen_rmb() membar_producer()
-#define xen_wmb() membar_consumer()
+void xen_mb(void);
+#define xen_rmb() membar_acquire()
+#define xen_wmb() membar_release()
 #endif /* __XEN_INTERFACE_VERSION */
 
 #include <machine/xen/hypercalls.h>
@@ -134,10 +136,12 @@ struct xen_npx_attach_args {
 union start_info_union
 {
     start_info_t start_info;
-    char padding[512];
+    char padding[PAGE_SIZE];
 };
 extern union start_info_union start_info_union;
 #define xen_start_info (start_info_union.start_info)
+
+CTASSERT(sizeof(start_info_t) <= PAGE_SIZE);
 
 extern struct hvm_start_info *hvm_start_info;
 
@@ -159,6 +163,10 @@ extern volatile struct xencons_interface *xencons_interface;
 struct intrframe;
 struct cpu_info;
 void do_hypervisor_callback(struct intrframe *regs);
+#if defined(XENPV) && (NPCI > 0 || NISA > 0)
+void hypervisor_prime_pirq_event(int, unsigned int);
+void hypervisor_ack_pirq_event(unsigned int);
+#endif /* XENPV && ( NPCI > 0 || NISA > 0 ) */
 
 extern int xen_version;
 #define XEN_MAJOR(x) (((x) & 0xffff0000) >> 16)
@@ -179,14 +187,14 @@ void hypervisor_unmask_event(unsigned int);
 void hypervisor_mask_event(unsigned int);
 void hypervisor_clear_event(unsigned int);
 void hypervisor_enable_sir(unsigned int);
-void hypervisor_set_ipending(uint32_t, int, int);
+void hypervisor_set_ipending(uint64_t, int, int);
 void hypervisor_machdep_attach(void);
 void hypervisor_machdep_resume(void);
 
-/* 
+/*
  * Force a proper event-channel callback from Xen after clearing the
  * callback mask. We do this in a very simple manner, by making a call
- * down into Xen. The pending flag will be checked by Xen on return. 
+ * down into Xen. The pending flag will be checked by Xen on return.
  */
 static __inline void hypervisor_force_callback(void)
 {
@@ -204,5 +212,8 @@ hypervisor_notify_via_evtchn(unsigned int port)
 }
 
 void xen_init_ksyms(void);
+void xen_map_vcpu(struct cpu_info *);
+
+void xen_early_console(void);
 
 #endif /* _XEN_HYPERVISOR_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: owtemp.c,v 1.19 2019/11/30 23:06:52 ad Exp $	*/
+/*	$NetBSD: owtemp.c,v 1.22 2023/12/11 13:30:33 mlelstv Exp $	*/
 /*	$OpenBSD: owtemp.c,v 1.1 2006/03/04 16:27:03 grange Exp $	*/
 
 /*-
@@ -51,13 +51,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: owtemp.c,v 1.19 2019/11/30 23:06:52 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: owtemp.c,v 1.22 2023/12/11 13:30:33 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
+#include <sys/module.h>
 
 #include <dev/sysmon/sysmonvar.h>
 
@@ -160,6 +161,7 @@ owtemp_attach(device_t parent, device_t self, void *aux)
 	    "%s S/N %012" PRIx64, sc->sc_chipname, ONEWIRE_ROM_SN(sc->sc_rom));
 	if (sysmon_envsys_sensor_attach(sc->sc_sme, &sc->sc_sensor)) {
 		sysmon_envsys_destroy(sc->sc_sme);
+		sc->sc_sme = NULL;
 		return;
 	}
 
@@ -171,6 +173,7 @@ owtemp_attach(device_t parent, device_t self, void *aux)
 	if (sysmon_envsys_register(sc->sc_sme)) {
 		aprint_error_dev(self, "unable to register with sysmon\n");
 		sysmon_envsys_destroy(sc->sc_sme);
+		sc->sc_sme = NULL;
 		return;
 	}
 
@@ -182,7 +185,8 @@ owtemp_detach(device_t self, int flags)
 {
 	struct owtemp_softc *sc = device_private(self);
 
-	sysmon_envsys_unregister(sc->sc_sme);
+	if (sc->sc_sme != NULL)
+		sysmon_envsys_unregister(sc->sc_sme);
 	evcnt_detach(&sc->sc_ev_rsterr);
 	evcnt_detach(&sc->sc_ev_update);
 	evcnt_detach(&sc->sc_ev_crcerr);
@@ -315,4 +319,38 @@ owtemp_decode_ds1920(const uint8_t *buf)
 
 	/* convert to uK */
 	return (temp + 273150000);
+}
+
+MODULE(MODULE_CLASS_DRIVER, owtemp, "onewire");
+
+#ifdef _MODULE
+#include "ioconf.c"
+#endif
+
+static int
+owtemp_modcmd(modcmd_t cmd, void *opaque)
+{
+	int error;
+
+	error = 0;
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+#ifdef _MODULE
+		error = config_init_component(cfdriver_ioconf_owtemp,
+		    cfattach_ioconf_owtemp, cfdata_ioconf_owtemp);
+		if (error)
+			aprint_error("%s: unable to init component\n",
+			    owtemp_cd.cd_name);
+#endif
+		break;
+	case MODULE_CMD_FINI:
+#ifdef _MODULE
+		config_fini_component(cfdriver_ioconf_owtemp,
+		    cfattach_ioconf_owtemp, cfdata_ioconf_owtemp);
+#endif
+		break;
+	default:
+		error = ENOTTY;
+	}
+	return error;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: vm_machdep.c,v 1.162 2020/08/23 10:23:38 simonb Exp $	*/
+/*	$NetBSD: vm_machdep.c,v 1.166 2023/02/25 08:41:37 skrll Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.162 2020/08/23 10:23:38 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.166 2023/02/25 08:41:37 skrll Exp $");
 
 #include "opt_ddb.h"
 #include "opt_cputype.h"
@@ -49,7 +49,6 @@ __KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.162 2020/08/23 10:23:38 simonb Exp 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/malloc.h>
 #include <sys/buf.h>
 #include <sys/cpu.h>
 #include <sys/vnode.h>
@@ -94,9 +93,9 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 
 	KASSERT(l1 == curlwp || l1 == &lwp0);
 
-	l2->l_md.md_ss_addr = 0;
-	l2->l_md.md_ss_instr = 0;
-	l2->l_md.md_astpending = 0;
+	KASSERT(l2->l_md.md_ss_addr == 0);
+	KASSERT(l2->l_md.md_ss_instr == 0);
+	KASSERT(l2->l_md.md_astpending == 0);
 
 	/* Copy the PCB from parent. */
 	*pcb2 = *pcb1;

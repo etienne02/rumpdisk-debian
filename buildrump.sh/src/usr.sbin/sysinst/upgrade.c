@@ -1,4 +1,4 @@
-/*	$NetBSD: upgrade.c,v 1.18 2021/08/12 09:33:59 martin Exp $	*/
+/*	$NetBSD: upgrade.c,v 1.21 2022/06/24 22:05:24 tsutsui Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -119,11 +119,15 @@ do_upgrade(void)
 	    MSG_upgrcomplete, MSG_abortupgr) != 0)
 		goto free_install;
 
-	if (md_post_extract(&install))
+	if (md_post_extract(&install, true))
 		goto free_install;
 
 	merge_X("/usr/X11R6");
 	merge_X("/usr/X11R7");
+
+#if CHECK_ENTROPY
+	do_add_entropy();
+#endif
 
 	sanity_check();
 
@@ -193,7 +197,7 @@ merge_X(const char *xroot)
  * Unpacks sets,  clobbering existing contents.
  */
 void
-do_reinstall_sets()
+do_reinstall_sets(void)
 {
 	struct install_partition_desc install = {};
 	int retcode = 0;
@@ -222,6 +226,10 @@ do_reinstall_sets()
 		goto free_install;
 	if (get_and_unpack_sets(0, NULL, MSG_unpackcomplete, MSG_abortunpack) != 0)
 		goto free_install;
+
+#if CHECK_ENTROPY
+	do_add_entropy();
+#endif
 
 	sanity_check();
 

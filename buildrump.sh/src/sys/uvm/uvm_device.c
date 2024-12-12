@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_device.c,v 1.72 2021/03/13 15:29:55 skrll Exp $	*/
+/*	$NetBSD: uvm_device.c,v 1.80 2022/07/07 13:27:02 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_device.c,v 1.72 2021/03/13 15:29:55 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_device.c,v 1.80 2022/07/07 13:27:02 riastradh Exp $");
 
 #include "opt_uvmhist.h"
 
@@ -112,10 +112,12 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 {
 	struct uvm_device *udv, *lcv;
 	const struct cdevsw *cdev;
-	dev_type_mmap((*mapfn));
+	dev_mmap_t *mapfn;
 
 	UVMHIST_FUNC(__func__);
 	UVMHIST_CALLARGS(maphist, "(device=%#jx)", device,0,0,0);
+
+	KASSERT(size > 0);
 
 	/*
 	 * before we do anything, ensure this device supports mmap
@@ -123,20 +125,27 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 
 	cdev = cdevsw_lookup(device);
 	if (cdev == NULL) {
-		return (NULL);
+		return NULL;
 	}
 	mapfn = cdev->d_mmap;
 	if (mapfn == NULL || mapfn == nommap) {
-		return(NULL);
+		return NULL;
 	}
 
 	/*
-	 * Negative offsets on the object are not allowed.
+	 * Negative offsets on the object are not allowed, unless the
+	 * device has affirmatively set D_NEGOFFSAFE.
 	 */
-
-	if ((cdev->d_flag & D_NEGOFFSAFE) == 0 &&
-	    off != UVM_UNKNOWN_OFFSET && off < 0)
-		return(NULL);
+	if ((cdev->d_flag & D_NEGOFFSAFE) == 0 && off != UVM_UNKNOWN_OFFSET) {
+		if (off < 0)
+			return NULL;
+#if SIZE_MAX > UINT32_MAX	/* XXX -Wtype-limits */
+		if (size > __type_max(voff_t))
+			return NULL;
+#endif
+		if (off > __type_max(voff_t) - size)
+			return NULL;
+	}
 
 	/*
 	 * Check that the specified range of the device allows the
@@ -145,13 +154,29 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 	 * XXX assumes VM_PROT_* == PROT_*
 	 * XXX clobbers off and size, but nothing else here needs them.
 	 */
-
-	while (size != 0) {
-		if (cdev_mmap(device, off, accessprot) == -1) {
-			return (NULL);
+	do {
+		KASSERTMSG((off % PAGE_SIZE) == 0, "off=%jd", (intmax_t)off);
+		KASSERTMSG(size >= PAGE_SIZE, "size=%"PRIuVSIZE, size);
+		if (cdev_mmap(device, off, accessprot) == -1)
+			return NULL;
+		KASSERT(off <= __type_max(voff_t) - PAGE_SIZE ||
+		    (cdev->d_flag & D_NEGOFFSAFE) != 0);
+		if (__predict_false(off > __type_max(voff_t) - PAGE_SIZE)) {
+			/*
+			 * off += PAGE_SIZE, with two's-complement
+			 * wraparound, or
+			 *
+			 *	off += PAGE_SIZE - 2*(VOFF_MAX + 1).
+			 */
+			CTASSERT(MIN_PAGE_SIZE >= 2);
+			off -= __type_max(voff_t);
+			off += PAGE_SIZE - 2;
+			off -= __type_max(voff_t);
+		} else {
+			off += PAGE_SIZE;
 		}
-		off += PAGE_SIZE; size -= PAGE_SIZE;
-	}
+		size -= PAGE_SIZE;
+	} while (size != 0);
 
 	/*
 	 * keep looping until we get it
@@ -204,7 +229,7 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 				wakeup(lcv);
 			lcv->u_flags &= ~(UVM_DEVICE_WANTED|UVM_DEVICE_HOLD);
 			mutex_exit(&udv_lock);
-			return(&lcv->u_obj);
+			return &lcv->u_obj;
 		}
 
 		/*
@@ -250,7 +275,7 @@ udv_attach(dev_t device, vm_prot_t accessprot,
 		udv->u_device = device;
 		LIST_INSERT_HEAD(&udv_list, udv, u_list);
 		mutex_exit(&udv_lock);
-		return(&udv->u_obj);
+		return &udv->u_obj;
 	}
 	/*NOTREACHED*/
 }
@@ -375,7 +400,7 @@ udv_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 		UVMHIST_LOG(maphist, "<- failed -- COW entry (etype=%#jx)",
 		    entry->etype, 0,0,0);
 		uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap, uobj);
-		return(EIO);
+		return EIO;
 	}
 
 	/*
@@ -386,7 +411,7 @@ udv_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 	if (cdevsw_lookup(device) == NULL) {
 		/* XXX This should not happen */
 		uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap, uobj);
-		return (EIO);
+		return EIO;
 	}
 
 	/*
@@ -446,5 +471,5 @@ udv_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr, struct vm_page **pps,
 
 	pmap_update(ufi->orig_map->pmap);
 	uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap, uobj);
-	return (retval);
+	return retval;
 }

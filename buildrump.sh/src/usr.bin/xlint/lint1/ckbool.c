@@ -1,4 +1,4 @@
-/* $NetBSD: ckbool.c,v 1.8 2021/07/26 16:22:24 rillig Exp $ */
+/* $NetBSD: ckbool.c,v 1.32 2024/05/12 12:32:39 rillig Exp $ */
 
 /*-
  * Copyright (c) 2021 The NetBSD Foundation, Inc.
@@ -35,8 +35,8 @@
 
 #include <sys/cdefs.h>
 
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: ckbool.c,v 1.8 2021/07/26 16:22:24 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: ckbool.c,v 1.32 2024/05/12 12:32:39 rillig Exp $");
 #endif
 
 #include <string.h>
@@ -46,39 +46,14 @@ __RCSID("$NetBSD: ckbool.c,v 1.8 2021/07/26 16:22:24 rillig Exp $");
 
 /*
  * The option -T treats _Bool as incompatible with all other scalar types.
- * See d_c99_bool_strict.c for the exact rules and for examples.
+ * See d_c99_bool_strict.c for the detailed rules and for examples.
  */
 
-static const char *
-op_name(op_t op)
-{
-	return modtab[op].m_name;
-}
-
-/*
- * See if in strict bool mode, the operator takes either two bool operands
- * or two arbitrary other operands.
- */
-static bool
-is_assignment_bool_or_other(op_t op)
-{
-	return op == ASSIGN ||
-	       op == ANDASS || op == XORASS || op == ORASS ||
-	       op == RETURN || op == INIT || op == FARG;
-}
-
-static bool
-is_symmetric_bool_or_other(op_t op)
-{
-	return op == EQ || op == NE ||
-	       op == BITAND || op == BITXOR || op == BITOR ||
-	       op == COLON;
-}
 
 static bool
 is_int_constant_zero(const tnode_t *tn, tspec_t t)
 {
-	return t == INT && tn->tn_op == CON && tn->tn_val->v_quad == 0;
+	return t == INT && tn->tn_op == CON && tn->u.value.u.integer == 0;
 }
 
 static bool
@@ -89,15 +64,23 @@ is_typeok_strict_bool_binary(op_t op,
 	if ((lt == BOOL) == (rt == BOOL))
 		return true;
 
-	if ((ln->tn_relaxed || rn->tn_relaxed) &&
+	if (op == FARG && rn->tn_sys)
+		return false;
+
+	if ((ln->tn_sys || rn->tn_sys) &&
 	    (is_int_constant_zero(ln, lt) || is_int_constant_zero(rn, rt)))
 		return true;
 
-	if (is_assignment_bool_or_other(op)) {
-		return lt != BOOL && (ln->tn_relaxed || rn->tn_relaxed);
-	}
+	if (op == ASSIGN || op == ANDASS || op == XORASS || op == ORASS ||
+	    op == RETURN || op == INIT || op == FARG)
+		return lt != BOOL && (ln->tn_sys || rn->tn_sys);
 
-	return !is_symmetric_bool_or_other(op);
+	if (op == EQ || op == NE ||
+	    op == BITAND || op == BITXOR || op == BITOR ||
+	    op == COLON)
+		return false;
+
+	return true;
 }
 
 /*
@@ -116,16 +99,15 @@ typeok_strict_bool_binary_compatible(op_t op, int arg,
 	if (is_typeok_strict_bool_binary(op, ln, lt, rn, rt))
 		return true;
 
-	if (op == FARG) {
-		/* argument #%d expects '%s', gets passed '%s' */
+	if (op == FARG)
+		/* parameter %d expects '%s', gets passed '%s' */
 		error(334, arg, tspec_name(lt), tspec_name(rt));
-	} else if (op == RETURN) {
-		/* return value type mismatch (%s) and (%s) */
+	else if (op == RETURN)
+		/* function has return type '%s' but returns '%s' */
 		error(211, tspec_name(lt), tspec_name(rt));
-	} else {
-		/* operands of '%s' have incompatible types (%s != %s) */
+	else
+		/* operands of '%s' have incompatible types '%s' and '%s' */
 		error(107, op_name(op), tspec_name(lt), tspec_name(rt));
-	}
 
 	return false;
 }
@@ -138,27 +120,22 @@ bool
 typeok_scalar_strict_bool(op_t op, const mod_t *mp, int arg,
 			  const tnode_t *ln,
 			  const tnode_t *rn)
-
 {
-	tspec_t lt, rt;
-
 	ln = before_conversion(ln);
-	lt = ln->tn_type->t_tspec;
-
+	tspec_t lt = ln->tn_type->t_tspec;
+	tspec_t rt = NO_TSPEC;
 	if (rn != NULL) {
 		rn = before_conversion(rn);
 		rt = rn->tn_type->t_tspec;
-	} else {
-		rt = NOTSPEC;
 	}
 
 	if (rn != NULL &&
 	    !typeok_strict_bool_binary_compatible(op, arg, ln, lt, rn, rt))
 		return false;
 
-	if (mp->m_requires_bool || op == QUEST) {
+	if (mp->m_compares_with_zero) {
 		bool binary = mp->m_binary;
-		bool lbool = is_typeok_bool_operand(ln);
+		bool lbool = is_typeok_bool_compares_with_zero(ln, false);
 		bool ok = true;
 
 		if (!binary && !lbool) {
@@ -171,7 +148,8 @@ typeok_scalar_strict_bool(op_t op, const mod_t *mp, int arg,
 			error(331, op_name(op), tspec_name(lt));
 			ok = false;
 		}
-		if (binary && op != QUEST && !is_typeok_bool_operand(rn)) {
+		if (binary && op != QUEST &&
+		    !is_typeok_bool_compares_with_zero(rn, false)) {
 			/* right operand of '%s' must be bool, not '%s' */
 			error(332, op_name(op), tspec_name(rt));
 			ok = false;
@@ -205,54 +183,33 @@ typeok_scalar_strict_bool(op_t op, const mod_t *mp, int arg,
 	return true;
 }
 
-/*
- * See if the node is valid as operand of an operator that compares its
- * argument with 0.
- */
 bool
-is_typeok_bool_operand(const tnode_t *tn)
+is_typeok_bool_compares_with_zero(const tnode_t *tn, bool is_do_while)
 {
-	tspec_t t;
-
-	lint_assert(Tflag);
-
+	while (tn->tn_op == COMMA)
+		tn = tn->u.ops.right;
 	tn = before_conversion(tn);
-	t = tn->tn_type->t_tspec;
 
-	if (t == BOOL)
-		return true;
-
-	if (tn->tn_relaxed && is_scalar(t))
-		return true;
-
-	/* For enums that are used as bit sets, allow "flags & FLAG". */
-	if (tn->tn_op == BITAND &&
-	    tn->tn_left->tn_op == CVT &&
-	    tn->tn_left->tn_type->t_is_enum &&
-	    tn->tn_right->tn_type->t_is_enum)
-		return true;
-
-	return false;
+	return tn->tn_type->t_tspec == BOOL
+	    || tn->tn_op == BITAND
+	    || (is_do_while && is_int_constant_zero(tn, tn->tn_type->t_tspec))
+	    || (tn->tn_sys && is_scalar(tn->tn_type->t_tspec));
 }
 
 bool
 fallback_symbol_strict_bool(sym_t *sym)
 {
-	if (Tflag && strcmp(sym->s_name, "__lint_false") == 0) {
-		sym->s_scl = CTCONST; /* close enough */
+	if (strcmp(sym->s_name, "__lint_false") == 0) {
+		sym->s_scl = BOOL_CONST;
 		sym->s_type = gettyp(BOOL);
-		sym->s_value.v_tspec = BOOL;
-		sym->s_value.v_unsigned_since_c90 = false;
-		sym->s_value.v_quad = 0;
+		sym->u.s_bool_constant = false;
 		return true;
 	}
 
-	if (Tflag && strcmp(sym->s_name, "__lint_true") == 0) {
-		sym->s_scl = CTCONST; /* close enough */
+	if (strcmp(sym->s_name, "__lint_true") == 0) {
+		sym->s_scl = BOOL_CONST;
 		sym->s_type = gettyp(BOOL);
-		sym->s_value.v_tspec = BOOL;
-		sym->s_value.v_unsigned_since_c90 = false;
-		sym->s_value.v_quad = 1;
+		sym->u.s_bool_constant = true;
 		return true;
 	}
 

@@ -1,4 +1,4 @@
-/* $NetBSD: apple_platform.c,v 1.1 2021/08/30 23:26:26 jmcneill Exp $ */
+/* $NetBSD: apple_platform.c,v 1.6 2023/04/07 08:55:29 skrll Exp $ */
 
 /*-
  * Copyright (c) 2021 Jared McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: apple_platform.c,v 1.1 2021/08/30 23:26:26 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: apple_platform.c,v 1.6 2023/04/07 08:55:29 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -36,6 +36,7 @@ __KERNEL_RCSID(0, "$NetBSD: apple_platform.c,v 1.1 2021/08/30 23:26:26 jmcneill 
 #include <sys/termios.h>
 
 #include <dev/fdt/fdtvar.h>
+
 #include <arm/fdt/arm_fdtvar.h>
 
 #include <uvm/uvm_extern.h>
@@ -60,6 +61,8 @@ __KERNEL_RCSID(0, "$NetBSD: apple_platform.c,v 1.1 2021/08/30 23:26:26 jmcneill 
 
 extern struct bus_space arm_generic_bs_tag;
 
+static struct bus_space apple_nonposted_bs_tag;
+
 struct arm32_bus_dma_tag apple_coherent_dma_tag;
 static struct arm32_dma_range apple_coherent_ranges[] = {
 	[0] = {
@@ -70,10 +73,24 @@ static struct arm32_dma_range apple_coherent_ranges[] = {
 	}
 };
 
+static int
+apple_nonposted_bs_map(void *t, bus_addr_t bpa, bus_size_t size, int flag,
+    bus_space_handle_t *bshp)
+{
+	if (flag == 0) {
+		flag |= BUS_SPACE_MAP_NONPOSTED;
+	}
+
+	return bus_space_map(&arm_generic_bs_tag, bpa, size, flag, bshp);
+}
+
 static void
 apple_platform_bootstrap(void)
 {
 	extern struct arm32_bus_dma_tag arm_generic_dma_tag;
+
+	apple_nonposted_bs_tag = arm_generic_bs_tag;
+	apple_nonposted_bs_tag.bs_map = apple_nonposted_bs_map;
 
 	apple_coherent_dma_tag = arm_generic_dma_tag;
 	apple_coherent_dma_tag._ranges = apple_coherent_ranges;
@@ -85,7 +102,7 @@ apple_platform_bootstrap(void)
 static void
 apple_platform_init_attach_args(struct fdt_attach_args *faa)
 {
-	faa->faa_bst = &arm_generic_bs_tag;
+	faa->faa_bst = &apple_nonposted_bs_tag;
 	faa->faa_dmat = &apple_coherent_dma_tag;
 }
 
@@ -110,7 +127,7 @@ apple_platform_devmap(void)
 		devmap[devmap_index].pd_va = DEVMAP_ALIGN(devmap_va);
 		devmap[devmap_index].pd_size = DEVMAP_SIZE(L3_SIZE);
 		devmap[devmap_index].pd_prot = VM_PROT_READ | VM_PROT_WRITE;
-		devmap[devmap_index].pd_flags = PMAP_DEV_SO;
+		devmap[devmap_index].pd_flags = PMAP_DEV_NP;
 		devmap_va = DEVMAP_SIZE(devmap[devmap_index].pd_va +
 		    devmap[devmap_index].pd_size);
 		devmap_index++;
@@ -134,7 +151,7 @@ apple_platform_devmap(void)
 }
 
 static u_int
-arm_platform_uart_freq(void)
+apple_platform_uart_freq(void)
 {
 	return 0;
 }
@@ -184,6 +201,26 @@ apple_platform_device_register(device_t self, void *aux)
 	uint8_t eaddr[ETHER_ADDR_LEN];
 	int len;
 
+	if (device_is_a(self, "cpu")) {
+		struct fdt_attach_args * const faa = aux;
+		bus_addr_t cpuid;
+
+		if (fdtbus_get_reg(faa->faa_phandle, 0, &cpuid, NULL) != 0) {
+			cpuid = 0;
+		}
+
+		/*
+		 * On Apple M1 (and hopefully later models), AFF2 is 0 for
+		 * efficiency and 1 for performance cores. Use this value
+		 * to provide a fake DMIPS/MHz value -- the actual number
+		 * only matters in relation to the value presented by other
+		 * cores.
+		 */
+		const u_int aff2 = __SHIFTOUT(cpuid, MPIDR_AFF2);
+		prop_dictionary_set_uint32(prop, "capacity_dmips_mhz", aff2);
+		return;
+	}
+
 	if (device_is_a(self, "bge") &&
 	    device_is_a(device_parent(self), "pci")) {
 		struct pci_attach_args * const pa = aux;
@@ -199,15 +236,15 @@ apple_platform_device_register(device_t self, void *aux)
 	}
 }
 
-static const struct arm_platform apple_arm_platform = {
-	.ap_devmap = apple_platform_devmap,
-	.ap_bootstrap = apple_platform_bootstrap,
-	.ap_init_attach_args = apple_platform_init_attach_args,
-	.ap_reset = psci_fdt_reset,
-	.ap_delay = gtmr_delay,
-	.ap_uart_freq = arm_platform_uart_freq,
-	.ap_device_register = apple_platform_device_register,
-	.ap_mpstart = arm_fdt_cpu_mpstart,
+static const struct fdt_platform apple_fdt_platform = {
+	.fp_devmap = apple_platform_devmap,
+	.fp_bootstrap = apple_platform_bootstrap,
+	.fp_init_attach_args = apple_platform_init_attach_args,
+	.fp_reset = psci_fdt_reset,
+	.fp_delay = gtmr_delay,
+	.fp_uart_freq = apple_platform_uart_freq,
+	.fp_device_register = apple_platform_device_register,
+	.fp_mpstart = arm_fdt_cpu_mpstart,
 };
 
-ARM_PLATFORM(apple_arm, "apple,arm-platform", &apple_arm_platform);
+FDT_PLATFORM(apple_arm, "apple,arm-platform", &apple_fdt_platform);

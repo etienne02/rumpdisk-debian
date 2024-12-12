@@ -1,4 +1,4 @@
-/*	$NetBSD: spkr.c,v 1.21 2021/08/07 16:19:08 thorpej Exp $	*/
+/*	$NetBSD: spkr.c,v 1.25 2023/03/31 15:00:26 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1990 Eric S. Raymond (esr@snark.thyrsus.com)
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: spkr.c,v 1.21 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: spkr.c,v 1.25 2023/03/31 15:00:26 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "wsmux.h"
@@ -54,7 +54,7 @@ __KERNEL_RCSID(0, "$NetBSD: spkr.c,v 1.21 2021/08/07 16:19:08 thorpej Exp $");
 #include <sys/kernel.h>
 #include <sys/errno.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/module.h>
 #include <sys/uio.h>
 #include <sys/proc.h>
@@ -204,6 +204,7 @@ playtone(struct spkr_softc *sc, int note, int val, int sustain)
 			rest(sc, total);
 		return;
 	}
+	KASSERTMSG(note < __arraycount(pitchtab), "note=%d", note);
 
 	/*
 	 * Rest 1/8 (if NORMAL) or 3/8 (if STACCATO) in tick.
@@ -233,6 +234,10 @@ playstring(struct spkr_softc *sc, const char *cp, size_t slen)
 
 #define GETNUM(cp, v)	\
 	for (v = 0; slen > 0 && isdigit((unsigned char)cp[1]); ) { \
+		if (v > INT_MAX/10 - (cp[1] - '0')) { \
+			v = INT_MAX; \
+			continue; \
+		} \
 		v = v * 10 + (*++cp - '0'); \
 		slen--; \
 	}
@@ -320,6 +325,8 @@ playstring(struct spkr_softc *sc, const char *cp, size_t slen)
 				slen--;
 			} else {
 				GETNUM(cp, sc->sc_octave);
+				KASSERTMSG(sc->sc_octave >= 0, "%d",
+				    sc->sc_octave);
 				if (sc->sc_octave >= NOCTAVES)
 					sc->sc_octave = DFLT_OCTAVE;
 				sc->sc_octprefix = true;
@@ -340,6 +347,9 @@ playstring(struct spkr_softc *sc, const char *cp, size_t slen)
 
 		case 'N':
 			GETNUM(cp, pitch);
+			KASSERTMSG(pitch >= 0, "pitch=%d", pitch);
+			if (pitch >= __arraycount(pitchtab))
+				break;
 			for (sustain = 0; slen > 0 && cp[1] == '.'; cp++) {
 				slen--;
 				sustain++;
@@ -416,7 +426,8 @@ spkr_attach(device_t self, void (*tone)(device_t, u_int, u_int))
 	struct spkr_softc *sc = device_private(self);
 
 #ifdef SPKRDEBUG
-	aprint_debug("%s: entering for unit %d\n", __func__, self->dv_unit);
+	aprint_debug("%s: entering for unit %d\n", __func__,
+	    device_unit(self));
 #endif /* SPKRDEBUG */
 	sc->sc_dev = self;
 	sc->sc_tone = tone;
@@ -433,7 +444,8 @@ spkr_detach(device_t self, int flags)
 	int rc;
 
 #ifdef SPKRDEBUG
-	aprint_debug("%s: entering for unit %d\n", __func__, self->dv_unit);
+	aprint_debug("%s: entering for unit %d\n", __func__,
+	    device_unit(self));
 #endif /* SPKRDEBUG */
 	if (sc == NULL)
 		return ENXIO;
@@ -490,7 +502,7 @@ spkropen(dev_t dev, int	flags, int mode, struct lwp *l)
 	if (sc->sc_inbuf != NULL)
 		return EBUSY;
 
-	sc->sc_inbuf = malloc(DEV_BSIZE, M_DEVBUF, M_WAITOK);
+	sc->sc_inbuf = kmem_alloc(DEV_BSIZE, KM_SLEEP);
 	playinit(sc);
 	return 0;
 }
@@ -531,7 +543,7 @@ spkrclose(dev_t dev, int flags, int mode, struct lwp *l)
 		return EINVAL;
 
 	sc->sc_tone(sc->sc_dev, 0, 0);
-	free(sc->sc_inbuf, M_DEVBUF);
+	kmem_free(sc->sc_inbuf, DEV_BSIZE);
 	sc->sc_inbuf = NULL;
 
 	return 0;
@@ -631,12 +643,10 @@ spkr_modcmd(modcmd_t cmd, void *arg)
 
 	case MODULE_CMD_FINI:
 #ifdef _MODULE
-		devsw_detach(NULL, &spkr_cdevsw);
 		error = config_fini_component(cfdriver_ioconf_spkr,
 		    cfattach_ioconf_spkr, cfdata_ioconf_spkr);
-		if (error)
-			devsw_attach(spkr_cd.cd_name, NULL, &bmajor,
-			    &spkr_cdevsw, &cmajor);
+		if (error == 0)
+			devsw_detach(NULL, &spkr_cdevsw);
 #endif
 		break;
 

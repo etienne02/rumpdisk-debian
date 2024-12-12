@@ -1,4 +1,4 @@
-/*	$NetBSD: sti_sgc.c,v 1.6 2021/08/07 16:18:53 thorpej Exp $	*/
+/*	$NetBSD: sti_sgc.c,v 1.8 2023/01/15 06:19:45 tsutsui Exp $	*/
 /*	$OpenBSD: sti_sgc.c,v 1.14 2007/05/26 00:36:03 krw Exp $	*/
 
 /*
@@ -27,7 +27,7 @@
  *
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sti_sgc.c,v 1.6 2021/08/07 16:18:53 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sti_sgc.c,v 1.8 2023/01/15 06:19:45 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -55,7 +55,7 @@ struct sti_sgc_softc {
  * 425e EVRX specific hardware
  */
 /*
- * EVRX RAMDAC (Bt458) is found at offset 0x060000 from SGC bus PA and 
+ * EVRX RAMDAC (Bt458) is found at offset 0x060000 from SGC bus PA and
  * offset 0x040000 length 0x1c0000 is mapped in MI sti via ROM region 2
  */
 #define STI_EVRX_REGNO2OFFSET	0x020000
@@ -259,7 +259,7 @@ sti_sgc_probe(bus_space_tag_t iot, int slot)
 
 	/*
 	 * This might not be reliable enough. On the other hand, non-STI
-	 * SGC cards will apparently not initialize in an hp300, to the
+	 * SGC cards will apparently not initialize in the hp300, to the
 	 * point of not even answering bus probes (checked with an
 	 * Harmony/FDDI SGC card).
 	 */
@@ -317,7 +317,7 @@ sti_evrx_resetramdac(struct sti_screen *scr)
 	bus_space_write_1(bst, bsh, EVRX_BT458_ADDR, 0x05);
 	bus_space_write_1(bst, bsh, EVRX_BT458_CTRL, 0x00);
 
-	/* pallete enabled, ovly plane disabled */
+	/* palette enabled, ovly plane disabled */
 	bus_space_write_1(bst, bsh, EVRX_BT458_ADDR, 0x06);
 	bus_space_write_1(bst, bsh, EVRX_BT458_CTRL, 0x40);
 

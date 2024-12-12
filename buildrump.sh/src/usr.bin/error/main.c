@@ -1,4 +1,4 @@
-/*	$NetBSD: main.c,v 1.21 2011/08/17 13:11:22 christos Exp $	*/
+/*	$NetBSD: main.c,v 1.26 2023/08/26 14:59:44 rillig Exp $	*/
 
 /*
  * Copyright (c) 1980, 1993
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1980, 1993\
 #if 0
 static char sccsid[] = "@(#)main.c	8.1 (Berkeley) 6/6/93";
 #endif
-__RCSID("$NetBSD: main.c,v 1.21 2011/08/17 13:11:22 christos Exp $");
+__RCSID("$NetBSD: main.c,v 1.26 2023/08/26 14:59:44 rillig Exp $");
 #endif /* not lint */
 
 #include <signal.h>
@@ -65,17 +65,17 @@ static Eptr *errors;
 
 int nfiles = 0;
 Eptr **files;		/* array of pointers into errors*/
-boolean *touchedfiles;  /* which files we touched */
+bool *touchedfiles;	/* which files we touched */
 int language = INCC;
 
 char default_currentfilename[] = "????";
 char *currentfilename = default_currentfilename;
 
-boolean query = false;	/* query the operator if touch files */
-boolean terse = false;	/* Terse output */
+bool query = false;	/* query the operator if touch files */
+bool terse = false;	/* Terse output */
 
 static char im_on[] = _PATH_TTY;	/* my tty name */
-static boolean notouch = false;		/* don't touch ANY files */
+static bool notouch = false;		/* don't touch ANY files */
 
 const char *suffixlist = ".*";	/* initially, can touch any file */
 
@@ -84,54 +84,17 @@ static void forkvi(int, char **);
 static void try(const char *, int, char **);
 static void usage(void) __attribute__((__noreturn__));
 
-/*
- * error [-nqSsTv] [-I <ignorename>] [-t <suffixlist>] [-p <level>] <infile>
- *
- *	-I:	the following name, `ignorename' contains a list of
- *		function names that are not to be treated as hard errors.
- *		Default: ~/.errorsrc
- *
- *	-n:	don't touch ANY files!
- *
- *	-p:	take the next argument as the number of levels to skip
- *		from the filename, like perl.
- *
- *	-q:	The user is to be queried before touching each
- *		file; if not specified, all files with hard, non
- *		ignorable errors are touched (assuming they can be).
- *
- *	-S:	show the errors in unsorted order
- *		(as they come from the error file)
- *
- *	-s:	print a summary of the error's categories.
- *
- *	-T:	terse output
- *
- *	-t:	touch only files ending with the list of suffixes, each
- *		suffix preceded by a dot.
- *		eg, -t .c.y.l
- *		will touch only files ending with .c, .y or .l
- *
- *	-v:	after touching all files, overlay vi(1), ex(1) or ed(1)
- *		on top of error, entered in the first file with
- *		an error in it, with the appropriate editor
- *		set up to use the "next" command to get the other
- *		files containing errors.
- *
- *	infile:	The error messages come from this file.
- *		Default: stdin
- */
 int
 main(int argc, char **argv)
 {
 	int c;
-	char *ignorename = 0;
+	char *ignorename = NULL;
 	int ed_argc;
 	char **ed_argv;		/* return from touchfiles */
-	boolean show_errors = false;
-	boolean Show_Errors = false;
-	boolean pr_summary = false;
-	boolean edit_files = false;
+	bool show_errors = false;
+	bool Show_Errors = false;
+	bool pr_summary = false;
+	bool edit_files = false;
 
 	setprogname(argv[0]);
 
@@ -184,7 +147,7 @@ main(int argc, char **argv)
 	}
 
 	if (notouch)
-		suffixlist = 0;
+		suffixlist = NULL;
 
 
 	if ((queryfile = fopen(im_on, "r")) == NULL) {
@@ -205,27 +168,27 @@ main(int argc, char **argv)
 	findfiles(nerrors, errors, &nfiles, &files);
 #define P(msg, arg) fprintf(stdout, msg, arg)
 	if (pr_summary) {
-		if (nunknown)
+		if (nunknown > 0)
 			P("%d Errors are unclassifiable.\n", nunknown);
-		if (nignore)
+		if (nignore > 0)
 			P("%d Errors are classifiable, but totally "
 			    "discarded.\n", nignore);
-		if (nsyncerrors)
+		if (nsyncerrors > 0)
 			P("%d Errors are synchronization errors.\n",
 			    nsyncerrors);
-		if (nignore)
+		if (nignore > 0)
 			P("%d Errors are discarded because they refer to "
 			    "sacrosinct files.\n", ndiscard);
-		if (nnulled)
+		if (nnulled > 0)
 			P("%d Errors are nulled because they refer to specific "
 			    "functions.\n", nnulled);
-		if (nnonspec)
+		if (nnonspec > 0)
 			P("%d Errors are not specific to any file.\n",
 			    nnonspec);
-		if (nthisfile)
+		if (nthisfile > 0)
 			P("%d Errors are specific to a given file, but not "
 			    "to a line.\n", nthisfile);
-		if (ntrue)
+		if (ntrue > 0)
 			P("%d Errors are true errors, and can be inserted "
 			    "into the files.\n", ntrue);
 	}
@@ -252,7 +215,7 @@ forkvi(int argc, char **argv)
 		}
 	}
 	/*
-	 *	ed_agument's first argument is
+	 *	ed_argument's first argument is
 	 *	a vi/ex compatible search argument
 	 *	to find the first occurrence of ###
 	 */

@@ -1,4 +1,4 @@
-/*	$NetBSD: exec.c,v 1.77 2021/05/30 05:59:23 mlelstv Exp $	 */
+/*	$NetBSD: exec.c,v 1.81 2024/09/11 20:15:36 andvar Exp $	 */
 
 /*
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -89,7 +89,6 @@
 
 /*
  * Starts a NetBSD ELF kernel. The low level startup is done in startprog.S.
- * This is a special version of exec.c to support use of XMS.
  */
 
 #include <sys/param.h>
@@ -108,6 +107,8 @@
 #endif
 #ifdef EFIBOOT
 #include "efiboot.h"
+#include "biosdisk.h"
+#include "efidisk.h"
 #undef DEBUG	/* XXX */
 #endif
 
@@ -351,7 +352,6 @@ common_load_prekern(const char *file, u_long *basemem, u_long *extmem,
 	/*
 	 * Gather some information for the kernel. Do this after the
 	 * "point of no return" to avoid memory leaks.
-	 * (but before DOS might be trashed in the XMS case)
 	 */
 #ifdef PASS_BIOSGEOM
 	bi_getbiosgeom();
@@ -374,43 +374,10 @@ common_load_kernel(const char *file, u_long *basemem, u_long *extmem,
     physaddr_t loadaddr, int floppy, u_long marks[MARK_MAX])
 {
 	int fd;
-#ifdef XMS
-	u_long xmsmem;
-	physaddr_t origaddr = loadaddr;
-#endif
 
 	*extmem = getextmem();
 	*basemem = getbasemem();
 
-#ifdef XMS
-	if ((getextmem1() == 0) && (xmsmem = checkxms())) {
-		u_long kernsize;
-
-		/*
-		 * With "CONSERVATIVE_MEMDETECT", extmem is 0 because
-		 * getextmem() is getextmem1(). Without, the "smart"
-		 * methods could fail to report all memory as well.
-		 * xmsmem is a few kB less than the actual size, but
-		 * better than nothing.
-		 */
-		if (xmsmem > *extmem)
-			*extmem = xmsmem;
-		/*
-		 * Get the size of the kernel
-		 */
-		marks[MARK_START] = loadaddr;
-		if ((fd = loadfile(file, marks, COUNT_KERNEL)) == -1)
-			return errno;
-		close(fd);
-
-		kernsize = marks[MARK_END];
-		kernsize = (kernsize + 1023) / 1024;
-
-		loadaddr = xmsalloc(kernsize);
-		if (!loadaddr)
-			return ENOMEM;
-	}
-#endif
 	marks[MARK_START] = loadaddr;
 	if ((fd = loadfile(file, marks,
 	    LOAD_KERNEL & ~(floppy ? LOAD_BACKWARDS : 0))) == -1)
@@ -425,7 +392,6 @@ common_load_kernel(const char *file, u_long *basemem, u_long *extmem,
 	/*
 	 * Gather some information for the kernel. Do this after the
 	 * "point of no return" to avoid memory leaks.
-	 * (but before DOS might be trashed in the XMS case)
 	 */
 #ifdef PASS_BIOSGEOM
 	bi_getbiosgeom();
@@ -434,20 +400,6 @@ common_load_kernel(const char *file, u_long *basemem, u_long *extmem,
 	bi_getmemmap();
 #endif
 
-#ifdef XMS
-	if (loadaddr != origaddr) {
-		/*
-		 * We now have done our last DOS IO, so we may
-		 * trash the OS. Copy the data from the temporary
-		 * buffer to its real address.
-		 */
-		marks[MARK_START] -= loadaddr;
-		marks[MARK_END] -= loadaddr;
-		marks[MARK_SYM] -= loadaddr;
-		marks[MARK_END] -= loadaddr;
-		ppbcopy(loadaddr, origaddr, marks[MARK_END]);
-	}
-#endif
 	marks[MARK_END] = (((u_long) marks[MARK_END] + sizeof(int) - 1)) &
 	    (-sizeof(int));
 	image_end = marks[MARK_END];
@@ -465,6 +417,7 @@ exec_netbsd(const char *file, physaddr_t loadaddr, int boothowto, int floppy,
 	struct btinfo_symtab btinfo_symtab;
 	u_long extmem;
 	u_long basemem;
+	u_long entry;
 	int error;
 #ifdef EFIBOOT
 	int i;
@@ -497,6 +450,12 @@ exec_netbsd(const char *file, physaddr_t loadaddr, int boothowto, int floppy,
 		goto out;
 	}
 #ifdef EFIBOOT
+	BI_ADD(&bi_disk, BTINFO_BOOTDISK, sizeof(bi_disk));
+	BI_ADD(&bi_wedge, BTINFO_BOOTWEDGE, sizeof(bi_wedge));
+	efidisk_getbiosgeom();
+
+	efi_load_start = marks[MARK_START];
+
 	/* adjust to the real load address */
 	marks[MARK_START] -= efi_loadaddr;
 	marks[MARK_ENTRY] -= efi_loadaddr;
@@ -552,6 +511,8 @@ exec_netbsd(const char *file, physaddr_t loadaddr, int boothowto, int floppy,
 
 	if (callback != NULL)
 		(*callback)();
+
+	entry = marks[MARK_ENTRY];
 #ifdef EFIBOOT
 	/* Copy bootinfo to safe arena. */
 	for (i = 0; i < bootinfo->nentries; i++) {
@@ -563,8 +524,22 @@ exec_netbsd(const char *file, physaddr_t loadaddr, int boothowto, int floppy,
 
 	efi_kernel_start = marks[MARK_START];
 	efi_kernel_size = image_end - (efi_loadaddr + efi_kernel_start);
+
+	switch (efi_reloc_type) {
+	case RELOC_NONE:
+		entry += (efi_load_start - efi_kernel_start);
+		efi_kernel_start = efi_load_start;
+		break;
+	case RELOC_ADDR:
+		entry += (efi_kernel_reloc - efi_kernel_start);
+		efi_kernel_start = efi_kernel_reloc;
+		break;
+	case RELOC_DEFAULT:
+	default:
+		break;
+	}
 #endif
-	startprog(marks[MARK_ENTRY], BOOT_NARGS, boot_argv,
+	startprog(entry, BOOT_NARGS, boot_argv,
 	    x86_trunc_page(basemem * 1024));
 	panic("exec returned");
 
@@ -684,7 +659,7 @@ module_base_path(char *buf, size_t bufsize, const char *kernel_path)
 		    "/stand/%s/%d.%d.%d/modules", machine,
 		    netbsd_version / 100000000,
 		    netbsd_version / 1000000 % 100,
-		    netbsd_version / 100 % 100);
+		    netbsd_version / 100 % 10000);
 	} else if (netbsd_version != 0) {
 		/* release */
 		snprintf(buf, bufsize,

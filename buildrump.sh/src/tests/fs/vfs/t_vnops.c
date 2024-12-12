@@ -1,4 +1,4 @@
-/*	$NetBSD: t_vnops.c,v 1.60 2021/08/19 20:56:36 andvar Exp $	*/
+/*	$NetBSD: t_vnops.c,v 1.63 2023/05/08 19:23:45 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -104,9 +104,9 @@ lookup_complex(const atf_tc_t *tc, const char *mountpath)
 	 * The lookup is permitted to modify the access time of
 	 * any directories searched - such a directory is the
 	 * subject of this test.   Any difference should cause
-	 * the 2nd lookup atime tp be >= the first, if it is ==, all is
+	 * the 2nd lookup atime to be >= the first, if it is ==, all is
 	 * OK (atime is not required to be modified by the search, or
-	 * both references may happen within the came clock tick), if the
+	 * both references may happen within the same clock tick), if the
 	 * 2nd lookup atime is > the first, but not "too much" greater,
 	 * just set it back, so the memcmp just below succeeds
 	 * (assuming all else is OK).
@@ -167,11 +167,50 @@ dir_simple(const atf_tc_t *tc, const char *mountpath)
 	if (rump_sys_stat(pb, &sb) == -1)
 		atf_tc_fail_errno("stat new directory");
 
-	/* check we can remove then and that it makes them unreachable */
+	/* check we can remove them and that it makes them unreachable */
 	if (rump_sys_rmdir(pb) == -1)
 		atf_tc_fail_errno("rmdir");
 	if (rump_sys_stat(pb, &sb) != -1 || errno != ENOENT)
 		atf_tc_fail("ENOENT expected from stat");
+}
+
+static void
+do_dir_slash(const atf_tc_t *tc, const char *mountpath, const char *addend)
+{
+	char plain[MAXPATHLEN], with_slash[MAXPATHLEN];
+	struct stat sb;
+
+	USES_DIRS;
+
+	/* check we can create directories with one or more / appended */
+	snprintf(plain, sizeof(plain), "%s/dir%s", mountpath, addend);
+	snprintf(with_slash, sizeof(with_slash), "%s/dir/", mountpath);
+	if (rump_sys_mkdir(with_slash, 0777) == -1)
+		atf_tc_fail_errno("mkdir");
+	if (rump_sys_stat(plain, &sb) == -1)
+		atf_tc_fail_errno("stat new directory");
+	if (rump_sys_rmdir(plain) == -1)
+		atf_tc_fail_errno("rmdir");
+	if (rump_sys_stat(with_slash, &sb) != -1 || errno != ENOENT)
+		atf_tc_fail("ENOENT expected from stat");
+}
+
+static void
+dir_slash(const atf_tc_t *tc, const char *mountpath)
+{
+	do_dir_slash(tc, mountpath, "/");
+}
+
+static void
+dir_2slash(const atf_tc_t *tc, const char *mountpath)
+{
+	do_dir_slash(tc, mountpath, "//");
+}
+
+static void
+dir_3slash(const atf_tc_t *tc, const char *mountpath)
+{
+	do_dir_slash(tc, mountpath, "///");
 }
 
 static void
@@ -195,7 +234,7 @@ dir_notempty(const atf_tc_t *tc, const char *mountpath)
 
 	rv = rump_sys_rmdir(pb);
 	if (rv != -1 || errno != ENOTEMPTY)
-		atf_tc_fail("non-empty directory removed succesfully");
+		atf_tc_fail("non-empty directory removed successfully");
 
 	if (rump_sys_unlink(pb2) == -1)
 		atf_tc_fail_errno("cannot remove dir/file");
@@ -1026,6 +1065,9 @@ lstat_symlink(const atf_tc_t *tc, const char *mp)
 ATF_TC_FSAPPLY(lookup_simple, "simple lookup (./.. on root)");
 ATF_TC_FSAPPLY(lookup_complex, "lookup of non-dot entries");
 ATF_TC_FSAPPLY(dir_simple, "mkdir/rmdir");
+ATF_TC_FSAPPLY(dir_slash, "mkdir with appended slash");
+ATF_TC_FSAPPLY(dir_2slash, "mkdir with two slashes appended");
+ATF_TC_FSAPPLY(dir_3slash, "mkdir with three slashes appended");
 ATF_TC_FSAPPLY(dir_notempty, "non-empty directories cannot be removed");
 ATF_TC_FSAPPLY(dir_rmdirdotdot, "remove .. and try to cd out (PR kern/44657)");
 ATF_TC_FSAPPLY(rename_dir, "exercise various directory renaming ops "
@@ -1058,6 +1100,9 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_FSAPPLY(dir_simple);
 	ATF_TP_FSAPPLY(dir_notempty);
 	ATF_TP_FSAPPLY(dir_rmdirdotdot);
+	ATF_TP_FSAPPLY(dir_slash);
+	ATF_TP_FSAPPLY(dir_2slash);
+	ATF_TP_FSAPPLY(dir_3slash);
 	ATF_TP_FSAPPLY(rename_dir);
 	ATF_TP_FSAPPLY(rename_dotdot);
 	ATF_TP_FSAPPLY(rename_reg_nodir);

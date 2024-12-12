@@ -1,4 +1,4 @@
-/*	$NetBSD: esiop.c,v 1.59 2021/08/07 16:19:12 thorpej Exp $	*/
+/*	$NetBSD: esiop.c,v 1.63 2024/02/08 19:44:08 andvar Exp $	*/
 
 /*
  * Copyright (c) 2002 Manuel Bouyer.
@@ -28,7 +28,7 @@
 /* SYM53c7/8xx PCI-SCSI I/O Processors driver */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: esiop.c,v 1.59 2021/08/07 16:19:12 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: esiop.c,v 1.63 2024/02/08 19:44:08 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -209,7 +209,7 @@ esiop_reset(struct esiop_softc *sc)
 	siop_common_reset(&sc->sc_c);
 
 	/*
-	 * we copy the script at the beggining of RAM. Then there is 4 bytes
+	 * we copy the script at the beginning of RAM. Then there is 4 bytes
 	 * for messages in, and 4 bytes for semaphore
 	 */
 	sc->sc_free_offset = __arraycount(esiop_script);
@@ -660,7 +660,7 @@ none:
 		if ((sist & (SIST1_STO << 8)) && need_reset == 0) {
 			/*
 			 * selection time out, assume there's no device here
-			 * We also have to update the ring pointer ourselve
+			 * We also have to update the ring pointer ourselves
 			 */
 			slot = bus_space_read_1(sc->sc_c.sc_rt,
 			    sc->sc_c.sc_rh, SIOP_SCRATCHE);
@@ -733,7 +733,7 @@ none:
 				goto scintr;
 			}
 			/*
-			 * else we have to restart it ourselve, at the
+			 * else we have to restart it ourselves, at the
 			 * interrupted instruction.
 			 */
 			bus_space_write_4(sc->sc_c.sc_rt, sc->sc_c.sc_rh,
@@ -1101,7 +1101,7 @@ scintr:
 		return 1;
 	}
 	/*
-	 * We just should't get there, but on some KVM virtual hosts,
+	 * We just shouldn't get there, but on some KVM virtual hosts,
 	 * we do - see PR 48277.
 	 */
 	printf("esiop_intr: I shouldn't be there !\n");
@@ -1398,7 +1398,7 @@ esiop_handle_qtag_reject(struct esiop_cmd *esiop_cmd)
 /*
  * handle a bus reset: reset chip, unqueue all active commands, free all
  * target struct and report lossage to upper layer.
- * As the upper layer may requeue immediatly we have to first store
+ * As the upper layer may requeue immediately we have to first store
  * all active commands in a temporary queue.
  */
 void

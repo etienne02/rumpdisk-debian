@@ -1,4 +1,4 @@
-/* $NetBSD: umcs.h,v 1.4 2021/07/31 20:29:37 andvar Exp $ */
+/* $NetBSD: umcs.h,v 1.6 2024/02/10 09:21:53 andvar Exp $ */
 /* $FreeBSD: head/sys/dev/usb/serial/umcs.h 252123 2013-06-23 20:19:51Z thomas $ */
 
 /*-
@@ -38,14 +38,14 @@
 #define	MCS7840_RDREQ		0x0d
 #define	MCS7840_WRREQ		0x0e
 
-/* Read/Wrtie EEPROM values */
+/* Read/Write EEPROM values */
 #define	MCS7840_EEPROM_RW_WVALUE	0x0900
 
 /*
  *   All these registers are documented only in full datasheet,
  * which can be requested from MosChip tech support.
  */
-#define	MCS7840_DEV_REG_SP1		0x00	/* Options for for UART 1, R/W */
+#define	MCS7840_DEV_REG_SP1		0x00	/* Options for UART 1, R/W */
 #define	MCS7840_DEV_REG_CONTROL1	0x01	/* Control bits for UART 1,
 						 * R/W */
 #define	MCS7840_DEV_REG_PINPONGHIGH	0x02	/* High bits of ping-pong

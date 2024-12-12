@@ -1,4 +1,4 @@
-/*	$NetBSD: ffs_balloc.c,v 1.21 2015/03/29 05:52:59 agc Exp $	*/
+/*	$NetBSD: ffs_balloc.c,v 1.23 2023/03/13 22:17:24 christos Exp $	*/
 /* From NetBSD: ffs_balloc.c,v 1.25 2001/08/08 08:36:36 lukem Exp */
 
 /*
@@ -38,7 +38,7 @@
 
 #include <sys/cdefs.h>
 #if defined(__RCSID) && !defined(__lint)
-__RCSID("$NetBSD: ffs_balloc.c,v 1.21 2015/03/29 05:52:59 agc Exp $");
+__RCSID("$NetBSD: ffs_balloc.c,v 1.23 2023/03/13 22:17:24 christos Exp $");
 #endif	/* !__lint */
 
 #include <sys/param.h>
@@ -74,7 +74,8 @@ static int ffs_balloc_ufs2(struct inode *, off_t, int, struct buf **);
 int
 ffs_balloc(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 {
-	if (ip->i_fs->fs_magic == FS_UFS2_MAGIC)
+	if (ip->i_fs->fs_magic == FS_UFS2_MAGIC ||
+	    ip->i_fs->fs_magic == FS_UFS2EA_MAGIC)
 		return ffs_balloc_ufs2(ip, offset, bufsize, bpp);
 	else
 		return ffs_balloc_ufs1(ip, offset, bufsize, bpp);
@@ -141,7 +142,6 @@ ffs_balloc_ufs1(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 				error = bread(ip->i_devvp, lbn, fs->fs_bsize,
 				    0, bpp);
 				if (error) {
-					brelse(*bpp, 0);
 					return (error);
 				}
 			}
@@ -167,8 +167,7 @@ ffs_balloc_ufs1(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 					error = bread(ip->i_devvp, lbn, osize,
 					    0, bpp);
 					if (error) {
-						brelse(*bpp, 0);
-						return (error);
+						return error;
 					}
 				}
 				return 0;
@@ -253,7 +252,6 @@ ffs_balloc_ufs1(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 		error = bread(ip->i_devvp, indirs[i].in_lbn, fs->fs_bsize,
 		    0, &bp);
 		if (error) {
-			brelse(bp, 0);
 			return error;
 		}
 		bap = (int32_t *)bp->b_data;
@@ -323,7 +321,6 @@ ffs_balloc_ufs1(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 	if (bpp != NULL) {
 		error = bread(ip->i_devvp, lbn, (int)fs->fs_bsize, 0, &nbp);
 		if (error) {
-			brelse(nbp, 0);
 			return error;
 		}
 		*bpp = nbp;
@@ -391,7 +388,6 @@ ffs_balloc_ufs2(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 				error = bread(ip->i_devvp, lbn, fs->fs_bsize,
 				    0, bpp);
 				if (error) {
-					brelse(*bpp, 0);
 					return (error);
 				}
 			}
@@ -417,7 +413,6 @@ ffs_balloc_ufs2(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 					error = bread(ip->i_devvp, lbn, osize,
 					    0, bpp);
 					if (error) {
-						brelse(*bpp, 0);
 						return (error);
 					}
 				}
@@ -503,7 +498,6 @@ ffs_balloc_ufs2(struct inode *ip, off_t offset, int bufsize, struct buf **bpp)
 		error = bread(ip->i_devvp, indirs[i].in_lbn, fs->fs_bsize,
 		    0, &bp);
 		if (error) {
-			brelse(bp, 0);
 			return error;
 		}
 		bap = (int64_t *)bp->b_data;

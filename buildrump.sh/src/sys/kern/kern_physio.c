@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_physio.c,v 1.98 2020/03/14 15:31:29 ad Exp $	*/
+/*	$NetBSD: kern_physio.c,v 1.102 2022/07/10 23:11:55 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1990, 1993
@@ -71,7 +71,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_physio.c,v 1.98 2020/03/14 15:31:29 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_physio.c,v 1.102 2022/07/10 23:11:55 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -180,7 +180,7 @@ physio_biodone(struct buf *bp)
 	KASSERT(bp->b_bcount <= todo);
 	KASSERT(bp->b_resid <= bp->b_bcount);
 	if (done == todo)
-		KASSERT(bp->b_error == 0);
+		KASSERTMSG(bp->b_error == 0, "error=%d", bp->b_error);
 #endif /* defined(DIAGNOSTIC) */
 
 	workqueue_enqueue(physio_workqueue, &bp->b_work, NULL);
@@ -308,7 +308,7 @@ physio(void (*strategy)(struct buf *), struct buf *obp, dev_t dev, int flags,
 				 * aligned, the block addresses are used to track
 				 * errors of finished requests.
 				 */
-				if (dbtob(bp->b_blkno) != uio->uio_offset) {
+				if (uio->uio_offset & (DEV_BSIZE - 1)) {
 					error = EINVAL;
 					goto done;
 				}
@@ -317,7 +317,7 @@ physio(void (*strategy)(struct buf *), struct buf *obp, dev_t dev, int flags,
 				 */
 				bp->b_bcount = MIN(MAXPHYS, iovp->iov_len);
 			} else {
-				bp->b_bcount = iovp->iov_len;
+				bp->b_bcount = MIN(INT_MAX, iovp->iov_len);
 			}
 			bp->b_data = iovp->iov_base;
 
@@ -355,7 +355,7 @@ physio(void (*strategy)(struct buf *), struct buf *obp, dev_t dev, int flags,
 			}
 
 			/*
-			 * Beware vmapbuf(); if succesful it clobbers
+			 * Beware vmapbuf(); if successful it clobbers
 			 * b_data and saves it in b_saveaddr.
 			 * However, vunmapbuf() restores b_data.
 			 */

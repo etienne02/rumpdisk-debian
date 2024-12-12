@@ -1,4 +1,4 @@
-/*      $NetBSD: pciback.c,v 1.21 2020/04/07 11:47:06 jdolecek Exp $      */
+/*      $NetBSD: pciback.c,v 1.23 2022/09/01 15:33:23 bouyer Exp $      */
 
 /*
  * Copyright (c) 2009 Manuel Bouyer.
@@ -26,10 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pciback.c,v 1.21 2020/04/07 11:47:06 jdolecek Exp $");
-
-#include "opt_xen.h"
-
+__KERNEL_RCSID(0, "$NetBSD: pciback.c,v 1.23 2022/09/01 15:33:23 bouyer Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -48,6 +45,7 @@ __KERNEL_RCSID(0, "$NetBSD: pciback.c,v 1.21 2020/04/07 11:47:06 jdolecek Exp $"
 #include <xen/hypervisor.h>
 #include <xen/evtchn.h>
 #include <xen/granttables.h>
+#include <xen/xen_shm.h>
 #include <xen/include/public/io/pciif.h>
 #include <xen/xenbus.h>
 
@@ -519,8 +517,6 @@ pciback_xenbus_destroy(void *arg)
 {
 	struct pb_xenbus_instance *pbxi = arg;
 	struct pciback_pci_dev *pbd;
-	struct gnttab_unmap_grant_ref op;
-	int err;
 
 	hypervisor_mask_event(pbxi->pbx_evtchn);
 	xen_intr_disestablish(pbxi->pbx_ih);
@@ -529,21 +525,16 @@ pciback_xenbus_destroy(void *arg)
 	    pbxi, pb_xenbus_instance, pbx_next);
 	mutex_exit(&pb_xenbus_lock);
 
+
 	if (pbxi->pbx_sh_info) {
-		op.host_addr = (vaddr_t)pbxi->pbx_sh_info;
-		op.handle = pbxi->pbx_shinfo_handle;
-		op.dev_bus_addr = 0;
-		err = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
-		    &op, 1);
-		if (err)
-			aprint_error("pciback: unmap_grant_ref failed: %d\n",
-			    err);
+		xen_shm_unmap((vaddr_t)pbxi->pbx_sh_info, 1,
+		    &pbxi->pbx_shinfo_handle);
+		uvm_km_free(kernel_map, (vaddr_t)pbxi->pbx_sh_info,
+		    PAGE_SIZE, UVM_KMF_VAONLY);
 	}
 	SLIST_FOREACH(pbd, &pbxi->pbx_pb_pci_dev, pb_guest_next) {
 		pbd->pbx_instance = NULL;
 	}
-	uvm_km_free(kernel_map, (vaddr_t)pbxi->pbx_sh_info,
-	    PAGE_SIZE, UVM_KMF_VAONLY);
 	kmem_free(pbxi, sizeof(*pbxi));
 	return 0;
 }
@@ -554,9 +545,9 @@ pciback_xenbus_frontend_changed(void *arg, XenbusState new_state)
 	struct pb_xenbus_instance *pbxi = arg;
 	struct xenbus_device *xbusd = pbxi->pbx_xbusd;
 	int err;
-	struct gnttab_map_grant_ref op;
 	evtchn_op_t evop;
 	u_long shared_ref;
+	grant_ref_t gshared_ref;
 	u_long revtchn;
 
 	/* do it only once */
@@ -593,17 +584,13 @@ pciback_xenbus_frontend_changed(void *arg, XenbusState new_state)
 			    xbusd->xbusd_otherend);
 			break;
 		}
-		op.host_addr = (vaddr_t)pbxi->pbx_sh_info;
-		op.flags = GNTMAP_host_map;
-		op.ref = shared_ref;
-		op.dom = pbxi->pbx_domid;
-		err = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &op, 1);
-		if (err || op.status) {
-			aprint_error("pciback: can't map shared grant ref: "
-			    "%d/%d\n", err, op.status);
-			goto err1;
+		gshared_ref = shared_ref;
+		if (xen_shm_map(1, pbxi->pbx_domid, &gshared_ref,
+		    (vaddr_t)pbxi->pbx_sh_info,
+		    &pbxi->pbx_shinfo_handle, 0) != 0) {
+			aprint_error("pciback: can't map shared grant ref\n");
+			goto err2;
 		}
-		pbxi->pbx_shinfo_handle = op.handle;
 
 		evop.cmd = EVTCHNOP_bind_interdomain;
 		evop.u.bind_interdomain.remote_dom = pbxi->pbx_domid;
@@ -640,6 +627,8 @@ pciback_xenbus_frontend_changed(void *arg, XenbusState new_state)
 	}
 	return;
 err1:
+	xen_shm_unmap((vaddr_t)pbxi->pbx_sh_info, 1, &pbxi->pbx_shinfo_handle);
+err2:
 	uvm_km_free(kernel_map, (vaddr_t)pbxi->pbx_sh_info,
 	    PAGE_SIZE, UVM_KMF_VAONLY);
 }

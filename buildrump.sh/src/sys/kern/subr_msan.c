@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_msan.c,v 1.14 2020/09/09 16:29:59 maxv Exp $	*/
+/*	$NetBSD: subr_msan.c,v 1.19 2023/04/11 10:19:56 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Maxime Villard, m00nbsd.net
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_msan.c,v 1.14 2020/09/09 16:29:59 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_msan.c,v 1.19 2023/04/11 10:19:56 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -44,6 +44,8 @@ __KERNEL_RCSID(0, "$NetBSD: subr_msan.c,v 1.14 2020/09/09 16:29:59 maxv Exp $");
 #include <sys/buf.h>
 #include <sys/cpu.h>
 #include <sys/msan.h>
+
+#include <ddb/db_active.h>
 
 static void kmsan_printf(const char *, ...);
 
@@ -144,14 +146,15 @@ kmsan_orig_name(int type)
 static void
 kmsan_report_hook(const void *addr, size_t size, size_t off, const char *hook)
 {
+	unsigned long symstart;
 	const char *mod, *sym;
-	extern int db_active;
 	msan_orig_t *orig;
 	const char *typename;
 	char *var, *fn;
 	uintptr_t ptr;
 	char buf[128];
 	int type;
+	int s;
 
 	if (__predict_false(panicstr != NULL || db_active || kmsan_reporting))
 		return;
@@ -172,15 +175,32 @@ kmsan_report_hook(const void *addr, size_t size, size_t off, const char *hook)
 	typename = kmsan_orig_name(type);
 
 	if (kmsan_md_is_pc(ptr)) {
-		if (ksyms_getname(&mod, &sym, (vaddr_t)ptr, KSYMS_PROC)) {
+		s = pserialize_read_enter();
+		if (ksyms_getname(&mod, &sym, (vaddr_t)ptr, KSYMS_PROC) ||
+		    ksyms_getval(mod, sym, &symstart, KSYMS_PROC)) {
 			REPORT("MSan: Uninitialized %s Memory In %s "
 			    "At Offset %zu/%zu, IP %p\n", typename, hook, off,
 			    size, (void *)ptr);
 		} else {
+			char soff[16] = "";
+
+			if ((vaddr_t)ptr < symstart) {
+				snprintf(soff, sizeof(soff), "-0x%"PRIxVADDR,
+				    symstart - (vaddr_t)ptr);
+			} else if ((vaddr_t)ptr > symstart) {
+				snprintf(soff, sizeof(soff), "+0x%"PRIxVADDR,
+				    (vaddr_t)ptr - symstart);
+			}
 			REPORT("MSan: Uninitialized %s Memory In %s "
-			    "At Offset %zu/%zu, From %s()\n", typename, hook,
-			    off, size, sym);
+			    "At Offset %zu/%zu, From %s%s%lx\n",
+			    typename, hook,
+			    off, size, sym,
+			    ((unsigned long)ptr < symstart ? "-" :
+				(unsigned long)ptr > symstart ? "+" :
+				""),
+			    (unsigned long)ptr - symstart);
 		}
+		pserialize_read_exit(s);
 	} else {
 		var = (char *)ptr + 4;
 		strlcpy(buf, var, sizeof(buf));
@@ -202,12 +222,12 @@ static void
 kmsan_report_inline(msan_orig_t orig, unsigned long pc)
 {
 	const char *mod, *sym;
-	extern int db_active;
 	const char *typename;
 	char *var, *fn;
 	uintptr_t ptr;
 	char buf[128];
 	int type;
+	int s;
 
 	if (__predict_false(panicstr != NULL || db_active || kmsan_reporting))
 		return;
@@ -225,6 +245,7 @@ kmsan_report_inline(msan_orig_t orig, unsigned long pc)
 	typename = kmsan_orig_name(type);
 
 	if (kmsan_md_is_pc(ptr)) {
+		s = pserialize_read_enter();
 		if (ksyms_getname(&mod, &sym, (vaddr_t)ptr, KSYMS_PROC)) {
 			REPORT("MSan: Uninitialized %s Memory, "
 			    "Origin %x\n", typename, orig);
@@ -232,6 +253,7 @@ kmsan_report_inline(msan_orig_t orig, unsigned long pc)
 			REPORT("MSan: Uninitialized %s Memory "
 			    "From %s()\n", typename, sym);
 		}
+		pserialize_read_exit(s);
 	} else {
 		var = (char *)ptr + 4;
 		strlcpy(buf, var, sizeof(buf));

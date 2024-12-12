@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_generic.c,v 1.132 2020/05/23 23:42:43 ad Exp $	*/
+/*	$NetBSD: sys_generic.c,v 1.134 2022/07/10 23:12:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008, 2009 The NetBSD Foundation, Inc.
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_generic.c,v 1.132 2020/05/23 23:42:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_generic.c,v 1.134 2022/07/10 23:12:12 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -208,17 +208,18 @@ do_filereadv(int fd, const struct iovec *iovp, int iovcnt,
 	if (offset == NULL)
 		offset = &fp->f_offset;
 	else {
-		struct vnode *vp = fp->f_vnode;
-		if (fp->f_type != DTYPE_VNODE || vp->v_type == VFIFO) {
+		/*
+		 * Caller must not specify &fp->f_offset -- we can't
+		 * safely dereference it for the call to fo_seek
+		 * without holding some underlying object lock.
+		 */
+		KASSERT(offset != &fp->f_offset);
+		if (fp->f_ops->fo_seek == NULL) {
 			error = ESPIPE;
 			goto out;
 		}
-		/*
-		 * Test that the device is seekable ?
-		 * XXX This works because no file systems actually
-		 * XXX take any action on the seek operation.
-		 */
-		error = VOP_SEEK(vp, fp->f_offset, *offset, fp->f_cred);
+		error = (*fp->f_ops->fo_seek)(fp, *offset, SEEK_SET, NULL,
+		    0);
 		if (error != 0)
 			goto out;
 	}
@@ -254,7 +255,8 @@ do_filereadv(int fd, const struct iovec *iovp, int iovcnt,
 		 * Therefore we must restrict the length to SSIZE_MAX to
 		 * avoid garbage return values.
 		 */
-		if (iov->iov_len > SSIZE_MAX || auio.uio_resid > SSIZE_MAX) {
+		if (iov->iov_len > SSIZE_MAX ||
+		    auio.uio_resid > SSIZE_MAX - iov->iov_len) {
 			error = EINVAL;
 			goto done;
 		}
@@ -408,17 +410,18 @@ do_filewritev(int fd, const struct iovec *iovp, int iovcnt,
 	if (offset == NULL)
 		offset = &fp->f_offset;
 	else {
-		struct vnode *vp = fp->f_vnode;
-		if (fp->f_type != DTYPE_VNODE || vp->v_type == VFIFO) {
+		/*
+		 * Caller must not specify &fp->f_offset -- we can't
+		 * safely dereference it for the call to fo_seek
+		 * without holding some underlying object lock.
+		 */
+		KASSERT(offset != &fp->f_offset);
+		if (fp->f_ops->fo_seek == NULL) {
 			error = ESPIPE;
 			goto out;
 		}
-		/*
-		 * Test that the device is seekable ?
-		 * XXX This works because no file systems actually
-		 * XXX take any action on the seek operation.
-		 */
-		error = VOP_SEEK(vp, fp->f_offset, *offset, fp->f_cred);
+		error = (*fp->f_ops->fo_seek)(fp, *offset, SEEK_SET, NULL,
+		    0);
 		if (error != 0)
 			goto out;
 	}
@@ -454,7 +457,8 @@ do_filewritev(int fd, const struct iovec *iovp, int iovcnt,
 		 * Therefore we must restrict the length to SSIZE_MAX to
 		 * avoid garbage return values.
 		 */
-		if (iov->iov_len > SSIZE_MAX || auio.uio_resid > SSIZE_MAX) {
+		if (iov->iov_len > SSIZE_MAX ||
+		    auio.uio_resid > SSIZE_MAX - iov->iov_len) {
 			error = EINVAL;
 			goto done;
 		}

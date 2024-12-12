@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_dma_hacks.h,v 1.20 2020/02/20 09:07:39 mrg Exp $	*/
+/*	$NetBSD: bus_dma_hacks.h,v 1.25 2022/07/19 23:19:44 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -39,6 +39,8 @@
 
 #include <uvm/uvm.h>
 #include <uvm/uvm_extern.h>
+
+#include <linux/mm_types.h>	/* XXX struct page */
 
 #if defined(__i386__) || defined(__x86_64__)
 #  include <x86/bus_private.h>
@@ -83,6 +85,11 @@ BUS_MEM_TO_PHYS(bus_dma_tag_t dmat, bus_addr_t ba)
 #  define	PHYS_TO_BUS_MEM(dmat, paddr)	((bus_addr_t)(paddr))
 #  define	BUS_MEM_TO_PHYS(dmat, baddr)	((paddr_t)(baddr))
 #elif defined(__powerpc__)
+#elif defined(__alpha__)
+#  define	PHYS_TO_BUS_MEM(dmat, paddr)				      \
+	((bus_addr_t)(paddr) | (dmat)->_wbase)
+#  define	BUS_MEM_TO_PHYS(dmat, baddr)				      \
+	((paddr_t)((baddr) & ~(bus_addr_t)(dmat)->_wbase))
 #else
 #  error DRM GEM/TTM need new MI bus_dma APIs!  Halp!
 #endif
@@ -115,14 +122,22 @@ bus_dmatag_bounces_paddr(bus_dma_tag_t dmat, paddr_t pa)
 	return dmat->_bounce_thresh && pa >= dmat->_bounce_thresh;
 #elif defined(__sparc__) || defined(__sparc64__)
 	return false;		/* no bounce buffers ever */
+#elif defined(__alpha__)
+	return (dmat->_wsize == 0 ? false : pa >= dmat->_wsize);
 #endif
 }
 
 #define MAX_STACK_SEGS 32	/* XXXMRG: 512 bytes on 16 byte seg platforms */
 
+/*
+ * XXX This should really take an array of struct vm_page pointers, but
+ * Linux drm code stores arrays of struct page pointers, and these two
+ * types (struct page ** and struct vm_page **) are not compatible so
+ * naive conversion would violate strict aliasing rules.
+ */
 static inline int
-bus_dmamap_load_pglist(bus_dma_tag_t tag, bus_dmamap_t map,
-    struct pglist *pglist, bus_size_t size, int flags)
+bus_dmamap_load_pages(bus_dma_tag_t tag, bus_dmamap_t map,
+    struct page **pgs, bus_size_t size, int flags)
 {
 	km_flag_t kmflags;
 	bus_dma_segment_t *segs;
@@ -131,12 +146,11 @@ bus_dmamap_load_pglist(bus_dma_tag_t tag, bus_dmamap_t map,
 	struct vm_page *page;
 	int error;
 
-	nsegs = 0;
-	TAILQ_FOREACH(page, pglist, pageq.queue) {
-		if (nsegs == MIN(INT_MAX, (SIZE_MAX / sizeof(segs[0]))))
-			return ENOMEM;
-		nsegs++;
-	}
+	KASSERT((size & (PAGE_SIZE - 1)) == 0);
+
+	if ((size >> PAGE_SHIFT) > INT_MAX)
+		return ENOMEM;
+	nsegs = size >> PAGE_SHIFT;
 
 	KASSERT(nsegs <= (SIZE_MAX / sizeof(segs[0])));
 	if (nsegs > MAX_STACK_SEGS) {
@@ -157,14 +171,13 @@ bus_dmamap_load_pglist(bus_dma_tag_t tag, bus_dmamap_t map,
 		segs = stacksegs;
 	}
 
-	seg = 0;
-	TAILQ_FOREACH(page, pglist, pageq.queue) {
+	for (seg = 0; seg < nsegs; seg++) {
+		page = &pgs[seg]->p_vmp;
 		paddr_t paddr = VM_PAGE_TO_PHYS(page);
 		bus_addr_t baddr = PHYS_TO_BUS_MEM(tag, paddr);
 
 		segs[seg].ds_addr = baddr;
 		segs[seg].ds_len = PAGE_SIZE;
-		seg++;
 	}
 
 	error = bus_dmamap_load_raw(tag, map, segs, nsegs, size, flags);
@@ -187,42 +200,43 @@ out:	if (segs != stacksegs) {
 
 static inline int
 bus_dmamem_export_pages(bus_dma_tag_t dmat, const bus_dma_segment_t *segs,
-    int nsegs, paddr_t *pgs, unsigned npgs)
+    int nsegs, struct page **pgs, unsigned npgs)
 {
 	int seg;
-	unsigned i;
+	unsigned pg;
 
-	i = 0;
+	pg = 0;
 	for (seg = 0; seg < nsegs; seg++) {
-		bus_addr_t baddr = segs[i].ds_addr;
-		bus_size_t len = segs[i].ds_len;
+		bus_addr_t baddr = segs[seg].ds_addr;
+		bus_size_t len = segs[seg].ds_len;
 
 		while (len >= PAGE_SIZE) {
 			paddr_t paddr = BUS_MEM_TO_PHYS(dmat, baddr);
 
-			KASSERT(i < npgs);
-			pgs[i++] = paddr;
+			KASSERT(pg < npgs);
+			pgs[pg++] = container_of(PHYS_TO_VM_PAGE(paddr),
+			    struct page, p_vmp);
 
 			baddr += PAGE_SIZE;
 			len -= PAGE_SIZE;
 		}
 		KASSERT(len == 0);
 	}
-	KASSERT(i == npgs);
+	KASSERT(pg == npgs);
 
 	return 0;
 }
 
 static inline int
 bus_dmamem_import_pages(bus_dma_tag_t dmat, bus_dma_segment_t *segs,
-    int nsegs, int *rsegs, const paddr_t *pgs, unsigned npgs)
+    int nsegs, int *rsegs, struct page *const *pgs, unsigned npgs)
 {
 	int seg;
 	unsigned i;
 
 	seg = 0;
 	for (i = 0; i < npgs; i++) {
-		paddr_t paddr = pgs[i];
+		paddr_t paddr = VM_PAGE_TO_PHYS(&pgs[i]->p_vmp);
 		bus_addr_t baddr = PHYS_TO_BUS_MEM(dmat, paddr);
 
 		if (seg > 0 && segs[seg - 1].ds_addr + PAGE_SIZE == baddr) {

@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.117 2020/08/19 13:11:42 tsutsui Exp $	*/
+/*	$NetBSD: pmap.c,v 1.123 2024/05/11 06:37:54 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -105,7 +105,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.117 2020/08/19 13:11:42 tsutsui Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.123 2024/05/11 06:37:54 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_pmap_debug.h"
@@ -113,7 +113,6 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.117 2020/08/19 13:11:42 tsutsui Exp $");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/malloc.h>
 #include <sys/pool.h>
 #include <sys/queue.h>
 #include <sys/kcore.h>
@@ -222,7 +221,7 @@ int pmap_debug = 0;
  * For every A table in the MMU A area, there will be a corresponding
  * a_tmgr structure in the TMGR A area.  The same will be true for
  * the B and C tables.  This arrangement will make it easy to find the
- * controling tmgr structure for any table in the system by use of
+ * controlling tmgr structure for any table in the system by use of
  * (relatively) simple macros.
  */
 
@@ -293,7 +292,7 @@ struct pool	pmap_pmap_pool;
  * physical memory.  Memory is divided into 4 banks which are physically
  * locatable on the system board.  Although the size of these banks varies
  * with the size of memory they contain, their base addresses are
- * permenently fixed.  The following structure, which describes these
+ * permanently fixed.  The following structure, which describes these
  * banks, is initialized by pmap_bootstrap() after it reads from a similar
  * structure provided by the ROM Monitor.
  *
@@ -934,7 +933,7 @@ pmap_alloc_pv(void)
 	 * At this time we also initialize the offset of each bank's
 	 * starting pv_head within the pv_head list so that the physical
 	 * memory state routines (pmap_is_referenced(),
-	 * pmap_is_modified(), et al.) can quickly find coresponding
+	 * pmap_is_modified(), et al.) can quickly find corresponding
 	 * pv_heads in spite of the non-contiguity.
 	 */
 	total_mem = 0;
@@ -1218,7 +1217,7 @@ pmap_init_pv(void)
  *
  * Note: A "managed" address is one that was reported to the VM system as
  * a "usable page" during system startup.  As such, the VM system expects the
- * pmap module to keep an accurate track of the useage of those pages.
+ * pmap module to keep an accurate track of the usage of those pages.
  * Any page not given to the VM system at startup does not exist (as far as
  * the VM system is concerned) and is therefore "unmanaged."  Examples are
  * those pages which belong to the ROM monitor and the memory allocated before
@@ -1523,7 +1522,7 @@ free_c_table(c_tmgr_t *c_tbl, bool relink)
 /* pmap_remove_pte			INTERNAL
  **
  * Unmap the given pte and preserve any page modification
- * information by transfering it to the pv head of the
+ * information by transferring it to the pv head of the
  * physical page it maps to.  This function does not update
  * any reference counts because it is assumed that the calling
  * function will do so.
@@ -1704,7 +1703,7 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	/*
 	 * Determine if the physical address being mapped is on-board RAM.
 	 * Any other area of the address space is likely to belong to a
-	 * device and hence it would be disasterous to cache its contents.
+	 * device and hence it would be disastrous to cache its contents.
 	 */
 	if ((managed = is_managed(pa)) == false)
 		mapflags |= PMAP_NC;
@@ -2064,7 +2063,7 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
  * Note that the kernel should never take a fault on any page
  * between [ KERNBASE .. virtual_avail ] and this is checked in
  * trap.c for kernel-mode MMU faults.  This means that mappings
- * created in that range must be implicily wired. -gwr
+ * created in that range must be implicitly wired. -gwr
  */
 void
 pmap_enter_kernel(vaddr_t va, paddr_t pa, vm_prot_t prot)
@@ -2256,7 +2255,7 @@ pmap_protect_kernel(vaddr_t startva, vaddr_t endva, vm_prot_t prot)
  * and therefore do not need to map the page just to apply a protection
  * code.  Only pmap_enter() needs to create new mappings if they do not exist.
  *
- * XXX - This function could be speeded up by using pmap_stroll() for inital
+ * XXX - This function could be speeded up by using pmap_stroll() for initial
  *       setup, and then manual scrolling in the for() loop.
  */
 void
@@ -3026,7 +3025,7 @@ pmap_remove(pmap_t pmap, vaddr_t sva, vaddr_t eva)
 	 * If we just modified the current address space,
 	 * make sure to flush the MMU cache.
 	 *
-	 * XXX - this could be an unecessarily large flush.
+	 * XXX - this could be an unnecessarily large flush.
 	 * XXX - Could decide, based on the size of the VA range
 	 * to be removed, whether to flush "by pages" or "all".
 	 */
@@ -3060,7 +3059,7 @@ pmap_remove_a(a_tmgr_t *a_tbl, vaddr_t sva, vaddr_t eva)
 
 	/*
 	 * The following code works with what I call a 'granularity
-	 * reduction algorithim'.  A range of addresses will always have
+	 * reduction algorithm'.  A range of addresses will always have
 	 * the following properties, which are classified according to
 	 * how the range relates to the size of the current granularity
 	 * - an A table entry:
@@ -3071,13 +3070,13 @@ pmap_remove_a(a_tmgr_t *a_tbl, vaddr_t sva, vaddr_t eva)
 	 *
 	 * A range will always start on a granularity boundary, illustrated
 	 * by '+' signs in the table above, or it will start at some point
-	 * inbetween a granularity boundary, as illustrated by point 1.
+	 * in-between a granularity boundary, as illustrated by point 1.
 	 * The first step in removing a range of addresses is to remove the
 	 * range between 1 and 2, the nearest granularity boundary.  This
 	 * job is handled by the section of code governed by the
 	 * 'if (start < nstart)' statement.
 	 *
-	 * A range will always encompass zero or more intergral granules,
+	 * A range will always encompass zero or more integral granules,
 	 * illustrated by points 2 and 3.  Integral granules are easy to
 	 * remove.  The removal of these granules is the second step, and
 	 * is handled by the code block 'if (nstart < nend)'.
@@ -3463,7 +3462,7 @@ pmap_bootstrap_alloc(int size)
 	return rtn;
 }
 
-/* pmap_bootstap_aalign			INTERNAL
+/* pmap_bootstrap_aalign			INTERNAL
  **
  * Used to insure that the next call to pmap_bootstrap_alloc() will
  * return a chunk of memory aligned to the specified size.
@@ -3592,7 +3591,7 @@ pmap_kcore_hdr(struct sun3x_kcore_hdr *sh)
 /* pmap_virtual_space			INTERFACE
  **
  * Return the current available range of virtual addresses in the
- * arguuments provided.  Only really called once.
+ * arguments provided.  Only really called once.
  */
 void
 pmap_virtual_space(vaddr_t *vstart, vaddr_t *vend)
@@ -3649,7 +3648,7 @@ pmap_count(pmap_t pmap, int type)
 
 	/*
 	 * If the pmap does not have its own A table manager, it has no
-	 * valid entires.
+	 * valid entries.
 	 */
 	if (pmap->pm_a_tmgr == NULL)
 		return 0;

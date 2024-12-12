@@ -1,4 +1,4 @@
-/*	$NetBSD: ncr53c9xvar.h,v 1.56 2014/03/25 16:19:13 christos Exp $	*/
+/*	$NetBSD: ncr53c9xvar.h,v 1.58 2024/12/06 23:29:10 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -95,7 +95,7 @@
 /*
  * ECB. Holds additional information for each SCSI command Comments: We
  * need a separate scsi command block because we may need to overwrite it
- * with a request sense command.  Basicly, we refrain from fiddling with
+ * with a request sense command.  Basically, we refrain from fiddling with
  * the scsipi_xfer struct (except do the expected updating of return values).
  * We'll generally update: xs->{flags,resid,error,sense,status} and
  * occasionally xs->retries.
@@ -180,7 +180,7 @@ struct ncr53c9x_tinfo {
 	uint8_t	offset;		/* Offset suggestion */
 	uint8_t	cfg3;		/* per target config 3  */
 	uint8_t	nextag;		/* Next available tag */
-	uint8_t	width;		/* width suggesion */
+	uint8_t	width;		/* width suggestion */
 	LIST_HEAD(lun_list, ncr53c9x_linfo) luns;
 	struct ncr53c9x_linfo *lun[NCR_NLUN]; /* For speedy lookups */
 };

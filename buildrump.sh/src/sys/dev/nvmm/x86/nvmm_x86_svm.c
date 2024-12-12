@@ -1,4 +1,4 @@
-/*	$NetBSD: nvmm_x86_svm.c,v 1.83 2021/03/26 15:59:53 reinoud Exp $	*/
+/*	$NetBSD: nvmm_x86_svm.c,v 1.85 2023/02/23 02:54:02 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2018-2020 Maxime Villard, m00nbsd.net
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nvmm_x86_svm.c,v 1.83 2021/03/26 15:59:53 reinoud Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nvmm_x86_svm.c,v 1.85 2023/02/23 02:54:02 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -48,6 +48,7 @@ __KERNEL_RCSID(0, "$NetBSD: nvmm_x86_svm.c,v 1.83 2021/03/26 15:59:53 reinoud Ex
 #include <x86/cpu_counter.h>
 
 #include <machine/cpuvar.h>
+#include <machine/pmap_private.h>
 
 #include <dev/nvmm/nvmm.h>
 #include <dev/nvmm/nvmm_internal.h>
@@ -521,6 +522,33 @@ static uint64_t svm_xcr0_mask __read_mostly;
 	(CR0_PG|CR0_WP|CR0_CD|CR0_NW)
 #define CR4_TLB_FLUSH \
 	(CR4_PSE|CR4_PAE|CR4_PGE|CR4_PCIDE|CR4_SMEP)
+
+#define CR4_VALID \
+	(CR4_VME |			\
+	 CR4_PVI |			\
+	 CR4_TSD |			\
+	 CR4_DE |			\
+	 CR4_PSE |			\
+	 CR4_PAE |			\
+	 CR4_MCE |			\
+	 CR4_PGE |			\
+	 CR4_PCE |			\
+	 CR4_OSFXSR |			\
+	 CR4_OSXMMEXCPT |		\
+	 CR4_UMIP |			\
+	 /* CR4_LA57 excluded */	\
+	 /* bit 13 reserved on AMD */	\
+	 /* bit 14 reserved on AMD */	\
+	 /* bit 15 reserved on AMD */	\
+	 CR4_FSGSBASE |			\
+	 CR4_PCIDE |			\
+	 CR4_OSXSAVE |			\
+	 /* bit 19 reserved on AMD */	\
+	 CR4_SMEP |			\
+	 CR4_SMAP			\
+	 /* CR4_PKE excluded */		\
+	 /* CR4_CET excluded */		\
+	 /* bits 24:63 reserved on AMD */)
 
 /* -------------------------------------------------------------------------- */
 
@@ -1852,6 +1880,7 @@ svm_vcpu_setstate(struct nvmm_cpu *vcpu)
 		vmcb->state.cr2 = state->crs[NVMM_X64_CR_CR2];
 		vmcb->state.cr3 = state->crs[NVMM_X64_CR_CR3];
 		vmcb->state.cr4 = state->crs[NVMM_X64_CR_CR4];
+		vmcb->state.cr4 &= CR4_VALID;
 
 		vmcb->ctrl.v &= ~VMCB_CTRL_V_TPR;
 		vmcb->ctrl.v |= __SHIFTIN(state->crs[NVMM_X64_CR_CR8],

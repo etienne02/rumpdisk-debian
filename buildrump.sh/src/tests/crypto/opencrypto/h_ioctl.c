@@ -1,4 +1,4 @@
-/*	$NetBSD: h_ioctl.c,v 1.3 2017/06/14 21:43:02 christos Exp $	*/
+/*	$NetBSD: h_ioctl.c,v 1.6 2023/08/05 13:29:57 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2017 Internet Initiative Japan Inc.
@@ -29,8 +29,10 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <sys/errno.h>
 #include <sys/ioctl.h>
@@ -58,6 +60,30 @@ unsigned char aes_cipher[AES_CIPHER_LEN] =
   0x27, 0x08, 0x94, 0x2d, 0xbe, 0x77, 0x18, 0x1a, };
 
 #define COUNT 2
+
+static int
+wait_for_read(int fd)
+{
+	struct pollfd pfd = { .fd = fd, .events = POLLIN };
+	int nfd;
+
+	nfd = poll(&pfd, 1, 5000);
+	if (nfd == -1) {
+		warn("failed: poll");
+		return -1;
+	}
+	if (nfd == 0) {
+		warnx("failed: timeout");
+		errno = ETIMEDOUT;
+		return -1;
+	}
+	if (nfd != 1 || (pfd.revents & POLLIN) == 0) {
+		warnx("failed: invalid poll: %d", nfd);
+		errno = EIO;
+		return -1;
+	}
+	return 0;
+}
 
 /*
  * CRIOGET is deprecated.
@@ -88,7 +114,7 @@ test_ngsession(int fd)
 
 	ret = ioctl(fd, CIOCNGSESSION, &sg);
 	if (ret < 0)
-		fprintf(stderr, "failed: CIOCNGSESSION\n");
+		warn("failed: CIOCNGSESSION");
 
 	return ret;
 }
@@ -111,7 +137,7 @@ test_nfsession(int fd)
 
 	ret = ioctl(fd, CIOCNFSESSION, &sf);
 	if (ret < 0)
-		fprintf(stderr, "failed: CIOCNFSESSION\n");
+		warn("failed: CIOCNFSESSION");
 
 	return ret;
 }
@@ -143,7 +169,7 @@ test_ncryptm(int fd)
 
 	ret = ioctl(fd, CIOCNCRYPTM, &mop);
 	if (ret < 0)
-		fprintf(stderr, "failed: CIOCNCRYPTM\n");
+		warn("failed: CIOCNCRYPTM");
 
 	return ret;
 }
@@ -170,7 +196,7 @@ test_ncryptretm(int fd)
 	cs.key = __UNCONST(&aes_key);
 	ret = ioctl(fd, CIOCGSESSION, &cs);
 	if (ret < 0) {
-		fprintf(stderr, "failed: CIOCGSESSION\n");
+		warn("failed: CIOCGSESSION");
 		return ret;
 	}
 
@@ -190,8 +216,10 @@ test_ncryptretm(int fd)
 	mop.count = COUNT;
 	mop.reqs = cnos;
 	ret = ioctl(fd, CIOCNCRYPTM, &mop);
-	if (ret < 0)
-		fprintf(stderr, "failed: CIOCNCRYPTM\n");
+	if (ret < 0) {
+		warn("failed: CIOCNCRYPTM");
+		return ret;
+	}
 
 	for (size_t i = 0; i < COUNT; i++) {
 		struct crypt_result *cr = &crs[i];
@@ -204,8 +232,24 @@ test_ncryptretm(int fd)
 	cret.count = COUNT;
 	cret.results = crs;
 	ret = ioctl(fd, CIOCNCRYPTRETM, &cret);
-	if (ret < 0)
-		fprintf(stderr, "failed: CIOCNCRYPTRETM\n");
+	if (ret < 0) {
+		if (errno != EINPROGRESS) {
+			warn("failed: CIOCNCRYPTRETM");
+			return ret;
+		}
+
+		ret = wait_for_read(fd);
+		if (ret < 0)
+			return ret;
+
+		cret.count = COUNT;
+		cret.results = crs;
+		ret = ioctl(fd, CIOCNCRYPTRETM, &cret);
+		if (ret < 0) {
+			warn("failed: CIOCNCRYPTRET");
+			return ret;
+		}
+	}
 
 	return ret;
 }
@@ -225,8 +269,7 @@ test_ncryptret_noent(int fd)
 
 	ret = ioctl(fd, CIOCNCRYPTRET, &cr);
 	if (ret == 0) {
-		fprintf(stderr,
-		    "failed: CIOCNCRYPTRET unexpected success when no entry\n");
+		warn("failed: CIOCNCRYPTRET unexpected success when no entry");
 		ret = -1;
 	} else if (errno == EINPROGRESS) {
 		/* expected fail */
@@ -254,7 +297,7 @@ test_ncryptret_ent(int fd)
 	cs.key = __UNCONST(&aes_key);
 	ret = ioctl(fd, CIOCGSESSION, &cs);
 	if (ret < 0) {
-		fprintf(stderr, "failed: CIOCGSESSION\n");
+		warn("failed: CIOCGSESSION");
 		return ret;
 	}
 
@@ -270,15 +313,31 @@ test_ncryptret_ent(int fd)
 	mop.count = 1;
 	mop.reqs = &cno;
 	ret = ioctl(fd, CIOCNCRYPTM, &mop);
-	if (ret < 0)
-		fprintf(stderr, "failed: CIOCNCRYPTM\n");
+	if (ret < 0) {
+		warn("failed: CIOCNCRYPTM");
+		return ret;
+	}
 
 	memset(&cr, 0, sizeof(cr));
 	cr.reqid = cno.reqid;
 
 	ret = ioctl(fd, CIOCNCRYPTRET, &cr);
-	if (ret < 0)
-		fprintf(stderr, "failed: CIOCNCRYPTRET\n");
+	if (ret < 0) {
+		if (errno != EINPROGRESS) {
+			warn("failed: CIOCNCRYPTRET");
+			return ret;
+		}
+
+		ret = wait_for_read(fd);
+		if (ret < 0)
+			return ret;
+		ret = ioctl(fd, CIOCNCRYPTRET, &cr);
+		if (ret < 0) {
+			warn("failed: CIOCNCRYPTRET");
+			return ret;
+		}
+		return 0;
+	}
 
 	return ret;
 }
@@ -309,7 +368,7 @@ set_userasymcrypto(int new, int *old)
 
 	ret = sysctlbyname("kern.userasymcrypto", NULL, NULL, &new, sizeof(new));
 	if (ret < 0) {
-		fprintf(stderr, "failed: kern.userasymcrypto=%d", new);
+		warn("failed: kern.userasymcrypto=%d", new);
 		return ret;
 	}
 
@@ -326,7 +385,7 @@ test_asymfeat_each(int fd, u_int32_t *asymfeat, int userasym)
 
 	ret = ioctl(fd, CIOCASYMFEAT, asymfeat);
 	if (ret < 0)
-		fprintf(stderr, "failed: CIOCASYMFEAT when userasym=%d\n", userasym);
+		warn("failed: CIOCASYMFEAT when userasym=%d", userasym);
 
 	return ret;
 }
@@ -358,7 +417,7 @@ test_asymfeat(int fd)
 	/* cleanup */
 	ret = set_userasymcrypto(orig, NULL);
 	if (ret < 0)
-		fprintf(stderr, "failed: cleanup kern.userasymcrypto\n");
+		warnx("failed: cleanup kern.userasymcrypto");
 
 	return ret;
 }
@@ -392,9 +451,11 @@ main(void)
 	if (ret < 0)
 		err(1, "test_ncryptret");
 
-	ret = test_asymfeat(fd);
-	if (ret < 0)
-		err(1, "test_asymfeat");
+	if (getuid() == 0) {
+		ret = test_asymfeat(fd);
+		if (ret < 0)
+			err(1, "test_asymfeat");
+	}
 
 	return 0;
 }

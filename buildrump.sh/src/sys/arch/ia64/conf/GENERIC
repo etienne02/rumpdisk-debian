@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.9 2017/04/07 17:07:09 scole Exp $
+# $NetBSD: GENERIC,v 1.15 2024/01/29 18:27:13 christos Exp $
 #
 # GENERIC machine description file
 #
@@ -22,7 +22,7 @@ include 	"arch/ia64/conf/std.ia64"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"GENERIC-$Revision: 1.9 $"
+#ident 		"GENERIC-$Revision: 1.15 $"
 
 maxusers	32		# estimated number of users
 
@@ -77,6 +77,16 @@ file-system	OVERLAY		# overlay file system
 #file-system	PROCFS		# /proc
 file-system	TMPFS		# Efficient memory file-system
 
+# File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	QUOTA		# legacy UFS quotas
+options 	QUOTA2		# new, in-filesystem UFS quotas
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
+options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+options 	NFSSERVER	# Network File System server
+
 # These options enable verbose messages for several subsystems.
 # Warning, these may compile large string tables into the kernel!
 options 	ACPIVERBOSE	# verbose ACPI device autoconfig messages
@@ -112,9 +122,6 @@ com*		at acpi?		# Serial communications interface
 #puc* at pci? dev ? function ? 
 #com* at puc? port ?
 
-# Pull in optional local configuration
-cinclude "arch/ia64/conf/GENERIC.local"
-
 # Pseudo-Devices
 
 # Enable the hooks used for initializing the root memory-disk.
@@ -131,4 +138,7 @@ pseudo-device	loop			# network loopback
 
 # miscellaneous pseudo-devices
 #pseudo-device	pty			# pseudo-terminals
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
+# Pull in optional local configuration - always at end
+cinclude	"arch/ia64/conf/GENERIC.local"

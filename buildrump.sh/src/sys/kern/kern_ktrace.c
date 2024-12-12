@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_ktrace.c,v 1.178 2021/02/27 13:02:42 simonb Exp $	*/
+/*	$NetBSD: kern_ktrace.c,v 1.186 2024/09/08 09:36:51 rillig Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
@@ -61,24 +61,26 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_ktrace.c,v 1.178 2021/02/27 13:02:42 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_ktrace.c,v 1.186 2024/09/08 09:36:51 rillig Exp $");
 
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/proc.h>
+
+#include <sys/callout.h>
+#include <sys/cpu.h>
 #include <sys/file.h>
-#include <sys/kernel.h>
-#include <sys/kthread.h>
-#include <sys/ktrace.h>
-#include <sys/kmem.h>
-#include <sys/syslog.h>
 #include <sys/filedesc.h>
 #include <sys/ioctl.h>
-#include <sys/callout.h>
 #include <sys/kauth.h>
-
+#include <sys/kernel.h>
+#include <sys/kmem.h>
+#include <sys/kthread.h>
+#include <sys/ktrace.h>
 #include <sys/mount.h>
+#include <sys/proc.h>
+#include <sys/syncobj.h>
 #include <sys/syscallargs.h>
+#include <sys/syslog.h>
+#include <sys/systm.h>
 
 /*
  * TODO:
@@ -789,6 +791,7 @@ ktr_psig(int sig, sig_t action, const sigset_t *mask,
 	if (ktealloc(&kte, (void *)&kbuf, l, KTR_PSIG, sizeof(*kbuf)))
 		return;
 
+	memset(&kbuf->kp, 0, sizeof(kbuf->kp));
 	kbuf->kp.signo = (char)sig;
 	kbuf->kp.action = action;
 	kbuf->kp.mask = *mask;
@@ -807,7 +810,7 @@ ktr_psig(int sig, sig_t action, const sigset_t *mask,
 }
 
 void
-ktr_csw(int out, int user)
+ktr_csw(int out, int user, const struct syncobj *syncobj)
 {
 	lwp_t *l = curlwp;
 	struct proc *p = l->l_proc;
@@ -819,10 +822,14 @@ ktr_csw(int out, int user)
 
 	/*
 	 * Don't record context switches resulting from blocking on
-	 * locks; it's too easy to get duff results.
+	 * locks; the results are not useful, and the mutex may be in a
+	 * softint, which would lead us to ktealloc in softint context,
+	 * which is forbidden.
 	 */
-	if (l->l_syncobj == &mutex_syncobj || l->l_syncobj == &rw_syncobj)
+	if (syncobj == &mutex_syncobj || syncobj == &rw_syncobj)
 		return;
+	KASSERT(!cpu_intr_p());
+	KASSERT(!cpu_softintr_p());
 
 	/*
 	 * We can't sleep if we're already going to sleep (if original
@@ -950,7 +957,8 @@ ktr_kuser(const char *id, const void *addr, size_t len)
 	if (error != 0)
 		return;
 
-	strlcpy(ktp->ktr_id, id, KTR_USER_MAXIDLEN);
+	strncpy(ktp->ktr_id, id, KTR_USER_MAXIDLEN - 1);
+	ktp->ktr_id[KTR_USER_MAXIDLEN - 1] = '\0';
 
 	memcpy(ktp + 1, addr, len);
 
@@ -1034,7 +1042,7 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 			mutex_exit(&ktrace_lock);
 
 			/*
-			 * XXX: not correct.  needs an way to detect
+			 * XXX: not correct.  needs a way to detect
 			 * whether ktruss or ktrace.
 			 */
 			if (fp->f_type == DTYPE_PIPE)
@@ -1088,7 +1096,10 @@ ktrace_common(lwp_t *curl, int ops, int facs, int pid, file_t **fpp)
 		/*
 		 * by process group
 		 */
-		pg = pgrp_find(-pid);
+		if (pid == INT_MIN)
+			pg = NULL;
+		else
+			pg = pgrp_find(-pid);
 		if (pg == NULL)
 			error = ESRCH;
 		else {
@@ -1396,7 +1407,11 @@ ktrace_thread(void *arg)
 		mutex_enter(&ktrace_lock);
 	}
 
-	TAILQ_REMOVE(&ktdq, ktd, ktd_list);
+	if (ktd_lookup(ktd->ktd_fp) == ktd) {
+		TAILQ_REMOVE(&ktdq, ktd, ktd_list);
+	} else {
+		/* nothing, collision in KTROP_SET */
+	}
 
 	callout_halt(&ktd->ktd_wakch, &ktrace_lock);
 	callout_destroy(&ktd->ktd_wakch);

@@ -1,4 +1,4 @@
-/*	$NetBSD: cpuregs.h,v 1.112 2021/08/09 21:13:05 andvar Exp $	*/
+/*	$NetBSD: cpuregs.h,v 1.116 2021/11/16 06:11:52 simonb Exp $	*/
 
 /*
  * Copyright (c) 2009 Miodrag Vallat.
@@ -695,7 +695,7 @@
 				(MIPS_BREAK_SOVER_VAL << MIPS_BREAK_VAL_SHIFT))
 
 /*
- * Mininum and maximum cache sizes.
+ * Minimum and maximum cache sizes.
  */
 #define	MIPS_MIN_CACHE_SIZE	(16 * 1024)
 #define	MIPS_MAX_CACHE_SIZE	(256 * 1024)
@@ -712,7 +712,7 @@
  */
 #define	MIPS_FCSR_RM		__BITS(1,0)
 #define	  MIPS_FCSR_RM_RN	  0	/* round to nearest */
-#define	  MIPS_FCSR_RM_RZ	  1	/* round toward zerO */
+#define	  MIPS_FCSR_RM_RZ	  1	/* round towards zero */
 #define	  MIPS_FCSR_RM_RP	  2	/* round towards +infinity */
 #define	  MIPS_FCSR_RM_RM	  3	/* round towards -infinity */
 #define	MIPS_FCSR_FLAGS		__BITS(6,2)
@@ -876,21 +876,20 @@
 /*
  * RDHWR register numbers
  */
-#define	MIPS_HWR_CPUNUM			_(0)
-#define	MIPS_HWR_SYNCI_STEP		_(1)
-#define	MIPS_HWR_CC			_(2)
-#define	MIPS_HWR_CCRES			_(3)
-#define	MIPS_HWR_UL			_(29)	/* Userlocal */
-#define	MIPS_HWR_IMPL30			_(30)
-#define	MIPS_HWR_IMPL31			_(31)
-#define	MIPS_HWR_CPUNUM			_(0)
+#define	MIPS_HWR_CPUNUM			_(0)	/* Which CPU are we on? */
+#define	MIPS_HWR_SYNCI_STEP		_(1)	/* Address step size for SYNCI */
+#define	MIPS_HWR_CC			_(2)	/* Hi-res cycle counter */
+#define	MIPS_HWR_CCRES			_(3)	/* Cycle counter resolution */
+#define	MIPS_HWR_ULR			_(29)	/* Userlocal */
+#define	MIPS_HWR_IMPL30			_(30)	/* Implementation dependent use */
+#define	MIPS_HWR_IMPL31			_(31)	/* Implementation dependent use */
 
 /*
  * Bits defined for HWREna (CP0 register 7, select 0).
  */
 #define	MIPS_HWRENA_IMPL31		__BIT(MIPS_HWR_IMPL31)
 #define	MIPS_HWRENA_IMPL30		__BIT(MIPS_HWR_IMPL30)
-#define	MIPS_HWRENA_UL			__BIT(MIPS_HWR_UL)
+#define	MIPS_HWRENA_ULR			__BIT(MIPS_HWR_ULR)
 #define	MIPS_HWRENA_CCRES		__BIT(MIPS_HWR_CCRES)
 #define	MIPS_HWRENA_CC			__BIT(MIPS_HWR_CC)
 #define	MIPS_HWRENA_SYNCI_STEP		__BIT(MIPS_HWR_SYNCI_STEP)
@@ -1034,7 +1033,7 @@
 #define	MIPS_BCM3302	0x90	/* MIPS 4KEc_R2-like?		ISA 32  Rel 2 */
 
 /*
- * Alchemy (company ID 3) use the processor ID field to donote the CPU core
+ * Alchemy (company ID 3) use the processor ID field to denote the CPU core
  * revision and the company options field do donate the SOC chip type.
  */
 /* CPU processor revision IDs */

@@ -1,4 +1,4 @@
-/*	$NetBSD: arm.c,v 1.4 2021/01/16 15:35:28 jmcneill Exp $	*/
+/*	$NetBSD: arm.c,v 1.6 2022/08/06 18:26:43 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -32,7 +32,7 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: arm.c,v 1.4 2021/01/16 15:35:28 jmcneill Exp $");
+__RCSID("$NetBSD: arm.c,v 1.6 2022/08/06 18:26:43 andvar Exp $");
 #endif /* not lint */
 
 #include <sys/types.h>
@@ -74,10 +74,10 @@ static const char * const id_mmfr_fieldnames[][8] = {
 	{
 		"VMSA-Support",
 		"PMSA-Support",
-		"Outermost-Shareablity",
+		"Outermost-Shareability",
 		"Shareability-Levels",
 		"TCM-Support",
-		"Auxilary-Registers",
+		"Auxiliary-Registers",
 		"FCSE-Support",
 		"Innermost-Shareability"
 	}, {

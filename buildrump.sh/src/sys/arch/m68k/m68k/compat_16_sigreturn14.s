@@ -1,4 +1,4 @@
-/*	$NetBSD: compat_16_sigreturn14.s,v 1.5 2013/09/07 19:06:29 chs Exp $	*/
+/*	$NetBSD: compat_16_sigreturn14.s,v 1.7 2024/10/31 07:30:28 isaki Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -38,9 +38,12 @@
  *	@(#)locore.s	8.6 (Berkeley) 5/27/94
  */
 
-/*
- * NOTICE: This file is included by <m68k/m68k/sigreturn.s>.
- */
+#include <machine/asm.h>
+
+#include "assym.h"
+
+	.file	"compat_13_sigreturn13.s"
+	.text
 
 /*
  * The compat_16_sigreturn14() syscall comes here.  It requires special
@@ -61,19 +64,19 @@ ENTRY_NOPROFILE(m68k_compat_16_sigreturn14_stub)
 	movl	FR_SP(%sp),%a0		| grab and restore
 	movl	%a0,%usp		|   user SP
 	lea	FR_HW(%sp),%a1		| pointer to HW frame
-	movw	FR_ADJ(%sp),%d0	| do we need to adjust the stack?
-	jeq	.Lsigr1			| no, just continue
+	movw	FR_ADJ(%sp),%d0		| do we need to adjust the stack?
+	jeq	2f			| no, just continue
 	moveq	#92,%d1			| total size
 	subw	%d0,%d1			|  - hole size = frame size
 	lea	92(%a1),%a0		| destination
 	addw	%d1,%a1			| source
 	lsrw	#1,%d1			| convert to word count
 	subqw	#1,%d1			| minus 1 for dbf
-.Lsigrlp:
+1:
 	movw	-(%a1),-(%a0)		| copy a word
-	dbf	%d1,.Lsigrlp		| continue
+	dbf	%d1,1b			| continue
 	movl	%a0,%a1			| new HW frame base
-.Lsigr1:
+2:
 	movl	%a1,FR_SP(%sp)		| new SP value
 	moveml	(%sp)+,#0x7FFF		| restore user registers
 	movl	(%sp),%sp		| and our SP

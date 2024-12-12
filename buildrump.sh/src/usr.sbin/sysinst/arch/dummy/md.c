@@ -1,4 +1,4 @@
-/*	$NetBSD: md.c,v 1.6 2020/10/12 16:14:33 martin Exp $	*/
+/*	$NetBSD: md.c,v 1.8 2022/12/09 17:02:14 martin Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -52,6 +52,7 @@ md_init_set_status(int flags)
 bool
 md_get_info(struct install_partition_desc *desc)
 {
+	set_default_sizemult(pm->diskdev, MEG, pm->sectorsize);
 	return true;
 }
 
@@ -94,7 +95,7 @@ md_post_newfs(struct install_partition_desc *install)
 }
 
 int
-md_post_extract(struct install_partition_desc *install)
+md_post_extract(struct install_partition_desc *install, bool upgrade)
 {
 	return 0;
 }

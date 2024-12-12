@@ -1,4 +1,4 @@
-/*	$NetBSD: ufs_lookup.c,v 1.155 2020/09/05 02:55:39 riastradh Exp $	*/
+/*	$NetBSD: ufs_lookup.c,v 1.159 2024/09/08 09:36:52 rillig Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ufs_lookup.c,v 1.155 2020/09/05 02:55:39 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ufs_lookup.c,v 1.159 2024/09/08 09:36:52 rillig Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ffs.h"
@@ -250,7 +250,7 @@ ufs_can_delete(struct vnode *tdp, struct vnode *vdp, struct inode *ip,
 	if (error)
 		goto out;
 
-	if (!(ip->i_mode & ISVTX)) 
+	if (!(ip->i_mode & ISVTX))
 		return 0;
 
 	/*
@@ -300,7 +300,7 @@ ufs_getino(struct vnode *vdp, struct inode *ip, ino_t foundino,
  * exists, lookup returns both the target and its parent directory locked.
  * When creating or renaming and LOCKPARENT is specified, the target may
  * not be ".".  When deleting and LOCKPARENT is specified, the target may
- * be "."., but the caller must check to ensure it does an vrele and vput
+ * be ".", but the caller must check to ensure it does a vrele and vput
  * instead of two vputs.
  *
  * Overall outline of ufs_lookup:
@@ -362,7 +362,7 @@ ufs_lookup(void *v)
 	endsearch = 0; /* silence compiler warning */
 
 	/*
-	 * Check accessiblity of directory.
+	 * Check accessibility of directory.
 	 */
 	if ((error = VOP_ACCESS(vdp, VEXEC, cred)) != 0)
 		return (error);
@@ -820,7 +820,7 @@ ufs_dirbadentry(const struct vnode *dp, const struct direct *ep,
 	if (name[namlen]) {
 		str = "missing NUL in name";
 #ifdef DIAGNOSTIC
-		snprintf(buf, sizeof(buf), "%s [%*.*s] namlen=%d", str, 
+		snprintf(buf, sizeof(buf), "%s [%*.*s] namlen=%d", str,
 		    namlen, namlen, name, namlen);
 		str = buf;
 #endif
@@ -1297,8 +1297,8 @@ int
 ufs_dirempty(struct inode *ip, ino_t parentino, kauth_cred_t cred)
 {
 	doff_t off;
-	struct dirtemplate dbuf;
-	struct direct *dp = (void *)&dbuf;
+	struct direct dbuf;
+	struct direct *dp = &dbuf;
 	int error;
 	size_t count;
 	const int needswap = UFS_IPNEEDSWAP(ip);

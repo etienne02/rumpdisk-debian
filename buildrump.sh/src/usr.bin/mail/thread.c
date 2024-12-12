@@ -1,4 +1,4 @@
-/*	$NetBSD: thread.c,v 1.10 2012/10/21 22:18:16 christos Exp $	*/
+/*	$NetBSD: thread.c,v 1.16 2023/08/23 03:49:00 rin Exp $	*/
 
 /*-
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
@@ -37,7 +37,7 @@
 
 #include <sys/cdefs.h>
 #ifndef __lint__
-__RCSID("$NetBSD: thread.c,v 1.10 2012/10/21 22:18:16 christos Exp $");
+__RCSID("$NetBSD: thread.c,v 1.16 2023/08/23 03:49:00 rin Exp $");
 #endif /* not __lint__ */
 
 #include <assert.h>
@@ -440,20 +440,17 @@ redepth(struct thread_s *thread)
  * as it needs access to current_thread.t_head.
  */
 PUBLIC void
-thread_fix_old_links(struct message *nmessage, struct message *message, int omsgCount)
+thread_fix_old_links(struct message *nmessage, ptrdiff_t off, int omsgCount)
 {
 	int i;
-	if (nmessage == message)
-		return;
 
 #ifndef NDEBUG
 	message_array.t_head = nmessage; /* for assert check in thread_fix_new_links */
 #endif
 
 # define FIX_LINK(p)	do {\
-	if (p)\
-		p = nmessage + (p - message);\
-  } while (/*CONSTCOND*/0)
+	p = nmessage + off;\
+  } while (0)
 
 	FIX_LINK(current_thread.t_head);
 	for (i = 0; i < omsgCount; i++) {
@@ -594,6 +591,9 @@ first_visible_message(struct message *mp)
 
 	if (mp == NULL)
 		mp = current_thread.t_head;
+
+	if (mp == NULL)
+		return NULL;
 
 	oldmp = mp;
 	if ((S_IS_RESTRICT(state) && is_tagged(mp)) || mp->m_flag & MDELETED)
@@ -823,6 +823,9 @@ static void
 thread_array(struct key_sort_s *marray, size_t mcount, int cutit)
 {
 	struct message *parent;
+
+	if (mcount == 0)
+		return;
 
 	parent = marray[0].mp->m_plink;
 	qsort(marray, mcount, sizeof(*marray), qsort_cmpfn);

@@ -1,4 +1,4 @@
-/*	$NetBSD: op_shl_lp64.c,v 1.3 2021/08/21 11:50:57 rillig Exp $	*/
+/*	$NetBSD: op_shl_lp64.c,v 1.5 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "op_shl_lp64.c"
 
 /*
@@ -12,6 +12,7 @@
  */
 
 /* lint1-only-if: lp64 */
+/* lint1-extra-flags: -X 351 */
 
 const __uint128_t zero105 =
     (((__uint128_t)1) << 105)
@@ -19,7 +20,7 @@ const __uint128_t zero105 =
     - (((__uint128_t)1) << 9);
 
 const __uint128_t shl_128_129 =
-    /* expect+1: warning: shift equal to size of object [267] */
+    /* expect+1: warning: shift amount 128 equals bit-size of '__uint128_t' [267] */
     (((__uint128_t)1) << 128)
     /* expect+1: warning: shift amount 129 is greater than bit-size 128 of '__uint128_t' [122] */
     - (((__uint128_t)1) << 129);

@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_clock.c,v 1.146 2021/08/14 21:17:11 ryo Exp $	*/
+/*	$NetBSD: kern_clock.c,v 1.151 2023/09/02 17:44:59 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2000, 2004, 2006, 2007, 2008 The NetBSD Foundation, Inc.
@@ -69,7 +69,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_clock.c,v 1.146 2021/08/14 21:17:11 ryo Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_clock.c,v 1.151 2023/09/02 17:44:59 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_dtrace.h"
@@ -92,6 +92,7 @@ __KERNEL_RCSID(0, "$NetBSD: kern_clock.c,v 1.146 2021/08/14 21:17:11 ryo Exp $")
 #include <sys/cpu.h>
 #include <sys/atomic.h>
 #include <sys/rndsource.h>
+#include <sys/heartbeat.h>
 
 #ifdef GPROF
 #include <sys/gmon.h>
@@ -135,7 +136,7 @@ int	profhz;
 int	profsrc;
 int	schedhz;
 int	profprocs;
-int	hardclock_ticks;
+static int hardclock_ticks;
 static int hardscheddiv; /* hard => sched divider (used if schedhz == 0) */
 static int psdiv;			/* prof => stat divider */
 int	psratio;			/* ratio: prof / stat */
@@ -163,7 +164,7 @@ clockrnd_sample(struct clockrnd *C)
 	struct cpu_info *ci = curcpu();
 
 	/* If there's nothing needed right now, stop here.  */
-	if (__predict_true(C->needed == 0))
+	if (__predict_true(atomic_load_relaxed(&C->needed) == 0))
 		return;
 
 	/*
@@ -284,12 +285,14 @@ initclocks(void)
 
 	rndsource_setcb(&hardclockrnd.source, clockrnd_get, &hardclockrnd);
 	rnd_attach_source(&hardclockrnd.source, "hardclock", RND_TYPE_SKEW,
-	    RND_FLAG_COLLECT_TIME|RND_FLAG_HASCB);
+	    RND_FLAG_COLLECT_TIME|RND_FLAG_ESTIMATE_TIME|RND_FLAG_HASCB);
 	if (stathz) {
 		rndsource_setcb(&statclockrnd.source, clockrnd_get,
 		    &statclockrnd);
 		rnd_attach_source(&statclockrnd.source, "statclock",
-		    RND_TYPE_SKEW, RND_FLAG_COLLECT_TIME|RND_FLAG_HASCB);
+		    RND_TYPE_SKEW,
+		    (RND_FLAG_COLLECT_TIME|RND_FLAG_ESTIMATE_TIME|
+			RND_FLAG_HASCB));
 	}
 }
 
@@ -332,6 +335,11 @@ hardclock(struct clockframe *frame)
 		    atomic_load_relaxed(&hardclock_ticks) + 1);
 		tc_ticktock();
 	}
+
+	/*
+	 * Make sure the CPUs and timecounter are making progress.
+	 */
+	heartbeat();
 
 	/*
 	 * Update real-time timeout queue.

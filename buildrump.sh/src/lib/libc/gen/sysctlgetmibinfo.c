@@ -1,4 +1,4 @@
-/*	$NetBSD: sysctlgetmibinfo.c,v 1.14 2019/08/27 22:48:53 kamil Exp $ */
+/*	$NetBSD: sysctlgetmibinfo.c,v 1.16 2024/01/20 14:52:47 christos Exp $ */
 
 /*-
  * Copyright (c) 2003,2004 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: sysctlgetmibinfo.c,v 1.14 2019/08/27 22:48:53 kamil Exp $");
+__RCSID("$NetBSD: sysctlgetmibinfo.c,v 1.16 2024/01/20 14:52:47 christos Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #ifndef RUMP_ACTION
@@ -82,11 +82,6 @@ static struct sysctlnode sysctl_mibroot = {
 static int compar(const void *, const void *);
 static void free_children(struct sysctlnode *);
 static void relearnhead(void);
-
-/*
- * specifically not static since sysctl(8) "borrows" it.
- */
-int __learn_tree(int *, u_int, struct sysctlnode *);
 
 /*
  * for ordering nodes -- a query may or may not be given them in
@@ -483,7 +478,7 @@ sysctlgetmibinfo_unlocked(const char *gname, int *iname, u_int *namelenp,
 			*(cs) = strlen(t) + 1;			\
 		if ((nlp) != NULL)				\
 			*(nlp) = (l);				\
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 	piece = gname;
 	while (piece != NULL && *piece != '\0') {

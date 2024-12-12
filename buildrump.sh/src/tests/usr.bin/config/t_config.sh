@@ -1,4 +1,4 @@
-# $NetBSD: t_config.sh,v 1.10 2020/03/09 20:33:16 christos Exp $
+# $NetBSD: t_config.sh,v 1.12 2024/04/28 07:27:42 rillig Exp $
 #
 # Copyright (c) 2008, 2010 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -68,7 +68,7 @@ run_and_check_pass()
 
 	run_and_check_prep "${name}"
 
-	atf_check -o ignore -s eq:0 \
+	atf_check -o ignore -s exit:0 \
 	    config -s "${supportdir}" -b "compile/${name}" "${config}"
 }
 
@@ -80,7 +80,7 @@ run_and_check_warn()
 
 	local stderr
 	eval stderr=\$${name}_stderr
-	atf_check -o ignore -e "${stderr}" -s eq:0 \
+	atf_check -o ignore -e "${stderr}" -s exit:0 \
 	    config -s "${supportdir}" -b "compile/${name}" "${config}"
 }
 
@@ -135,7 +135,7 @@ test_case pseudo_parent pass "Checks correct handling of children of pseudo" \
     "devices (PR/32329)"
 test_case postponed_orphan fail "Checks that config catches adding an" \
     "instance of a child of a negated instance as error"
-test_case no_pseudo fail "Checks that config catches ommited 'pseudo-device'" \
+test_case no_pseudo fail "Checks that config catches omitted 'pseudo-device'" \
     "as error (PR/34111)"
 test_case deffs_redef fail "Checks that config doesn't allow a deffs to use" \
     "the same name as a previous defflag/defparam"

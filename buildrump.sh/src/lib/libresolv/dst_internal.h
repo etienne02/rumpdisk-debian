@@ -1,4 +1,4 @@
-/*	$NetBSD: dst_internal.h,v 1.2 2012/11/16 02:11:05 joerg Exp $	*/
+/*	$NetBSD: dst_internal.h,v 1.4 2022/04/19 20:32:17 rillig Exp $	*/
 
 #ifndef DST_INTERNAL_H
 #define DST_INTERNAL_H
@@ -50,7 +50,7 @@ typedef struct dst_key {
 #include <isc/dst.h>
 /* 
  * define what crypto systems are supported for RSA, 
- * BSAFE is prefered over RSAREF; only one can be set at any time
+ * BSAFE is preferred over RSAREF; only one can be set at any time
  */
 #if defined(BSAFE) && defined(RSAREF)
 # error "Cannot have both BSAFE and RSAREF defined"
@@ -67,7 +67,7 @@ typedef struct dst_key {
 #ifdef DEBUG
 #define EREPORT(str)		printf str
 #else
-#define EREPORT(str)		do {} while (/*CONSTCOND*/0)
+#define EREPORT(str)		do {} while (0)
 #endif
 
 /* use our own special macro to FRRE memory */
@@ -79,7 +79,7 @@ typedef struct dst_key {
 		free((a)); \
 		(a) = NULL; \
 	} \
-} while (/*CONSTCOND*/0)
+} while (0)
 #endif
 
 #ifndef SAFE_FREE

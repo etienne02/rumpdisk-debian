@@ -1,4 +1,4 @@
-/*	$NetBSD: menus.mi,v 1.24 2020/11/04 14:29:40 martin Exp $	*/
+/*	$NetBSD: menus.mi,v 1.29 2023/12/17 18:46:42 martin Exp $	*/
 
 /*-
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -270,20 +270,20 @@ menu utility, title MSG_NetBSD_VERSION_Utilities, exit,
 		exitstring MSG_exit_menu_generic;
 	display action  { toplevel(); };
 	option MSG_Run_bin_sh,
-		action (endwin) { system("/bin/sh"); };
+		action (endwin) { system("/bin/sh -i -E"); };
 	option MSG_Set_timezone, 
 		action { set_timezone(); };
 	option MSG_Configure_network,
 		action {
 			extern int network_up;
 			network_up = 0;
-			config_network();
+			config_network(1);
 		};
 	option MSG_Partition_a_disk,
 		action {
 #ifndef NO_PARTMAN
 			partman_go = 1;
-			partman();
+			partman(NULL);
 #endif
 		};
 	option MSG_Logging_functions, action { do_logging(); };
@@ -366,14 +366,20 @@ menu ftpsource, y=-4, x=0, w=70, no box, no clear,
 		msg_display_subst(MSG_ftpsource, 2, "." SETS_TAR_SUFF,
 		    url_proto((uintptr_t)((arg_rv*)arg)->arg));
 	    };
-	option {src_legend(menu, MSG_Host, ftp.xfer_host[(uintptr_t)((arg_rv*)arg)->arg]);},
-		action { src_prompt(MSG_Host, ftp.xfer_host[(uintptr_t)((arg_rv*)arg)->arg], sizeof ftp.xfer_host[(uintptr_t)((arg_rv*)arg)->arg]); };
+	option {src_legend(menu, MSG_Host, ftp.xfer_host[
+		XFER_HOST((uintptr_t)((arg_rv*)arg)->arg)]);},
+		action { src_prompt(MSG_Host, ftp.xfer_host[
+		XFER_HOST((uintptr_t)((arg_rv*)arg)->arg)],
+		sizeof ftp.xfer_host[XFER_HOST(
+		(uintptr_t)((arg_rv*)arg)->arg)]); };
 	option {src_legend(menu, MSG_Base_dir, ftp.dir);},
 		action { src_prompt(MSG_Base_dir, ftp.dir, sizeof ftp.dir); };
 	option {src_legend(menu, MSG_Set_dir_bin, set_dir_bin);},
 		action { src_prompt(MSG_Set_dir_bin, set_dir_bin, sizeof set_dir_bin); };
 	option {src_legend(menu, MSG_Set_dir_src, set_dir_src);},
 		action { src_prompt(MSG_Set_dir_src, set_dir_src, sizeof set_dir_src); };
+	option {src_legend(menu, MSG_Dist_postfix, dist_postfix);},
+		action { src_prompt(MSG_Dist_postfix, dist_postfix, sizeof dist_postfix); };
 	option {src_legend(menu, MSG_User, ftp.user);},
 		action { src_prompt(MSG_User, ftp.user, sizeof ftp.user);
 			ftp.pass[0] = 0;
@@ -407,7 +413,7 @@ menu ftpsource, y=-4, x=0, w=70, no box, no clear,
 		action {
 			extern int network_up;
 			network_up = 0;
-			config_network();
+			config_network(1);
 		};
 	option MSG_exit_menu_generic, exit, action { ((arg_rv*)arg)->rv = SET_RETRY; };
 
@@ -424,11 +430,13 @@ menu nfssource, y=-4, x=0, w=70, no box, no clear,
 		action { src_prompt(MSG_Set_dir_bin, set_dir_bin, sizeof set_dir_bin); };
 	option {src_legend(menu, MSG_Set_dir_src, set_dir_src);},
 		action { src_prompt(MSG_Set_dir_src, set_dir_src, sizeof set_dir_src); };
+	option {src_legend(menu, MSG_Dist_postfix, dist_postfix);},
+		action { src_prompt(MSG_Dist_postfix, dist_postfix, sizeof dist_postfix); };
 	option MSG_Configure_network,
 		action {
 			extern int network_up;
 			network_up = 0;
-			config_network();
+			config_network(1);
 		};
 	option MSG_exit_menu_generic, exit, action { *((int*)arg) = SET_RETRY; };
 
@@ -470,6 +478,8 @@ menu cdromsource, y=-4, x=0, w=70, no box, no clear, exitstring MSG_Continue;
 		action { src_prompt(MSG_Set_dir_bin, set_dir_bin, sizeof set_dir_bin); };
 	option {src_legend(menu, MSG_Set_dir_src, set_dir_src);},
 		action { src_prompt(MSG_Set_dir_src, set_dir_src, sizeof set_dir_src); };
+	option {src_legend(menu, MSG_Dist_postfix, dist_postfix);},
+		action { src_prompt(MSG_Dist_postfix, dist_postfix, sizeof dist_postfix); };
 	option MSG_abort_install, exit, action { *((int*)arg) = SET_ABANDON; };
 	option MSG_source_sel_retry, exit, action { *((int*)arg) = SET_RETRY; };
 
@@ -486,6 +496,8 @@ menu localfssource, y=-4, x=0, w=70, no box, no clear, exitstring MSG_Continue;
 		action { src_prompt(MSG_Set_dir_bin, set_dir_bin, sizeof set_dir_bin); };
 	option {src_legend(menu, MSG_Set_dir_src, set_dir_src);},
 		action { src_prompt(MSG_Set_dir_src, set_dir_src, sizeof set_dir_src); };
+	option {src_legend(menu, MSG_Dist_postfix, dist_postfix);},
+		action { src_prompt(MSG_Dist_postfix, dist_postfix, sizeof dist_postfix); };
 	option MSG_exit_menu_generic, exit, action { *((int*)arg) = SET_RETRY; };
 
 menu localdirsource, y=-4, x=0, w=70, no box, no clear, exitstring MSG_Continue;
@@ -497,6 +509,8 @@ menu localdirsource, y=-4, x=0, w=70, no box, no clear, exitstring MSG_Continue;
 		action { src_prompt(MSG_Set_dir_bin, set_dir_bin, 60); };
 	option {src_legend(menu, MSG_Set_dir_src, set_dir_src);},
 		action { src_prompt(MSG_Set_dir_src, set_dir_src, 60); };
+	option {src_legend(menu, MSG_Dist_postfix, dist_postfix);},
+		action { src_prompt(MSG_Dist_postfix, dist_postfix, 60); };
 	option MSG_exit_menu_generic, exit, action { *((int*)arg) = SET_RETRY; };
 
 menu namesrv6, title MSG_Select_DNS_server;
@@ -556,8 +570,11 @@ menu zeroconf, title "Zeroconf", no clear;
 menu binpkg, y=-4, x=0, w=70, no box, no clear,
 	    exitstring MSG_Install_pkgin;
 	display action { msg_display(MSG_pkgpath); };
-	option {src_legend(menu, MSG_Host, pkg.xfer_host[pkg.xfer]);},
-		action { src_prompt(MSG_Host, pkg.xfer_host[pkg.xfer], sizeof pkg.xfer_host[pkg.xfer]); };
+	option {src_legend(menu, MSG_Host,
+		pkg.xfer_host[XFER_HOST(pkg.xfer)]);},
+		action { src_prompt(MSG_Host,
+		pkg.xfer_host[XFER_HOST(pkg.xfer)],
+		sizeof pkg.xfer_host[XFER_HOST(pkg.xfer)]); };
 	option {src_legend(menu, MSG_Base_dir, pkg.dir);},
 		action { src_prompt(MSG_Base_dir, pkg.dir, sizeof pkg.dir); };
 	option {src_legend(menu, MSG_Pkg_dir, pkg_dir);},
@@ -593,7 +610,7 @@ menu binpkg, y=-4, x=0, w=70, no box, no clear,
 		action {
 			extern int network_up;
 			network_up = 0;
-			config_network();
+			config_network(1);
 			mnt_net_config();
 		};
 	option {src_legend(menu, MSG_transfer_method, url_proto(pkg.xfer));},
@@ -603,9 +620,11 @@ menu binpkg, y=-4, x=0, w=70, no box, no clear,
 menu pkgsrc, y=-4, x=0, w=70, no box, no clear,
 	    exit, exitstring MSG_Install_pkgsrc;
 	display action { msg_display(MSG_pkgsrc); };
-	option {src_legend(menu, MSG_Host, pkgsrc.xfer_host[pkgsrc.xfer]);},
-		action { src_prompt(MSG_Host, pkgsrc.xfer_host[pkgsrc.xfer],
-			sizeof pkgsrc.xfer_host[pkgsrc.xfer]); };
+	option {src_legend(menu, MSG_Host, pkgsrc.xfer_host[
+		XFER_HOST(pkgsrc.xfer)]);},
+		action { src_prompt(MSG_Host,
+			pkgsrc.xfer_host[XFER_HOST(pkgsrc.xfer)],
+			sizeof pkgsrc.xfer_host[XFER_HOST(pkgsrc.xfer)]); };
 	option {src_legend(menu, MSG_Pkgsrc_dir, pkgsrc_dir);},
 		action { src_prompt(MSG_Pkgsrc_dir, pkgsrc_dir, sizeof pkgsrc_dir); };
 	option {src_legend(menu, MSG_User, pkgsrc.user);},

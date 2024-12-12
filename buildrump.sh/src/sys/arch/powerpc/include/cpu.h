@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.119 2021/08/14 17:51:19 ryo Exp $	*/
+/*	$NetBSD: cpu.h,v 1.124 2023/07/26 06:36:20 skrll Exp $	*/
 
 /*
  * Copyright (C) 1999 Wolfgang Solfrank.
@@ -49,6 +49,7 @@ struct cache_info {
 #include "opt_modular.h"
 #include "opt_multiprocessor.h"
 #include "opt_ppcarch.h"
+#include "opt_ppcopts.h"
 #endif
 
 #ifdef _KERNEL
@@ -133,7 +134,7 @@ struct cpu_info {
 #define	ci_pmap_user_segtab	ci_pmap_segtabs[1]
 	struct pmap_tlb_info *ci_tlb_info;
 #endif /* PPC_BOOKE || ((MODULAR || _MODULE) && !_LP64) */
-	struct cache_info ci_ci;		
+	struct cache_info ci_ci;
 	void *ci_sysmon_cookie;
 	void (*ci_idlespin)(void);
 	uint32_t ci_khz;
@@ -230,7 +231,7 @@ extern struct cpuset_info cpuset_info;
 extern struct cpu_info cpu_info[];
 
 static __inline struct cpu_info * curcpu(void) __pure;
-static __inline struct cpu_info *
+static __inline __always_inline struct cpu_info *
 curcpu(void)
 {
 	struct cpu_info *ci;
@@ -239,12 +240,8 @@ curcpu(void)
 	return ci;
 }
 
-#ifdef __clang__
-#define	curlwp			(curcpu()->ci_curlwp)
-#else
 register struct lwp *powerpc_curlwp __asm("r13");
 #define	curlwp			powerpc_curlwp
-#endif
 #define curpcb			(curcpu()->ci_curpcb)
 #define curpm			(curcpu()->ci_curpm)
 
@@ -344,7 +341,7 @@ mfrtc(uint32_t *rtcp)
 static __inline uint64_t
 rtc_nanosecs(void)
 {
-    /* 
+    /*
      * 601 RTC/DEC registers share clock of 7.8125 MHz, 128 ns per tick.
      * DEC has max of 25 bits, FFFFFF => 2.14748352 seconds.
      * RTCU is seconds, 32 bits.
@@ -471,6 +468,10 @@ extern paddr_t msgbuf_paddr;
 extern int cpu_altivec;
 #endif
 
+#ifdef PPC_NO_UNALIGNED
+bool	fix_unaligned(struct trapframe *, ksiginfo_t *);
+#endif
+
 #endif /* _KERNEL */
 
 /* XXX The below breaks unified pmap on ppc32 */
@@ -506,5 +507,6 @@ void	__syncicache(void *, size_t);
 #define	CPU_BOOTED_KERNEL	10	/* string: kernel we booted */
 #define	CPU_EXECPROT		11	/* bool: PROT_EXEC works */
 #define	CPU_FPU			12
+#define	CPU_NO_UNALIGNED	13	/* No HW support for unaligned access */
 
 #endif	/* _POWERPC_CPU_H_ */

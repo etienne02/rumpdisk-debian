@@ -1,4 +1,4 @@
-/*	$NetBSD: dz.c,v 1.42 2014/07/25 08:10:36 dholland Exp $	*/
+/*	$NetBSD: dz.c,v 1.44 2024/02/02 15:44:43 tsutsui Exp $	*/
 /*
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dz.c,v 1.42 2014/07/25 08:10:36 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dz.c,v 1.44 2024/02/02 15:44:43 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -247,7 +247,7 @@ dzattach(struct dz_softc *sc, struct evcnt *parent_evcnt, int consline)
 		callout_init(&dzscan_ch, 0);
 		callout_reset(&dzscan_ch, hz, dzscan, NULL);
 	}
-	printf("\n");
+	aprint_normal("\n");
 }
 
 /* Receiver Interrupt */
@@ -407,7 +407,7 @@ dzopen(dev_t dev, int flag, int mode, struct lwp *l)
 	/* Use DMBIS and *not* DMSET or else we clobber incoming bits */
 	if (dzmctl(sc, line, DML_DTR, DMBIS) & DML_DCD)
 		tp->t_state |= TS_CARR_ON;
-	mutex_spin_enter(&tty_lock);
+	ttylock(tp);
 	while (!(flag & O_NONBLOCK) && !(tp->t_cflag & CLOCAL) &&
 	       !(tp->t_state & TS_CARR_ON)) {
 		tp->t_wopen++;
@@ -416,7 +416,7 @@ dzopen(dev_t dev, int flag, int mode, struct lwp *l)
 		if (error)
 			break;
 	}
-	mutex_spin_exit(&tty_lock);
+	ttyunlock(tp);
 	if (error)
 		return (error);
 	return ((*tp->t_linesw->l_open)(dev, tp));

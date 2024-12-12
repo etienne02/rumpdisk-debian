@@ -1,4 +1,4 @@
-/* $NetBSD: db_trace.c,v 1.30 2021/07/24 21:31:32 andvar Exp $ */
+/* $NetBSD: db_trace.c,v 1.39 2023/11/21 22:19:12 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: db_trace.c,v 1.30 2021/07/24 21:31:32 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_trace.c,v 1.39 2023/11/21 22:19:12 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -44,7 +44,7 @@ __KERNEL_RCSID(0, "$NetBSD: db_trace.c,v 1.30 2021/07/24 21:31:32 andvar Exp $")
 #include <machine/alpha.h>
 #include <machine/db_machdep.h>
 
-#include <alpha/alpha/db_instruction.h>
+#include <machine/alpha_instruction.h>
 
 #include <ddb/db_sym.h>
 #include <ddb/db_access.h>
@@ -62,39 +62,6 @@ struct prologue_info {
 };
 
 /*
- * We use several symbols to take special action:
- *
- *	Trap vectors, which use a different (fixed-size) stack frame:
- *
- *		XentArith
- *		XentIF
- *		XentInt
- *		XentMM
- *		XentSys
- *		XentUna
- */
-
-static struct special_symbol {
-	vaddr_t ss_val;
-	const char *ss_note;
-} special_symbols[] = {
-	{ (vaddr_t)&XentArith,		"arithmetic trap" },
-	{ (vaddr_t)&XentIF,		"instruction fault" },
-	{ (vaddr_t)&XentInt,		"interrupt" },
-	{ (vaddr_t)&XentMM,		"memory management fault" },
-	{ (vaddr_t)&XentSys,		"syscall" },
-	{ (vaddr_t)&XentUna,		"unaligned access fault" },
-	{ (vaddr_t)&XentRestart,	"console restart" },
-
-	/*
-	 * We'll not know what trap we took, but we'll find the
-	 * trap frame, at least...
-	 */
-	{ (vaddr_t)&exception_return,	"(exception return)" },
-	{ 0 }
-};
-
-/*
  * Decode the function prologue for the function we're in, and note
  * which registers are stored where, and how large the stack frame is.
  */
@@ -104,7 +71,7 @@ decode_prologue(db_addr_t callpc, db_addr_t func,
 {
 	long signed_immediate;
 	alpha_instruction ins;
-	db_expr_t pc;
+	db_addr_t pc;
 
 	pi->pi_regmask = 0;
 	pi->pi_frame_size = 0;
@@ -117,7 +84,7 @@ do {									\
 } while (0)
 
 	for (pc = func; pc < callpc; pc += sizeof(alpha_instruction)) {
-		ins.bits = *(unsigned int *)pc;
+		db_read_bytes(pc, sizeof(ins.bits), (char *)&ins.bits);
 
 		if (ins.mem_format.opcode == op_lda &&
 		    ins.mem_format.ra == 30 &&
@@ -165,21 +132,9 @@ do {									\
 	}
 }
 
-static int
-sym_is_trapsymbol(vaddr_t v)
-{
-	int i;
-
-	for (i = 0; special_symbols[i].ss_val != 0; ++i)
-		if (v == special_symbols[i].ss_val)
-			return 1;
-	return 0;
-}
-
 static void
-decode_syscall(int number, struct proc *p, void (*pr)(const char *, ...))
+decode_syscall(int number, void (*pr)(const char *, ...))
 {
-
 	(*pr)(" (%d)", number);
 }
 
@@ -187,11 +142,21 @@ void
 db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
     const char *modif, void (*pr)(const char *, ...))
 {
+
+	db_stack_trace_print_ra(/*ra*/0, /*have_ra*/false, addr, have_addr,
+	    count, modif, pr);
+}
+
+void
+db_stack_trace_print_ra(db_expr_t ra, bool have_ra,
+    db_expr_t addr, bool have_addr,
+    db_expr_t count,
+    const char *modif, void (*pr)(const char *, ...))
+{
 	db_addr_t callpc, frame, symval;
 	struct prologue_info pi;
 	db_expr_t diff;
 	db_sym_t sym;
-	int i;
 	u_long tfps;
 	const char *symname;
 	struct pcb *pcbp;
@@ -199,8 +164,6 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 	struct trapframe *tf;
 	bool ra_from_tf;
 	u_long last_ipl = ~0L;
-	struct proc *p = NULL;
-	struct lwp *l = NULL;
 	char c;
 	bool trace_thread = false;
 	bool lwpaddr = false;
@@ -212,19 +175,33 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 	}
 
 	if (!have_addr) {
-		p = curproc;
 		addr = DDB_REGS->tf_regs[FRAME_SP] - FRAME_SIZE * 8;
 		tf = (struct trapframe *)addr;
-		callpc = tf->tf_regs[FRAME_PC];
+		callpc = db_alpha_tf_reg(tf, FRAME_PC);
 		frame = (db_addr_t)tf + FRAME_SIZE * 8;
 		ra_from_tf = true;
 	} else {
+#ifdef _KERNEL
+		struct proc *p = NULL;
+		struct lwp *l = NULL;
+#else
+		struct proc pstore, *p = &pstore;
+		struct lwp lstore, *l = &lstore;
+#endif /* _KERNEL */
+
 		if (trace_thread) {
 			if (lwpaddr) {
+#ifdef _KERNEL
 				l = (struct lwp *)addr;
 				p = l->l_proc;
+#else
+				db_read_bytes(addr, sizeof(*l), (char *)l);
+				db_read_bytes((db_addr_t)l->l_proc,
+				    sizeof(*p), (char *)p);
+#endif /* _KERNEL */
 				(*pr)("trace: pid %d ", p->p_pid);
 			} else {
+#ifdef _KERNEL
 				(*pr)("trace: pid %d ", (int)addr);
 				p = proc_find_raw(addr);
 				if (p == NULL) {
@@ -233,12 +210,19 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 				}
 				l = LIST_FIRST(&p->p_lwps);
 				KASSERT(l != NULL);
+#else
+				(*pr)("no proc_find_raw() in crash\n");
+				return;
+#endif /* _KERNEL */
 			}
 			(*pr)("lid %d ", l->l_lid);
 			pcbp = lwp_getpcb(l);
-			addr = (db_expr_t)pcbp->pcb_hw.apcb_ksp;
-			callpc = pcbp->pcb_context[7];
+			addr = db_alpha_read_saved_reg(&pcbp->pcb_hw.apcb_ksp);
+			callpc = db_alpha_read_saved_reg(&pcbp->pcb_context[7]);
 			(*pr)("at 0x%lx\n", addr);
+		} else if (have_ra) {
+			callpc = ra;
+			(*pr)("at 0x%lx pc 0x%lx\n", addr, callpc);
 		} else {
 			(*pr)("alpha trace requires known PC =eject=\n");
 			return;
@@ -266,7 +250,7 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 		 * backstop, then we are at the root of the call
 		 * graph.
 		 */
-		if (symval == (vaddr_t)&alpha_kthread_backstop) {
+		if (db_alpha_sym_is_backstop(symval)) {
 			(*pr)("--- kernel thread backstop ---\n");
 			break;
 		}
@@ -306,28 +290,28 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 		 * If we are in a trap vector, frame points to a
 		 * trapframe.
 		 */
-		if (sym_is_trapsymbol(symval)) {
+		if (db_alpha_sym_is_trap(symval)) {
 			tf = (struct trapframe *)frame;
 
-			for (i = 0; special_symbols[i].ss_val != 0; ++i)
-				if (symval == special_symbols[i].ss_val)
-					(*pr)("--- %s",
-					    special_symbols[i].ss_note);
+			(*pr)("--- %s", db_alpha_trapsym_description(symval));
 
-			tfps = tf->tf_regs[FRAME_PS];
-			if (symval == (vaddr_t)&XentSys)
-				decode_syscall(tf->tf_regs[FRAME_V0], p, pr);
+			tfps = db_alpha_tf_reg(tf, FRAME_PS);
+			if (db_alpha_sym_is_syscall(symval)) {
+				decode_syscall(db_alpha_tf_reg(tf, FRAME_V0),
+				    pr);
+			}
 			if ((tfps & ALPHA_PSL_IPL_MASK) != last_ipl) {
 				last_ipl = tfps & ALPHA_PSL_IPL_MASK;
-				if (symval != (vaddr_t)&XentSys)
+				if (! db_alpha_sym_is_syscall(symval)) {
 					(*pr)(" (from ipl %ld)", last_ipl);
+				}
 			}
 			(*pr)(" ---\n");
 			if (tfps & ALPHA_PSL_USERMODE) {
 				(*pr)("--- user mode ---\n");
 				break;	/* Terminate search.  */
 			}
-			callpc = tf->tf_regs[FRAME_PC];
+			callpc = db_alpha_tf_reg(tf, FRAME_PC);
 			frame = (db_addr_t)tf + FRAME_SIZE * 8;
 			ra_from_tf = true;
 			continue;
@@ -347,14 +331,19 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 			 * in a leaf call).  If not, we've found the
 			 * root of the call graph.
 			 */
-			if (ra_from_tf)
-				callpc = tf->tf_regs[FRAME_RA];
-			else {
+			if (ra_from_tf) {
+				callpc = db_alpha_tf_reg(tf, FRAME_RA);
+			} else {
 				(*pr)("--- root of call graph ---\n");
 				break;
 			}
-		} else
-			callpc = *(u_long *)(frame + pi.pi_reg_offset[26]);
+		} else {
+			unsigned long reg;
+
+			db_read_bytes(frame + pi.pi_reg_offset[26],
+			    sizeof(reg), (char *)&reg);
+			callpc = reg;
+		}
 		frame += pi.pi_frame_size;
 		ra_from_tf = false;
 	}

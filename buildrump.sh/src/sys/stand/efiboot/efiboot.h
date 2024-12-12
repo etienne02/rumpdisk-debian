@@ -1,4 +1,4 @@
-/*	$NetBSD: efiboot.h,v 1.15 2021/06/20 19:10:47 jmcneill Exp $	*/
+/*	$NetBSD: efiboot.h,v 1.22 2024/08/15 06:01:40 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2016 Kimihiro Nonaka <nonaka@netbsd.org>
@@ -51,9 +51,9 @@ extern struct fs_ops nfs_fs_ops;
 /* boot.c */
 void boot(void);
 void clearit(void);
-void print_banner(void);
 extern const struct boot_command commands[];
 void command_help(char *);
+void command_printtab(const char *, const char *, ...);
 int set_default_device(const char *);
 char *get_default_device(void);
 void set_default_fstype(int);
@@ -76,6 +76,7 @@ void efi_cleanup(void);
 void efi_exit(void);
 void efi_delay(int);
 void efi_reboot(void);
+void efi_progress(const char *, ...);
 extern int howto;
 
 /* efichar.c */
@@ -107,7 +108,14 @@ bool efi_pxe_match_booted_interface(const EFI_MAC_ADDRESS *, UINT32);
 /* efiwatchdog.c */
 void efi_set_watchdog(uint32_t, uint64_t);
 
+/* efigop.c */
+void efi_gop_probe(void);
+void efi_gop_show(void);
+void efi_gop_dump(void);
+void efi_gop_setmode(UINT32);
+
 /* exec.c */
+int load_file(const char *, u_long, bool, EFI_PHYSICAL_ADDRESS *, u_long *);
 int exec_netbsd(const char *, const char *);
 
 /* panic.c */
@@ -119,3 +127,7 @@ char *gettrailer(char *);
 void docommand(char *);
 char awaitkey(int, int);
 __dead void bootprompt(void);
+
+/* userconf.c */
+void userconf_add(const char *);
+void userconf_foreach(void (*)(const char *));

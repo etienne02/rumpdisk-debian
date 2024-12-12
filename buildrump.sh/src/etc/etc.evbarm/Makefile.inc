@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.125 2021/08/30 00:14:45 rin Exp $
+#	$NetBSD: Makefile.inc,v 1.131 2022/11/03 09:04:56 skrll Exp $
 #
 #	etc.evbarm/Makefile.inc -- evbarm-specific etc Makefile targets
 #
@@ -21,6 +21,7 @@ EVBARM_BOARDS.xscale+=		ADI_BRH
 KERNEL_SETS.xscale+=		NSLU2
 
 EVBARM_BOARDS.armv5t+=		KUROBOX_PRO
+KERNEL_SETS.armv5t+=		OPENBLOCKS_A6
 # Other marvell-based machines may also work but not tested yet.
 
 EVBARM_BOARDS.armv6+=		RPI
@@ -30,19 +31,16 @@ KERNEL_SETS.armv6hf+=	 	RPI2
 
 KERNEL_SETS.armv7+=		GENERIC
 KERNEL_SETS.armv7hf+=		GENERIC
+
 KERNEL_SETS.arm64+=		GENERIC64
+KERNEL_SETS.arm64+=		GENERIC64_PMAPMI
 .else
 IMAGEENDIAN=	le
 # little endian boards
-#EVBARM_BOARDS.armv4+=		ARMADILLO210
-#EVBARM_BOARDS.armv4+=		ARMADILLO9
 EVBARM_BOARDS.armv4+=		GEMINI
 EVBARM_BOARDS.armv4+=		INTEGRATOR
 EVBARM_BOARDS.armv4+=		INTEGRATOR_CP
 KERNEL_SETS.armv4+=		IXM1200
-#EVBARM_BOARDS.armv4+=		MINI2440
-#EVBARM_BOARDS.armv4+=		MPCSA_GENERIC
-#EVBARM_BOARDS.armv4+=		NAPPI
 EVBARM_BOARDS.armv4+=		SMDK2410
 EVBARM_BOARDS.armv4+=		SMDK2800
 EVBARM_BOARDS.armv4+=		TS7200
@@ -53,37 +51,25 @@ EVBARM_BOARDS.xscale+=		GUMSTIX
 KERNEL_SETS.xscale+=		HDL_G
 EVBARM_BOARDS.xscale+=		IQ80310
 EVBARM_BOARDS.xscale+=		IQ80321
-#EVBARM_BOARDS.xscale+=		LUBBOCK
 EVBARM_BOARDS.xscale+=		TEAMASA_NPWR
 EVBARM_BOARDS.xscale+=		TWINTAIL
-#EVBARM_BOARDS.xscale+=		VIPER
-#EVBARM_BOARDS.xscale+=		ZAO425
 
-#EVBARM_BOARDS.armv5t+=		DNS323
-#EVBARM_BOARDS.armv5t+=		HPT5325
-#EVBARM_BOARDS.armv5t+=		IMX23_OLINUXINO
 EVBARM_BOARDS.armv5t+=		KUROBOX_PRO
-#EVBARM_BOARDS.armv5t+=		MARVELL_NAS
-#EVBARM_BOARDS.armv5t+=		MMNET_GENERIC
 EVBARM_BOARDS.armv5t+=		MV2120
-#EVBARM_BOARDS.armv5t+=		OPENBLOCKS_A6
+KERNEL_SETS.armv5t+=		OPENBLOCKS_A6
 EVBARM_BOARDS.armv5t+=		OPENRD
-#EVBARM_BOARDS.armv5t+=		OSK5912
 EVBARM_BOARDS.armv5t+=		SHEEVAPLUG
 
-#EVBARM_BOARDS.armv6+=		IMX31LITE
-#EVBARM_BOARDS.armv6hf+= 	IMX31LITE
 EVBARM_BOARDS.armv6+=		RPI
 EVBARM_BOARDS.armv6hf+=	 	RPI
 KERNEL_SETS.armv6+=		RPI2
 KERNEL_SETS.armv6hf+=	 	RPI2
-EVBARM_BOARDS.armv6+=		TISDP2420
-EVBARM_BOARDS.armv6hf+= 	TISDP2420
-#EVBARM_BOARDS.armv6+=		TISDP2430
 
 KERNEL_SETS.armv7+=		GENERIC
 KERNEL_SETS.armv7hf+=		GENERIC
+
 KERNEL_SETS.arm64+=		GENERIC64
+KERNEL_SETS.arm64+=		GENERIC64_PMAPMI
 .endif
 
 IMAGE.rel=	${RELEASEDIR}/${RELEASEMACHINEDIR}
@@ -109,6 +95,17 @@ __mkimage: .USE
 	${HOST_SH} ${MKIMAGE} -x -h ${.TARGET:S/smp_//} -D ${DESTDIR} \
 	    -S ${NETBSDSRCDIR} -B ${IMAGEENDIAN} ${MKI_OPTS.${.TARGET}} \
 	    ${IMAGE.dir}/${.TARGET:S/smp_//}.img.gz
+	${TOOL_GZIP} -cd ${IMAGE.dir}/${.TARGET:S/smp_//}.img.gz \
+		> ${IMAGE.dir}/${.TARGET:S/smp_//}.img
+.for f in ${INSTALLBOOT_BOARDS}
+	@echo "===> Making bootable image ${IMAGE.dir:T}/${.TARGET:S/smp_//}-${f}.img.gz"
+	@cp ${IMAGE.dir}/${.TARGET:S/smp_//}.img ${IMAGE.dir}/${.TARGET:S/smp_//}-${f}.img
+	@${TOOL_INSTALLBOOT} -m ${MACHINE} -o board=${f} \
+			${IMAGE.dir}/${.TARGET:S/smp_//}-${f}.img \
+		&& ${TOOL_GZIP} -f ${IMAGE.dir}/${.TARGET:S/smp_//}-${f}.img \
+		|| rm ${IMAGE.dir}/${.TARGET:S/smp_//}-${f}.img
+.endfor
+	rm ${IMAGE.dir}/${.TARGET:S/smp_//}.img
 
 ARCHES.earmv4=		armv4
 ARCHES.earmv4eb=	armv4

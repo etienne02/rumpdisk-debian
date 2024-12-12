@@ -1,4 +1,4 @@
-/*	$NetBSD: fpu_sqrt.c,v 1.5 2005/11/16 23:24:44 uwe Exp $ */
+/*	$NetBSD: fpu_sqrt.c,v 1.7 2022/08/28 22:09:26 rin Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fpu_sqrt.c,v 1.5 2005/11/16 23:24:44 uwe Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fpu_sqrt.c,v 1.7 2022/08/28 22:09:26 rin Exp $");
 
 #include <sys/types.h>
 
@@ -126,7 +126,7 @@ __KERNEL_RCSID(0, "$NetBSD: fpu_sqrt.c,v 1.5 2005/11/16 23:24:44 uwe Exp $");
  * zero bit at the top of x.  Doing so means that q is not going to acquire
  * a 1 bit in the first trip around the loop (since x0 < 2^NBITS).  If the
  * final value in x is not needed, or can be off by a factor of 2, this is
- * equivalant to moving the `x *= 2' step to the bottom of the loop:
+ * equivalent to moving the `x *= 2' step to the bottom of the loop:
  *
  *	for k = NBITS-1 to 0 step -1 do if ... fi; x *= 2; done
  *
@@ -188,12 +188,12 @@ __KERNEL_RCSID(0, "$NetBSD: fpu_sqrt.c,v 1.5 2005/11/16 23:24:44 uwe Exp $");
 struct fpn *
 fpu_sqrt(struct fpemu *fe)
 {
-	register struct fpn *x = &fe->fe_f1;
-	register u_int bit, q, tt;
-	register u_int x0, x1, x2, x3;
-	register u_int y0, y1, y2, y3;
-	register u_int d0, d1, d2, d3;
-	register int e;
+	struct fpn *x = &fe->fe_f1;
+	u_int bit, q, tt;
+	u_int x0, x1, x2, x3;
+	u_int y0, y1, y2, y3;
+	u_int d0, d1, d2, d3;
+	int e;
 
 	/*
 	 * Take care of special cases first.  In order:

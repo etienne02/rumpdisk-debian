@@ -1,4 +1,4 @@
-# $NetBSD: t_here.sh,v 1.7 2019/01/22 14:31:53 kre Exp $
+# $NetBSD: t_here.sh,v 1.9 2021/11/22 05:21:54 kre Exp $
 #
 # Copyright (c) 2007 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -515,19 +515,88 @@ quoting_body() {
 	results
 }
 
+#
+# This next test is really just testing what our shell happens to do.
+# There doesn't seem to be any spec on in which context expansions
+# in redirects are processed.   Most shells do them in the parent
+# shell context, meaning that side effects of the expansion become
+# visible to the shell - a couple process redirect expansions in
+# a subshell, meaning that side effects are lost.
+#
+# Before PR bin/53550 was fixed, the NetBSD sh evaluated all redirect
+# expansions, except here documents, in the context of the shell, and
+# here document redirects in a subshell context.   That distinction
+# makes no real sense (and only an old, and maybe still current, FreeBSD
+# shell shares that pecadillo.)   Afer that fix, the NetBSD shell joins
+# almost all others in expanding redirects (all of them) in the shell
+# context, meaning that side effects of here documenty expansions become
+# visible in the shell.
+#
+# Before the fix, we used to get "2\n1\n" as the output from this
+# test, now the variable assignment in the here document persists
+# and we get "2\n2\n" as do most other shells.  (bash is a notable
+# exception, but it does all redirect expansions in a subshell context)
+#
+
 atf_test_case side_effects
 side_effects_head() {
 	atf_set "descr" "Tests how side effects in here documents are handled"
 }
 side_effects_body() {
 
-	atf_check -s exit:0 -o inline:'2\n1\n' -e empty ${TEST_SH} -c '
+	atf_check -s exit:0 -o inline:'2\n2\n' -e empty ${TEST_SH} -c '
 		unset X
 		cat <<-EOF
 		${X=2}
 		EOF
 		echo "${X-1}"
 		'
+}
+
+# This is a test for the specific bug reported in PR bin/53550
+# This should work in any shell.
+
+atf_test_case exit_status
+exit_status_head() {
+	atf_set descr "Tests exit status of a command substitution in a heredoc"
+}
+exit_status_body() {
+
+	# PR bin/53550 test
+	atf_check -s exit:7 -o empty -e empty ${TEST_SH} -c '
+		<<-EOF
+		$(exit 7)
+		EOF
+		'
+}
+
+# The following tests a problem reported on the austin-list 2021-09-08
+# by oguzismailuysal@gmail.com ... it affected all ash derived shells
+atf_test_case hard_cases
+hard_cases_head() {
+	atf_set "descr" \
+		"Tests here docs in positions that have confised our parser"
+}
+hard_cases_body() {
+
+	atf_check -s exit:0 -o inline:'xxx\n' -e empty ${TEST_SH} -c '
+		: <<- do | for x in xxx
+		do
+		do echo $x
+		done'
+
+	atf_check -s exit:0 -o inline:'xxx\n' -e empty ${TEST_SH} -c '
+		set -- xxx
+		: <<- done | for x in xxx
+		done
+		do echo $x
+		done'
+
+	atf_check -s exit:0 -o inline:'xxx\n' -e empty ${TEST_SH} -c '
+		: <<- in | case xxx
+		in
+		in xxx) echo xxx;;
+		esac'
 }
 
 atf_test_case vicious
@@ -594,11 +663,13 @@ vicious_body() {
 atf_init_test_cases() {
 	atf_add_test_case do_simple	# not worthy of a comment
 	atf_add_test_case end_markers	# the mundane, the weird, the bizarre
+	atf_add_test_case exit_status	# PR bin/53550, cmdsub in heredoc
 	atf_add_test_case incomplete	# where the end marker isn't...
 	atf_add_test_case lineends	# test weird line endings in heredocs
 	atf_add_test_case multiple	# multiple << operators on one cmd
 	atf_add_test_case nested	# here docs inside here docs
 	atf_add_test_case quoting	# stuff quoted inside
 	atf_add_test_case side_effects	# here docs that modify environment
+	atf_add_test_case hard_cases	# here doc bodies appearing mid command
 	atf_add_test_case vicious	# evil test from the austin-l list...
 }

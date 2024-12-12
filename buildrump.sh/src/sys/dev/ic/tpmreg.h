@@ -1,4 +1,4 @@
-/*	$NetBSD: tpmreg.h,v 1.9 2021/05/29 08:45:29 riastradh Exp $	*/
+/*	$NetBSD: tpmreg.h,v 1.11 2022/01/29 12:27:30 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2019 The NetBSD Foundation, Inc.
@@ -36,14 +36,6 @@
 
 #include <sys/cdefs.h>
 #include <sys/endian.h>
-
-#if (_BYTE_ORDER == _LITTLE_ENDIAN)
-#define TPM_BE16(a)	bswap16(a)
-#define TPM_BE32(a)	bswap32(a)
-#else
-#define TPM_BE16(a)	(a)
-#define TPM_BE32(a)	(a)
-#endif
 
 struct tpm_header {
 	uint16_t tag;
@@ -110,9 +102,10 @@ struct tpm_header {
 #define	TPM_REV				0x0f04	/* 8bit register */
 
 /*
- * Five localities, 4K per locality.
+ * Five localities, 4K per locality.  But we only use the registers for
+ * the first locality, so this is 0x1000 rather than 0x5000.
  */
-#define	TPM_SPACE_SIZE	0x5000
+#define	TPM_SPACE_SIZE	0x1000
 
 #define	TPM_TAG_RQU_COMMAND		0x00c1
 #define	TPM_TAG_RSP_COMMAND		0x00c4

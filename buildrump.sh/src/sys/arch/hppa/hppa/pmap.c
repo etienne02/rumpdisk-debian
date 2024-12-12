@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.114 2020/08/19 07:29:00 simonb Exp $	*/
+/*	$NetBSD: pmap.c,v 1.122 2023/08/02 09:18:14 macallan Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002, 2020 The NetBSD Foundation, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.114 2020/08/19 07:29:00 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.122 2023/08/02 09:18:14 macallan Exp $");
 
 #include "opt_cputype.h"
 
@@ -767,6 +767,9 @@ static void
 pmap_page_physload(paddr_t spa, paddr_t epa)
 {
 
+	if (spa == epa)
+		return;
+
 	if (spa < FIRST_16M && epa <= FIRST_16M) {
 		uvm_page_physload(spa, epa, spa, epa, VM_FREELIST_ISADMA);
 	} else if (spa < FIRST_16M && epa > FIRST_16M) {
@@ -1109,7 +1112,7 @@ pmap_bootstrap(vaddr_t vstart)
 		else if (va == uvm_lwp_getuarea(&lwp0) + USPACE - PAGE_SIZE)
 			prot = UVM_PROT_NONE;
 #endif
-		pmap_kenter_pa(va, va, prot, 0);
+		pmap_kenter_pa(va, va, prot, PMAP_DIRECTMAP);
 	}
 
 	/* XXXNH update */
@@ -1249,8 +1252,10 @@ pmap_destroy(pmap_t pmap)
 	off_t off;
 #endif
 
+	membar_release();
 	if (atomic_dec_uint_nv(&pmap->pm_obj.uo_refs) > 0)
 		return;
+	membar_acquire();
 
 #ifdef DIAGNOSTIC
 	uvm_page_array_init(&a, &pmap->pm_obj, 0);
@@ -1871,10 +1876,13 @@ pmap_activate(struct lwp *l)
 void
 pmap_procwr(struct proc *p, vaddr_t va, size_t len)
 {
-	pmap_t pmap = p->p_vmspace->vm_map.pmap;
+	const pmap_t pmap = p->p_vmspace->vm_map.pmap;
+	const pa_space_t space = pmap->pm_space;
 
-	fdcache(pmap->pm_space, va, len);
-	ficache(pmap->pm_space, va, len);
+	fdcache(space, va, len);
+	ficache(space, va, len);
+	pdtlb(space, va);
+	pitlb(space, va);
 }
 
 static inline void
@@ -1988,8 +1996,11 @@ pmap_kenter_pa(vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	    pmap_prot(pmap_kernel(), prot & VM_PROT_ALL));
 	if (IS_IOPAGE_P(pa) || (flags & PMAP_NOCACHE))
 		pte |= PTE_PROT(TLB_UNCACHEABLE);
-	pmap_kernel()->pm_stats.wired_count++;
-	pmap_kernel()->pm_stats.resident_count++;
+
+	if ((flags & PMAP_DIRECTMAP) == 0) {
+		pmap_kernel()->pm_stats.wired_count++;
+		pmap_kernel()->pm_stats.resident_count++;
+	}
 	if (opte)
 		pmap_pte_flush(pmap_kernel(), va, opte);
 
@@ -2068,6 +2079,9 @@ pmap_kremove(vaddr_t va, vsize_t size)
 
 		pmap_pte_flush(pmap, va, pte);
 		pmap_pte_set(pde, va, 0);
+
+		pmap->pm_stats.wired_count--;
+		pmap->pm_stats.resident_count--;
 
 		pg = pmap_initialized ? PHYS_TO_VM_PAGE(PTE_PAGE(pte)) : NULL;
 		if (pg != NULL) {

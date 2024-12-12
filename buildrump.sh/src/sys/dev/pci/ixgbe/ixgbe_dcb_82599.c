@@ -1,8 +1,8 @@
-/* $NetBSD: ixgbe_dcb_82599.c,v 1.9 2021/04/30 06:55:32 msaitoh Exp $ */
+/* $NetBSD: ixgbe_dcb_82599.c,v 1.12 2023/07/15 21:41:26 andvar Exp $ */
 /******************************************************************************
   SPDX-License-Identifier: BSD-3-Clause
 
-  Copyright (c) 2001-2017, Intel Corporation
+  Copyright (c) 2001-2020, Intel Corporation
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -35,7 +35,7 @@
 /*$FreeBSD: head/sys/dev/ixgbe/ixgbe_dcb_82599.c 331224 2018-03-19 20:55:05Z erj $*/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ixgbe_dcb_82599.c,v 1.9 2021/04/30 06:55:32 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ixgbe_dcb_82599.c,v 1.12 2023/07/15 21:41:26 andvar Exp $");
 
 #include "ixgbe_type.h"
 #include "ixgbe_dcb.h"
@@ -140,7 +140,7 @@ s32 ixgbe_dcb_config_rx_arbiter_82599(struct ixgbe_hw *hw, u16 *refill,
 
 	/*
 	 * map all UPs to TCs. up_to_tc_bitmap for each TC has corresponding
-	 * bits sets for the UPs that needs to be mappped to that TC.
+	 * bits sets for the UPs that needs to be mapped to that TC.
 	 * e.g if priorities 6 and 7 are to be mapped to a TC then the
 	 * up_to_tc_bitmap value for that TC will be 11000000 in binary.
 	 */
@@ -200,7 +200,7 @@ s32 ixgbe_dcb_config_tx_desc_arbiter_82599(struct ixgbe_hw *hw, u16 *refill,
 	for (i = 0; i < IXGBE_DCB_MAX_TRAFFIC_CLASS; i++) {
 		max_credits = max[i];
 		reg = max_credits << IXGBE_RTTDT2C_MCL_SHIFT;
-		reg |= refill[i];
+		reg |= (u32)(refill[i]);
 		reg |= (u32)(bwg_id[i]) << IXGBE_RTTDT2C_BWG_SHIFT;
 
 		if (tsa[i] == ixgbe_dcb_tsa_group_strict_cee)
@@ -251,7 +251,7 @@ s32 ixgbe_dcb_config_tx_data_arbiter_82599(struct ixgbe_hw *hw, u16 *refill,
 
 	/*
 	 * map all UPs to TCs. up_to_tc_bitmap for each TC has corresponding
-	 * bits sets for the UPs that needs to be mappped to that TC.
+	 * bits sets for the UPs that needs to be mapped to that TC.
 	 * e.g if priorities 6 and 7 are to be mapped to a TC then the
 	 * up_to_tc_bitmap value for that TC will be 11000000 in binary.
 	 */

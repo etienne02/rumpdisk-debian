@@ -1,4 +1,4 @@
-/* $NetBSD: rk3399_pcie.c,v 1.15 2021/01/27 03:10:19 thorpej Exp $ */
+/* $NetBSD: rk3399_pcie.c,v 1.23 2024/11/21 07:15:00 skrll Exp $ */
 /*
  * Copyright (c) 2018 Mark Kettenis <kettenis@openbsd.org>
  *
@@ -17,7 +17,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: rk3399_pcie.c,v 1.15 2021/01/27 03:10:19 thorpej Exp $");
+__KERNEL_RCSID(1, "$NetBSD: rk3399_pcie.c,v 1.23 2024/11/21 07:15:00 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -206,19 +206,21 @@ rkpcie_attach(device_t parent, device_t self, void *aux)
 	struct pcihost_softc * const phsc = &sc->sc_phsc;
 	struct fdt_attach_args *faa = aux;
 	struct fdtbus_gpio_pin *ep_gpio;
-	u_int max_link_speed, num_lanes;
+	u_int max_link_speed, num_lanes, bus_scan_delay_ms;
 	struct fdtbus_phy *phy[4];
 	const u_int *bus_range;
 	uint32_t status;
+	uint32_t delayed_ms = 0;
 	int timo, len;
 
 	phsc->sc_dev = self;
 	phsc->sc_bst = faa->faa_bst;
+	phsc->sc_pci_bst = faa->faa_bst;
 	phsc->sc_dmat = faa->faa_dmat;
 	sc->sc_iot = phsc->sc_bst;
 	phsc->sc_phandle = faa->faa_phandle;
 	const int phandle = phsc->sc_phandle;
-	
+
 	if (fdtbus_get_reg_byname(faa->faa_phandle, "axi-base", &sc->sc_axi_addr, &sc->sc_axi_size) != 0) {
 		aprint_error(": couldn't get axi registers\n");
 		return;
@@ -229,7 +231,7 @@ rkpcie_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	const int mapflags = _ARM_BUS_SPACE_MAP_STRONGLY_ORDERED;
+	const int mapflags = BUS_SPACE_MAP_NONPOSTED;
 	if (bus_space_map(sc->sc_iot, sc->sc_apb_addr, sc->sc_apb_size, mapflags, &sc->sc_ioh) != 0 ||
 	    bus_space_map(sc->sc_iot, sc->sc_axi_addr, sc->sc_axi_size, mapflags, &sc->sc_axi_ioh) != 0) {
 		printf(": can't map registers\n");
@@ -247,16 +249,33 @@ rkpcie_attach(device_t parent, device_t self, void *aux)
 		fdtbus_regulator_enable(regulator);
 		fdtbus_regulator_release(regulator);
 	}
-		
+
 	fdtbus_clock_assign(phandle);
 	clock_enable_all(phandle);
 
 	ep_gpio = fdtbus_gpio_acquire(phandle, "ep-gpios", GPIO_PIN_OUTPUT);
 
+	/*
+	 * Let board-specific properties override the default, which is set
+	 * to PCIe 1.x, due to errata in the RK3399 CPU.  We don't know exactly
+	 * what these errata involved (not public), but posts from the
+	 * @rock-chips.com domain to u-boot and linux-kernel lists indicate
+	 * that there is a errata related to this, and indeed, the Datasheet
+	 * since at least Rev 1.6 and including the latest Rev 1.8 say that the
+	 * PCIe can handle 2.5GT/s (ie, PCIe 1.x).
+	 */
 	if (of_getprop_uint32(phandle, "max-link-speed", &max_link_speed) != 0)
-		max_link_speed = 2;
+		max_link_speed = 1;
 	if (of_getprop_uint32(phandle, "num-lanes", &num_lanes) != 0)
 		num_lanes = 1;
+
+	/*
+	 * If the DT has a "bus-scan-delay-ms" property, delay attaching the
+	 * PCI bus this many microseconds.
+	 */
+	if (of_getprop_uint32(phandle, "bus-scan-delay-ms",
+	    &bus_scan_delay_ms) != 0)
+		bus_scan_delay_ms = 0;
 
 again:
 	fdtbus_gpio_write(ep_gpio, 0);
@@ -281,7 +300,8 @@ again:
 	reset_assert(phandle, "pipe");
 
 	delay(1000);	/* TPERST. use 1ms */
-	
+	delayed_ms += 1;
+
 	reset_deassert(phandle, "pm");
 	reset_deassert(phandle, "aclk");
 	reset_deassert(phandle, "pclk");
@@ -315,6 +335,7 @@ again:
 
 	fdtbus_gpio_write(ep_gpio, 1);
 	delay(20000);	/* 20 ms according to PCI-e BS "Conventional Reset" */
+	delayed_ms += 20;
 
 	/* Start link training. */
 	HWRITE4(sc, PCIE_CLIENT_BASIC_STRAP_CONF, PCBSC_LINK_TRAIN_EN);
@@ -324,6 +345,7 @@ again:
 		if (PCBS1_LINK_ST(status) == PCBS1_LS_DL_DONE)
 			break;
 		delay(1000);
+		delayed_ms += 1;
 	}
 	if (timo == 0) {
 		device_printf(self, "link training timeout (link_st %u)\n",
@@ -342,6 +364,7 @@ again:
 			if ((status & PCIE_CORE_PL_CONF_SPEED_MASK) == PCIE_CORE_PL_CONF_SPEED_5G)
 				break;
 			delay(1000);
+			delayed_ms += 1;
 		}
 		if (timo == 0) {
 			device_printf(self, "Gen2 link training timeout\n");
@@ -350,6 +373,7 @@ again:
 		}
 	}
 	delay(80000);	/* wait 100 ms before CSR access. already waited 20. */
+	delayed_ms += 80;
 
 	fdtbus_gpio_release(ep_gpio);
 
@@ -394,8 +418,8 @@ again:
 	/* Configure Address Translation. */
 	rkpcie_atr_init(sc);
 
-	fdtbus_register_interrupt_controller(self, OF_child(sc->sc_phsc.sc_phandle),
-	            &rkpcie_intrfuncs);
+	fdtbus_register_interrupt_controller(self,
+	    OF_child(sc->sc_phsc.sc_phandle), &rkpcie_intrfuncs);
 
 	sc->sc_phsc.sc_type = PCIHOST_ECAM;
 	sc->sc_phsc.sc_pci_flags |= PCI_FLAGS_MSI_OKAY;
@@ -407,6 +431,15 @@ again:
 	sc->sc_phsc.sc_pc.pc_conf_read = rkpcie_conf_read;
 	sc->sc_phsc.sc_pc.pc_conf_write = rkpcie_conf_write;
 	sc->sc_phsc.sc_pc.pc_conf_hook = rkpcie_conf_hook;
+
+	if (bus_scan_delay_ms > delayed_ms) {
+		uint32_t ms = bus_scan_delay_ms - delayed_ms;
+
+		aprint_verbose_dev(phsc->sc_dev,
+		    "waiting %u extra ms for reset (already waited %u)\n",
+		    ms, delayed_ms);
+		delay(ms * 1000);
+	}
 
 	mutex_init(&sc->sc_conf_lock, MUTEX_DEFAULT, IPL_HIGH);
 	pcihost_init2(&sc->sc_phsc);
@@ -480,7 +513,7 @@ rkpcie_atr_init(struct rkpcie_softc *sc)
 		}
 	}
 
-	/* Passthrought inbound translations unmodified. */
+	/* Passthrough inbound translations unmodified. */
 	HWRITE4(sc, PCIE_ATR_IB_ADDR0(2), 32 - 1);
 	HWRITE4(sc, PCIE_ATR_IB_ADDR1(2), 0);
 

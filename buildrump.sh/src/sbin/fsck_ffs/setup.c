@@ -1,4 +1,4 @@
-/*	$NetBSD: setup.c,v 1.103 2020/04/17 09:42:27 jdolecek Exp $	*/
+/*	$NetBSD: setup.c,v 1.109 2023/07/05 10:59:08 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)setup.c	8.10 (Berkeley) 5/9/95";
 #else
-__RCSID("$NetBSD: setup.c,v 1.103 2020/04/17 09:42:27 jdolecek Exp $");
+__RCSID("$NetBSD: setup.c,v 1.109 2023/07/05 10:59:08 riastradh Exp $");
 #endif
 #endif /* not lint */
 
@@ -85,7 +85,8 @@ int16_t sblkpostbl[256];
 int
 setup(const char *dev, const char *origdev)
 {
-	long cg, size, asked, i, j;
+	uint32_t cg;
+	long size, asked, i, j;
 	long bmapsize;
 	struct disk_geom geo;
 	struct dkwedge_info dkw;
@@ -180,7 +181,7 @@ setup(const char *dev, const char *origdev)
 
 	if (!quota2_check_doquota())
 		doskipclean = 0;
-		
+
 	/* ffs_superblock_layout() == 2 */
 	if (sblock->fs_magic != FS_UFS1_MAGIC ||
 	    (sblock->fs_old_flags & FS_FLAGS_UPDATED) != 0) {
@@ -207,7 +208,7 @@ setup(const char *dev, const char *origdev)
 			 * so we don't bother to re-read the superblock from
 			 * the journal.
 			 * XXX, instead we could re-read the superblock and
-			 * then not force doskipclean = 0 
+			 * then not force doskipclean = 0
 			 */
 		}
 	}
@@ -295,7 +296,7 @@ setup(const char *dev, const char *origdev)
 		}
 	}
 	if (!is_ufs2 && sblock->fs_old_postblformat != FS_42POSTBLFMT &&
-	    (sblock->fs_old_interleave < 1 || 
+	    (sblock->fs_old_interleave < 1 ||
 	    sblock->fs_old_interleave > sblock->fs_old_nsect)) {
 		pwarn("IMPOSSIBLE INTERLEAVE=%d IN SUPERBLOCK",
 			sblock->fs_old_interleave);
@@ -308,7 +309,7 @@ setup(const char *dev, const char *origdev)
 		}
 	}
 	if (!is_ufs2 && sblock->fs_old_postblformat != FS_42POSTBLFMT &&
-	    (sblock->fs_old_npsect < sblock->fs_old_nsect || 
+	    (sblock->fs_old_npsect < sblock->fs_old_nsect ||
 	    sblock->fs_old_npsect > sblock->fs_old_nsect*2)) {
 		pwarn("IMPOSSIBLE NPSECT=%d IN SUPERBLOCK",
 			sblock->fs_old_npsect);
@@ -462,7 +463,7 @@ setup(const char *dev, const char *origdev)
 	    sblock->fs_cssize);
 	if (sblock->fs_csp == NULL) {
 		pwarn("cannot alloc %u bytes for summary info\n",
-		    sblock->fs_cssize);	
+		    sblock->fs_cssize);
 		goto badsblabel;
 	}
 	memset(sblock->fs_csp, 0, sblock->fs_cssize);
@@ -525,7 +526,7 @@ setup(const char *dev, const char *origdev)
 	inpsort = calloc((unsigned)listmax, sizeof(*inpsort));
 	inphead = calloc((unsigned)numdirs, sizeof(*inphead));
 	if (inpsort == NULL || inphead == NULL) {
-		pwarn("cannot alloc %u bytes for inphead\n", 
+		pwarn("cannot alloc %u bytes for inphead\n",
 		    (unsigned)(numdirs * sizeof(struct inoinfo *)));
 		goto badsblabel;
 	}
@@ -542,7 +543,7 @@ setup(const char *dev, const char *origdev)
 		usedsoftdep = 0;
 
 #ifndef NO_APPLE_UFS
-	if (!forceimage && dkw.dkw_parent[0]) 
+	if (!forceimage && dkw.dkw_parent[0])
 		if (strcmp(dkw.dkw_ptype, DKW_PTYPE_APPLEUFS) == 0)
 			isappleufs = 1;
 
@@ -718,7 +719,8 @@ detect_byteorder(struct fs *fs, int sblockoff)
 	    fs->fs_magic == FS_UFS1_MAGIC_SWAPPED))
 		/* Likely to be the first alternate of a fs with 64k blocks */
 		return -1;
-	if (fs->fs_magic == FS_UFS1_MAGIC || fs->fs_magic == FS_UFS2_MAGIC) {
+	if (fs->fs_magic == FS_UFS1_MAGIC || fs->fs_magic == FS_UFS2_MAGIC ||
+	    fs->fs_magic == FS_UFS2EA_MAGIC) {
 #ifndef NO_FFS_EI
 		if (endian == 0 || BYTE_ORDER == endian) {
 			needswap = 0;
@@ -732,7 +734,8 @@ detect_byteorder(struct fs *fs, int sblockoff)
 	}
 #ifndef NO_FFS_EI
 	else if (fs->fs_magic == FS_UFS1_MAGIC_SWAPPED ||
-		   fs->fs_magic == FS_UFS2_MAGIC_SWAPPED) {
+		 fs->fs_magic == FS_UFS2_MAGIC_SWAPPED ||
+		 fs->fs_magic == FS_UFS2EA_MAGIC_SWAPPED) {
 		if (endian == 0 || BYTE_ORDER != endian) {
 			needswap = 1;
 			doswap = do_blkswap = do_dirswap = 0;
@@ -744,6 +747,29 @@ detect_byteorder(struct fs *fs, int sblockoff)
 	}
 #endif
 	return -1;
+}
+
+/* Update on-disk fs->fs_magic if we are converting */
+void
+cvt_magic(struct fs *fs)
+{
+
+	if (is_ufs2ea || doing2ea) {
+		if (fs->fs_magic == FS_UFS2_MAGIC) {
+			fs->fs_magic = FS_UFS2EA_MAGIC;
+		}
+		if (fs->fs_magic == FS_UFS2_MAGIC_SWAPPED) {
+			fs->fs_magic = FS_UFS2EA_MAGIC_SWAPPED;
+		}
+	}
+	if (doing2noea) {
+		if (fs->fs_magic == FS_UFS2EA_MAGIC) {
+			fs->fs_magic = FS_UFS2_MAGIC;
+		}
+		if (fs->fs_magic == FS_UFS2EA_MAGIC_SWAPPED) {
+			fs->fs_magic = FS_UFS2_MAGIC_SWAPPED;
+		}
+	}
 }
 
 /*
@@ -811,8 +837,14 @@ readsb(int listerr)
 	memmove(sblock, sblk.b_un.b_fs, SBLOCKSIZE);
 	if (needswap)
 		ffs_sb_swap(sblk.b_un.b_fs, sblock);
-
+	if (sblock->fs_magic == FS_UFS2EA_MAGIC) {
+		is_ufs2ea = 1;
+		sblock->fs_magic = FS_UFS2_MAGIC;
+	}
 	is_ufs2 = sblock->fs_magic == FS_UFS2_MAGIC;
+
+	/* change on-disk magic if asked */
+	cvt_magic(fs);
 
 	/*
 	 * run a few consistency checks of the super block
@@ -845,6 +877,11 @@ readsb(int listerr)
 	memmove(altsblock, asblk.b_un.b_fs, sblock->fs_sbsize);
 	if (needswap)
 		ffs_sb_swap(asblk.b_un.b_fs, altsblock);
+	if (altsblock->fs_magic == FS_UFS2EA_MAGIC) {
+		altsblock->fs_magic = FS_UFS2_MAGIC;
+	}
+	/* change on-disk magic if asked */
+	cvt_magic(asblk.b_un.b_fs);
 	if (cmpsblks(sblock, altsblock)) {
 		if (debug) {
 			uint32_t *nlp, *olp, *endlp;
@@ -873,7 +910,7 @@ out:
 	sb_oldfscompat_read(sblock, &sblocksave);
 
 	/* Now we know the SB is valid, we can write it back if needed */
-	if (doswap) {
+	if (doswap || doing2ea || doing2noea) {
 		sbdirty();
 		dirty(&asblk);
 	}
@@ -1024,7 +1061,6 @@ cmpsblks44(const struct fs *sb, struct fs *asb)
 	return memcmp(sb, asb, sb->fs_sbsize);
 }
 
-
 static void
 badsb(int listerr, const char *s)
 {
@@ -1114,10 +1150,10 @@ static int
 check_snapinum(void)
 {
 	int loc, loc2, res;
-	int *snapinum = &sblock->fs_snapinum[0];
+	uint32_t *snapinum = &sblock->fs_snapinum[0];
 
 	res = 0;
- 
+
 	if (isappleufs)
 		return 0;
 

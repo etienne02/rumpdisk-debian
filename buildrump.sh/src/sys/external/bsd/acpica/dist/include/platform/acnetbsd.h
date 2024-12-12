@@ -1,12 +1,12 @@
 /******************************************************************************
  *
  * Name: acnetbsd.h - OS specific defines, etc.
- *       $Revision: 1.22 $
+ *       $Revision: 1.26 $
  *
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -65,6 +65,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/reboot.h>
 #include <sys/endian.h>
 #include <dev/acpi/acpica/acpi_func.h>
 
@@ -83,6 +84,12 @@
 #define ACPI_EXTERNAL_XFACE
 #define ACPI_INTERNAL_XFACE
 #define ACPI_INTERNAL_VAR_XFACE
+
+#if defined(_KERNEL)
+/* Suppress ACPI_INFO level log messages in the kernel when this is true */
+#define ACPI_QUIET_BOOT	\
+	((boothowto & (AB_QUIET|AB_SILENT)) != 0)
+#endif
 
 /*
  * XXX: The internal memory tracking of ACPICA, available when

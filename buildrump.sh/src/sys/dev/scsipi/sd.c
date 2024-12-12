@@ -1,4 +1,4 @@
-/*	$NetBSD: sd.c,v 1.332 2021/05/30 06:46:46 dholland Exp $	*/
+/*	$NetBSD: sd.c,v 1.337 2024/09/28 08:57:47 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2003, 2004 The NetBSD Foundation, Inc.
@@ -47,7 +47,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sd.c,v 1.332 2021/05/30 06:46:46 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sd.c,v 1.337 2024/09/28 08:57:47 mlelstv Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_scsi.h"
@@ -167,6 +167,8 @@ const struct bdevsw sd_bdevsw = {
 	.d_dump = sddump,
 	.d_psize = sdsize,
 	.d_discard = nodiscard,
+	.d_cfdriver = &sd_cd,
+	.d_devtounit = disklabel_dev_unit,
 	.d_flag = D_DISK | D_MPSAFE
 };
 
@@ -182,6 +184,8 @@ const struct cdevsw sd_cdevsw = {
 	.d_mmap = nommap,
 	.d_kqfilter = nokqfilter,
 	.d_discard = nodiscard,
+	.d_cfdriver = &sd_cd,
+	.d_devtounit = disklabel_dev_unit,
 	.d_flag = D_DISK | D_MPSAFE
 };
 
@@ -254,9 +258,8 @@ sdattach(device_t parent, device_t self, void *aux)
 	SC_DEBUG(periph, SCSIPI_DB2, ("sdattach: "));
 
 	sd->type = (sa->sa_inqbuf.type & SID_TYPE);
-	strncpy(sd->name, sa->sa_inqbuf.product, sizeof(sd->name));
-
-	strncpy(sd->typename, sa->sa_inqbuf.product, sizeof(sd->typename));
+	memcpy(sd->name, sa->sa_inqbuf.product, uimin(16, sizeof(sd->name)));
+	memcpy(sd->typename, sa->sa_inqbuf.product, uimin(16, sizeof(sd->typename)));
 
 	if (sd->type == T_SIMPLE_DIRECT)
 		periph->periph_quirks |= PQUIRK_ONLYBIG | PQUIRK_NOBIGMODESENSE;
@@ -348,8 +351,9 @@ sdattach(device_t parent, device_t self, void *aux)
 	}
 	aprint_normal("\n");
 
-	/* Discover wedges on this disk. */
-	dkwedge_discover(&dksc->sc_dkdev);
+	/* Discover wedges on this disk if it is online */
+	if (result == SDGP_RESULT_OK)
+		dkwedge_discover(&dksc->sc_dkdev);
 
 	/*
 	 * Establish a shutdown hook so that we can ensure that
@@ -1311,19 +1315,14 @@ static int
 sd_validate_blksize(struct scsipi_periph *periph, int len)
 {
 
-	switch (len) {
-	case 256:
-	case 512:
-	case 1024:
-	case 2048:
-	case 4096:
+	if (len >= 256 && powerof2(len) && len <= MAXPHYS) {
 		return 1;
 	}
 
 	if (periph) {
 		scsipi_printaddr(periph);
 		printf("%s sector size: 0x%x.  Defaulting to %d bytes.\n",
-		    (len ^ (1 << (ffs(len) - 1))) ?
+		    !powerof2(len) ?
 		    "preposterous" : "unsupported",
 		    len, SD_DEFAULT_BLKSIZE);
 	}

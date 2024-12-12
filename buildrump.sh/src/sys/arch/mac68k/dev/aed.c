@@ -1,6 +1,9 @@
-/*	$NetBSD: aed.c,v 1.35 2020/12/19 21:46:40 thorpej Exp $	*/
+/*	$NetBSD: aed.c,v 1.41 2024/12/09 10:32:53 nat Exp $	*/
 
 /*
+ * Copyright (c) 2024 Nathanial Sloss <nathanialsloss@yahoo.com.au>
+ * All rights reserved.
+ *
  * Copyright (C) 1994	Bradley A. Grantham
  * All rights reserved.
  *
@@ -26,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aed.c,v 1.35 2020/12/19 21:46:40 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aed.c,v 1.41 2024/12/09 10:32:53 nat Exp $");
 
 #include "opt_adb.h"
 
@@ -48,6 +51,11 @@ __KERNEL_RCSID(0, "$NetBSD: aed.c,v 1.35 2020/12/19 21:46:40 thorpej Exp $");
 #include <mac68k/dev/adbvar.h>
 #include <mac68k/dev/aedvar.h>
 #include <mac68k/dev/akbdvar.h>
+#include <mac68k/dev/pm_direct.h>
+
+#define BRIGHTNESS_MAX	31
+#define BRIGHTNESS_MIN	0
+#define BRIGHTNESS_STEP	4
 
 /*
  * Function declarations.
@@ -60,11 +68,17 @@ static void	aed_dokeyupdown(adb_event_t *);
 static void	aed_handoff(adb_event_t *);
 static void	aed_enqevent(adb_event_t *);
 
+static void	aed_display_on(device_t);
+static void	aed_display_off(device_t);
+static void	aed_brightness_down(device_t);
+static void	aed_brightness_up(device_t);
+
 /*
  * Local variables.
  */
 static struct aed_softc *aed_sc;
 static int aed_options = 0 | AED_MSEMUL;
+static int brightness = BRIGHTNESS_MAX;
 
 /* Driver definition */
 CFATTACH_DECL_NEW(aed, sizeof(struct aed_softc),
@@ -139,6 +153,15 @@ aedattach(device_t parent, device_t self, void *aux)
 
 	aed_sc = sc;
 
+	pmf_event_register(self, PMFE_DISPLAY_ON,
+	    aed_display_on, TRUE);
+	pmf_event_register(self, PMFE_DISPLAY_OFF,
+	    aed_display_off, TRUE);
+	pmf_event_register(self, PMFE_DISPLAY_BRIGHTNESS_UP,
+	    aed_brightness_up, TRUE);
+	pmf_event_register(self, PMFE_DISPLAY_BRIGHTNESS_DOWN,
+	    aed_brightness_down, TRUE);
+
 	printf("ADB Event device\n");
 
 	return;
@@ -164,6 +187,7 @@ aed_input(adb_event_t *event)
 			aed_dokeyupdown(&new_event);
 		break;
 	case ADBADDR_MS:
+		event->u.m.buttons |= aed_sc->sc_buttons;
 		new_event.u.m.buttons |= aed_sc->sc_buttons;
 		aed_handoff(&new_event);
 		break;
@@ -266,6 +290,12 @@ aed_emulate_mouse(adb_event_t *event)
 			new_event.u.m.dx = new_event.u.m.dy = 0;
 			microtime(&new_event.timestamp);
 			aed_handoff(&new_event);
+			break;
+		case ADBK_KEYUP(ADBK_UP):
+			pmf_event_inject(NULL, PMFE_DISPLAY_BRIGHTNESS_UP);
+			break;
+		case ADBK_KEYUP(ADBK_DOWN):
+			pmf_event_inject(NULL, PMFE_DISPLAY_BRIGHTNESS_DOWN);
 			break;
 		case ADBK_KEYUP(ADBK_SHIFT):
 		case ADBK_KEYDOWN(ADBK_SHIFT):
@@ -598,17 +628,10 @@ filt_aedread(struct knote *kn, long hint)
 }
 
 static const struct filterops aedread_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_aedrdetach,
 	.f_event = filt_aedread,
-};
-
-static const struct filterops aed_seltrue_filtops = {
-	.f_isfd = 1,
-	.f_attach = NULL,
-	.f_detach = filt_aedrdetach,
-	.f_event = filt_seltrue,
 };
 
 int
@@ -619,21 +642,60 @@ aedkqfilter(dev_t dev, struct knote *kn)
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
 		kn->kn_fop = &aedread_filtops;
+		s = splvm();
+		selrecord_knote(&aed_sc->sc_selinfo, kn);
+		splx(s);
 		break;
 
 	case EVFILT_WRITE:
-		kn->kn_fop = &aed_seltrue_filtops;
+		kn->kn_fop = &seltrue_filtops;
 		break;
 
 	default:
-		return (1);
+		return (EINVAL);
 	}
 
-	kn->kn_hook = NULL;
-
-	s = splvm();
-	selrecord_knote(&aed_sc->sc_selinfo, kn);
-	splx(s);
-
 	return (0);
+}
+
+static void
+aed_brightness_down(device_t dev)
+{
+	int level, step;
+
+	level = brightness;
+	if (level <= 4) 	 /* logarithmic brightness curve. */
+		step = 1;
+	else
+		step = BRIGHTNESS_STEP;
+
+	level = uimax(BRIGHTNESS_MIN, level - step);
+	brightness = pm_set_brightness(level);
+}
+
+static void
+aed_brightness_up(device_t dev)
+{
+	int level, step;
+
+	level = brightness;
+	if (level <= 4) 	 /* logarithmic brightness curve. */
+		step = 1;
+	else
+		step = BRIGHTNESS_STEP;
+
+	level = uimin(BRIGHTNESS_MAX, level + step);
+	brightness = pm_set_brightness(level);
+}
+
+static void
+aed_display_on(device_t dev)
+{
+	(void)pm_set_brightness(brightness);
+}
+
+static void
+aed_display_off(device_t dev)
+{
+	(void)pm_set_brightness(0);
 }

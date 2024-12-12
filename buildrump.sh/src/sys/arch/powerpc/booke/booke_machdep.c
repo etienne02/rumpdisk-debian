@@ -1,4 +1,4 @@
-/*	$NetBSD: booke_machdep.c,v 1.33 2021/03/30 14:29:54 rin Exp $	*/
+/*	$NetBSD: booke_machdep.c,v 1.35 2024/03/05 14:15:34 thorpej Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -38,7 +38,7 @@
 #define	_POWERPC_BUS_DMA_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: booke_machdep.c,v 1.33 2021/03/30 14:29:54 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: booke_machdep.c,v 1.35 2024/03/05 14:15:34 thorpej Exp $");
 
 #include "ksyms.h"
 
@@ -266,7 +266,6 @@ cpu_reboot(int howto, char *what)
 	if (!cold && !(howto & RB_NOSYNC) && !syncing) {
 		syncing = 1;
 		vfs_shutdown();		/* sync */
-		resettodr();		/* set wall clock */
 	}
 
 	splhigh();
@@ -638,7 +637,7 @@ sort_data(uint64_t *data, size_t count)
 			 * We want to but can't use floating point to calculate
 			 *	gap = (size_t)((double)gap / N)
 			 *
-			 * So we will use the multicative inverse of N
+			 * So we will use the multiplicative inverse of N
 			 * (module 65536) to achieve the division.
 			 *
 			 * iN = 2^16 / 1.24733... = 52540

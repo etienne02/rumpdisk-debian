@@ -1,4 +1,4 @@
-/*	$NetBSD: expand.c,v 1.138 2020/08/01 17:56:56 kre Exp $	*/
+/*	$NetBSD: expand.c,v 1.146 2024/10/21 15:57:45 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)expand.c	8.5 (Berkeley) 5/15/95";
 #else
-__RCSID("$NetBSD: expand.c,v 1.138 2020/08/01 17:56:56 kre Exp $");
+__RCSID("$NetBSD: expand.c,v 1.146 2024/10/21 15:57:45 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -126,7 +126,7 @@ STATIC void rmescapes_nl(char *);
 #ifdef	DEBUG
 #define	NULLTERM_4_TRACE(p)	STACKSTRNUL(p)
 #else
-#define	NULLTERM_4_TRACE(p)	do { /* nothing */ } while (/*CONSTCOND*/0)
+#define	NULLTERM_4_TRACE(p)	do { /* nothing */ } while (0)
 #endif
 
 #define	IS_BORING(_ch)						\
@@ -143,15 +143,16 @@ STATIC void rmescapes_nl(char *);
  * Expand shell variables and backquotes inside a here document.
  */
 
-void
-expandhere(union node *arg, int fd)
+char *
+expandhere(union node *arg)
 {
 	int len;
 
-	herefd = fd;
+	VTRACE(DBG_EXPAND|DBG_REDIR, ("expandhere(%p)\n", arg));
 	expandarg(arg, NULL, 0);
 	len = rmescapes(stackblock());
-	xwrite(fd, stackblock(),  len);
+	VTRACE(DBG_EXPAND|DBG_REDIR, ("expandhere() -> %d\n", len));
+	return stalloc(len + 1);	/* include the \0 */
 }
 
 
@@ -193,8 +194,9 @@ expandarg(union node *arg, struct arglist *arglist, int flag)
 	argstr(arg->narg.text, flag);
 	if (arglist == NULL) {
 		STACKSTRNUL(expdest);
-		CTRACE(DBG_EXPAND, ("expandarg: no arglist, done (%d) \"%s\"\n",
-		    expdest - stackblock(), stackblock()));
+		CTRACE(DBG_EXPAND,
+		    ("expandarg: no arglist, done[%d] (len %d) \"%s\"\n",
+		    back_exitstatus, expdest - stackblock(), stackblock()));
 		return;			/* here document expanded */
 	}
 	STPUTC('\0', expdest);
@@ -386,7 +388,7 @@ argstr(const char *p, int flag)
 STATIC const char *
 exptilde(const char *p, int flag)
 {
-	char c;
+	char c, last;
 	const char *startp = p;
 	struct passwd *pw;
 	const char *home;
@@ -455,15 +457,36 @@ exptilde(const char *p, int flag)
 	 * Posix XCU 2.6.1: The value of $HOME (for ~) or the initial
 	 *		working directory from getpwnam() for ~user
 	 * Nothing there about "except if a null string".  So do what it wants.
+	 * In later drafts (to become Issue 8), it is even required that in
+	 * this case, (where HOME='') a bare ~ expands to "" (which must not
+	 * be reduced to nothing).
 	 */
-	if (home == NULL /* || *home == '\0' */) {
+	last = '\0';		/* just in case *home == '\0' (already) */
+	if (home == NULL) {
 		CTRACE(DBG_EXPAND, (": returning unused \"%s\"\n", startp));
 		return startp;
-	} while ((c = *home++) != '\0') {
+	}
+	while ((c = *home++) != '\0') {
 		if ((quotes && NEEDESC(c)) || ISCTL(c))
 			STPUTC(CTLESC, expdest);
 		STPUTC(c, expdest);
+		last = c;
 	}
+
+	/*
+	 * If HOME (or whatver) ended in a '/' (last == '/'), and
+	 * the ~prefix was terminated by a '/', then only keep one
+	 * of them - since we already took the one from HOME, just
+	 * skip over the one that ended the tilde prefix.
+	 *
+	 * Current (Issue 8) drafts say this is permitted, and recommend
+	 * it - a later version of the standard will probably require it.
+	 * This is to prevent ~/foo generating //foo when HOME=/ (and
+	 * other cases like it, but that's the important one).
+	 */
+	if (last == '/' && *p == '/')
+		p++;
+
 	CTRACE(DBG_EXPAND, (": added %d \"%.*s\" returning \"%s\"\n",
 	      expdest - stackblock() - offs, expdest - stackblock() - offs,
 	      stackblock() + offs, p));
@@ -698,7 +721,8 @@ expbackq(union node *cmd, int quoted, int flag)
 		back_exitstatus = waitforjob(in.jp);
 	if (quoted == 0)
 		recordregion(startloc, dest - stackblock(), 0);
-	CTRACE(DBG_EXPAND, ("evalbackq: size=%d: \"%.*s\"\n",
+	CTRACE(DBG_EXPAND, ("evalbackq: [%d] size=%d: \"%.*s\"\n",
+		back_exitstatus,
 		(int)((dest - stackblock()) - startloc),
 		(int)((dest - stackblock()) - startloc),
 		stackblock() + startloc));
@@ -889,12 +913,12 @@ evalvar(const char *p, int flag)
 	varflags = (unsigned char)*p++;
 	subtype = varflags & VSTYPE;
 	var = p;
-	special = !is_name(*p);
+	special = subtype != VSUNKNOWN && !is_name(*p);
 	p = strchr(p, '=') + 1;
 
 	CTRACE(DBG_EXPAND,
 	    ("evalvar \"%.*s\", flag=%#X quotes=%#X vf=%#X subtype=%X\n",
-	    p - var - 1, var, flag, quotes, varflags, subtype));
+	    (int)(p - var - 1), var, flag, quotes, varflags, subtype));
 
  again: /* jump here after setting a variable with ${var=text} */
 	if (varflags & VSLINENO) {
@@ -1082,6 +1106,26 @@ evalvar(const char *p, int flag)
 		apply_ifs = 0;		/* never executed */
 		break;
 
+	case VSUNKNOWN:
+		VTRACE(DBG_EXPAND,
+	    	   ("evalvar \"%.*s\", unknown [%p %p] \"%.3s\" (%#2x %#2x)\n",
+		    (int)(p - var - 1), var, var, p, p, p[0] & 0xFF, p[1] & 0xFF));
+
+		if ((p - var) <= 1)
+			error("%d: unknown expansion type", line_number);
+		else {
+			if (*p == '#')	/* only VSUNKNOWN as a ${#var:...} */
+				error("%d: ${#%.*s%c..}: unknown modifier",
+				     line_number, (int)(p - var - 1),
+				     var, p[1]&0xFF);
+
+			if (*p == CTLESC)
+				p++;
+			error("%d: ${%.*s%c..}: unknown modifier",
+			    line_number, (int)(p - var - 1), var, (*p & 0xFF));
+		}
+		/* NOTREACHED */
+
 	default:
 		abort();
 	}
@@ -1182,7 +1226,7 @@ varvalue(const char *name, int quoted, int subtype, int flag)
 	    quoted ? ", quoted" : "", subtype, flag));
 
 	if (subtype == VSLENGTH)	/* no magic required ... */
-		flag &= ~EXP_FULL;
+		flag &= ~(EXP_FULL | EXP_QNEEDED);
 
 #define STRTODEST(p) \
 	do {\
@@ -1194,7 +1238,7 @@ varvalue(const char *name, int quoted, int subtype, int flag)
 			} \
 		} else \
 			while (*p) { \
-				if (ISCTL(*p)) \
+				if ((flag & EXP_QNEEDED) && ISCTL(*p)) \
 					STPUTC(CTLESC, expdest); \
 				STPUTC(*p++, expdest); \
 			} \
@@ -1792,7 +1836,7 @@ static int
 match_charclass(const char *p, wchar_t chr, const char **end)
 {
 	char name[20];
-	char *nameend;
+	const char *nameend;
 	wctype_t cclass;
 	char *q;
 

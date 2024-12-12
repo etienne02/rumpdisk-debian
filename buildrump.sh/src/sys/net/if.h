@@ -1,4 +1,4 @@
-/*	$NetBSD: if.h,v 1.292 2021/08/09 20:49:10 andvar Exp $	*/
+/*	$NetBSD: if.h,v 1.306 2024/09/22 08:21:33 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001 The NetBSD Foundation, Inc.
@@ -85,6 +85,7 @@
 #include <sys/socket.h>
 #include <sys/queue.h>
 #include <sys/mutex.h>
+#include <sys/hook.h>
 
 #include <net/dlt.h>
 #include <net/pfil.h>
@@ -240,7 +241,7 @@ struct ifqueue {
 	struct		mbuf *ifq_tail;
 	int		ifq_len;
 	int		ifq_maxlen;
-	int		ifq_drops;
+	uint64_t	ifq_drops;
 	kmutex_t	*ifq_lock;
 };
 
@@ -339,6 +340,8 @@ typedef struct ifnet {
 #define	if_watchdog	if_slowtimo
 	void		(*if_drain)	/* :: routine to release resources */
 			    (struct ifnet *);
+	void		(*if_bpf_mtap)	/* :: bpf routine */
+			    (struct bpf_if *, struct mbuf *, u_int);
 	struct ifaltq	if_snd;		/* q: output queue (includes altq) */
 	struct ifaddr	*if_dl;		/* i: identity of this interface. */
 	const struct sockaddr_dl
@@ -380,8 +383,7 @@ typedef struct ifnet {
 					/* a: */
 	struct mowner	*if_mowner;	/* ?: who owns mbufs for this interface */
 
-	void		*if_agrprivate;	/* ?: used only when #if NAGR > 0 */
-	void		*if_lagg;	/* ?: used only when #if NLAGG > 0 */
+	void		*if_lagg;	/* :: lagg or agr structure */
 	void		*if_npf_private;/* ?: associated NPF context */
 
 	/*
@@ -391,7 +393,7 @@ typedef struct ifnet {
 	void		*if_pf_groups;	/* ?: pf interface groups */
 	/*
 	 * During an ifnet's lifetime, it has only one if_index, but
-	 * and if_index is not sufficient to identify an ifnet
+	 * an if_index is not sufficient to identify an ifnet
 	 * because during the lifetime of the system, many ifnets may occupy a
 	 * given if_index.  Let us tell different ifnets at the same
 	 * if_index apart by their if_index_gen, a unique number that each ifnet
@@ -412,7 +414,7 @@ typedef struct ifnet {
 	kmutex_t	*if_ioctl_lock;	/* :: */
 	char		*if_description;	/* i: interface description */
 #ifdef _KERNEL /* XXX kvm(3) */
-	struct callout	*if_slowtimo_ch;/* :: */
+	struct if_slowtimo_data *if_slowtimo_data; /* :: */
 	struct krwlock	*if_afdata_lock;/* :: */
 	struct if_percpuq
 			*if_percpuq;	/* :: we should remove it in the future */
@@ -420,7 +422,6 @@ typedef struct ifnet {
 	uint16_t	if_link_queue;	/* q: masked link state change queue */
 					/* q: is link state work scheduled? */
 	bool		if_link_scheduled;
-	void		(*if_link_state_changed)(struct ifnet *, int);
 	struct pslist_entry
 			if_pslist_entry;/* i: */
 	struct psref_target
@@ -433,11 +434,12 @@ typedef struct ifnet {
 	/* XXX should be protocol independent */
 	LIST_HEAD(, in6_multi)
 			if_multiaddrs;	/* 6: */
+	khook_list_t	*if_linkstate_hooks;	/* :: */
 #endif
 } ifnet_t;
 
 #include <net/if_stats.h>
- 
+
 #define	if_name(ifp)	((ifp)->if_xname)
 
 #define	IFF_UP		0x0001		/* interface is up */
@@ -445,11 +447,27 @@ typedef struct ifnet {
 #define	IFF_DEBUG	0x0004		/* turn on debugging */
 #define	IFF_LOOPBACK	0x0008		/* is a loopback net */
 #define	IFF_POINTOPOINT	0x0010		/* interface is point-to-point link */
+#if 0
 /*			0x0020		   was IFF_NOTRAILERS */
+#else
+/*
+ * sys/compat/svr4 is removed on 19 Dec 2018.
+ * And then, IFF_NOTRAILERS itself is removed by if.h:r1.268 on 5 Feb 2019.
+ */
+#define	IFF_UNNUMBERED	0x0020		/* explicit unnumbered */
+#endif
 #define	IFF_RUNNING	0x0040		/* resources allocated */
 #define	IFF_NOARP	0x0080		/* no address resolution protocol */
 #define	IFF_PROMISC	0x0100		/* receive all packets */
-#define	IFF_ALLMULTI	0x0200		/* receive all multicast packets */
+#define	IFF_ALLMULTI	0x0200		/* OBSOLETE -- DO NOT USE */
+/*
+ * IFF_ALLMULTI obsoleted on 2019-05-15 -- existing non-MP-safe drivers
+ * can use it for themselves under IFNET_LOCK, but they should be
+ * converted to use ETHER_F_ALLMULTI under ETHER_LOCK instead.  For
+ * compatibility with existing drivers, if_ethersubr and if_arcsubr
+ * will set IFF_ALLMULTI according to other flags, but you should not
+ * rely on this.
+ */
 #define	IFF_OACTIVE	0x0400		/* transmission in progress */
 #define	IFF_SIMPLEX	0x0800		/* can't hear own transmissions */
 #define	IFF_LINK0	0x1000		/* per link layer defined bit */
@@ -597,7 +615,7 @@ if_start_lock(struct ifnet *ifp)
 #endif /* _KERNEL */
 
 #define	IFFBITS \
-    "\020\1UP\2BROADCAST\3DEBUG\4LOOPBACK\5POINTOPOINT" \
+    "\020\1UP\2BROADCAST\3DEBUG\4LOOPBACK\5POINTOPOINT\6UNNUMBERED" \
     "\7RUNNING\10NOARP\11PROMISC\12ALLMULTI\13OACTIVE\14SIMPLEX" \
     "\15LINK0\16LINK1\17LINK2\20MULTICAST"
 
@@ -698,7 +716,7 @@ if_start_lock(struct ifnet *ifp)
 		(m)->m_nextpkt = 0; \
 		(ifq)->ifq_len--; \
 	} \
-} while (/*CONSTCOND*/0) 
+} while (/*CONSTCOND*/0)
 #define	IF_POLL(ifq, m)		((m) = (ifq)->ifq_head)
 #define	IF_PURGE(ifq)							\
 do {									\
@@ -1086,20 +1104,6 @@ do {									\
 #define	IFQ_INC_DROPS(ifq)		((ifq)->ifq_drops++)
 #define	IFQ_SET_MAXLEN(ifq, len)	((ifq)->ifq_maxlen = (len))
 
-#define	IFQ_ENQUEUE_ISR(ifq, m, isr)					\
-do {									\
-	IFQ_LOCK(inq);							\
-	if (IF_QFULL(inq)) {						\
-		IF_DROP(inq);						\
-		IFQ_UNLOCK(inq);					\
-		m_freem(m);						\
-	} else {							\
-		IF_ENQUEUE(inq, m);					\
-		IFQ_UNLOCK(inq);					\
-		schednetisr(isr);					\
-	}								\
-} while (/*CONSTCOND*/ 0)
-
 #include <sys/mallocvar.h>
 MALLOC_DECLARE(M_IFADDR);
 MALLOC_DECLARE(M_IFMADDR);
@@ -1142,6 +1146,10 @@ int	if_do_dad(struct ifnet *);
 int	if_mcast_op(ifnet_t *, const unsigned long, const struct sockaddr *);
 int	if_flags_set(struct ifnet *, const u_short);
 int	if_clone_list(int, char *, int *);
+
+int	if_ioctl(struct ifnet *, u_long, void *);
+int	if_init(struct ifnet *);
+void	if_stop(struct ifnet *, int);
 
 struct	ifnet *ifunit(const char *);
 struct	ifnet *if_get(const char *, struct psref *);
@@ -1243,6 +1251,11 @@ void	loopattach(int);
 void	loopinit(void);
 int	looutput(struct ifnet *,
 	   struct mbuf *, const struct sockaddr *, const struct rtentry *);
+
+void *	if_linkstate_change_establish(struct ifnet *,
+	    void (*)(void *), void *);
+void	if_linkstate_change_disestablish(struct ifnet *,
+	    void *, kmutex_t *);
 
 /*
  * These are exported because they're an easy way to tell if
@@ -1397,10 +1410,11 @@ int	sysctl_ifq(int *name, u_int namelen, void *oldp,
 #define IFQCTL_PEAK	3
 #define IFQCTL_DROPS	4
 
-/* 
+/*
  * Hook for if_vlan - needed by if_agr
  */
-MODULE_HOOK(if_vlan_vlan_input_hook, void, (struct ifnet *, struct mbuf *));
+MODULE_HOOK(if_vlan_vlan_input_hook,
+    struct mbuf *, (struct ifnet *, struct mbuf *));
 
 #endif /* _KERNEL */
 

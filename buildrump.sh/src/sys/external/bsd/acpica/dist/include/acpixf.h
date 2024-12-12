@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,7 +46,7 @@
 
 /* Current ACPICA subsystem version in YYYYMMDD format */
 
-#define ACPI_CA_VERSION                 0x20210604
+#define ACPI_CA_VERSION                 0x20240827
 
 #include "acconfig.h"
 #include "actypes.h"
@@ -550,8 +550,12 @@ AcpiDecodePldBuffer (
 ACPI_EXTERNAL_RETURN_STATUS (
 ACPI_STATUS ACPI_INIT_FUNCTION
 AcpiInstallTable (
-    ACPI_PHYSICAL_ADDRESS   Address,
-    BOOLEAN                 Physical))
+    ACPI_TABLE_HEADER       *Table))
+
+ACPI_EXTERNAL_RETURN_STATUS (
+ACPI_STATUS ACPI_INIT_FUNCTION
+AcpiInstallPhysicalTable (
+    ACPI_PHYSICAL_ADDRESS   Address))
 
 ACPI_EXTERNAL_RETURN_STATUS (
 ACPI_STATUS
@@ -658,7 +662,7 @@ ACPI_EXTERNAL_RETURN_STATUS (
 ACPI_STATUS
 AcpiGetHandle (
     ACPI_HANDLE             Parent,
-    ACPI_CONST_STRING       Pathname,
+    const char              *Pathname,
     ACPI_HANDLE             *RetHandle))
 
 ACPI_EXTERNAL_RETURN_STATUS (
@@ -829,6 +833,21 @@ AcpiInstallAddressSpaceHandler (
     ACPI_ADR_SPACE_HANDLER  Handler,
     ACPI_ADR_SPACE_SETUP    Setup,
     void                    *Context))
+
+ACPI_EXTERNAL_RETURN_STATUS (
+ACPI_STATUS
+AcpiInstallAddressSpaceHandlerNo_Reg(
+    ACPI_HANDLE             Device,
+    ACPI_ADR_SPACE_TYPE     SpaceId,
+    ACPI_ADR_SPACE_HANDLER  Handler,
+    ACPI_ADR_SPACE_SETUP    Setup,
+    void                    *Context))
+
+ACPI_EXTERNAL_RETURN_STATUS (
+ACPI_STATUS
+AcpiExecuteRegMethods (
+    ACPI_HANDLE             Device,
+    ACPI_ADR_SPACE_TYPE     SpaceId))
 
 ACPI_EXTERNAL_RETURN_STATUS (
 ACPI_STATUS
@@ -1168,7 +1187,7 @@ ACPI_STATUS
 AcpiLeaveSleepState (
     UINT8                   SleepState))
 
-ACPI_HW_DEPENDENT_RETURN_STATUS (
+ACPI_EXTERNAL_RETURN_STATUS (
 ACPI_STATUS
 AcpiSetFirmwareWakingVector (
     ACPI_PHYSICAL_ADDRESS   PhysicalAddress,

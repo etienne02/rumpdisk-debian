@@ -1,4 +1,4 @@
-/*	$NetBSD: kernfs_vnops.c,v 1.172 2021/07/19 01:33:53 dholland Exp $	*/
+/*	$NetBSD: kernfs_vnops.c,v 1.174 2022/03/27 17:10:56 christos Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kernfs_vnops.c,v 1.172 2021/07/19 01:33:53 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kernfs_vnops.c,v 1.174 2022/03/27 17:10:56 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -145,8 +145,6 @@ int	kernfs_setattr(void *);
 int	kernfs_read(void *);
 int	kernfs_write(void *);
 int	kernfs_ioctl(void *);
-int	kernfs_link(void *);
-int	kernfs_symlink(void *);
 int	kernfs_readdir(void *);
 int	kernfs_inactive(void *);
 int	kernfs_reclaim(void *);
@@ -183,11 +181,11 @@ const struct vnodeopv_entry_desc kernfs_vnodeop_entries[] = {
 	{ &vop_fsync_desc, genfs_nullop },		/* fsync */
 	{ &vop_seek_desc, genfs_nullop },		/* seek */
 	{ &vop_remove_desc, genfs_eopnotsupp },		/* remove */
-	{ &vop_link_desc, kernfs_link },		/* link */
+	{ &vop_link_desc, genfs_erofs_link },		/* link */
 	{ &vop_rename_desc, genfs_eopnotsupp },		/* rename */
 	{ &vop_mkdir_desc, genfs_eopnotsupp },		/* mkdir */
 	{ &vop_rmdir_desc, genfs_eopnotsupp },		/* rmdir */
-	{ &vop_symlink_desc, kernfs_symlink },		/* symlink */
+	{ &vop_symlink_desc, genfs_erofs_symlink },	/* symlink */
 	{ &vop_readdir_desc, kernfs_readdir },		/* readdir */
 	{ &vop_readlink_desc, genfs_eopnotsupp },	/* readlink */
 	{ &vop_abortop_desc, genfs_abortop },		/* abortop */
@@ -195,7 +193,7 @@ const struct vnodeopv_entry_desc kernfs_vnodeop_entries[] = {
 	{ &vop_reclaim_desc, kernfs_reclaim },		/* reclaim */
 	{ &vop_lock_desc, genfs_lock },			/* lock */
 	{ &vop_unlock_desc, genfs_unlock },		/* unlock */
-	{ &vop_bmap_desc, genfs_badop },		/* bmap */
+	{ &vop_bmap_desc, genfs_eopnotsupp },		/* bmap */
 	{ &vop_strategy_desc, genfs_eopnotsupp },	/* strategy */
 	{ &vop_print_desc, kernfs_print },		/* print */
 	{ &vop_islocked_desc, genfs_islocked },		/* islocked */
@@ -1145,34 +1143,6 @@ kernfs_print(void *v)
 	return (0);
 }
 
-int
-kernfs_link(void *v)
-{
-	struct vop_link_v2_args /* {
-		struct vnode *a_dvp;
-		struct vnode *a_vp;
-		struct componentname *a_cnp;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
-}
-
-int
-kernfs_symlink(void *v)
-{
-	struct vop_symlink_v3_args /* {
-		struct vnode *a_dvp;
-		struct vnode **a_vpp;
-		struct componentname *a_cnp;
-		struct vattr *a_vap;
-		char *a_target;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
-}
- 
 int
 kernfs_getpages(void *v)
 {

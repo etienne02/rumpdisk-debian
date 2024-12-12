@@ -1,5 +1,5 @@
 /*	$KAME: sctp_usrreq.c,v 1.50 2005/06/16 20:45:29 jinmei Exp $	*/
-/*	$NetBSD: sctp_usrreq.c,v 1.20 2020/04/27 19:21:43 rjs Exp $	*/
+/*	$NetBSD: sctp_usrreq.c,v 1.27 2024/09/08 17:28:37 rillig Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Cisco Systems, Inc.
@@ -33,7 +33,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctp_usrreq.c,v 1.20 2020/04/27 19:21:43 rjs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctp_usrreq.c,v 1.27 2024/09/08 17:28:37 rillig Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -370,7 +370,7 @@ sctp_notify(struct sctp_inpcb *inp,
 	    (errno == ENOPROTOOPT)	/* SCTP is not present on host */
 		) {
 		/*
-		 * Hmm reachablity problems we must examine closely.
+		 * Hmm reachability problems we must examine closely.
 		 * If its not reachable, we may have lost a network.
 		 * Or if there is NO protocol at the other end named SCTP.
 		 * well we consider it a OOTB abort.
@@ -473,7 +473,7 @@ sctp_ctlinput(int cmd, const struct sockaddr *sa, void *vip)
 #if defined(__FreeBSD__) && __FreeBSD_version < 500000
                         /* XXX must be fixed for 5.x and higher, leave for 4.x */
 			if (PRC_IS_REDIRECT(cmd) && inp) {
-				in_rtchange((struct inpcb *)inp,
+				inpcb_rtchange((struct inpcb *)inp,
 					    inetctlerrmap[cmd]);
 			}
 #endif
@@ -605,14 +605,12 @@ sctp_send(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 	int error;
 	inp = (struct sctp_inpcb *)so->so_pcb;
 	if (inp == 0) {
-		if (control) {
-			sctp_m_freem(control);
-			control = NULL;
-		}
+		sctp_m_freem(control);
+		control = NULL;
 		sctp_m_freem(m);
 		return EINVAL;
 	}
-	/* Got to have an to address if we are NOT a connected socket */
+	/* Got to have a to address if we are NOT a connected socket */
 	if ((addr == NULL) &&
 	    ((inp->sctp_flags & SCTP_PCB_FLAGS_CONNECTED) ||
 	     (inp->sctp_flags & SCTP_PCB_FLAGS_TCPTYPE))
@@ -621,20 +619,16 @@ sctp_send(struct socket *so, struct mbuf *m, struct sockaddr *addr,
 	} else if (addr == NULL) {
 		error = EDESTADDRREQ;
 		sctp_m_freem(m);
-		if (control) {
-			sctp_m_freem(control);
-			control = NULL;
-		}
+		sctp_m_freem(control);
+		control = NULL;
 		return (error);
 	}
 #ifdef INET6
 	if (addr->sa_family != AF_INET) {
 		/* must be a v4 address! */
 		sctp_m_freem(m);
-		if (control) {
-			sctp_m_freem(control);
-			control = NULL;
-		}
+		sctp_m_freem(control);
+		control = NULL;
 		error = EDESTADDRREQ;
 		return EINVAL;
 	}
@@ -981,7 +975,7 @@ sctp_fill_up_addresses(struct sctp_inpcb *inp,
 					struct sockaddr_in *sin;
 					sin = (struct sockaddr_in *)ifa->ifa_addr;
 					if (sin->sin_addr.s_addr == 0) {
-						/* we skip unspecifed addresses */
+						/* we skip unspecified addresses */
 						continue;
 					}
 					if ((ipv4_local_scope == 0) &&
@@ -1101,7 +1095,7 @@ sctp_count_max_addresses(struct sctp_inpcb *inp)
 {
 	int cnt = 0;
 	/*
-	 * In both sub-set bound an bound_all cases we return the MAXIMUM
+	 * In both sub-set bound and bound_all cases we return the MAXIMUM
 	 * number of addresses that you COULD get. In reality the sub-set
 	 * bound may have an exclusion list for a given TCB OR in the
 	 * bound-all case a TCB may NOT include the loopback or other
@@ -2017,7 +2011,7 @@ sctp_optsget(struct socket *so, struct sockopt *sopt)
 			SCTP_INP_RLOCK(inp);
 #ifdef SCTP_DEBUG
 			if (sctp_debug_on & SCTP_DEBUG_USRREQ1) {
-				printf("In EP levle info\n");
+				printf("In EP level info\n");
 			}
 #endif /* SCTP_DEBUG */
 			paddrp->spp_pathmaxrxt = inp->sctp_ep.def_net_failure;
@@ -2437,7 +2431,7 @@ sctp_optsset(struct socket *so, struct sockopt *sopt)
 			set_opt = SCTP_PCB_FLAGS_AUTOCLOSE;
 			/*
 			 * The value is in ticks.
-			 * Note this does not effect old associations, only
+			 * Note this does not affect old associations, only
 			 * new ones.
 			 */
 			inp->sctp_ep.auto_close_time = (*mopt * hz);

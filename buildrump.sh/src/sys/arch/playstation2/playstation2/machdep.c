@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.33 2017/11/06 03:47:47 christos Exp $	*/
+/*	$NetBSD: machdep.c,v 1.36 2024/03/05 14:15:34 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.33 2017/11/06 03:47:47 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.36 2024/03/05 14:15:34 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kloader.h"
@@ -43,6 +43,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.33 2017/11/06 03:47:47 christos Exp $"
 #include <sys/boot_flag.h>
 #include <sys/device.h>
 
+#include <uvm/uvm.h>
 #include <uvm/uvm_extern.h>
 
 #ifdef DDB
@@ -54,6 +55,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.33 2017/11/06 03:47:47 christos Exp $"
 
 #include <dev/cons.h>	/* cntab access (cpu_reboot) */
 #include <machine/bootinfo.h>
+#include <machine/locore.h>
 #include <machine/psl.h>
 #include <machine/intr.h>/* hardintr_init */
 #include <playstation2/playstation2/sifbios.h>
@@ -68,7 +70,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.33 2017/11/06 03:47:47 christos Exp $"
 
 struct cpu_info cpu_info_store;
 
-struct vm_map *mb_map;
 struct vm_map *phys_map;
 phys_ram_seg_t mem_clusters[VM_PHYSSEG_MAX];
 int mem_cluster_cnt;
@@ -85,7 +86,7 @@ void
 mach_init(void)
 {
 	extern char kernel_text[], edata[], end[];
-	void *kernend;
+	char *kernend;
 	struct pcb *pcb0;
 	vaddr_t v;
 	paddr_t start;
@@ -119,7 +120,7 @@ mach_init(void)
 	 * Initialize locore-function vector.
 	 * Clear out the I and D caches.
 	 */
-	mips_vector_init();
+	mips_vector_init(NULL, false);
 
 	/*
 	 * Load the rest of the available pages into the VM system.
@@ -135,11 +136,9 @@ mach_init(void)
 	mem_clusters[1].start = start;
 	mem_clusters[1].size = size;
 	/* load */
-	printf("load memory %#lx, %#x\n", start, size);
+	printf("load memory %#x, %#lx\n", start, size);
 	uvm_page_physload(atop(start), atop(start + size),
 	    atop(start), atop(start + size), VM_FREELIST_DEFAULT);
-
-	strcpy(cpu_model, "SONY PlayStation 2");
 
 	/*
 	 * Initialize error message buffer (at end of core).
@@ -154,12 +153,12 @@ mach_init(void)
 	v = uvm_pageboot_alloc(USPACE);
 
 	pcb0 = lwp_getpcb(&lwp0);
-	pcb0->pcb_context[11] = PSL_LOWIPL;	/* SR */
+	pcb0->pcb_context.val[_L_SR] = PSL_LOWIPL;	/* SR */
 #ifdef IPL_ICU_MASK
 	pcb0->pcb_ppl = 0;
 #endif
 
-	lwp0.l_md.md_regs = (struct frame *)(v + USPACE) - 1
+	lwp0.l_md.md_utf = (struct trapframe *)(v + USPACE) - 1;
 }
 
 /*
@@ -207,12 +206,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && (waittime < 0)) {
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	splhigh();

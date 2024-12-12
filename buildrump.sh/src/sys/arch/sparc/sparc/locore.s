@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.281 2021/08/09 21:08:06 andvar Exp $	*/
+/*	$NetBSD: locore.s,v 1.285 2024/02/10 08:24:51 andvar Exp $	*/
 
 /*
  * Copyright (c) 1996 Paul Kranenburg
@@ -1405,7 +1405,7 @@ label:	b,a	1f; \
  * wmask[CWP] tells whether a `rett' would return into the invalid window.
  */
 	.data
-	.skip	32			! alignment byte & negative indicies
+	.skip	32			! alignment byte & negative indices
 uwtab:	.skip	32			! u_char uwtab[-31..31];
 wmask:	.skip	32			! u_char wmask[0..31];
 
@@ -4225,7 +4225,7 @@ no_3mmu:
 
 	/*
 	 * Ok, we have a non-Mbus TI Viking, a MicroSparc.
-	 * In this scenerio, in order to play with the MMU
+	 * In this scenario, in order to play with the MMU
 	 * passthrough safely, we need turn off traps, flip
 	 * the AC bit on in the mmu status register, do our
 	 * passthroughs, then restore the mmu reg and %psr
@@ -4889,7 +4889,30 @@ Lwb1:	SAVE; SAVE; SAVE; SAVE; SAVE; SAVE;	/* 6 of each: */
 	/* set new cpcb, and curlwp */
 	sethi	%hi(curlwp), %l7
 	st	%g5, [%l6 + %lo(cpcb)]		! cpcb = newpcb;
+
+	/*
+	 * Issue barriers to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
+	 */
+	/* stbar -- store-before-store, not needed on TSO */
 	st      %g3, [%l7 + %lo(curlwp)]        ! curlwp = l;
+#ifdef MULTIPROCESSOR
+	ldstub	[%sp - 4], %g0	/* makeshift store-before-load barrier */
+#endif
 
 	/* compute new wim */
 	ld	[%g5 + PCB_WIM], %o0
@@ -5621,10 +5644,6 @@ Lkcerr:
  *
  * The IPI version just deals with updating event counters first.
  */
-Lpanic_savefpstate:
-	.asciz	"cpu%d: NULL fpstate"
-	_ALIGN
-
 ENTRY(ipi_savefpstate)
 	sethi	%hi(CPUINFO_VA+CPUINFO_SAVEFPSTATE), %o5
 	ldd	[%o5 + %lo(CPUINFO_VA+CPUINFO_SAVEFPSTATE)], %o2

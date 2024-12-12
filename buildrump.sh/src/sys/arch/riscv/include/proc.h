@@ -1,4 +1,4 @@
-/*	$NetBSD: proc.h,v 1.3 2015/03/31 06:47:47 matt Exp $	*/
+/*	$NetBSD: proc.h,v 1.6 2024/08/04 08:16:25 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -46,8 +46,8 @@ struct mdlwp {
 	struct trapframe *md_utf;	/* trapframe from userspace */
 	struct trapframe *md_ktf;	/* trapframe from userspace */
 	struct faultbuf *md_onfault;	/* registers to store on fault */
-	register_t md_usp;		/* for locore.S */
-	vaddr_t	md_ss_addr;		/* single step address for ptrace */
+	unsigned long md_usp;		/* for locore.S */
+	unsigned long md_ss_addr;	/* single step address for ptrace */
 	int	md_ss_instr;		/* single step instruction for ptrace */
 	volatile int md_astpending;	/* AST pending on return to userland */
 #if 0
@@ -65,7 +65,12 @@ struct mdproc {
 };
 
 #ifdef _KERNEL
-#define	LWP0_CPU_INFO	&cpu_info_store	/* staticly set in lwp0 */
+#define	LWP0_CPU_INFO	&cpu_info_store[0]	/* staticly set in lwp0 */
+#if 0
+#define LWP0_MD_INITIALIZER {   \
+	.md_utf = (void *)0xdeadbeef, \
+    }
+#endif
 #endif /* _KERNEL */
 
 #endif /* _RISCV_PROC_H_ */

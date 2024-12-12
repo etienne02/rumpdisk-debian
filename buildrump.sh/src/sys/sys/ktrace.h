@@ -1,4 +1,4 @@
-/*	$NetBSD: ktrace.h,v 1.66 2018/04/19 21:19:07 christos Exp $	*/
+/*	$NetBSD: ktrace.h,v 1.70 2024/05/12 09:34:25 rillig Exp $	*/
 
 /*
  * Copyright (c) 1988, 1993
@@ -248,6 +248,27 @@ struct ktr_execfd {
 #define KTRFAC_EXEC_ENV	(1<<KTR_EXEC_ENV)
 #define	KTRFAC_MIB	(1<<KTR_MIB)
 #define	KTRFAC_EXEC_FD	(1<<KTR_EXEC_FD)
+
+#define __KTRACE_FLAG_BITS \
+    "\177\020" \
+    "b\1SYSCALL\0" \
+    "b\2SYSRET\0" \
+    "b\3NAMEI\0" \
+    "b\4GENIO\0" \
+    "b\5PSIG\0" \
+    "b\6CSW\0" \
+    "b\7EMUL\0" \
+    "b\10USER\0" \
+    "b\12EXEC_ARG\0" \
+    "b\13EXEC_ENV\0" \
+    "b\15SAUPCALL\0" \
+    "b\16MIB\0" \
+    "b\17EXEC_FD\0" \
+    "f\30\4VERSION\0" \
+    "b\34TRC_EMUL\0" \
+    "b\36INHERIT\0" \
+    "b\37PERSISTENT\0"
+
 /*
  * trace flags (also in p_traceflags)
  */
@@ -276,6 +297,8 @@ __END_DECLS
 
 #else
 
+struct syncobj;
+
 void ktrinit(void);
 void ktrderef(struct proc *);
 void ktradref(struct proc *);
@@ -286,7 +309,7 @@ extern int ktrace_on;
 int ktruser(const char *, void *, size_t, int);
 bool ktr_point(int);
 
-void ktr_csw(int, int);
+void ktr_csw(int, int, const struct syncobj *);
 void ktr_emul(void);
 void ktr_geniov(int, enum uio_rw, struct iovec *, size_t, int);
 void ktr_genio(int, enum uio_rw, const void *, size_t, int);
@@ -328,10 +351,10 @@ ktrpoint(int fac)
 }
 
 static __inline void
-ktrcsw(int a, int b)
+ktrcsw(int a, int b, const struct syncobj *c)
 {
 	if (__predict_false(ktrace_on))
-		ktr_csw(a, b);
+		ktr_csw(a, b, c);
 }
 
 static __inline void

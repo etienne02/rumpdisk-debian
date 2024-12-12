@@ -1,4 +1,4 @@
-/*	$NetBSD: cons.c,v 1.77 2019/12/06 04:15:38 riastradh Exp $	*/
+/*	$NetBSD: cons.c,v 1.95 2023/09/02 17:44:59 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,20 +39,25 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cons.c,v 1.77 2019/12/06 04:15:38 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cons.c,v 1.95 2023/09/02 17:44:59 riastradh Exp $");
 
 #include <sys/param.h>
-#include <sys/proc.h>
-#include <sys/systm.h>
+
+#include <sys/atomic.h>
 #include <sys/buf.h>
-#include <sys/ioctl.h>
-#include <sys/poll.h>
-#include <sys/tty.h>
-#include <sys/file.h>
 #include <sys/conf.h>
-#include <sys/vnode.h>
+#include <sys/file.h>
+#include <sys/heartbeat.h>
+#include <sys/ioctl.h>
 #include <sys/kauth.h>
+#include <sys/module.h>
 #include <sys/mutex.h>
+#include <sys/poll.h>
+#include <sys/proc.h>
+#include <sys/pserialize.h>
+#include <sys/systm.h>
+#include <sys/tty.h>
+#include <sys/vnode.h>
 
 #include <dev/cons.h>
 
@@ -66,7 +71,8 @@ dev_type_ioctl(cnioctl);
 dev_type_poll(cnpoll);
 dev_type_kqfilter(cnkqfilter);
 
-static bool cn_redirect(dev_t *, int, int *);
+static bool cn_redirect(dev_t *, int, int *, struct tty **);
+static void cn_release(struct tty *);
 
 const struct cdevsw cons_cdevsw = {
 	.d_open = cnopen,
@@ -80,12 +86,30 @@ const struct cdevsw cons_cdevsw = {
 	.d_mmap = nommap,
 	.d_kqfilter = cnkqfilter,
 	.d_discard = nodiscard,
-	.d_flag = D_TTY
+	.d_flag = D_TTY|D_MPSAFE,
 };
 
-struct	tty *constty = NULL;	/* virtual console output device */
+static struct kmutex cn_lock;
+
+struct	tty *volatile constty;	/* virtual console output device */
 struct	consdev *cn_tab;	/* physical console device info */
 struct	vnode *cn_devvp[2];	/* vnode for underlying device. */
+
+void
+cn_set_tab(struct consdev *tab)
+{
+
+	/*
+	 * This is a point that we should have KASSERT(cold) or add
+	 * synchronization in case this can happen after cold boot.
+	 * However, cn_tab initialization is so critical to any
+	 * diagnostics or debugging that we need to tread carefully
+	 * about introducing new ways to crash.  So let's put the
+	 * assertion in only after we've audited most or all of the
+	 * cn_tab updates.
+	 */
+	cn_tab = tab;
+}
 
 int
 cnopen(dev_t dev, int flag, int mode, struct lwp *l)
@@ -97,8 +121,12 @@ cnopen(dev_t dev, int flag, int mode, struct lwp *l)
 	if (unit > 1)
 		return ENODEV;
 
-	if (cn_tab == NULL)
-		return (0);
+	mutex_enter(&cn_lock);
+
+	if (cn_tab == NULL) {
+		error = 0;
+		goto out;
+	}
 
 	/*
 	 * always open the 'real' console device, so we don't get nailed
@@ -129,15 +157,19 @@ cnopen(dev_t dev, int flag, int mode, struct lwp *l)
 		 */
 		panic("cnopen: cn_tab->cn_dev == dev");
 	}
-	if (cn_devvp[unit] != NULLVP)
-		return 0;
-	if ((error = cdevvp(cndev, &cn_devvp[unit])) != 0)
-		printf("cnopen: unable to get vnode reference\n");
-	error = vn_lock(cn_devvp[unit], LK_EXCLUSIVE | LK_RETRY);
-	if (error == 0) {
-		error = VOP_OPEN(cn_devvp[unit], flag, kauth_cred_get());
-		VOP_UNLOCK(cn_devvp[unit]);
+	if (cn_devvp[unit] != NULLVP) {
+		error = 0;
+		goto out;
 	}
+	if ((error = cdevvp(cndev, &cn_devvp[unit])) != 0) {
+		printf("cnopen: unable to get vnode reference\n");
+		goto out;
+	}
+	vn_lock(cn_devvp[unit], LK_EXCLUSIVE | LK_RETRY);
+	error = VOP_OPEN(cn_devvp[unit], flag, kauth_cred_get());
+	VOP_UNLOCK(cn_devvp[unit]);
+
+out:	mutex_exit(&cn_lock);
 	return error;
 }
 
@@ -148,24 +180,31 @@ cnclose(dev_t dev, int flag, int mode, struct lwp *l)
 	int unit, error;
 
 	unit = minor(dev);
+	if (unit > 1)
+		return ENODEV;
 
-	if (cn_tab == NULL)
-		return (0);
+	mutex_enter(&cn_lock);
+
+	if (cn_tab == NULL) {
+		error = 0;
+		goto out;
+	}
 
 	vp = cn_devvp[unit];
 	cn_devvp[unit] = NULL;
-	error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-	if (error == 0) {
-		error = VOP_CLOSE(vp, flag, kauth_cred_get());
-		VOP_UNLOCK(vp);
-		vrele(vp);
-	}
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	error = VOP_CLOSE(vp, flag, kauth_cred_get());
+	VOP_UNLOCK(vp);
+	vrele(vp);
+
+out:	mutex_exit(&cn_lock);
 	return error;
 }
 
 int
 cnread(dev_t dev, struct uio *uio, int flag)
 {
+	struct tty *ctp = NULL;
 	int error;
 
 	/*
@@ -175,25 +214,31 @@ cnread(dev_t dev, struct uio *uio, int flag)
 	 * input (except a shell in single-user mode, but then,
 	 * one wouldn't TIOCCONS then).
 	 */
-	if (!cn_redirect(&dev, 1, &error))
+	if (!cn_redirect(&dev, 1, &error, &ctp))
 		return error;
-	return cdev_read(dev, uio, flag);
+	error = cdev_read(dev, uio, flag);
+	cn_release(ctp);
+	return error;
 }
 
 int
 cnwrite(dev_t dev, struct uio *uio, int flag)
 {
+	struct tty *ctp = NULL;
 	int error;
 
 	/* Redirect output, if that's appropriate. */
-	if (!cn_redirect(&dev, 0, &error))
+	if (!cn_redirect(&dev, 0, &error, &ctp))
 		return error;
-	return cdev_write(dev, uio, flag);
+	error = cdev_write(dev, uio, flag);
+	cn_release(ctp);
+	return error;
 }
 
 int
 cnioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 {
+	struct tty *ctp = NULL;
 	int error;
 
 	error = 0;
@@ -202,29 +247,41 @@ cnioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 	 * Superuser can always use this to wrest control of console
 	 * output from the "virtual" console.
 	 */
-	if (cmd == TIOCCONS && constty != NULL) {
-		error = kauth_authorize_device_tty(l->l_cred,
-		    KAUTH_DEVICE_TTY_VIRTUAL, constty);
-		if (!error)
-			constty = NULL;
-		return (error);
-	}
+	if (cmd == TIOCCONS) {
+		struct tty *tp;
 
+		mutex_enter(&constty_lock);
+		tp = atomic_load_relaxed(&constty);
+		if (tp == NULL) {
+			mutex_exit(&constty_lock);
+			goto passthrough; /* XXX ??? */
+		}
+		error = kauth_authorize_device_tty(l->l_cred,
+		    KAUTH_DEVICE_TTY_VIRTUAL, tp);
+		if (!error)
+			atomic_store_relaxed(&constty, NULL);
+		mutex_exit(&constty_lock);
+		return error;
+	}
+passthrough:
 	/*
 	 * Redirect the ioctl, if that's appropriate.
 	 * Note that strange things can happen, if a program does
 	 * ioctls on /dev/console, then the console is redirected
 	 * out from under it.
 	 */
-	if (!cn_redirect(&dev, 0, &error))
+	if (!cn_redirect(&dev, 0, &error, &ctp))
 		return error;
-	return cdev_ioctl(dev, cmd, data, flag, l);
+	error = cdev_ioctl(dev, cmd, data, flag, l);
+	cn_release(ctp);
+	return error;
 }
 
 /*ARGSUSED*/
 int
 cnpoll(dev_t dev, int events, struct lwp *l)
 {
+	struct tty *ctp = NULL;
 	int error;
 
 	/*
@@ -232,15 +289,18 @@ cnpoll(dev_t dev, int events, struct lwp *l)
 	 * I don't want to think of the possible side effects
 	 * of console redirection here.
 	 */
-	if (!cn_redirect(&dev, 0, &error))
+	if (!cn_redirect(&dev, 0, &error, &ctp))
 		return POLLHUP;
-	return cdev_poll(dev, events, l);
+	error = cdev_poll(dev, events, l);
+	cn_release(ctp);
+	return error;
 }
 
 /*ARGSUSED*/
 int
 cnkqfilter(dev_t dev, struct knote *kn)
 {
+	struct tty *ctp = NULL;
 	int error;
 
 	/*
@@ -248,9 +308,11 @@ cnkqfilter(dev_t dev, struct knote *kn)
 	 * I don't want to think of the possible side effects
 	 * of console redirection here.
 	 */
-	if (!cn_redirect(&dev, 0, &error))
+	if (!cn_redirect(&dev, 0, &error, &ctp))
 		return error;
-	return cdev_kqfilter(dev, kn);
+	error = cdev_kqfilter(dev, kn);
+	cn_release(ctp);
+	return error;
 }
 
 int
@@ -356,8 +418,26 @@ cnpollc(int on)
 		return;
 	if (!on)
 		--refcount;
-	if (refcount == 0)
+	if (refcount == 0) {
+		if (on) {
+			/*
+			 * Bind to the current CPU by disabling
+			 * preemption (more convenient than finding a
+			 * place to store a stack to unwind for
+			 * curlwp_bind/bindx, and preemption wouldn't
+			 * happen anyway while spinning at high IPL in
+			 * cngetc) so that curcpu() is stable so that
+			 * we can suspend heartbeat checks for it.
+			 */
+			kpreempt_disable();
+			heartbeat_suspend();
+		}
 		(*cn_tab->cn_pollc)(cn_tab->cn_dev, on);
+		if (!on) {
+			heartbeat_resume();
+			kpreempt_enable();
+		}
+	}
 	if (on)
 		++refcount;
 }
@@ -396,26 +476,60 @@ cnhalt(void)
 /*
  * Redirect output, if that's appropriate.  If there's no real console,
  * return ENXIO.
- *
- * Call with tty_mutex held.
  */
 static bool
-cn_redirect(dev_t *devp, int is_read, int *error)
+cn_redirect(dev_t *devp, int is_read, int *error, struct tty **ctpp)
 {
 	dev_t dev = *devp;
+	struct tty *ctp;
+	int s;
+	bool ok = false;
 
 	*error = ENXIO;
-	if (constty != NULL && minor(dev) == 0 &&
+	*ctpp = NULL;
+	s = pserialize_read_enter();
+	if ((ctp = atomic_load_consume(&constty)) != NULL && minor(dev) == 0 &&
 	    (cn_tab == NULL || (cn_tab->cn_pri != CN_REMOTE))) {
 		if (is_read) {
 			*error = 0;
-			return false;
+			goto out;
 		}
-		dev = constty->t_dev;
+		tty_acquire(ctp);
+		*ctpp = ctp;
+		dev = ctp->t_dev;
 	} else if (cn_tab == NULL)
-		return false;
+		goto out;
 	else
 		dev = cn_tab->cn_dev;
+	ok = true;
 	*devp = dev;
-	return true;
+out:	pserialize_read_exit(s);
+	return ok;
+}
+
+static void
+cn_release(struct tty *ctp)
+{
+
+	if (ctp == NULL)
+		return;
+	tty_release(ctp);
+}
+
+MODULE(MODULE_CLASS_DRIVER, cons, NULL);
+
+static int
+cons_modcmd(modcmd_t cmd, void *arg)
+{
+
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+		mutex_init(&cn_lock, MUTEX_DEFAULT, IPL_NONE);
+		return 0;
+	case MODULE_CMD_FINI:
+		mutex_destroy(&cn_lock);
+		return 0;
+	default:
+		return ENOTTY;
+	}
 }

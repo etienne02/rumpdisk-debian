@@ -6,7 +6,7 @@
 --  Open source license information is in the zlib.ads file.  --
 ----------------------------------------------------------------
 
---  $Id: zlib.adb,v 1.1.1.2 2017/01/10 00:25:30 christos Exp $
+--  Id: zlib.adb,v 1.31 2004/09/06 06:53:19 vagul Exp 
 
 with Ada.Exceptions;
 with Ada.Unchecked_Conversion;
@@ -204,7 +204,7 @@ package body ZLib is
       end if;
 
       --  We allow ZLib to make header only in case of default header type.
-      --  Otherwise we would either do header by ourselfs, or do not do
+      --  Otherwise we would either do header by ourselves, or do not do
       --  header at all.
 
       if Header = None or else Header = GZip then

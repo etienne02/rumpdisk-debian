@@ -1,7 +1,15 @@
-/*	$NetBSD: msg_313.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_313.c,v 1.5 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_313.c"
 
-// Test for message: struct or union member name in initializer is a C9X feature [313]
+/* Test for message: struct or union member name in initializer is a C99 feature [313] */
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-flags: -sw -X 351 */
+
+struct point {
+	int x, y;
+} p = {
+	/* expect+1: warning: struct or union member name in initializer is a C99 feature [313] */
+	.x = 3,
+	/* expect+1: warning: struct or union member name in initializer is a C99 feature [313] */
+	.y = 4,
+};

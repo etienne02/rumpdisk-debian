@@ -1,4 +1,4 @@
-/*	$NetBSD: cpufunc.c,v 1.181 2021/07/02 07:15:35 skrll Exp $	*/
+/*	$NetBSD: cpufunc.c,v 1.185 2022/12/22 06:58:07 ryo Exp $	*/
 
 /*
  * arm7tdmi support code Copyright (c) 2001 John Fremlin
@@ -49,7 +49,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpufunc.c,v 1.181 2021/07/02 07:15:35 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpufunc.c,v 1.185 2022/12/22 06:58:07 ryo Exp $");
 
 #include "opt_arm_start.h"
 #include "opt_compat_netbsd.h"
@@ -1964,6 +1964,7 @@ set_cpufuncs(void)
 		 * Start and reset the PMC Cycle Counter.
 		 */
 		armreg_pmcr_write(ARM11_PMCCTL_E | ARM11_PMCCTL_P | ARM11_PMCCTL_C);
+		armreg_pmintenclr_write(PMINTEN_C | PMINTEN_P);
 		armreg_pmcntenset_write(CORTEX_CNTENS_C);
 		return 0;
 	}
@@ -2713,7 +2714,7 @@ arm10_setup(char *args)
 	    | CPU_CONTROL_IC_ENABLE | CPU_CONTROL_DC_ENABLE
 	    | CPU_CONTROL_WBUF_ENABLE | CPU_CONTROL_ROM_ENABLE
 	    | CPU_CONTROL_BEND_ENABLE | CPU_CONTROL_AFLT_ENABLE
-	    | CPU_CONTROL_BPRD_ENABLE
+	    | CPU_CONTROL_BPRD_ENABLE | CPU_CONTROL_VECRELOC
 	    | CPU_CONTROL_ROUNDROBIN | CPU_CONTROL_CPCLK;
 #endif
 
@@ -2776,7 +2777,8 @@ arm11_setup(char *args)
 	int cpuctrlmask = cpuctrl
 	    | CPU_CONTROL_ROM_ENABLE | CPU_CONTROL_BPRD_ENABLE
 	    | CPU_CONTROL_BEND_ENABLE | CPU_CONTROL_AFLT_ENABLE
-	    | CPU_CONTROL_ROUNDROBIN | CPU_CONTROL_CPCLK;
+	    | CPU_CONTROL_ROUNDROBIN | CPU_CONTROL_CPCLK
+	    | CPU_CONTROL_VECRELOC;
 
 #ifndef ARM32_DISABLE_ALIGNMENT_FAULTS
 	cpuctrl |= CPU_CONTROL_AFLT_ENABLE;
@@ -3005,12 +3007,27 @@ armv7_setup(char *args)
 		    CORTEXA15_ACTLR_SMP |
 		    CORTEXA15_ACTLR_SDEH |
 		    0;
-#if 0
 	} else if (CPU_ID_CORTEX_A12_P(lcputype) ||
-	    CPU_ID_CORTEX_A17_P(lcputype)) {
-		actlr_set =
-		    CORTEXA17_ACTLR_SMP;
-#endif
+		   CPU_ID_CORTEX_A17_P(lcputype)) {
+		actlr_set = CORTEXA17_ACTLR_SMP;
+		uint32_t diagset = 0;
+		const uint16_t varrev =
+		   __SHIFTIN(__SHIFTOUT(lcputype, CPU_ID_VARIANT_MASK), __BITS(7,4)) |
+		   __SHIFTIN(__SHIFTOUT(lcputype, CPU_ID_REVISION_MASK), __BITS(3,0)) |
+		   0;
+		/* Errata 852421 exists upto r1p2 */
+		if (varrev < 0x12) {
+			diagset |= __BIT(24);
+		}
+		/* Errata 852423 exists upto r1p2 */
+		if (varrev < 0x12) {
+			diagset |= __BIT(12);
+		}
+		/* Errata 857272 */
+		diagset |= __BITS(11,10);
+
+		const uint32_t dgnctlr1 = armreg_dgnctlr1_read();
+		armreg_dgnctlr1_write(dgnctlr1 | diagset);
 	} else if (CPU_ID_CORTEX_A53_P(lcputype)) {
 	} else if (CPU_ID_CORTEX_A57_P(lcputype)) {
 	} else if (CPU_ID_CORTEX_A72_P(lcputype)) {

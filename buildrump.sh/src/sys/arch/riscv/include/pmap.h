@@ -1,4 +1,4 @@
-/* $NetBSD: pmap.h,v 1.9 2021/05/01 07:41:24 skrll Exp $ */
+/* $NetBSD: pmap.h,v 1.24 2024/08/04 08:16:25 skrll Exp $ */
 
 /*
  * Copyright (c) 2014, 2019, 2021 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #ifndef _RISCV_PMAP_H_
-#define _RISCV_PMAP_H_
+#define	_RISCV_PMAP_H_
 
 #ifdef _KERNEL_OPT
 #include "opt_modular.h"
@@ -50,108 +50,149 @@
 #include <riscv/pte.h>
 #include <riscv/sysreg.h>
 
-#define PMAP_SEGTABSIZE	NPTEPG
-#define PMAP_PDETABSIZE	NPTEPG
+#define	PMAP_SEGTABSIZE	NPTEPG
+#define	PMAP_PDETABSIZE	NPTEPG
 
 #ifdef _LP64
-#define PTPSHIFT	3
+#define	PTPSHIFT	3
+/* This is SV57. */
+//#define	XSEGSHIFT	(SEGSHIFT + SEGLENGTH + SEGLENGTH + SEGLENGTH)
+
 /* This is SV48. */
-//#define SEGLENGTH + SEGSHIFT + SEGSHIFT */
+//#define	XSEGSHIFT	(SEGSHIFT + SEGLENGTH + SEGLENGTH)
 
 /* This is SV39. */
-#define XSEGSHIFT	(SEGSHIFT + SEGLENGTH)
-#define NBXSEG		(1ULL << XSEGSHIFT)
-#define XSEGOFSET	(NBXSEG - 1)		/* byte offset into xsegment */
-#define XSEGLENGTH	(PGSHIFT - 3)
-#define NXSEGPG		(1 << XSEGLENGTH)
+#define	XSEGSHIFT	(SEGSHIFT + SEGLENGTH)
+#define	NBXSEG		(1ULL << XSEGSHIFT)
+#define	XSEGOFSET	(NBXSEG - 1)		/* byte offset into xsegment */
+#define	XSEGLENGTH	(PGSHIFT - 3)
+#define	NXSEGPG		(1 << XSEGLENGTH)
 #else
-#define PTPSHIFT	2
-#define XSEGSHIFT	SEGLENGTH
+#define	PTPSHIFT	2
+#define	XSEGSHIFT	SEGSHIFT
 #endif
 
-#define SEGLENGTH	(PGSHIFT - PTPSHIFT)
-#define SEGSHIFT	(SEGLENGTH + PGSHIFT)
-#define NBSEG		(1 << SEGSHIFT)		/* bytes/segment */
-#define SEGOFSET	(NBSEG - 1)		/* byte offset into segment */
+#define	SEGLENGTH	(PGSHIFT - PTPSHIFT)
+#define	SEGSHIFT	(SEGLENGTH + PGSHIFT)
+#define	NBSEG		(1 << SEGSHIFT)		/* bytes/segment */
+#define	SEGOFSET	(NBSEG - 1)		/* byte offset into segment */
 
-#define KERNEL_PID	0
+#define	KERNEL_PID	0
 
-#define PMAP_HWPAGEWALKER		1
-#define PMAP_TLB_MAX			1
+#define	PMAP_HWPAGEWALKER		1
+#define	PMAP_TLB_MAX			1
+#define	PMAP_TLB_ALWAYS_ASIDS		false
 #ifdef _LP64
-#define PMAP_INVALID_PDETAB_ADDRESS	((pmap_pdetab_t *)(VM_MIN_KERNEL_ADDRESS - PAGE_SIZE))
-#define PMAP_INVALID_SEGTAB_ADDRESS	((pmap_segtab_t *)(VM_MIN_KERNEL_ADDRESS - PAGE_SIZE))
+#define	PMAP_INVALID_PDETAB_ADDRESS	((pmap_pdetab_t *)(VM_MIN_KERNEL_ADDRESS - PAGE_SIZE))
+#define	PMAP_INVALID_SEGTAB_ADDRESS	((pmap_segtab_t *)(VM_MIN_KERNEL_ADDRESS - PAGE_SIZE))
 #else
-#define PMAP_INVALID_PDETAB_ADDRESS	((pmap_pdetab_t *)0xdeadbeef)
-#define PMAP_INVALID_SEGTAB_ADDRESS	((pmap_segtab_t *)0xdeadbeef)
+#define	PMAP_INVALID_PDETAB_ADDRESS	((pmap_pdetab_t *)0xdeadbeef)
+#define	PMAP_INVALID_SEGTAB_ADDRESS	((pmap_segtab_t *)0xdeadbeef)
 #endif
-#define PMAP_TLB_NUM_PIDS		(__SHIFTOUT_MASK(SATP_ASID) + 1)
-#define PMAP_TLB_BITMAP_LENGTH          PMAP_TLB_NUM_PIDS
-#define PMAP_TLB_FLUSH_ASID_ON_RESET	false
+#define	PMAP_TLB_NUM_PIDS		(__SHIFTOUT_MASK(SATP_ASID) + 1)
+#define	PMAP_TLB_BITMAP_LENGTH		PMAP_TLB_NUM_PIDS
+#define	PMAP_TLB_FLUSH_ASID_ON_RESET	true
 
-#define pmap_phys_address(x)		(x)
+#define	pmap_phys_address(x)		(x)
 
 #ifndef __BSD_PTENTRY_T__
-#define __BSD_PTENTRY_T__
+#define	__BSD_PTENTRY_T__
 #ifdef _LP64
-#define PRIxPTE         PRIx64
+#define	PRIxPTE		PRIx64
 #else
-#define PRIxPTE         PRIx32
+#define	PRIxPTE		PRIx32
 #endif
 #endif /* __BSD_PTENTRY_T__ */
 
-#define PMAP_NEED_PROCWR
+#define	PMAP_NEED_PROCWR
 static inline void
 pmap_procwr(struct proc *p, vaddr_t va, vsize_t len)
 {
-	__asm __volatile("fence\trw,rw; fence.i");
+	__asm __volatile("fence\trw,rw; fence.i" ::: "memory");
 }
 
 #include <uvm/pmap/tlb.h>
+#include <uvm/pmap/pmap_devmap.h>
 #include <uvm/pmap/pmap_tlb.h>
+#include <uvm/pmap/pmap_synci.h>
 
-#define PMAP_GROWKERNEL
-#define PMAP_STEAL_MEMORY
+#define	PMAP_GROWKERNEL
+#define	PMAP_STEAL_MEMORY
 
 #ifdef _KERNEL
 
-#define __HAVE_PMAP_MD
+#define	__HAVE_PMAP_MD
 struct pmap_md {
-	paddr_t md_ptbr;
-	pd_entry_t *md_pdetab;
+	paddr_t md_ppn;
 };
 
-void	pmap_bootstrap(void);
+static inline void
+pmap_md_icache_sync_all(void)
+{
+}
+
+static inline void
+pmap_md_icache_sync_range_index(vaddr_t va, vsize_t size)
+{
+}
 
 struct vm_page *
-	pmap_md_alloc_poolpage(int flags);
+	pmap_md_alloc_poolpage(int);
 vaddr_t	pmap_md_map_poolpage(paddr_t, vsize_t);
 void	pmap_md_unmap_poolpage(vaddr_t, vsize_t);
+
 bool	pmap_md_direct_mapped_vaddr_p(vaddr_t);
-bool	pmap_md_io_vaddr_p(vaddr_t);
 paddr_t	pmap_md_direct_mapped_vaddr_to_paddr(vaddr_t);
 vaddr_t	pmap_md_direct_map_paddr(paddr_t);
 void	pmap_md_init(void);
-bool	pmap_md_tlb_check_entry(void *, vaddr_t, tlb_asid_t, pt_entry_t);
-
+bool	pmap_md_io_vaddr_p(vaddr_t);
+bool	pmap_md_ok_to_steal_p(const uvm_physseg_t, size_t);
+void	pmap_md_pdetab_init(struct pmap *);
+void	pmap_md_pdetab_fini(struct pmap *);
+void	pmap_md_tlb_info_attach(struct pmap_tlb_info *, struct cpu_info *);
 void	pmap_md_xtab_activate(struct pmap *, struct lwp *);
 void	pmap_md_xtab_deactivate(struct pmap *);
-void	pmap_md_pdetab_init(struct pmap *);
-bool	pmap_md_ok_to_steal_p(const uvm_physseg_t, size_t);
 
+void	pmap_bootstrap(vaddr_t, vaddr_t);
+
+vsize_t	pmap_kenter_range(vaddr_t, paddr_t, vsize_t, vm_prot_t, u_int);
+
+#ifdef _LP64
 extern vaddr_t pmap_direct_base;
 extern vaddr_t pmap_direct_end;
-#define PMAP_DIRECT_MAP(pa)	(pmap_direct_base + (pa))
-#define PMAP_DIRECT_UNMAP(va)	((paddr_t)(va) - pmap_direct_base)
+#define	PMAP_DIRECT_MAP(pa)	RISCV_PA_TO_KVA(pa)
+#define	PMAP_DIRECT_UNMAP(va)	RISCV_KVA_TO_PA(va)
 
-#define MEGAPAGE_TRUNC(x)	((x) & ~SEGOFSET)
-#define MEGAPAGE_ROUND(x)	MEGAPAGE_TRUNC((x) + SEGOFSET)
+/*
+ * Other hooks for the pool allocator.
+ */
+#define	POOL_PHYSTOV(pa)	RISCV_PA_TO_KVA((paddr_t)(pa))
+#define	POOL_VTOPHYS(va)	RISCV_KVA_TO_PA((vaddr_t)(va))
+
+#endif	/* _LP64 */
+
+#define	MEGAPAGE_TRUNC(x)	((x) & ~SEGOFSET)
+#define	MEGAPAGE_ROUND(x)	MEGAPAGE_TRUNC((x) + SEGOFSET)
+
+#define	PMAP_DEV		__BIT(29)	/* 0x2000_0000 */
+
+#define	DEVMAP_ALIGN(x)		MEGAPAGE_TRUNC((x))
+#define	DEVMAP_SIZE(x)		MEGAPAGE_ROUND((x))
+#define	DEVMAP_FLAGS		PMAP_DEV
 
 #ifdef __PMAP_PRIVATE
-static inline void
-pmap_md_page_syncicache(struct vm_page_md *mdpg, const kcpuset_t *kc)
+
+static inline bool
+pmap_md_tlb_check_entry(void *ctx, vaddr_t va, tlb_asid_t asid, pt_entry_t pte)
 {
-	__asm __volatile("fence\trw,rw; fence.i");
+	// TLB not walked and so not called.
+	return false;
+}
+
+static inline void
+pmap_md_page_syncicache(struct vm_page_md *mdpg, const kcpuset_t *onproc)
+{
+	__asm __volatile("fence\trw,rw; fence.i" ::: "memory");
 }
 
 /*
@@ -176,7 +217,22 @@ pmap_md_vca_clean(struct vm_page_md *mdpg, vaddr_t va, int op)
 static inline size_t
 pmap_md_tlb_asid_max(void)
 {
-	return PMAP_TLB_NUM_PIDS - 1;
+	const register_t satp = csr_satp_read();
+	const register_t test = satp | SATP_ASID;
+
+	csr_satp_write(test);
+
+	const register_t ret = __SHIFTOUT(csr_satp_read(), SATP_ASID);
+	csr_satp_write(satp);
+
+	KASSERT(ret < PMAP_TLB_NUM_PIDS);
+	return ret;
+}
+
+static inline pt_entry_t *
+pmap_md_nptep(pt_entry_t *ptep)
+{
+	return ptep + 1;
 }
 
 #endif /* __PMAP_PRIVATE */
@@ -192,7 +248,7 @@ pmap_md_tlb_asid_max(void)
  * whether we are using modules or not.
  */
 #ifndef __HAVE_VM_PAGE_MD
-#define __HAVE_VM_PAGE_MD
+#define	__HAVE_VM_PAGE_MD
 
 struct vm_page_md {
 	uintptr_t mdpg_dummy[3];

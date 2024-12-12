@@ -1,4 +1,4 @@
-/* $NetBSD: t_mmap.c,v 1.14 2020/06/26 07:50:11 jruoho Exp $ */
+/* $NetBSD: t_mmap.c,v 1.18 2022/06/04 23:09:18 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2011 The NetBSD Foundation, Inc.
@@ -55,7 +55,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: t_mmap.c,v 1.14 2020/06/26 07:50:11 jruoho Exp $");
+__RCSID("$NetBSD: t_mmap.c,v 1.18 2022/06/04 23:09:18 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/disklabel.h>
@@ -74,6 +74,7 @@ __RCSID("$NetBSD: t_mmap.c,v 1.14 2020/06/26 07:50:11 jruoho Exp $");
 #include <string.h>
 #include <unistd.h>
 #include <paths.h>
+#include <pthread.h>
 
 static long	page = 0;
 static char	path[] = "mmap";
@@ -215,7 +216,7 @@ ATF_TC_HEAD(mmap_err, tc)
 
 ATF_TC_BODY(mmap_err, tc)
 {
-	size_t addr = SIZE_MAX;
+	void *addr = (void *)-1;
 	void *map;
 
 	errno = 0;
@@ -225,10 +226,10 @@ ATF_TC_BODY(mmap_err, tc)
 	ATF_REQUIRE(errno == EBADF);
 
 	errno = 0;
-	map = mmap(&addr, page, PROT_READ, MAP_FIXED|MAP_PRIVATE, -1, 0);
+	map = mmap(addr, page, PROT_READ, MAP_FIXED|MAP_PRIVATE, -1, 0);
 
 	ATF_REQUIRE(map == MAP_FAILED);
-	ATF_REQUIRE(errno == EINVAL);
+	ATF_REQUIRE_MSG(errno == EINVAL, "errno %d != EINVAL", errno);
 
 	errno = 0;
 	map = mmap(NULL, page, PROT_READ, MAP_ANON|MAP_PRIVATE, INT_MAX, 0);
@@ -413,6 +414,65 @@ ATF_TC_CLEANUP(mmap_prot_3, tc)
 	(void)unlink(path);
 }
 
+ATF_TC(mmap_reprotect_race);
+
+ATF_TC_HEAD(mmap_reprotect_race, tc)
+{
+	atf_tc_set_md_var(tc, "descr", "Test for the race condition of PR 52239");
+}
+
+const int mmap_reprotect_race_npages = 13;
+const int mmap_reprotect_iterations = 1000000;
+
+static void *
+mmap_reprotect_race_thread(void *arg)
+{
+	int i, r;
+	void *p;
+
+	for (i = 0; i < mmap_reprotect_iterations; i++) {
+		/* Get some unrelated memory */
+		p = mmap(0, mmap_reprotect_race_npages * page,
+			 PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0);
+		ATF_REQUIRE(p);
+		r = munmap(p, mmap_reprotect_race_npages * page);
+		ATF_REQUIRE(r == 0);
+	}
+	return 0;
+}
+
+ATF_TC_BODY(mmap_reprotect_race, tc)
+{
+	pthread_t thread;
+	void *p, *q;
+	int i, r;
+
+	r = pthread_create(&thread, 0, mmap_reprotect_race_thread, 0);
+	ATF_REQUIRE(r == 0);
+
+	for (i = 0; i < mmap_reprotect_iterations; i++) {
+		/* Get a placeholder region */
+		p = mmap(0, mmap_reprotect_race_npages * page,
+			 PROT_NONE, MAP_ANON|MAP_PRIVATE, -1, 0);
+		if (p == MAP_FAILED)
+			atf_tc_fail("mmap: %s", strerror(errno));
+
+		/* Upgrade placeholder to read/write access */
+		q = mmap(p, mmap_reprotect_race_npages * page,
+			 PROT_READ|PROT_WRITE,
+			 MAP_ANON|MAP_PRIVATE|MAP_FIXED, -1, 0);
+		if (q == MAP_FAILED)
+			atf_tc_fail("update mmap: %s", strerror(errno));
+		ATF_REQUIRE(q == p);
+
+		/* Free it */
+		r = munmap(q, mmap_reprotect_race_npages * page);
+		if (r != 0)
+			atf_tc_fail("munmap: %s", strerror(errno));
+	}
+	pthread_join(thread, NULL);
+}
+
 ATF_TC_WITH_CLEANUP(mmap_truncate);
 ATF_TC_HEAD(mmap_truncate, tc)
 {
@@ -559,6 +619,71 @@ ATF_TC_BODY(mmap_va0, tc)
 	map_check(map, val);
 }
 
+static void
+test_mmap_hint(uintptr_t hintaddr)
+{
+	void *hint = (void *)hintaddr;
+	void *map1 = MAP_FAILED, *map2 = MAP_FAILED, *map3 = MAP_FAILED;
+
+	map1 = mmap(hint, page, PROT_READ|PROT_WRITE, MAP_ANON, -1, 0);
+	if (map1 == MAP_FAILED) {
+		atf_tc_fail_nonfatal("mmap1 hint=%p: errno=%d", hint, errno);
+		goto out;
+	}
+	map2 = mmap(map1, page, PROT_READ|PROT_WRITE, MAP_ANON, -1, 0);
+	if (map2 == MAP_FAILED) {
+		atf_tc_fail_nonfatal("mmap2 hint=%p map1=%p failed: errno=%d",
+		    hint, map1, errno);
+		goto out;
+	}
+	map3 = mmap(hint, page, PROT_READ|PROT_WRITE, MAP_ANON, -1, 0);
+	if (map3 == MAP_FAILED) {
+		atf_tc_fail_nonfatal("mmap3 hint=%p map1=%p failed: errno=%d",
+		    hint, map1, errno);
+		goto out;
+	}
+out:
+	if (map3 != MAP_FAILED) {
+		ATF_CHECK_MSG(munmap(map3, page) == 0, "munmap3 %p hint=%p",
+		    map3, hint);
+	}
+	if (map2 != MAP_FAILED) {
+		ATF_CHECK_MSG(munmap(map2, page) == 0, "munmap2 %p hint=%p",
+		    map2, hint);
+	}
+	if (map1 != MAP_FAILED) {
+		ATF_CHECK_MSG(munmap(map1, page) == 0, "munmap1 %p hint=%p",
+		    map1, hint);
+	}
+}
+
+ATF_TC(mmap_hint);
+ATF_TC_HEAD(mmap_hint, tc)
+{
+	atf_tc_set_md_var(tc, "descr", "Test mmap with hints");
+}
+ATF_TC_BODY(mmap_hint, tc)
+{
+	static const int minaddress_mib[] = { CTL_VM, VM_MINADDRESS };
+	static const int maxaddress_mib[] = { CTL_VM, VM_MAXADDRESS };
+	long minaddress, maxaddress;
+	size_t minaddresssz = sizeof(minaddress);
+	size_t maxaddresssz = sizeof(maxaddress);
+
+	ATF_REQUIRE_MSG(sysctl(minaddress_mib, __arraycount(minaddress_mib),
+		&minaddress, &minaddresssz, NULL, 0) == 0,
+	    "sysctl vm.minaddress: errno=%d", errno);
+	ATF_REQUIRE_MSG(sysctl(maxaddress_mib, __arraycount(maxaddress_mib),
+		&maxaddress, &maxaddresssz, NULL, 0) == 0,
+	    "sysctl vm.maxaddress: errno=%d", errno);
+
+	test_mmap_hint(0);
+	test_mmap_hint(-1);
+	test_mmap_hint(page);
+	test_mmap_hint(minaddress);
+	test_mmap_hint(maxaddress);
+}
+
 ATF_TP_ADD_TCS(tp)
 {
 	page = sysconf(_SC_PAGESIZE);
@@ -570,9 +695,11 @@ ATF_TP_ADD_TCS(tp)
 	ATF_TP_ADD_TC(tp, mmap_prot_1);
 	ATF_TP_ADD_TC(tp, mmap_prot_2);
 	ATF_TP_ADD_TC(tp, mmap_prot_3);
+	ATF_TP_ADD_TC(tp, mmap_reprotect_race);
 	ATF_TP_ADD_TC(tp, mmap_truncate);
 	ATF_TP_ADD_TC(tp, mmap_truncate_signal);
 	ATF_TP_ADD_TC(tp, mmap_va0);
+	ATF_TP_ADD_TC(tp, mmap_hint);
 
 	return atf_no_error();
 }

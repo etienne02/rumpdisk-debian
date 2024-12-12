@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.4 2019/09/29 23:45:00 mrg Exp $
+# $NetBSD: Makefile,v 1.6 2023/06/03 21:30:23 lukem Exp $
 
 .include "../Makefile.inc"
 .include "../drmkms/Makefile.inc"
@@ -8,6 +8,8 @@ IOCONF=	viadrmums.ioconf
 
 CPPFLAGS+=	-I${S}/external/bsd/drm2/dist/drm/via
 CPPFLAGS+=	-I${S}/external/bsd/drm2/via
+
+CPPFLAGS+=	-DCONFIG_DRM_LEGACY
 
 .PATH:	${S}/external/bsd/drm2/via
 .PATH:	${S}/external/bsd/drm2/dist/drm/via
@@ -29,8 +31,6 @@ SRCS+=	via_pci.c
 
 WARNS=	3
 
-.if defined(HAVE_GCC) && ${HAVE_GCC} >= 7 && ${ACTIVE_CC} == "gcc"
-COPTS.via_dmablit.c+=	-Wno-error=implicit-fallthrough
-.endif
+COPTS.via_dmablit.c+=	${CC_WNO_IMPLICIT_FALLTHROUGH}
 
 .include <bsd.kmodule.mk>

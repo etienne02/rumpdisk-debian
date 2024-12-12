@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic.S,v 1.5 2009/11/09 14:22:02 skrll Exp $	*/
+/*	$NetBSD: atomic.S,v 1.7 2022/04/09 23:32:51 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -117,6 +117,16 @@ ENTRY(_membar_producer,0)
 	br.ret.sptk	rp
 END(_membar_producer)
 
+ENTRY(_membar_acquire,0)
+	mf
+	br.ret.sptk	rp
+END(_membar_acquire)
+
+ENTRY(_membar_release,0)
+	mf
+	br.ret.sptk	rp
+END(_membar_release)
+
 ENTRY(_membar_enter,0)
 	mf
 	br.ret.sptk	rp
@@ -213,6 +223,8 @@ ALIAS(atomic_cas_ptr_ni,_atomic_cas_64)
 
 ALIAS(membar_consumer,_membar_consumer)
 ALIAS(membar_producer,_membar_producer)
+ALIAS(membar_acquire,_membar_acquire)
+ALIAS(membar_release,_membar_release)
 ALIAS(membar_enter,_membar_enter)
 ALIAS(membar_exit,_membar_exit)
 ALIAS(membar_sync,_membar_sync)

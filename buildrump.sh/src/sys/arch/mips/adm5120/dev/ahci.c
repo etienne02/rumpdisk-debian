@@ -1,4 +1,4 @@
-/*	$NetBSD: ahci.c,v 1.25 2021/08/07 16:18:58 thorpej Exp $	*/
+/*	$NetBSD: ahci.c,v 1.32 2022/10/23 06:29:01 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2007 Ruslan Ermilov and Vsevolod Lobko.
@@ -64,7 +64,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahci.c,v 1.25 2021/08/07 16:18:58 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahci.c,v 1.32 2022/10/23 06:29:01 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -445,7 +445,7 @@ ahci_poll_hub(void *arg)
 	 * another intr xfer has been submitted, let that one be dealt
 	 * with when the callout fires again.
 	 *
-	 * The call to callout_pending is racy, but the the transition
+	 * The call to callout_pending is racy, but the transition
 	 * from pending to invoking happens atomically.  The
 	 * callout_ack ensures callout_invoking does not return true
 	 * due to this invocation of the callout; the lock ensures the
@@ -729,22 +729,10 @@ ahci_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 static usbd_status
 ahci_root_intr_transfer(struct usbd_xfer *xfer)
 {
-	struct ahci_softc *sc = AHCI_XFER2SC(xfer);
-	usbd_status error;
 
 	DPRINTF(D_TRACE, ("SLRItransfer "));
 
-	/* Insert last in queue */
-	mutex_enter(&sc->sc_lock);
-	error = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (error)
-		return error;
-
-	/*
-	 * Pipe isn't running (otherwise error would be USBD_INPROG),
-	 * start first.
-	 */
+	/* Pipe isn't running, start first.  */
 	return ahci_root_intr_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 }
 
@@ -755,13 +743,13 @@ ahci_root_intr_start(struct usbd_xfer *xfer)
 
 	DPRINTF(D_TRACE, ("SLRIstart "));
 
-	mutex_enter(&sc->sc_lock);
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
 	KASSERT(sc->sc_intr_xfer == NULL);
 	sc->sc_interval = MS_TO_TICKS(xfer->ux_pipe->up_endpoint->ue_edesc->bInterval);
 	callout_schedule(&sc->sc_poll_handle, sc->sc_interval);
 	sc->sc_intr_xfer = xfer;
 	xfer->ux_status = USBD_IN_PROGRESS;
-	mutex_exit(&sc->sc_lock);
 
 	return USBD_IN_PROGRESS;
 }
@@ -827,16 +815,8 @@ ahci_root_intr_done(struct usbd_xfer *xfer)
 static usbd_status
 ahci_device_ctrl_transfer(struct usbd_xfer *xfer)
 {
-	struct ahci_softc *sc = AHCI_XFER2SC(xfer);
-	usbd_status error;
 
 	DPRINTF(D_TRACE, ("C"));
-
-	mutex_enter(&sc->sc_lock);
-	error = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (error)
-		return error;
 
 	return ahci_device_ctrl_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 }
@@ -854,11 +834,11 @@ ahci_device_ctrl_start(struct usbd_xfer *xfer)
 	struct ahci_softc *sc = AHCI_XFER2SC(xfer);
 	int len, isread;
 
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
 
 #if 0
 	struct ahci_pipe *apipe = (struct ahci_pipe *)xfer->ux_pipe;
 #endif
-	mutex_enter(&sc->sc_lock);
 /*	printf("ctrl_start>>>\n"); */
 
 #ifdef DIAGNOSTIC
@@ -877,7 +857,7 @@ ahci_device_ctrl_start(struct usbd_xfer *xfer)
 		td1 = (struct admhcd_td *)KSEG1ADDR(&td_v[1]);
 		td2 = (struct admhcd_td *)KSEG1ADDR(&td_v[2]);
 		td3 = (struct admhcd_td *)KSEG1ADDR(&td_v[3]);
-		err = usb_allocmem(&sc->sc_bus,
+		err = usb_allocmem(sc->sc_bus.ub_dmatag,
 			sizeof(usb_device_request_t),
 			0, USBMALLOC_COHERENT, &reqdma);
 		if (err)
@@ -988,9 +968,8 @@ ahci_device_ctrl_start(struct usbd_xfer *xfer)
 /* 	printf("ctrl_start<<<\n"); */
 
 	usb_transfer_complete(xfer);
-	mutex_exit(&sc->sc_lock);
 
-	usb_freemem(&sc->sc_bus, &reqdma);
+	usb_freemem(&reqdma);
 
 	return USBD_NORMAL_COMPLETION;
 }
@@ -1017,16 +996,8 @@ ahci_device_ctrl_done(struct usbd_xfer *xfer)
 static usbd_status
 ahci_device_intr_transfer(struct usbd_xfer *xfer)
 {
-	struct ahci_softc *sc = AHCI_XFER2SC(xfer);
-	usbd_status error;
 
 	DPRINTF(D_TRACE, ("INTRtrans "));
-
-	mutex_enter(&sc->sc_lock);
-	error = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (error)
-		return error;
 
 	return ahci_device_intr_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 }
@@ -1034,10 +1005,13 @@ ahci_device_intr_transfer(struct usbd_xfer *xfer)
 static usbd_status
 ahci_device_intr_start(struct usbd_xfer *xfer)
 {
+	struct ahci_softc *sc = AHCI_XFER2SC(xfer);
 	struct usbd_pipe *pipe = xfer->ux_pipe;
 	struct ahci_xfer *sx;
 
 	DPRINTF(D_TRACE, ("INTRstart "));
+
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
 
 	sx = kmem_intr_alloc(sizeof(*sx), KM_NOSLEEP);
 	if (sx == NULL)
@@ -1161,16 +1135,8 @@ ahci_device_isoc_done(struct usbd_xfer *xfer)
 static usbd_status
 ahci_device_bulk_transfer(struct usbd_xfer *xfer)
 {
-	struct ahci_softc *sc = AHCI_XFER2SC(xfer);
-	usbd_status error;
 
 	DPRINTF(D_TRACE, ("B"));
-
-	mutex_enter(&sc->sc_lock);
-	error = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (error)
-		return error;
 
 	return ahci_device_bulk_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 }
@@ -1192,6 +1158,8 @@ ahci_device_bulk_start(struct usbd_xfer *xfer)
 #define KSEG1ADDR(x) (0xa0000000 | (((uint32_t)x) & 0x1fffffff))
 	DPRINTF(D_TRACE, ("st "));
 
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
 #ifdef DIAGNOSTIC
 	if (xfer->ux_rqflags & URQ_REQUEST) {
 		/* XXX panic */
@@ -1200,7 +1168,6 @@ ahci_device_bulk_start(struct usbd_xfer *xfer)
 	}
 #endif
 
-	mutex_enter(&sc->sc_lock);
 	level++;
 /* 	printf("bulk_start>>>\n"); */
 
@@ -1236,7 +1203,7 @@ ahci_device_bulk_start(struct usbd_xfer *xfer)
 
 	i = 0;
 	offset = 0;
-	while (len > 0) || i == 0) {
+	while (len > 0 || i == 0) {
 		tlen = uimin(len,4096);
 		td[i]->buffer = DMAADDR(&xfer->ux_dmabuf, offset) | 0xa0000000;
 		td[i]->buflen = tlen;
@@ -1327,7 +1294,6 @@ ahci_device_bulk_start(struct usbd_xfer *xfer)
 		    isread ? BUS_DMASYNC_POSTREAD : BUS_DMASYNC_POSTWRITE);
 
 	usb_transfer_complete(xfer);
-	mutex_exit(&sc->sc_lock);
 
 	return USBD_NORMAL_COMPLETION;
 }

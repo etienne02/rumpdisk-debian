@@ -1,4 +1,4 @@
-/* $NetBSD: elf_machdep.h,v 1.8 2020/03/14 16:12:16 skrll Exp $ */
+/* $NetBSD: elf_machdep.h,v 1.10 2024/08/04 08:16:25 skrll Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -65,8 +65,8 @@
 #define R_RISCV_COPY		4
 #define R_RISCV_JMP_SLOT	5
 #define R_RISCV_TLS_DTPMOD32	6
-#define R_RISCV_TLS_DTPREL32	7
-#define R_RISCV_TLS_DTPMOD64	8
+#define R_RISCV_TLS_DTPMOD64	7
+#define R_RISCV_TLS_DTPREL32	8
 #define R_RISCV_TLS_DTPREL64	9
 #define R_RISCV_TLS_TPREL32	10
 #define R_RISCV_TLS_TPREL64	11
@@ -86,9 +86,9 @@
 #define R_RISCV_LO12_I		27	// (A >> 16) & 0xffff
 #define R_RISCV_LO12_S		28	// (S + A - P) >> 2
 #define R_RISCV_TPREL_HI20	29
-#define R_RISCV_TLREL_LO12_I	30
-#define R_RISCV_TLREL_LO12_S	31
-#define R_RISCV_TLREL_ADD	32
+#define R_RISCV_TPREL_LO12_I	30
+#define R_RISCV_TPREL_LO12_S	31
+#define R_RISCV_TPREL_ADD	32
 #define R_RISCV_ADD8		33
 #define R_RISCV_ADD16		34
 #define R_RISCV_ADD32		35
@@ -102,6 +102,18 @@
 #define R_RISCV_ALIGN		43
 #define R_RISCV_RVC_BRANCH	44
 #define R_RISCV_RVC_JUMP	45
+#define R_RISCV_RVC_LUI		46
+#define R_RISCV_GPREL_I		47
+#define R_RISCV_GPREL_S		48
+#define R_RISCV_TPREL_I		49
+#define R_RISCV_TPREL_S		50
+#define R_RISCV_RELAX		51
+#define R_RISCV_SUB6		52
+#define R_RISCV_SET6		53
+#define R_RISCV_SET8		54
+#define R_RISCV_SET16		55
+#define R_RISCV_SET32		56
+#define R_RISCV_32_PCREL	57
 
 /* These are aliases we can use R_TYPESZ */
 #define R_RISCV_ADDR32		R_RISCV_32
@@ -116,7 +128,7 @@
 
 #ifdef _KERNEL
 #ifdef ELFSIZE
-#define ELF_MD_PROBE_FUNC       ELFNAME2(cpu_netbsd,probe)
+#define ELF_MD_PROBE_FUNC	ELFNAME2(cpu_netbsd,probe)
 #endif
 
 struct exec_package;

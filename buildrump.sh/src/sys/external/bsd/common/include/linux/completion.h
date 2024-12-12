@@ -1,4 +1,4 @@
-/*	$NetBSD: completion.h,v 1.7 2020/07/03 16:23:02 maxv Exp $	*/
+/*	$NetBSD: completion.h,v 1.12 2021/12/19 12:35:37 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -47,6 +47,8 @@
 #define _LINUX_COMPLETION_H_
 
 #include <sys/types.h>
+#include <sys/param.h>
+#include <sys/kernel.h>
 #include <sys/condvar.h>
 #include <sys/mutex.h>
 
@@ -196,18 +198,18 @@ wait_for_completion_interruptible_timeout(struct completion *completion,
 
 	mutex_enter(&completion->c_lock);
 
-	/* Wait until c_done is nonzero.  */
+	/* Wait until c_done is nonzero, timeout, or signal.  */
 	while (completion->c_done == 0) {
-		error = cv_timedwait_sig(&completion->c_cv,
-		    &completion->c_lock, ticks);
-		if (error)
-			goto out;
-		now = getticks();
-		if (ticks < (now - start)) {
+		if (ticks == 0) {
 			error = EWOULDBLOCK;
 			goto out;
 		}
-		ticks -= (now - start);
+		error = cv_timedwait_sig(&completion->c_cv,
+		    &completion->c_lock, MIN(ticks, INT_MAX/2));
+		now = getticks();
+		if (error)
+			goto out;
+		ticks -= MIN(ticks, (now - start));
 		start = now;
 	}
 
@@ -222,7 +224,44 @@ out:	mutex_exit(&completion->c_lock);
 		return -ERESTARTSYS;
 	} else {
 		KASSERTMSG((error == 0), "error = %d", error);
-		return ticks;
+		return MAX(1, MIN(ticks, INT_MAX/2));
+	}
+}
+
+static inline int
+wait_for_completion_timeout(struct completion *completion, unsigned long ticks)
+{
+	/* XXX Arithmetic overflow...?  */
+	unsigned int start = getticks(), now;
+	int error;
+
+	mutex_enter(&completion->c_lock);
+
+	/* Wait until c_done is nonzero or timeout.  */
+	while (completion->c_done == 0) {
+		if (ticks == 0) {
+			error = EWOULDBLOCK;
+			goto out;
+		}
+		error = cv_timedwait(&completion->c_cv, &completion->c_lock,
+		    MIN(ticks, INT_MAX/2));
+		now = getticks();
+		if (error)
+			goto out;
+		ticks -= MIN(ticks, (now - start));
+		start = now;
+	}
+
+	/* Success!  */
+	_completion_claim(completion);
+	error = 0;
+
+out:	mutex_exit(&completion->c_lock);
+	if (error == EWOULDBLOCK) {
+		return 0;
+	} else {
+		KASSERTMSG((error == 0), "error = %d", error);
+		return MAX(1, MIN(ticks, INT_MAX/2));
 	}
 }
 
@@ -236,7 +275,7 @@ wait_for_completion_interruptible(struct completion *completion)
 
 	mutex_enter(&completion->c_lock);
 
-	/* Wait until c_done is nonzero.  */
+	/* Wait until c_done is nonzero or signal.  */
 	while (completion->c_done == 0) {
 		error = cv_wait_sig(&completion->c_cv, &completion->c_lock);
 		if (error)
@@ -248,9 +287,12 @@ wait_for_completion_interruptible(struct completion *completion)
 	error = 0;
 
 out:	mutex_exit(&completion->c_lock);
-	if ((error == EINTR) || (error == ERESTART))
-		error = -ERESTARTSYS;
-	return error;
+	if ((error == EINTR) || (error == ERESTART)) {
+		return -ERESTARTSYS;
+	} else {
+		KASSERTMSG((error == 0), "error = %d", error);
+		return 0;
+	}
 }
 
 /*
@@ -265,6 +307,17 @@ wait_for_completion_killable(struct completion *completion)
 {
 
 	return wait_for_completion_interruptible(completion);
+}
+
+static inline void
+wait_for_completion(struct completion *completion)
+{
+
+	mutex_enter(&completion->c_lock);
+	while (completion->c_done == 0)
+		cv_wait(&completion->c_cv, &completion->c_lock);
+	_completion_claim(completion);
+	mutex_exit(&completion->c_lock);
 }
 
 /*

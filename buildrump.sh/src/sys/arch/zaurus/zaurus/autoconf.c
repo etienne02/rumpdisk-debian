@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.14 2021/06/21 03:05:24 christos Exp $	*/
+/*	$NetBSD: autoconf.c,v 1.17 2023/12/20 15:34:46 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.14 2021/06/21 03:05:24 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.17 2023/12/20 15:34:46 thorpej Exp $");
 
 #include "opt_md.h"
 
@@ -36,7 +36,6 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.14 2021/06/21 03:05:24 christos Exp $
 #include <sys/device.h>
 #include <sys/disklabel.h>
 #include <sys/conf.h>
-#include <sys/malloc.h>
 #include <sys/vnode.h>
 #include <sys/fcntl.h>
 #include <sys/proc.h>
@@ -109,7 +108,9 @@ match_bootdisk(device_t dv, struct btinfo_bootdisk *bid)
 	if ((tmpvn = opendisk(dv)) == NULL)
 		return 0;
 
+	VOP_UNLOCK(tmpvn);
 	error = VOP_IOCTL(tmpvn, DIOCGDINFO, &label, FREAD, NOCRED);
+	vn_lock(tmpvn, LK_EXCLUSIVE | LK_RETRY);
 	if (error) {
 		/*
 		 * XXX Can't happen -- open() would have errored out
@@ -226,7 +227,7 @@ device_register(device_t dev, void *aux)
 	 * limited capabilities.
 	 */
 	if (device_is_a(dev, "iic") &&
-	    device_is_a(dev->dv_parent, "ziic")) {
+	    device_is_a(device_parent(dev), "ziic")) {
 		(void)prop_dictionary_set_string_nocopy(device_properties(dev),
 		    I2C_PROP_INDIRECT_PROBE_STRATEGY, I2C_PROBE_STRATEGY_NONE);
 	}

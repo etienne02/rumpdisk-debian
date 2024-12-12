@@ -1,4 +1,4 @@
-/*	$NetBSD: ixp425_qmgr.c,v 1.10 2019/12/27 09:25:57 msaitoh Exp $	*/
+/*	$NetBSD: ixp425_qmgr.c,v 1.12 2022/09/27 06:12:58 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2006 Sam Leffler, Errno Consulting
@@ -60,7 +60,7 @@
 */
 #include <sys/cdefs.h>
 /*__FBSDID("$FreeBSD: src/sys/arm/xscale/ixp425/ixp425_qmgr.c,v 1.1 2006/11/19 23:55:23 sam Exp $");*/
-__KERNEL_RCSID(0, "$NetBSD: ixp425_qmgr.c,v 1.10 2019/12/27 09:25:57 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ixp425_qmgr.c,v 1.12 2022/09/27 06:12:58 skrll Exp $");
 
 /*
  * Intel XScale Queue Manager support.
@@ -80,7 +80,7 @@ __KERNEL_RCSID(0, "$NetBSD: ixp425_qmgr.c,v 1.10 2019/12/27 09:25:57 msaitoh Exp
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/time.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/resource.h>
 
 #include <sys/bus.h>
@@ -229,7 +229,7 @@ ixpqmgr_init(bus_space_tag_t iot)
 	sc->sc_dev = dev;
 	sc->sc_iot = sa->sc_iot;
 #else
-	sc = malloc(sizeof(*sc), M_DEVBUF, M_WAITOK | M_ZERO);
+	sc = kmem_zalloc(sizeof(*sc), KM_SLEEP);
 	sc->sc_iot = iot;
 #endif
 
@@ -252,7 +252,7 @@ ixpqmgr_init(bus_space_tag_t iot)
 	    ixpqmgr_intr, sc);
 	if (sc->sc_ih[0] == NULL) {
 		ixpqmgr_sc = NULL;
-		free(sc, M_DEVBUF);
+		kmem_free(sc, sizeof(*sc));
 		return (NULL);
 	}
 	sc->sc_ih[1] = ixp425_intr_establish(IXP425_INT_QUE33_64, IPL_NET,
@@ -260,7 +260,7 @@ ixpqmgr_init(bus_space_tag_t iot)
 	if (sc->sc_ih[1] == NULL) {
 		ixp425_intr_disestablish(sc->sc_ih[0]);
 		ixpqmgr_sc = NULL;
-		free(sc, M_DEVBUF);
+		kmem_free(sc, sizeof(*sc));
 		return (NULL);
 	}
 #endif
@@ -436,7 +436,7 @@ ixpqmgr_qwrite(int qId, uint32_t entry)
 		    return ENOSPC;
 		}
 		/*
-		 * No overflow occured : someone is draining the queue
+		 * No overflow occurred : someone is draining the queue
 		 * and the current counter needs to be
 		 * updated from the current number of entries in the queue
 		 */

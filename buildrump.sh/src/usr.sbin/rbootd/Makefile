@@ -1,6 +1,7 @@
 #	from: @(#)Makefile	8.1 (Berkeley) 6/4/93
-#	$NetBSD: Makefile,v 1.15 2019/10/13 07:28:20 mrg Exp $
+#	$NetBSD: Makefile,v 1.17 2023/06/03 09:09:22 lukem Exp $
 
+WARNS?=	5
 USE_FORT?= yes	# network server
 
 PROG=	rbootd
@@ -16,6 +17,6 @@ DPADD+=	${LIBUTIL}
 COPTS.utils.c+=	-fno-strict-aliasing
 .endif
 
-COPTS.bpf.c+=	${GCC_NO_STRINGOP_TRUNCATION}
+COPTS.bpf.c+=	${CC_WNO_STRINGOP_TRUNCATION}
 
 .include <bsd.prog.mk>

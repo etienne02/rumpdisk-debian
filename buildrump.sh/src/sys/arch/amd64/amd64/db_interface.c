@@ -1,4 +1,4 @@
-/*	$NetBSD: db_interface.c,v 1.39 2021/02/23 07:13:51 mrg Exp $	*/
+/*	$NetBSD: db_interface.c,v 1.42 2023/07/31 02:38:16 mrg Exp $	*/
 
 /*
  * Mach Operating System
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.39 2021/02/23 07:13:51 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.42 2023/07/31 02:38:16 mrg Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -60,6 +60,7 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.39 2021/02/23 07:13:51 mrg Exp $"
 #include <machine/i82489var.h>
 #endif
 
+#include <ddb/db_active.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_command.h>
 #include <ddb/db_extern.h>
@@ -119,6 +120,7 @@ db_machine_init(void)
 		handler = &Xintr_x2apic_ddbipi;
 #endif
 	ddb_vec = idt_vec_alloc(iv, 0xf0, 0xff);
+	KASSERT(ddb_vec > 0);
 	set_idtgate(&idt[ddb_vec], handler, 1, SDT_SYS386IGT, SEL_KPL,
 	    GSEL(GCODE_SEL, SEL_KPL));
 #else
@@ -301,7 +303,7 @@ ddb_suspend(struct trapframe *frame)
 	atomic_or_32(&ci->ci_flags, CPUF_PAUSE);
 
 	while (ci->ci_flags & CPUF_PAUSE)
-		;
+		x86_pause();
 	ci->ci_ddb_regs = 0;
 	tlbflushg();
 }

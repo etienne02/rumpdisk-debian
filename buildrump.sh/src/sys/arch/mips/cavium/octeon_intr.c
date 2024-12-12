@@ -1,4 +1,4 @@
-/*	$NetBSD: octeon_intr.c,v 1.24 2020/08/18 07:41:41 skrll Exp $	*/
+/*	$NetBSD: octeon_intr.c,v 1.27 2022/04/09 23:34:40 riastradh Exp $	*/
 /*
  * Copyright 2001, 2002 Wasabi Systems, Inc.
  * All rights reserved.
@@ -44,7 +44,7 @@
 #define __INTR_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: octeon_intr.c,v 1.24 2020/08/18 07:41:41 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: octeon_intr.c,v 1.27 2022/04/09 23:34:40 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -54,6 +54,7 @@ __KERNEL_RCSID(0, "$NetBSD: octeon_intr.c,v 1.24 2020/08/18 07:41:41 skrll Exp $
 #include <sys/kernel.h>
 #include <sys/kmem.h>
 #include <sys/atomic.h>
+#include <sys/xcall.h>
 
 #include <lib/libkern/libkern.h>
 
@@ -361,8 +362,7 @@ octeon_intr_establish(int irq, int ipl, int (*func)(void *), void *arg)
 	KASSERTMSG(octciu_intrs[irq] == NULL, "irq %d in use! (%p)",
 	    irq, octciu_intrs[irq]);
 
-	octciu_intrs[irq] = ih;
-	membar_producer();
+	atomic_store_release(&octciu_intrs[irq], ih);
 
 	/*
 	 * Now enable it.
@@ -462,13 +462,15 @@ octeon_intr_disestablish(void *cookie)
 		break;
 	}
 
-	/*
-	 * Now remove it since we shouldn't get interrupts for it.
-	 */
-	octciu_intrs[irq] = NULL;
+	atomic_store_relaxed(&octciu_intrs[irq], NULL);
 
 	mutex_exit(&octeon_intr_lock);
 
+	/*
+	 * Wait until the interrupt handler is no longer running on all
+	 * CPUs before freeing ih and returning.
+	 */
+	xc_barrier(0);
 	kmem_free(ih, sizeof(*ih));
 }
 
@@ -507,7 +509,8 @@ octeon_iointr(int ipl, vaddr_t pc, uint32_t ipending)
 			const int irq = (bank * 64) + bit;
 			hwpend[bank] &= ~__BIT(bit);
 
-			struct octeon_intrhand * const ih = octciu_intrs[irq];
+			struct octeon_intrhand * const ih =
+			    atomic_load_consume(&octciu_intrs[irq]);
 			cpu->cpu_intr_evs[irq].ev_count++;
 			if (__predict_true(ih != NULL)) {
 #ifdef MULTIPROCESSOR
@@ -545,6 +548,7 @@ octeon_ipi_intr(void *arg)
 	ipi_mask &= mips3_ld(cpu->cpu_mbox_set);
 	if (ipi_mask == 0)
 		return 0;
+	membar_acquire();
 
 	mips3_sd(cpu->cpu_mbox_clr, ipi_mask);
 
@@ -563,8 +567,9 @@ octeon_ipi_intr(void *arg)
 #endif
 
 	/* if the request is clear, it was previously processed */
-	if ((ci->ci_request_ipis & ipi_mask) == 0)
+	if ((atomic_load_relaxed(&ci->ci_request_ipis) & ipi_mask) == 0)
 		return 0;
+	membar_acquire();
 
 	atomic_or_64(&ci->ci_active_ipis, ipi_mask);
 	atomic_and_64(&ci->ci_request_ipis, ~ipi_mask);
@@ -597,8 +602,10 @@ octeon_send_ipi(struct cpu_info *ci, int req)
 	const u_int ipi_shift = ipi_prio[req] == IPL_SCHED ? 16 : 0;
 	const uint32_t ipi_mask = __BIT(req + ipi_shift);
 
+	membar_release();
 	atomic_or_64(&ci->ci_request_ipis, ipi_mask);
 
+	membar_release();
 	mips3_sd(cpu->cpu_mbox_set, ipi_mask);
 
 	return 0;

@@ -1,4 +1,4 @@
-/*	$NetBSD: siop.c,v 1.7 2019/12/27 09:41:49 msaitoh Exp $	*/
+/*	$NetBSD: siop.c,v 1.15 2024/02/08 19:44:08 andvar Exp $	*/
 /*
  * Copyright (c) 2010 KIYOHARA Takashi
  * All rights reserved.
@@ -183,12 +183,12 @@ siop_sdp(struct siop_adapter *adp, struct siop_xfer *xfer, struct scsi_xfer *xs,
 		return;
 	/*
 	 * Save data pointer. We do this by adjusting the tables to point
-	 * at the begginning of the data not yet transferred.
+	 * at the beginning of the data not yet transferred.
 	 * offset points to the first table with untransferred data.
 	 */
 
 	/*
-	 * before doing that we decrease resid from the ammount of data which
+	 * before doing that we decrease resid from the amount of data which
 	 * has been transferred.
 	 */
 	siop_update_resid(adp, xfer, xs, offset);
@@ -213,7 +213,7 @@ siop_sdp(struct siop_adapter *adp, struct siop_xfer *xfer, struct scsi_xfer *xs,
 
 	/*
 	 * now we can remove entries which have been transferred.
-	 * We just move the entries with data left at the beggining of the
+	 * We just move the entries with data left at the beginning of the
 	 * tables
 	 */
 	memmove(xfer->siop_tables.data, &xfer->siop_tables.data[offset],
@@ -238,7 +238,7 @@ siop_update_resid(struct siop_adapter *adp, struct siop_xfer *xfer,
 #if 0
 	/*
 	 * if CMDFL_RESID is set, the last table (pointed by offset) is a
-	 * partial transfers. If not, offset points to the entry folloing
+	 * partial transfers. If not, offset points to the entry following
 	 * the last full transfer.
 	 */
 	if (siop_cmd->flags & CMDFL_RESID) {
@@ -406,7 +406,7 @@ reset:
 			if (target != adp->xs->target ||
 			    lun != adp->xs->lun ||
 			    tag != 0) {
-				printf("unknwon resellun:"
+				printf("unknown resellun:"
 				    " target %d lun %d tag %d\n",
 				    target, lun, tag);
 				goto reset;
@@ -465,7 +465,7 @@ reset:
 		}
 		return 1;
 	}
-	/* We just should't get there */
+	/* We just shouldn't get there */
 	panic("siop_intr: I shouldn't be there !");
 
 	return 1;
@@ -854,7 +854,7 @@ scsi_request_sense(struct siop_adapter *adp, struct scsi_xfer *xs)
 		xs->error = XS_RESET;
 		return;
 	case EIO:
-		 /* request sense coudn't be performed */
+		 /* request sense couldn't be performed */
 		/*
 		 * XXX this isn't quite right but we don't have anything
 		 * better for now
@@ -885,7 +885,7 @@ scsi_interpret_sense(struct siop_adapter *adp, struct scsi_xfer *xs)
 {
 	struct scsi_sense_data *sense;
 	u_int8_t key;
-	int error;
+	int error = 0;
 	uint32_t info;
 	static const char *error_mes[] = {
 		"soft error (corrected)",
@@ -961,7 +961,6 @@ scsi_interpret_sense(struct siop_adapter *adp, struct scsi_xfer *xs)
 				xs->resid = 0;	/* not short read */
 			}
 		case SKEY_EQUAL:
-			error = 0;
 			break;
 		case SKEY_NOT_READY:
 			if (adp->sd->sc_flags & FLAGS_REMOVABLE)
@@ -990,10 +989,9 @@ scsi_interpret_sense(struct siop_adapter *adp, struct scsi_xfer *xs)
 			error = EROFS;
 			break;
 		case SKEY_BLANK_CHECK:
-			error = 0;
 			break;
 		case SKEY_ABORTED_COMMAND:
-			/* XXX XXX initialize 'error' */
+			error = EIO;
 			break;
 		case SKEY_VOLUME_OVERFLOW:
 			error = ENOSPC;

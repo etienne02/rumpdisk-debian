@@ -1,4 +1,4 @@
-/*	$NetBSD: if_iavf.c,v 1.14 2021/06/16 00:21:18 riastradh Exp $	*/
+/*	$NetBSD: if_iavf.c,v 1.18 2024/06/29 12:11:12 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2013-2015, Intel Corporation
@@ -75,7 +75,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_iavf.c,v 1.14 2021/06/16 00:21:18 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_iavf.c,v 1.18 2024/06/29 12:11:12 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -1780,7 +1780,7 @@ iavf_setup_interrupts(struct iavf_softc *sc)
 		IAVF_LOG(sc, LOG_ERR, "couldn't allocate interrupts\n");
 	} else if (counts[PCI_INTR_TYPE_MSIX] != (int)num) {
 		IAVF_LOG(sc, LOG_DEBUG,
-		    "request %u intruppts, but allocate %d interrupts\n",
+		    "request %u interrupts, but allocate %d interrupts\n",
 		    num, counts[PCI_INTR_TYPE_MSIX]);
 		num = counts[PCI_INTR_TYPE_MSIX];
 	}
@@ -2699,8 +2699,9 @@ iavf_rxeof(struct iavf_softc *sc, struct iavf_rx_ring *rxr, u_int rxlimit,
 			word0 = le64toh(rxd->qword0);
 
 			if (ISSET(word, IXL_RX_DESC_L2TAG1P)) {
-				vlan_set_tag(m,
-				    __SHIFTOUT(word0, IXL_RX_DESC_L2TAG1_MASK));
+				uint16_t vtag;
+				vtag = __SHIFTOUT(word0, IXL_RX_DESC_L2TAG1_MASK);
+				vlan_set_tag(m, le16toh(vtag));
 			}
 
 			if ((ifp->if_capenable & IAVF_IFCAP_RXCSUM) != 0)
@@ -2709,12 +2710,12 @@ iavf_rxeof(struct iavf_softc *sc, struct iavf_rx_ring *rxr, u_int rxlimit,
 			if (!ISSET(word,
 			    IXL_RX_DESC_RXE | IXL_RX_DESC_OVERSIZE)) {
 				m_set_rcvif(m, ifp);
-				if_statinc_ref(nsr, if_ipackets);
-				if_statadd_ref(nsr, if_ibytes,
+				if_statinc_ref(ifp, nsr, if_ipackets);
+				if_statadd_ref(ifp, nsr, if_ibytes,
 				    m->m_pkthdr.len);
 				if_percpuq_enqueue(sc->sc_ipq, m);
 			} else {
-				if_statinc_ref(nsr, if_ierrors);
+				if_statinc_ref(ifp, nsr, if_ierrors);
 				m_freem(m);
 			}
 
@@ -2732,7 +2733,7 @@ iavf_rxeof(struct iavf_softc *sc, struct iavf_rx_ring *rxr, u_int rxlimit,
 		ecnt->ev_count++;
 		rxr->rxr_cons = cons;
 		if (iavf_rxfill(sc, rxr) == -1)
-			if_statinc_ref(nsr, if_iqdrops);
+			if_statinc_ref(ifp, nsr, if_iqdrops);
 	}
 
 	IF_STAT_PUTREF(ifp);
@@ -2829,10 +2830,10 @@ iavf_txeof(struct iavf_softc *sc, struct iavf_tx_ring *txr, u_int txlimit,
 
 		m = txm->txm_m;
 		if (m != NULL) {
-			if_statinc_ref(nsr, if_opackets);
-			if_statadd_ref(nsr, if_obytes, m->m_pkthdr.len);
+			if_statinc_ref(ifp, nsr, if_opackets);
+			if_statadd_ref(ifp, nsr, if_obytes, m->m_pkthdr.len);
 			if (ISSET(m->m_flags, M_MCAST))
-				if_statinc_ref(nsr, if_omcasts);
+				if_statinc_ref(ifp, nsr, if_omcasts);
 			m_freem(m);
 		}
 
@@ -3032,9 +3033,10 @@ iavf_tx_common_locked(struct ifnet *ifp, struct iavf_tx_ring *txr,
 			iavf_tx_setup_offloads(m, &cmd_txd);
 		}
 		if (vlan_has_tag(m)) {
+			uint16_t vtag;
+			vtag = htole16(vlan_get_tag(m));
 			cmd_txd |= IXL_TX_DESC_CMD_IL2TAG1 |
-			    ((uint64_t)vlan_get_tag(m)
-			    << IXL_TX_DESC_L2TAG1_SHIFT);
+			    ((uint64_t)vtag << IXL_TX_DESC_L2TAG1_SHIFT);
 		}
 
 		bus_dmamap_sync(sc->sc_dmat, map, 0,
@@ -5313,7 +5315,7 @@ iavf_parse_modprop(prop_dictionary_t dict)
 		val = prop_number_signed_value((prop_number_t)obj);
 		n = 1U << (fls32(val) - 1);
 		if (val != (int64_t) n) {
-			printf("iavf: TX desc invlaid size"
+			printf("iavf: TX desc invalid size"
 			    "(%" PRId64 " != %" PRIu32 ")\n", val, n);
 		} else if (val > (8192 - 32)) {
 			printf("iavf: Tx desc too big (%" PRId64 " > %d)",
@@ -5330,7 +5332,7 @@ iavf_parse_modprop(prop_dictionary_t dict)
 		val = prop_number_signed_value((prop_number_t)obj);
 		n = 1U << (fls32(val) - 1);
 		if (val != (int64_t) n) {
-			printf("iavf: RX desc invlaid size"
+			printf("iavf: RX desc invalid size"
 			    "(%" PRId64 " != %" PRIu32 ")\n", val, n);
 		} else if (val > (8192 - 32)) {
 			printf("iavf: Rx desc too big (%" PRId64 " > %d)",

@@ -1,4 +1,4 @@
-/*	$NetBSD: dp83932.c,v 1.47 2021/02/20 09:36:31 rin Exp $	*/
+/*	$NetBSD: dp83932.c,v 1.50 2024/06/29 12:11:11 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -35,13 +35,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dp83932.c,v 1.47 2021/02/20 09:36:31 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dp83932.c,v 1.50 2024/06/29 12:11:11 riastradh Exp $");
 
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -669,13 +668,15 @@ sonic_txintr(struct sonic_softc *sc)
 		 */
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (status & TCR_PTX) {
-			if_statinc_ref(nsr, if_opackets);
+			if_statinc_ref(ifp, nsr, if_opackets);
 			count++;
-		} else
-			if_statinc_ref(nsr, if_oerrors);
-		if (TDA_STATUS_NCOL(status))
-			if_statadd_ref(nsr, if_collisions,
+		} else {
+			if_statinc_ref(ifp, nsr, if_oerrors);
+		}
+		if (TDA_STATUS_NCOL(status)) {
+			if_statadd_ref(ifp, nsr, if_collisions,
 			    TDA_STATUS_NCOL(status));
+		}
 		IF_STAT_PUTREF(ifp);
 	}
 
@@ -689,8 +690,8 @@ sonic_txintr(struct sonic_softc *sc)
 	if (sc->sc_txpending == 0)
 		ifp->if_timer = 0;
 
-	if (count != 0)
-		rnd_add_uint32(&sc->sc_rndsource, count);
+	if (totstat != 0)
+		rnd_add_uint32(&sc->sc_rndsource, totstat);
 
 	return totstat;
 }

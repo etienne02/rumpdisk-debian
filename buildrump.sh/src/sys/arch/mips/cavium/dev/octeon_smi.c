@@ -1,4 +1,4 @@
-/*	$NetBSD: octeon_smi.c,v 1.7 2021/01/27 03:10:21 thorpej Exp $	*/
+/*	$NetBSD: octeon_smi.c,v 1.9 2022/09/29 07:00:46 skrll Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -27,13 +27,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: octeon_smi.c,v 1.7 2021/01/27 03:10:21 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: octeon_smi.c,v 1.9 2022/09/29 07:00:46 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/queue.h>
 #include <sys/kmem.h>
@@ -198,7 +197,7 @@ octsmi_read(struct octsmi_softc *sc, int phy_addr, int reg, uint16_t *val)
 	uint64_t smi_rd;
 	int timo;
 
-	_SMI_WR8(sc, SMI_CMD_OFFSET, 
+	_SMI_WR8(sc, SMI_CMD_OFFSET,
 	    __SHIFTIN(SMI_CMD_PHY_OP_READ, SMI_CMD_PHY_OP) |
 	    __SHIFTIN(phy_addr, SMI_CMD_PHY_ADR) |
 	    __SHIFTIN(reg, SMI_CMD_REG_ADR));

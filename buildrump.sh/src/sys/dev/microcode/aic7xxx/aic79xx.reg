@@ -1,4 +1,4 @@
-/*	$NetBSD: aic79xx.reg,v 1.14 2019/05/28 08:59:34 msaitoh Exp $	*/
+/*	$NetBSD: aic79xx.reg,v 1.17 2024/02/09 22:08:35 andvar Exp $	*/
 
 /*
  * Aic79xx register and scratch ram definitions.
@@ -1386,7 +1386,7 @@ const LUNLEN_SINGLE_LEVEL_LUN 0xF
 
 /*
  * CDB Limit
- * The size, in bytes, of the embedded CDB field in initator SCBs.
+ * The size, in bytes, of the embedded CDB field in initiator SCBs.
  */
 register CDBLIMIT {
 	address			0x031
@@ -2433,7 +2433,7 @@ register IOPDNCTL {
 }
 
 /*
- * Shaddow Host Address.
+ * Shadow Host Address.
  */
 register SHADDR {
 	address			0x060
@@ -3710,7 +3710,7 @@ scratch_ram {
 
 	/*
 	 * The maximum amount of time to wait, when interrupt coalescing
-	 * is enabled, before issueing a CMDCMPLT interrupt for a completed
+	 * is enabled, before issuing a CMDCMPLT interrupt for a completed
 	 * command.
 	 */
 	INT_COALESCING_TIMER {

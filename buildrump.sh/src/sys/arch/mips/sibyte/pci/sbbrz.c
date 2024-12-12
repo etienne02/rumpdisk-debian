@@ -1,25 +1,25 @@
-/* $NetBSD: sbbrz.c,v 1.6 2021/08/07 16:18:59 thorpej Exp $ */
+/* $NetBSD: sbbrz.c,v 1.9 2022/03/03 06:27:21 riastradh Exp $ */
 
 /*
  * Copyright 2000, 2001
  * Broadcom Corporation. All rights reserved.
- * 
+ *
  * This software is furnished under license and may be used and copied only
  * in accordance with the following terms and conditions.  Subject to these
  * conditions, you may download, copy, install, use, modify and distribute
  * modified or unmodified copies of this software in source and/or binary
  * form. No title or ownership is transferred hereby.
- * 
+ *
  * 1) Any source code used, modified or distributed must reproduce and
  *    retain this copyright notice and list of conditions as they appear in
  *    the source file.
- * 
+ *
  * 2) No right is granted to use any trade name, trademark, or logo of
  *    Broadcom Corporation. Neither the "Broadcom Corporation" name nor any
  *    trademark or logo of Broadcom Corporation may be used to endorse or
  *    promote products derived from this software without the prior written
  *    permission of Broadcom Corporation.
- * 
+ *
  * 3) THIS SOFTWARE IS PROVIDED "AS-IS" AND ANY EXPRESS OR IMPLIED
  *    WARRANTIES, INCLUDING BUT NOT LIMITED TO, ANY IMPLIED WARRANTIES OF
  *    MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR
@@ -69,17 +69,17 @@
  * All rights reserved.
  *
  * Author: Chris G. Demetriou
- * 
+ *
  * Permission to use, copy, modify and distribute this software and
  * its documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
- * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" 
- * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND 
+ *
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND
  * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
  *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
@@ -130,7 +130,7 @@ sbbrz_match(device_t parent, cfdata_t match, void *aux)
 
 	if (zap->za_locs.za_type != ZBBUS_ENTTYPE_BRZ)
 		return (0);
-  
+
 	if (sbbrz_softc.sc_dev != NULL)
 		return (0);
 
@@ -157,9 +157,9 @@ sbbrz_init(struct sbbrz_softc *sc)
 	t->_dmamem_ops = mips_bus_dmamem_ops;
 	t->_dmatag_ops = mips_bus_dmatag_ops;
 
-	error = bus_dmatag_subregion(t, 0, (bus_addr_t)1 << 32, &sc->sc_dmat32, 0);
+	error = bus_dmatag_subregion(t, 0, __MASK(32), &sc->sc_dmat32, 0);
 	if (error)
-		panic("%s: failed to create 32bit dma tag: %d",  
+		panic("%s: failed to create 32bit dma tag: %d",
 		    __func__, error);
 
 	sbbrz_pci_init(&sc->sc_pc, sc);
@@ -181,7 +181,7 @@ sbbrz_attach(device_t parent, device_t self, void *aux)
 
 	/* note that we've attached the bridge; can't have two. */
 	sc->sc_dev = self;
-	self->dv_private = sc;
+	device_set_private(self, sc);
 
 	/*
          * set up the bridge's info; done once at console init time
@@ -208,7 +208,7 @@ static int
 sbbrz_print(void *aux, const char *pnp)
 {
 	struct pcibus_attach_args *pba = aux;
-                
+
 	/* only PCIs can attach to sbbrz; easy. */
 	if (pnp)
 #if _has_pba_busname
@@ -218,4 +218,4 @@ sbbrz_print(void *aux, const char *pnp)
 #endif
 	aprint_normal(" bus %d", pba->pba_bus);
 	return (UNCONF);
-}       
+}

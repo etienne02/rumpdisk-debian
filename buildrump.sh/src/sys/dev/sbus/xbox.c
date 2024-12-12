@@ -1,4 +1,4 @@
-/*	$NetBSD: xbox.c,v 1.24 2021/08/07 16:19:15 thorpej Exp $ */
+/*	$NetBSD: xbox.c,v 1.26 2022/09/25 18:03:04 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -34,10 +34,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xbox.c,v 1.24 2021/08/07 16:19:15 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xbox.c,v 1.26 2022/09/25 18:03:04 thorpej Exp $");
 
 #include <sys/param.h>
-#include <sys/malloc.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 
@@ -150,5 +149,5 @@ xbox_attach(device_t parent, device_t self, void *aux)
 	xa.xa_dmatag = sa->sa_dmatag;
 
 	(void) config_found(self, (void *)&xa, xbox_print,
-	    CFARGS(.devhandle = prom_node_to_devhandle(node)));
+	    CFARGS(.devhandle = device_handle(self)));
 }

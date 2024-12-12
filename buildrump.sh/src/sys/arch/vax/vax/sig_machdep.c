@@ -1,4 +1,4 @@
-/* $NetBSD: sig_machdep.c,v 1.24 2018/12/29 11:30:12 maxv Exp $	 */
+/* $NetBSD: sig_machdep.c,v 1.27 2024/05/17 21:37:07 thorpej Exp $	 */
 
 /*
  * Copyright (c) 1982, 1986, 1990 The Regents of the University of California.
@@ -79,7 +79,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sig_machdep.c,v 1.24 2018/12/29 11:30:12 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sig_machdep.c,v 1.27 2024/05/17 21:37:07 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_compat_netbsd.h"
@@ -171,6 +171,8 @@ setupstack_siginfo3(const struct ksiginfo *ksi, const sigset_t *mask, int vers,
 	uc.uc_flags = _UC_SIGMASK;
 	uc.uc_sigmask = *mask;
 	uc.uc_link = l->l_ctxlink;
+	uc.uc_flags |= (l->l_sigstk.ss_flags & SS_ONSTACK)
+	    ? _UC_SETSTACK : _UC_CLRSTACK;
 	sendsig_reset(l, ksi->ksi_signo);
 	mutex_exit(p->p_lock);
 	cpu_getmcontext(l, &uc.uc_mcontext, &uc.uc_flags);
@@ -195,7 +197,7 @@ sendsig_sighelper(const ksiginfo_t *ksi, const sigset_t *mask)
 	struct lwp * const l = curlwp;
 	struct proc * const p = l->l_proc;
 	struct trapframe * const tf = l->l_md.md_utf;
-	struct sigaltstack * const ss = &l->l_sigstk;
+	stack_t * const ss = &l->l_sigstk;
 	const struct sigact_sigdesc * const sd =
 	    &p->p_sigacts->sa_sigdesc[ksi->ksi_signo];
 	vaddr_t sp;
@@ -207,7 +209,8 @@ sendsig_sighelper(const ksiginfo_t *ksi, const sigset_t *mask)
 	    (sd->sd_sigact.sa_flags & SA_ONSTACK) != 0;
 	sp = onstack ? ((vaddr_t)ss->ss_sp + ss->ss_size) : tf->tf_sp;
 
-	if (sd->sd_vers > 3 || (setup = sig_setupstacks[sd->sd_vers]) == NULL)
+	if (sd->sd_vers > __SIGTRAMP_SIGINFO_VERSION ||
+	    (setup = sig_setupstacks[sd->sd_vers]) == NULL)
 		goto nosupport;
 
 	sp = (*setup)(ksi, mask, sd->sd_vers, l, tf, sp, onstack,

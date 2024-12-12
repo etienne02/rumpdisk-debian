@@ -1,4 +1,4 @@
-/*	$NetBSD: puffs_vnops.c,v 1.222 2021/07/24 21:31:38 andvar Exp $	*/
+/*	$NetBSD: puffs_vnops.c,v 1.226 2024/02/09 22:08:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 2005, 2006, 2007  Antti Kantee.  All Rights Reserved.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: puffs_vnops.c,v 1.222 2021/07/24 21:31:38 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: puffs_vnops.c,v 1.226 2024/02/09 22:08:37 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/buf.h>
@@ -1342,12 +1342,12 @@ puffs_vnop_inactive(void *v)
 			mutex_enter(&pmp->pmp_sopmtx);
 
 			/*
-			 * If thread has disapeared, just give up. The
+			 * If thread has disappeared, just give up. The
 			 * fs is being unmounted and the node will be 
 			 * be reclaimed anyway.
 			 *
 			 * Otherwise, we queue the request but do not
-			 * immediatly signal the thread, as the node
+			 * immediately signal the thread, as the node
 			 * has not been expired yet.
 			 */
 			if (pmp->pmp_sopthrcount == 0) {
@@ -1428,7 +1428,7 @@ puffs_vnop_reclaim(void *v)
 		notifyserver = false;
 
 	/*
-	 * purge info from kernel before issueing FAF, since we
+	 * purge info from kernel before issuing FAF, since we
 	 * don't really know when we'll get around to it after
 	 * that and someone might race us into node creation
 	 */
@@ -1796,11 +1796,12 @@ callremove(struct puffs_mount *pmp, puffs_cookie_t dck, puffs_cookie_t ck,
 int
 puffs_vnop_remove(void *v)
 {
-	struct vop_remove_v2_args /* {
+	struct vop_remove_v3_args /* {
 		const struct vnodeop_desc *a_desc;
 		struct vnode *a_dvp;
 		struct vnode *a_vp;
 		struct componentname *a_cnp;
+		nlink_t ctx_vp_new_nlink;
 	} */ *ap = v;
 	PUFFS_MSG_VARS(vn, remove);
 	struct vnode *dvp = ap->a_dvp;
@@ -2172,6 +2173,8 @@ puffs_vnop_rename(void *v)
 		if (PUFFS_USE_DOTDOTCACHE(pmp) &&
 		    (VPTOPP(fvp)->pn_parent != tdvp))
 			update_parent(fvp, tdvp);
+
+		/* XXX Update ap->ctx_vp_new_nlink */
 	}
 
 
@@ -2471,7 +2474,7 @@ puffs_vnop_write(void *v)
 
 		/*
 		 * Direct I/O on write but not on read: we must
-		 * invlidate the written pages so that we read
+		 * invalidate the written pages so that we read
 		 * the written data and not the stalled cache.
 		 */
 		if ((error == 0) && 

@@ -1,4 +1,4 @@
-/*	$NetBSD: isadma_machdep.c,v 1.11 2016/12/23 07:15:27 cherry Exp $	*/
+/*	$NetBSD: isadma_machdep.c,v 1.14 2022/01/22 15:10:32 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: isadma_machdep.c,v 1.11 2016/12/23 07:15:27 cherry Exp $");
+__KERNEL_RCSID(0, "$NetBSD: isadma_machdep.c,v 1.14 2022/01/22 15:10:32 skrll Exp $");
 
 #define ISA_DMA_STATS
 
@@ -130,7 +130,7 @@ struct powerpc_bus_dma_tag isa_bus_dma_tag = {
 	_bus_dmamem_free,
 	_bus_dmamem_map,
 	_bus_dmamem_unmap,
-	_bus_dmamem_mmap, 
+	_bus_dmamem_mmap,
 };
 
 /**********************************************************************
@@ -193,7 +193,7 @@ _isa_bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
 	 * in memory below the 16M boundary.  On DMA reads,
 	 * DMA happens to the bounce buffers, and is copied into
 	 * the caller's buffer.  On writes, data is copied into
-	 * but bounce buffer, and the DMA happens from those
+	 * the bounce buffer, and the DMA happens from those
 	 * pages.  To software using the DMA mapping interface,
 	 * this looks simply like a data cache.
 	 *
@@ -570,7 +570,7 @@ _isa_bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 		 */
 		break;
 	    }
-	
+
 	case ID_BUFTYPE_UIO:
 		panic("_isa_bus_dmamap_sync: ID_BUFTYPE_UIO");
 		break;
@@ -608,9 +608,9 @@ _isa_bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t alignment,
 	}
 
 	if (avail_end > ISA_DMA_BOUNCE_THRESHOLD)
-		high = trunc_page(ISA_DMA_BOUNCE_THRESHOLD);
+		high = ISA_DMA_BOUNCE_THRESHOLD - 1;
 	else
-		high = trunc_page(avail_end);
+		high = avail_end - 1;
 	return (_bus_dmamem_alloc_range(t, size, alignment, boundary,
 	    segs, nsegs, rsegs, flags, 0, high));
 }

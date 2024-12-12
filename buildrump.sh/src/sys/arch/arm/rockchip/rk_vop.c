@@ -1,4 +1,4 @@
-/* $NetBSD: rk_vop.c,v 1.10 2021/01/27 03:10:19 thorpej Exp $ */
+/* $NetBSD: rk_vop.c,v 1.16 2021/12/20 00:27:17 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2019 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,26 +27,30 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rk_vop.c,v 1.10 2021/01/27 03:10:19 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rk_vop.c,v 1.16 2021/12/20 00:27:17 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/intr.h>
-#include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/conf.h>
 #include <sys/sysctl.h>
+#include <sys/systm.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_crtc.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_plane_helper.h>
-
-#include <dev/fdt/fdtvar.h>
 #include <dev/fdt/fdt_port.h>
+#include <dev/fdt/fdtvar.h>
 
 #include <arm/rockchip/rk_drm.h>
+
+#include <drm/drm_atomic.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_plane_helper.h>
+#include <drm/drm_vblank.h>
 
 #define	VOP_REG_CFG_DONE		0x0000
 #define	 REG_LOAD_EN			__BIT(0)
@@ -101,6 +105,26 @@ __KERNEL_RCSID(0, "$NetBSD: rk_vop.c,v 1.10 2021/01/27 03:10:19 thorpej Exp $");
 #define	VOP_DSP_VACT_ST_END		0x0194
 #define	 DSP_VACT_ST			__BITS(28,16)
 #define	 DSP_VACT_END			__BITS(12,0)
+#define	VOP_INTR_EN0			0x0280
+#define	VOP_INTR_CLEAR0			0x0284
+#define	VOP_INTR_STATUS0		0x0288
+#define	VOP_INTR_RAW_STATUS0		0x028c
+#define	 VOP_INTR0_DMA_FINISH		__BIT(15)
+#define	 VOP_INTR0_MMU			__BIT(14)
+#define	 VOP_INTR0_DSP_HOLD_VALID	__BIT(13)
+#define	 VOP_INTR0_FS_FIELD		__BIT(12)
+#define	 VOP_INTR0_POST_BUF_EMPTY	__BIT(11)
+#define	 VOP_INTR0_HWC_EMPTY		__BIT(10)
+#define	 VOP_INTR0_WIN3_EMPTY		__BIT(9)
+#define	 VOP_INTR0_WIN2_EMPTY		__BIT(8)
+#define	 VOP_INTR0_WIN1_EMPTY		__BIT(7)
+#define	 VOP_INTR0_WIN0_EMPTY		__BIT(6)
+#define	 VOP_INTR0_BUS_ERROR		__BIT(5)
+#define	 VOP_INTR0_LINE_FLAG1		__BIT(4)
+#define	 VOP_INTR0_LINE_FLAG0		__BIT(3)
+#define	 VOP_INTR0_ADDR_SAME		__BIT(2)
+#define	 VOP_INTR0_FS_NEW		__BIT(1)
+#define	 VOP_INTR0_FS			__BIT(0)
 
 /*
  * Polarity fields are in different locations depending on SoC and output type,
@@ -128,6 +152,11 @@ struct rk_vop_crtc {
 	struct rk_vop_softc	*sc;
 };
 
+struct rk_vop_plane {
+	struct drm_plane	base;
+	struct rk_vop_softc	*sc;
+};
+
 struct rk_vop_softc {
 	device_t		sc_dev;
 	bus_space_tag_t		sc_bst;
@@ -136,19 +165,34 @@ struct rk_vop_softc {
 
 	struct clk		*sc_dclk;
 
+	struct rk_vop_plane	sc_plane;
 	struct rk_vop_crtc	sc_crtc;
 
 	struct fdt_device_ports	sc_ports;
 
 	const struct rk_vop_config *sc_conf;
+
+	/* vblank */
+	void			*sc_ih;
+	kmutex_t		sc_intr_lock;
+	struct drm_pending_vblank_event *sc_event;
 };
 
 #define	to_rk_vop_crtc(x)	container_of(x, struct rk_vop_crtc, base)
+#define	to_rk_vop_plane(x)	container_of(x, struct rk_vop_plane, base)
 
 #define	RD4(sc, reg)				\
 	bus_space_read_4((sc)->sc_bst, (sc)->sc_bsh, (reg))
 #define	WR4(sc, reg, val)			\
 	bus_space_write_4((sc)->sc_bst, (sc)->sc_bsh, (reg), (val))
+
+static void
+WR4_MASK(struct rk_vop_softc *sc, bus_size_t reg, uint16_t mask, uint16_t val)
+{
+
+	KASSERT(val == (mask & val));
+	WR4(sc, reg, ((uint32_t)mask << 16) | val);
+}
 
 struct rk_vop_config {
 	const char		*descr;
@@ -156,6 +200,16 @@ struct rk_vop_config {
 	void			(*init)(struct rk_vop_softc *);
 	void			(*set_polarity)(struct rk_vop_softc *,
 						enum vop_ep_type, uint32_t);
+};
+
+static const uint32_t rk_vop_layer_formats[] = {
+	DRM_FORMAT_ARGB8888,
+	DRM_FORMAT_XRGB8888,
+};
+
+static const uint64_t rk_vop_layer_modifiers[] = {
+	DRM_FORMAT_MOD_LINEAR,
+	DRM_FORMAT_MOD_INVALID
 };
 
 #define	RK3399_VOP_MIPI_POL	__BITS(31,28)
@@ -228,46 +282,140 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 static int
-rk_vop_mode_do_set_base(struct drm_crtc *crtc, struct drm_framebuffer *fb,
-    int x, int y, int atomic)
+rk_vop_plane_atomic_check(struct drm_plane *plane,
+    struct drm_plane_state *state)
 {
-	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
-	struct rk_vop_softc * const sc = mixer_crtc->sc;
-	struct rk_drm_framebuffer *sfb = atomic?
-	    to_rk_drm_framebuffer(fb) :
-	    to_rk_drm_framebuffer(crtc->primary->fb);
+	struct drm_crtc_state *crtc_state;
 
-	uint64_t paddr = (uint64_t)sfb->obj->dmamap->dm_segs[0].ds_addr;
+	if (state->crtc == NULL)
+		return 0;
 
+	crtc_state = drm_atomic_get_new_crtc_state(state->state, state->crtc);
+	if (IS_ERR(crtc_state))
+		return PTR_ERR(crtc_state);
 
-	paddr += y * sfb->base.pitches[0];
-	paddr += x * drm_format_plane_cpp(sfb->base.pixel_format, 0);
+	return drm_atomic_helper_check_plane_state(state, crtc_state,
+	    DRM_PLANE_HELPER_NO_SCALING, DRM_PLANE_HELPER_NO_SCALING,
+	    false, true);
+}
+
+static void
+rk_vop_plane_atomic_update(struct drm_plane *plane,
+    struct drm_plane_state *old_state)
+{
+	struct rk_vop_plane *vop_plane = to_rk_vop_plane(plane);
+	struct rk_vop_softc * const sc = vop_plane->sc;
+	struct rk_drm_framebuffer *sfb =
+	    to_rk_drm_framebuffer(plane->state->fb);
+	struct drm_display_mode *mode = &plane->state->crtc->mode;
+	struct drm_rect *src = &plane->state->src;
+	struct drm_rect *dst = &plane->state->dst;
+	uint32_t act_width, act_height, dsp_width, dsp_height;
+	uint32_t htotal, hsync_start;
+	uint32_t vtotal, vsync_start;
+	uint32_t lb_mode;
+	uint32_t block_h, block_w, x, y, block_start_y, num_hblocks;
+	uint64_t paddr;
+	uint32_t val;
+
+	act_width = drm_rect_width(src) >> 16;
+	act_height = drm_rect_height(src) >> 16;
+	val = __SHIFTIN(act_width - 1, WIN0_ACT_WIDTH) |
+	      __SHIFTIN(act_height - 1, WIN0_ACT_HEIGHT);
+	WR4(sc, VOP_WIN0_ACT_INFO, val);
+
+	dsp_width = drm_rect_width(dst);
+	dsp_height = drm_rect_height(dst);
+	val = __SHIFTIN(dsp_width - 1, WIN0_DSP_WIDTH) |
+	      __SHIFTIN(dsp_height - 1, WIN0_DSP_HEIGHT);
+	WR4(sc, VOP_WIN0_DSP_INFO, val);
+
+	htotal = mode->htotal;
+	hsync_start = mode->hsync_start;
+	vtotal = mode->vtotal;
+	vsync_start = mode->vsync_start;
+	val = __SHIFTIN(dst->x1 + htotal - hsync_start, WIN0_DSP_XST) |
+	      __SHIFTIN(dst->y1 + vtotal - vsync_start, WIN0_DSP_YST);
+	WR4(sc, VOP_WIN0_DSP_ST, val);
+
+	WR4(sc, VOP_WIN0_COLOR_KEY, 0);
+
+	if (act_width > 2560)
+		lb_mode = WIN0_LB_MODE_RGB_3840X2;
+	else if (act_width > 1920)
+		lb_mode = WIN0_LB_MODE_RGB_2560X4;
+	else if (act_width > 1280)
+		lb_mode = WIN0_LB_MODE_RGB_1920X5;
+	else
+		lb_mode = WIN0_LB_MODE_RGB_1280X8;
+	val = __SHIFTIN(lb_mode, WIN0_LB_MODE) |
+	      __SHIFTIN(WIN0_DATA_FMT_ARGB888, WIN0_DATA_FMT) |
+	      WIN0_EN;
+	WR4(sc, VOP_WIN0_CTRL, val);
+
+	paddr = (uint64_t)sfb->obj->dmamap->dm_segs[0].ds_addr;
+	paddr += sfb->base.offsets[0];
+
+	block_h = drm_format_info_block_height(sfb->base.format, 0);
+	block_w = drm_format_info_block_width(sfb->base.format, 0);
+	x = plane->state->src_x >> 16;
+	y = plane->state->src_y >> 16;
+	block_start_y = (y / block_h) * block_h;
+	num_hblocks = x / block_w;
+
+	paddr += block_start_y * sfb->base.pitches[0];
+	paddr += sfb->base.format->char_per_block[0] * num_hblocks;
+
+	DRM_DEBUG_KMS("[PLANE:%s] fb=%p paddr=0x%lx\n", plane->name, sfb, paddr);
 
 	KASSERT((paddr & ~0xffffffff) == 0);
 
-	const uint32_t vir = __SHIFTIN(sfb->base.pitches[0] / 4,
-	    WIN0_VIR_STRIDE);
-	WR4(sc, VOP_WIN0_VIR, vir);
+	val = __SHIFTIN(sfb->base.pitches[0] / 4, WIN0_VIR_STRIDE);
+	WR4(sc, VOP_WIN0_VIR, val);
 
 	/* Framebuffer start address */
 	WR4(sc, VOP_WIN0_YRGB_MST, (uint32_t)paddr);
-
-	return 0;
 }
 
 static void
-rk_vop_destroy(struct drm_crtc *crtc)
+rk_vop_plane_atomic_disable(struct drm_plane *plane,
+    struct drm_plane_state *state)
 {
-	drm_crtc_cleanup(crtc);
+	struct rk_vop_plane *vop_plane = to_rk_vop_plane(plane);
+	struct rk_vop_softc * const sc = vop_plane->sc;
+
+	WR4(sc, VOP_WIN0_CTRL, 0);	/* clear WIN0_EN */
 }
 
-static const struct drm_crtc_funcs rk_vop_crtc_funcs = {
-	.set_config = drm_crtc_helper_set_config,
-	.destroy = rk_vop_destroy,
+static const struct drm_plane_helper_funcs rk_vop_plane_helper_funcs = {
+	.atomic_check = rk_vop_plane_atomic_check,
+	.atomic_update = rk_vop_plane_atomic_update,
+	.atomic_disable = rk_vop_plane_atomic_disable,
+#if 0
+	.prepare_fb = drm_gem_vram_plane_helper_prepare_fb,
+	.cleanup_fb = drm_gem_vram_plane_helper_cleanup_fb,
+#endif
+};
+
+static bool
+rk_vop_plane_format_mod_supported(struct drm_plane *plane, uint32_t format,
+    uint64_t modifier)
+{
+	return modifier == DRM_FORMAT_MOD_LINEAR;
+}
+
+static const struct drm_plane_funcs rk_vop_plane_funcs = {
+	.update_plane = drm_atomic_helper_update_plane,
+	.disable_plane = drm_atomic_helper_disable_plane,
+	.destroy = drm_plane_cleanup,
+	.reset = drm_atomic_helper_plane_reset,
+	.atomic_duplicate_state = drm_atomic_helper_plane_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_plane_destroy_state,
+	.format_mod_supported = rk_vop_plane_format_mod_supported,
 };
 
 static void
-rk_vop_dpms(struct drm_crtc *crtc, int mode)
+rk_vop_crtc_dpms(struct drm_crtc *crtc, int mode)
 {
 	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
 	struct rk_vop_softc * const sc = mixer_crtc->sc;
@@ -292,26 +440,29 @@ rk_vop_dpms(struct drm_crtc *crtc, int mode)
 	WR4(sc, VOP_REG_CFG_DONE, REG_LOAD_EN);
 }
 
-static bool
-rk_vop_mode_fixup(struct drm_crtc *crtc,
-    const struct drm_display_mode *mode, struct drm_display_mode *adjusted_mode)
+static int
+rk_vop_crtc_atomic_check(struct drm_crtc *crtc, struct drm_crtc_state *state)
 {
-	return true;
+	bool enabled = state->plane_mask & drm_plane_mask(crtc->primary);
+
+	if (enabled != state->enable)
+		return -EINVAL;
+
+	return drm_atomic_add_affected_planes(state->state, crtc);
 }
 
-static int
-rk_vop_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
-    struct drm_display_mode *adjusted_mode, int x, int y,
-    struct drm_framebuffer *old_fb)
+static void
+rk_vop_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_crtc_state *state)
 {
 	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
 	struct rk_vop_softc * const sc = mixer_crtc->sc;
+	struct drm_display_mode *adjusted_mode = &crtc->state->adjusted_mode;
 	uint32_t val;
-	u_int lb_mode;
-	int error;
 	u_int pol;
 	int connector_type = 0;
-	struct drm_connector * connector;
+	struct drm_connector *connector;
+	struct drm_connector_list_iter conn_iter;
+	int error;
 
 	const u_int hactive = adjusted_mode->hdisplay;
 	const u_int hsync_len = adjusted_mode->hsync_end - adjusted_mode->hsync_start;
@@ -324,38 +475,8 @@ rk_vop_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
 	const u_int vfront_porch = adjusted_mode->vsync_start - adjusted_mode->vdisplay;
 
 	error = clk_set_rate(sc->sc_dclk, adjusted_mode->clock * 1000);
-	if (error != 0)
+	if (error)
 		DRM_ERROR("couldn't set pixel clock: %d\n", error);
-
-	val = __SHIFTIN(hactive - 1, WIN0_ACT_WIDTH) |
-	      __SHIFTIN(vactive - 1, WIN0_ACT_HEIGHT);
-	WR4(sc, VOP_WIN0_ACT_INFO, val);
-
-	val = __SHIFTIN(hactive - 1, WIN0_DSP_WIDTH) |
-	      __SHIFTIN(vactive - 1, WIN0_DSP_HEIGHT);
-	WR4(sc, VOP_WIN0_DSP_INFO, val);
-
-	val = __SHIFTIN(hsync_len + hback_porch, WIN0_DSP_XST) |
-	      __SHIFTIN(vsync_len + vback_porch, WIN0_DSP_YST);
-	WR4(sc, VOP_WIN0_DSP_ST, val);
-
-	WR4(sc, VOP_WIN0_COLOR_KEY, 0);
-
-	if (adjusted_mode->hdisplay > 2560)
-		lb_mode = WIN0_LB_MODE_RGB_3840X2;
-	else if (adjusted_mode->hdisplay > 1920)
-		lb_mode = WIN0_LB_MODE_RGB_2560X4;
-	else if (adjusted_mode->hdisplay > 1280)
-		lb_mode = WIN0_LB_MODE_RGB_1920X5;
-	else
-		lb_mode = WIN0_LB_MODE_RGB_1280X8;
-
-	val = __SHIFTIN(lb_mode, WIN0_LB_MODE) |
-	      __SHIFTIN(WIN0_DATA_FMT_ARGB888, WIN0_DATA_FMT) |
-	      WIN0_EN;
-	WR4(sc, VOP_WIN0_CTRL, val);
-
-	rk_vop_mode_do_set_base(crtc, old_fb, x, y, 0);
 
 	pol = DSP_DCLK_POL;
 	if ((adjusted_mode->flags & DRM_MODE_FLAG_PHSYNC) != 0)
@@ -363,14 +484,16 @@ rk_vop_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
 	if ((adjusted_mode->flags & DRM_MODE_FLAG_PVSYNC) != 0)
 		pol |= DSP_VSYNC_POL;
 
-	drm_for_each_connector(connector, crtc->dev) {
-		if ((connector->encoder) == NULL)
+	drm_connector_list_iter_begin(crtc->dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
+		if (connector->encoder == NULL)
 			continue;
 		if (connector->encoder->crtc == crtc) {
 			connector_type = connector->connector_type;
 			break;
 		}
 	}
+	drm_connector_list_iter_end(&conn_iter);
 
 	switch (connector_type) {
 	case DRM_MODE_CONNECTOR_HDMIA:
@@ -424,68 +547,100 @@ rk_vop_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
 	      __SHIFTIN(vsync_len + vback_porch + vactive + vfront_porch, DSP_VS_END);
 	WR4(sc, VOP_DSP_VTOTAL_VS_END, val);
 
-	return 0;
+	drm_crtc_vblank_on(crtc);
 }
 
-static int
-rk_vop_mode_set_base(struct drm_crtc *crtc, int x, int y,
-    struct drm_framebuffer *old_fb)
+static void
+rk_vop_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_crtc_state *state)
 {
 	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
 	struct rk_vop_softc * const sc = mixer_crtc->sc;
+	uint32_t val;
 
-	rk_vop_mode_do_set_base(crtc, old_fb, x, y, 0);
+	drm_crtc_vblank_off(crtc);
+
+	val = RD4(sc, VOP_SYS_CTRL);
+	val |= VOP_STANDBY_EN;
+	WR4(sc, VOP_SYS_CTRL, val);
+
+	if (crtc->state->event && !crtc->state->active) {
+		spin_lock(&crtc->dev->event_lock);
+		drm_crtc_send_vblank_event(crtc, crtc->state->event);
+		spin_unlock(&crtc->dev->event_lock);
+
+		crtc->state->event = NULL;
+	}
+}
+
+static void
+rk_vop_crtc_atomic_flush(struct drm_crtc *crtc, struct drm_crtc_state *state)
+{
+	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
+	struct rk_vop_softc * const sc = mixer_crtc->sc;
+	int ret;
 
 	/* Commit settings */
 	WR4(sc, VOP_REG_CFG_DONE, REG_LOAD_EN);
 
-	return 0;
-}
-
-static int
-rk_vop_mode_set_base_atomic(struct drm_crtc *crtc, struct drm_framebuffer *fb,
-    int x, int y, enum mode_set_atomic state)
-{
-	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
-	struct rk_vop_softc * const sc = mixer_crtc->sc;
-
-	rk_vop_mode_do_set_base(crtc, fb, x, y, 1);
-
-	/* Commit settings */
-	WR4(sc, VOP_REG_CFG_DONE, REG_LOAD_EN);
-
-	return 0;
-}
-
-static void
-rk_vop_disable(struct drm_crtc *crtc)
-{
-}
-
-static void
-rk_vop_prepare(struct drm_crtc *crtc)
-{
-}
-
-static void
-rk_vop_commit(struct drm_crtc *crtc)
-{
-	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
-	struct rk_vop_softc * const sc = mixer_crtc->sc;
-
-	/* Commit settings */
-	WR4(sc, VOP_REG_CFG_DONE, REG_LOAD_EN);
+	/*
+	 * If caller wants a vblank event, tell the vblank interrupt
+	 * handler to send it on the next interrupt.
+	 */
+	spin_lock(&crtc->dev->event_lock);
+	if (crtc->state->event) {
+		if ((ret = drm_crtc_vblank_get_locked(crtc)) != 0)
+			aprint_error_dev(sc->sc_dev,
+			    "drm_crtc_vblank_get: %d\n", ret);
+		if (sc->sc_event) /* XXX leaky; KASSERT? */
+			aprint_error_dev(sc->sc_dev, "unfinished vblank\n");
+		sc->sc_event = crtc->state->event;
+		crtc->state->event = NULL;
+	}
+	spin_unlock(&crtc->dev->event_lock);
 }
 
 static const struct drm_crtc_helper_funcs rk_vop_crtc_helper_funcs = {
-	.dpms = rk_vop_dpms,
-	.mode_fixup = rk_vop_mode_fixup,
-	.mode_set = rk_vop_mode_set,
-	.mode_set_base = rk_vop_mode_set_base,
-	.mode_set_base_atomic = rk_vop_mode_set_base_atomic,
-	.disable = rk_vop_disable,
-	.prepare = rk_vop_prepare,
-	.commit = rk_vop_commit,
+	.dpms = rk_vop_crtc_dpms,
+	.atomic_check = rk_vop_crtc_atomic_check,
+	.atomic_enable = rk_vop_crtc_atomic_enable,
+	.atomic_disable = rk_vop_crtc_atomic_disable,
+	.atomic_flush = rk_vop_crtc_atomic_flush,
+};
+
+static int
+rk_vop_crtc_enable_vblank(struct drm_crtc *crtc)
+{
+	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
+	struct rk_vop_softc * const sc = mixer_crtc->sc;
+
+	mutex_spin_enter(&sc->sc_intr_lock);
+	WR4_MASK(sc, VOP_INTR_CLEAR0, VOP_INTR0_FS_NEW, VOP_INTR0_FS_NEW);
+	WR4_MASK(sc, VOP_INTR_EN0, VOP_INTR0_FS_NEW, VOP_INTR0_FS_NEW);
+	mutex_spin_exit(&sc->sc_intr_lock);
+
+	return 0;
+}
+
+static void
+rk_vop_crtc_disable_vblank(struct drm_crtc *crtc)
+{
+	struct rk_vop_crtc *mixer_crtc = to_rk_vop_crtc(crtc);
+	struct rk_vop_softc * const sc = mixer_crtc->sc;
+
+	mutex_spin_enter(&sc->sc_intr_lock);
+	WR4_MASK(sc, VOP_INTR_EN0, VOP_INTR0_FS_NEW, 0);
+	mutex_spin_exit(&sc->sc_intr_lock);
+}
+
+static const struct drm_crtc_funcs rk_vop_crtc_funcs = {
+	.set_config = drm_atomic_helper_set_config,
+	.destroy = drm_crtc_cleanup,
+	.page_flip = drm_atomic_helper_page_flip,
+	.reset = drm_atomic_helper_crtc_reset,
+	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
+	.enable_vblank = rk_vop_crtc_enable_vblank,
+	.disable_vblank = rk_vop_crtc_disable_vblank,
 };
 
 static int
@@ -493,6 +648,7 @@ rk_vop_ep_activate(device_t dev, struct fdt_endpoint *ep, bool activate)
 {
 	struct rk_vop_softc * const sc = device_private(dev);
 	struct drm_device *ddev;
+	int error;
 
 	if (!activate)
 		return EINVAL;
@@ -503,10 +659,27 @@ rk_vop_ep_activate(device_t dev, struct fdt_endpoint *ep, bool activate)
 		return ENXIO;
 	}
 
+	if (sc->sc_plane.sc == NULL) {
+		sc->sc_plane.sc = sc;
+
+		error = drm_universal_plane_init(ddev, &sc->sc_plane.base, 0x3,
+		    &rk_vop_plane_funcs,
+		    rk_vop_layer_formats, __arraycount(rk_vop_layer_formats),
+		    rk_vop_layer_modifiers,
+		    DRM_PLANE_TYPE_PRIMARY,
+		    NULL);
+		if (error) {
+			DRM_ERROR("couldn't initialize plane: %d\n", error);
+			return ENXIO;
+		}
+		drm_plane_helper_add(&sc->sc_plane.base, &rk_vop_plane_helper_funcs);
+	}
+
 	if (sc->sc_crtc.sc == NULL) {
 		sc->sc_crtc.sc = sc;
 
-		drm_crtc_init(ddev, &sc->sc_crtc.base, &rk_vop_crtc_funcs);
+		drm_crtc_init_with_planes(ddev, &sc->sc_crtc.base,
+		    &sc->sc_plane.base, NULL, &rk_vop_crtc_funcs, NULL);
 		drm_crtc_helper_add(&sc->sc_crtc.base, &rk_vop_crtc_helper_funcs);
 
 		aprint_debug_dev(dev, "using CRTC %d for %s\n",
@@ -531,6 +704,46 @@ rk_vop_ep_get_data(device_t dev, struct fdt_endpoint *ep)
 }
 
 static int
+rk_vop_intr(void *cookie)
+{
+	struct rk_vop_softc * const sc = cookie;
+	struct drm_crtc *crtc = &sc->sc_crtc.base;
+	struct drm_device *ddev;
+	uint32_t intr;
+	int ours = 0;
+
+	mutex_spin_enter(&sc->sc_intr_lock);
+	intr = RD4(sc, VOP_INTR_STATUS0);
+	WR4_MASK(sc, VOP_INTR_CLEAR0, intr, intr);
+	mutex_spin_exit(&sc->sc_intr_lock);
+
+	ddev = rk_drm_port_device(&sc->sc_ports);
+	KASSERT(ddev);
+
+	if (intr & VOP_INTR0_FS_NEW) {
+		intr &= ~VOP_INTR0_FS_NEW;
+		ours = 1;
+
+		/* XXX defer to softint? */
+		drm_crtc_handle_vblank(&sc->sc_crtc.base);
+		spin_lock(&ddev->event_lock);
+		if (sc->sc_event) {
+			drm_crtc_send_vblank_event(crtc, sc->sc_event);
+			sc->sc_event = NULL;
+			drm_crtc_vblank_put(crtc);
+		}
+		spin_unlock(&ddev->event_lock);
+	}
+
+	if (intr) {
+		aprint_error_dev(sc->sc_dev, "unhandled interrupts: 0x%04x\n",
+		    intr);
+	}
+
+	return ours;
+}
+
+static int
 rk_vop_match(device_t parent, cfdata_t cf, void *aux)
 {
 	struct fdt_attach_args * const faa = aux;
@@ -544,6 +757,7 @@ rk_vop_attach(device_t parent, device_t self, void *aux)
 	struct rk_vop_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
+	char intrstr[128];
 	const char * const reset_names[] = { "axi", "ahb", "dclk" };
 	const char * const clock_names[] = { "aclk_vop", "hclk_vop" };
 	struct fdtbus_reset *rst;
@@ -556,15 +770,32 @@ rk_vop_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
+	if (!fdtbus_intr_str(phandle, 0, intrstr, sizeof(intrstr))) {
+		aprint_error(": failed to decode interrupt\n");
+		return;
+	}
+
 	fdtbus_clock_assign(phandle);
 
+	/* assert all the reset signals for 20us */
 	for (n = 0; n < __arraycount(reset_names); n++) {
 		rst = fdtbus_reset_get(phandle, reset_names[n]);
-		if (rst == NULL || fdtbus_reset_deassert(rst) != 0) {
-			aprint_error(": couldn't de-assert reset %s\n", reset_names[n]);
+		if (rst == NULL || fdtbus_reset_assert(rst) != 0) {
+			aprint_error(": couldn't assert reset %s\n",
+			    reset_names[n]);
 			return;
 		}
 	}
+	DELAY(10);
+	for (n = 0; n < __arraycount(reset_names); n++) {
+		rst = fdtbus_reset_get(phandle, reset_names[n]);
+		if (rst == NULL || fdtbus_reset_deassert(rst) != 0) {
+			aprint_error(": couldn't de-assert reset %s\n",
+			    reset_names[n]);
+			return;
+		}
+	}
+
 	for (n = 0; n < __arraycount(clock_names); n++) {
 		if (fdtbus_clock_enable(phandle, clock_names[n], true) != 0) {
 			aprint_error(": couldn't enable clock %s\n", clock_names[n]);
@@ -599,6 +830,16 @@ rk_vop_attach(device_t parent, device_t self, void *aux)
 	const int port_phandle = of_find_firstchild_byname(phandle, "port");
 	if (port_phandle > 0)
 		rk_drm_register_port(port_phandle, &sc->sc_ports);
+
+	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_VM);
+	sc->sc_ih = fdtbus_intr_establish_xname(phandle, 0, IPL_VM,
+	    FDT_INTR_MPSAFE, &rk_vop_intr, sc, device_xname(self));
+	if (sc->sc_ih == NULL) {
+		aprint_error_dev(self, "failed to establish interrupt on %s\n",
+		    intrstr);
+		return;
+	}
+	aprint_normal_dev(self, "interrupting on %s\n", intrstr);
 }
 
 CFATTACH_DECL_NEW(rk_vop, sizeof(struct rk_vop_softc),

@@ -24,6 +24,9 @@ options 	SYSVSEM		# System V semaphores
 #options 	SEMMNU=30	# number of undo structures in system
 options 	SYSVSHM		# System V shared memory
 
+options 	MODULAR		# new style module(7) framework
+options 	MODULAR_DEFAULT_AUTOLOAD
+
 options 	USERCONF	# userconf(4) support
 #options 	PIPE_SOCKETPAIR	# smaller, but slower pipe(2)
 options 	SYSCTL_INCLUDE_DESCR	# Include sysctl descriptions in kernel
@@ -50,25 +53,19 @@ include 	"conf/compat_netbsd30.config"
 #options 	COMPAT_386BSD_MBRPART # recognize old partition ID
 
 # File systems
-file-system 	FFS		# UFS
-file-system 	MFS		# memory file system
-file-system	TMPFS		# Efficient memory file-system
-file-system 	KERNFS		# /kern
-file-system 	PROCFS		# /proc
-file-system 	NFS		# Network File System client
-file-system	PTYFS		# /dev/pts/N support
+include "conf/filesystems.config"
 
 # File system options
+#options 	APPLE_UFS	# Apple UFS support in FFS
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 #options 	QUOTA		# legacy UFS quotas
 #options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independent support
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
+#options 	UFS_EXTATTR	# Extended attribute support for UFS1
 options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
 #options 	NFSSERVER	# Network File System server
-#options 	FFS_NO_SNAPSHOT	# ffs snapshots
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
-#options 	APPLE_UFS	# Apple UFS support in FFS
+
 # Networking options
 #options 	GATEWAY		# packet forwarding
 options 	INET		# IP + ICMP + TCP + UDP
@@ -153,9 +150,13 @@ ukphy*	at mii? phy ?			# generic unknown PHYs
 # PCI USB controllers
 ohci*	at pci? dev ? function ?	# USB Open Host Controller
 ehci*	at pci? dev ? function ?	# USB Enhanced Host Controller
+# No G5 ships with USB 3.0 but xhci 1.0 cards have been confirmed working
+# in PCIe models
+xhci*	at pci? dev ? function ?	# USB 3.0
 
 usb*	at ohci?					# USB bus support
 usb*	at ehci?					# USB bus support
+usb*	at xhci?					# USB bus support
 uhub*	at usb?						# USB Hubs
 uhub*	at uhub? port ?
 uhidev*	at uhub? port ? configuration ? interface ?	# USB HID device
@@ -182,8 +183,8 @@ cd*	at atapibus? drive ? flags 0x0000	# ATAPI CD-ROM drives
 sd*	at atapibus? drive ? flags 0x0000	# ATAPI disk drives
 uk*	at atapibus? drive ? flags 0x0000	# ATAPI unknown
 
-#pseudo-device 	crypto			# opencrypto framework
-					# (disabled, requires generic softints)
+pseudo-device 	crypto			# /dev/crypto device
+pseudo-device	swcrypto		# software crypto implementation
 pseudo-device	vnd		4	# disk-like interface to files
 pseudo-device	md			# memory disk device
 pseudo-device	loop			# network loopback

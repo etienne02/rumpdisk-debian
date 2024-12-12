@@ -1,4 +1,4 @@
-/*	$NetBSD: virtioreg.h,v 1.7 2021/01/20 19:46:48 reinoud Exp $	*/
+/*	$NetBSD: virtioreg.h,v 1.13 2023/11/19 19:47:03 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2010 Minoura Makoto.
@@ -79,11 +79,15 @@
 #define VIRTIO_DEVICE_ID_9P		 9
 
 /* common device/guest features */
-#define  VIRTIO_F_NOTIFY_ON_EMPTY		(1<<24)
-#define  VIRTIO_F_RING_INDIRECT_DESC		(1<<28)
-#define  VIRTIO_F_RING_EVENT_IDX		(1<<29)
-#define  VIRTIO_F_BAD_FEATURE			(1<<30)
-#define  VIRTIO_F_VERSION_1			(1ULL<<32)
+#define  VIRTIO_F_NOTIFY_ON_EMPTY		__BIT(24)
+#define  VIRTIO_F_RING_INDIRECT_DESC		__BIT(28)
+#define  VIRTIO_F_RING_EVENT_IDX		__BIT(29)
+#define  VIRTIO_F_BAD_FEATURE			__BIT(30)
+#define  VIRTIO_F_VERSION_1			__BIT(32)
+#define  VIRTIO_F_ACCESS_PLATFORM		__BIT(33)
+#define  VIRTIO_F_RING_PACKED			__BIT(34)
+#define  VIRTIO_F_ORDER_PLATFORM		__BIT(36)
+#define  VIRTIO_F_SR_IOV			__BIT(37)
 
 /* common device status flags */
 #define  VIRTIO_CONFIG_DEVICE_STATUS_RESET		  0
@@ -99,12 +103,17 @@
 #define  VIRTIO_CONFIG_ISR_CONFIG_CHANGE	2
 
 /* common device/guest features */
-#define VIRTIO_COMMON_FLAG_BITS \
-        "\20" \
-	"\x1f""BAD_FEATURE" \
-	"\x1e""EVENT_IDX" \
-	"\x1d""INDIRECT_DESC" \
-	"\x19""NOTIFY_ON_EMPTY"
+#define VIRTIO_COMMON_FLAG_BITS			\
+        "\177\020"				\
+	"b\x24" "SR_IOV\0"			\
+	"b\x23" "ORDER_PLATFORM\0"		\
+	"b\x22" "RING_PACKED\0"			\
+	"b\x21" "ACCESS_PLATFORM\0"		\
+	"b\x20" "V1\0"				\
+	"b\x1e" "BAD_FEATURE\0"			\
+	"b\x1d" "EVENT_IDX\0"			\
+	"b\x1c" "INDIRECT_DESC\0"		\
+	"b\x18" "NOTIFY_ON_EMPTY\0"
 
 
 /*
@@ -152,7 +161,7 @@ struct vring_desc {
 struct vring_avail {
         uint16_t flags;
         uint16_t idx;
-        uint16_t ring[0];
+        uint16_t ring[];
 	/* trailed by uint16_t used_event when VIRTIO_F_RING_EVENT_IDX */
 } __packed;
 
@@ -167,7 +176,7 @@ struct vring_used_elem {
 struct vring_used {
         uint16_t flags;
         uint16_t idx;
-        struct vring_used_elem ring[0];
+        struct vring_used_elem ring[];
 	/* trailed by uint16_t avail_event when VIRTIO_F_RING_EVENT_IDX */
 } __packed;
 

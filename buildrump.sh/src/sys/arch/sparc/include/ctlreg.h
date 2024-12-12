@@ -1,4 +1,4 @@
-/*	$NetBSD: ctlreg.h,v 1.30 2019/08/29 05:55:18 msaitoh Exp $ */
+/*	$NetBSD: ctlreg.h,v 1.32 2024/03/10 17:34:46 rillig Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -376,13 +376,13 @@
 #define	SFSR_BITS	"\177\020"		\
 	"b\21EM\0b\20CS\0b\17SB\0f\15\2PERR\0"	\
 	"b\14UC\0b\13TO\0b\12BE\0f\10\2LVL\0"	\
-	"f\05\3AT\0f\02\3FT\0b\01FAV\0b\01OW\0"
+	"f\05\3AT\0f\02\3FT\0b\01FAV\0b\00OW\0"
 
 /* [4m] Synchronous Fault Types */
 #define SFSR_FT_NONE		(0 << 2) 	/* no fault */
 #define SFSR_FT_INVADDR		(1 << 2)	/* invalid address fault */
 #define SFSR_FT_PROTERR		(2 << 2)	/* protection fault */
-#define SFSR_FT_PRIVERR		(3 << 2)	/* privelege violation */
+#define SFSR_FT_PRIVERR		(3 << 2)	/* privilege violation */
 #define SFSR_FT_TRANSERR	(4 << 2)	/* translation fault */
 #define SFSR_FT_BUSERR		(5 << 2)	/* access bus error */
 #define SFSR_FT_INTERR		(6 << 2)	/* internal error */

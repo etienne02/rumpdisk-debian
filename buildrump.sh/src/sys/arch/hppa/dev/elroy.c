@@ -1,4 +1,4 @@
-/*	$NetBSD: elroy.c,v 1.4 2021/08/07 16:18:55 thorpej Exp $	*/
+/*	$NetBSD: elroy.c,v 1.7 2024/01/28 09:03:22 macallan Exp $	*/
 
 /*	$OpenBSD: elroy.c,v 1.5 2009/03/30 21:24:57 kettenis Exp $	*/
 
@@ -25,7 +25,6 @@
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/reboot.h>
-#include <sys/malloc.h>
 #include <sys/extent.h>
 
 #include <machine/iomod.h>
@@ -83,10 +82,16 @@ uint8_t elroy_r1(void *, bus_space_handle_t, bus_size_t);
 uint16_t elroy_r2(void *, bus_space_handle_t, bus_size_t);
 uint32_t elroy_r4(void *, bus_space_handle_t, bus_size_t);
 uint64_t elroy_r8(void *, bus_space_handle_t, bus_size_t);
+uint16_t elroy_rs2(void *, bus_space_handle_t, bus_size_t);
+uint32_t elroy_rs4(void *, bus_space_handle_t, bus_size_t);
+uint64_t elroy_rs8(void *, bus_space_handle_t, bus_size_t);
 void elroy_w1(void *, bus_space_handle_t, bus_size_t, uint8_t);
 void elroy_w2(void *, bus_space_handle_t, bus_size_t, uint16_t);
 void elroy_w4(void *, bus_space_handle_t, bus_size_t, uint32_t);
 void elroy_w8(void *, bus_space_handle_t, bus_size_t, uint64_t);
+void elroy_ws2(void *, bus_space_handle_t, bus_size_t, uint16_t);
+void elroy_ws4(void *, bus_space_handle_t, bus_size_t, uint32_t);
+void elroy_ws8(void *, bus_space_handle_t, bus_size_t, uint64_t);
 
 void elroy_rm_1(void *, bus_space_handle_t, bus_size_t, uint8_t *,
     bus_size_t);
@@ -536,6 +541,36 @@ elroy_r8(void *v, bus_space_handle_t h, bus_size_t o)
 	return (le64toh(data));
 }
 
+uint16_t
+elroy_rs2(void *v, bus_space_handle_t h, bus_size_t o)
+{
+	volatile uint16_t *p;
+
+	h += o;
+	p = (volatile uint16_t *)h;
+	return (*p);
+}
+
+uint32_t
+elroy_rs4(void *v, bus_space_handle_t h, bus_size_t o)
+{
+	uint32_t data;
+
+	h += o;
+	data = *(volatile uint32_t *)h;
+	return data;
+}
+
+uint64_t
+elroy_rs8(void *v, bus_space_handle_t h, bus_size_t o)
+{
+	uint64_t data;
+
+	h += o;
+	data = *(volatile uint64_t *)h;
+	return data;
+}
+
 void
 elroy_w1(void *v, bus_space_handle_t h, bus_size_t o, uint8_t vv)
 {
@@ -568,6 +603,29 @@ elroy_w8(void *v, bus_space_handle_t h, bus_size_t o, uint64_t vv)
 	*(volatile uint64_t *)h = htole64(vv);
 }
 
+void
+elroy_ws2(void *v, bus_space_handle_t h, bus_size_t o, uint16_t vv)
+{
+	volatile uint16_t *p;
+
+	h += o;
+	p = (volatile uint16_t *)h;
+	*p = vv;
+}
+
+void
+elroy_ws4(void *v, bus_space_handle_t h, bus_size_t o, uint32_t vv)
+{
+	h += o;
+	*(volatile uint32_t *)h = vv;
+}
+
+void
+elroy_ws8(void *v, bus_space_handle_t h, bus_size_t o, uint64_t vv)
+{
+	h += o;
+	*(volatile uint64_t *)h = vv;
+}
 
 void
 elroy_rm_1(void *v, bus_space_handle_t h, bus_size_t o, uint8_t *a, bus_size_t c)
@@ -1048,7 +1106,9 @@ const struct hppa_bus_space_tag elroy_iomemt = {
 	NULL, elroy_unmap, elroy_subregion, NULL, elroy_free,
 	elroy_barrier, elroy_vaddr, elroy_mmap,
 	elroy_r1,    elroy_r2,    elroy_r4,    elroy_r8,
+	             elroy_rs2,   elroy_rs4,   elroy_rs8,
 	elroy_w1,    elroy_w2,    elroy_w4,    elroy_w8,
+	             elroy_ws2,   elroy_ws4,   elroy_ws8,
 	elroy_rm_1,  elroy_rm_2,  elroy_rm_4,  elroy_rm_8,
 	elroy_wm_1,  elroy_wm_2,  elroy_wm_4,  elroy_wm_8,
 	elroy_sm_1,  elroy_sm_2,  elroy_sm_4,  elroy_sm_8,
@@ -1190,15 +1250,18 @@ const struct hppa_bus_dma_tag elroy_dmat = {
 };
 
 const struct hppa_pci_chipset_tag elroy_pc = {
-	NULL,
-	elroy_attach_hook, elroy_maxdevs, elroy_make_tag, elroy_decompose_tag,
-	elroy_conf_read, elroy_conf_write,
-	apic_intr_map, apic_intr_string,
-	apic_intr_establish, apic_intr_disestablish,
+	.pc_attach_hook = elroy_attach_hook,
+	.pc_bus_maxdevs = elroy_maxdevs,
+	.pc_make_tag = elroy_make_tag,
+	.pc_decompose_tag = elroy_decompose_tag,
+	.pc_conf_read = elroy_conf_read,
+	.pc_conf_write = elroy_conf_write,
+	.pc_intr_map = apic_intr_map,
+	.pc_intr_string = apic_intr_string,
+	.pc_intr_establish = apic_intr_establish,
+	.pc_intr_disestablish = apic_intr_disestablish,
 #if NCARDBUS > 0
-	elroy_alloc_parent
-#else
-	NULL
+	.pc_alloc_parent = elroy_alloc_parent
 #endif
 };
 

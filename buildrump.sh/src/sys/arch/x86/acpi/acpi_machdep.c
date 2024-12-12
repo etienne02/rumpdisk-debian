@@ -1,4 +1,4 @@
-/* $NetBSD: acpi_machdep.c,v 1.32 2021/05/12 23:22:33 thorpej Exp $ */
+/* $NetBSD: acpi_machdep.c,v 1.38 2024/12/06 10:53:41 bouyer Exp $ */
 
 /*
  * Copyright 2001 Wasabi Systems, Inc.
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_machdep.c,v 1.32 2021/05/12 23:22:33 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_machdep.c,v 1.38 2024/12/06 10:53:41 bouyer Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -64,6 +64,7 @@ __KERNEL_RCSID(0, "$NetBSD: acpi_machdep.c,v 1.32 2021/05/12 23:22:33 thorpej Ex
 #include <machine/i82093reg.h>
 #include <machine/i82093var.h>
 #include <machine/pic.h>
+#include <machine/pmap_private.h>
 
 #include <x86/efi.h>
 
@@ -71,6 +72,7 @@ __KERNEL_RCSID(0, "$NetBSD: acpi_machdep.c,v 1.32 2021/05/12 23:22:33 thorpej Ex
 
 #include <dev/isa/isareg.h>
 #include <dev/isa/isavar.h>
+#include <arch/x86/include/genfb_machdep.h>
 
 #include "ioapic.h"
 
@@ -106,15 +108,15 @@ acpi_md_OsGetRootPointer(void)
 
 #ifdef XENPV
 	/*
-	 * Obtain the ACPI RSDP from the hypervisor. 
-	 * This is the only way to go if Xen booted from EFI: the 
-	 * Extended BIOS Data Area (EBDA) is not mapped, and Xen 
+	 * Obtain the ACPI RSDP from the hypervisor.
+	 * This is the only way to go if Xen booted from EFI: the
+	 * Extended BIOS Data Area (EBDA) is not mapped, and Xen
 	 * does not pass an EFI SystemTable to the kernel.
 	 */
         struct xen_platform_op op = {
                 .cmd = XENPF_firmware_info,
                 .u.firmware_info = {
-                        .type = XEN_FW_EFI_INFO,  
+                        .type = XEN_FW_EFI_INFO,
                         .index = XEN_FW_EFI_CONFIG_TABLE
                 }
         };
@@ -124,7 +126,7 @@ acpi_md_OsGetRootPointer(void)
 		struct efi_cfgtbl *ct;
 		int i;
 
-		ct = AcpiOsMapMemory(info->cfg.addr, 
+		ct = AcpiOsMapMemory(info->cfg.addr,
 		    sizeof(*ct) * info->cfg.nent);
 
 		for (i = 0; i < info->cfg.nent; i++) {
@@ -134,7 +136,7 @@ acpi_md_OsGetRootPointer(void)
 				    (uintptr_t)ct[i].ct_data;
 				if (PhysicalAddress)
 					goto out;
-					
+
 			}
 		}
 
@@ -145,7 +147,7 @@ acpi_md_OsGetRootPointer(void)
 				    (uintptr_t)ct[i].ct_data;
 				if (PhysicalAddress)
 					goto out;
-					
+
 			}
 		}
 out:
@@ -156,14 +158,14 @@ out:
 	}
 #else
 #ifdef XEN
-	if (vm_guest == VM_GUEST_XENPVH) {
+	if (vm_guest_is_pvh()) {
 		PhysicalAddress = hvm_start_info->rsdp_paddr;
 		if (PhysicalAddress)
 			return PhysicalAddress;
 	}
 #endif
-	/* 
-	 * Get the ACPI RSDP from EFI SystemTable. This works when the 
+	/*
+	 * Get the ACPI RSDP from EFI SystemTable. This works when the
 	 * kernel was loaded from EFI bootloader.
 	 */
 	if (efi_probe()) {
@@ -222,7 +224,7 @@ acpi_md_OsInstallInterruptHandler(uint32_t InterruptNumber,
 	void *ih;
 
 	ih = acpi_md_intr_establish(InterruptNumber, IPL_TTY, IST_LEVEL,
-	    (int (*)(void *))ServiceRoutine, Context, false, xname);
+	    (int (*)(void *))ServiceRoutine, Context, /*mpsafe*/true, xname);
 	if (ih == NULL)
 		return AE_NO_MEMORY;
 
@@ -320,14 +322,14 @@ acpi_md_intr_establish(uint32_t InterruptNumber, int ipl, int type,
 		ioapic = ioapic_find_bybase(irq);
 		if (ioapic != NULL) {
 			pic = &ioapic->sc_pic;
- 
+
 			if (pic->pic_type == PIC_IOAPIC) {
 				pin = irq - pic->pic_vecbase;
 				irq = -1;
 			} else {
 				pin = irq;
 			}
- 
+
 			mip = ioapic->sc_pins[pin].ip_map;
 			if (mip) {
 				mip->flags &= ~0xf;
@@ -343,7 +345,7 @@ acpi_md_intr_establish(uint32_t InterruptNumber, int ipl, int type,
 			}
 		}
 	}
- 
+
 	if (pic == NULL)
 #endif
 	{
@@ -593,6 +595,8 @@ acpi_md_callback(struct acpi_softc *sc)
 }
 
 #ifndef XENPV
+int acpi_md_vbios_reset = 0;
+
 void
 device_acpi_register(device_t dev, void *aux)
 {
@@ -608,8 +612,6 @@ device_acpi_register(device_t dev, void *aux)
 	device_is_isa = device_is_a(parent, "isa");
 
 	if (device_is_vga && (device_is_pci || device_is_isa)) {
-		extern int acpi_md_vbios_reset;
-
 		acpi_md_vbios_reset = VBIOS_RESET_DEFAULT;
 	}
 }

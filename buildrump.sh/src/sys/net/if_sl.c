@@ -1,4 +1,4 @@
-/*	$NetBSD: if_sl.c,v 1.132 2020/01/29 04:28:27 thorpej Exp $	*/
+/*	$NetBSD: if_sl.c,v 1.136 2022/10/26 23:42:42 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1987, 1989, 1992, 1993
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_sl.c,v 1.132 2020/01/29 04:28:27 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_sl.c,v 1.136 2022/10/26 23:42:42 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -90,7 +90,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_sl.c,v 1.132 2020/01/29 04:28:27 thorpej Exp $");
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 
 #ifdef INET
@@ -269,7 +268,8 @@ sl_clone_create(struct if_clone *ifc, int unit)
 	sc->sc_if.if_ioctl = slioctl;
 	sc->sc_if.if_output = sloutput;
 	sc->sc_if.if_dlt = DLT_SLIP;
-	sc->sc_fastq.ifq_maxlen = 32;
+	IFQ_SET_MAXLEN(&sc->sc_fastq, 32);
+	IFQ_LOCK_INIT(&sc->sc_fastq);
 	IFQ_SET_READY(&sc->sc_if.if_snd);
 	if_attach(&sc->sc_if);
 	if_alloc_sadl(&sc->sc_if);
@@ -290,6 +290,8 @@ sl_clone_destroy(struct ifnet *ifp)
 
 	bpf_detach(ifp);
 	if_detach(ifp);
+
+	IFQ_LOCK_DESTROY(&sc->sc_fastq);
 
 	free(sc, M_DEVBUF);
 	return 0;
@@ -348,7 +350,7 @@ slopen(dev_t dev, struct tty *tp)
 			tp->t_sc = (void *)sc;
 			sc->sc_ttyp = tp;
 			sc->sc_if.if_baudrate = tp->t_ospeed;
-			mutex_spin_enter(&tty_lock);
+			ttylock(tp);
 			tp->t_state |= TS_ISOPEN | TS_XCLUDE;
 			ttyflush(tp, FREAD | FWRITE);
 			/*
@@ -364,7 +366,7 @@ slopen(dev_t dev, struct tty *tp)
 				sc->sc_oldbufquot = tp->t_outq.c_cq != 0;
 
 				clfree(&tp->t_outq);
-				mutex_spin_exit(&tty_lock);
+				ttyunlock(tp);
 				error = clalloc(&tp->t_outq, 2 * SLMAX + 2, 0);
 				if (error) {
 					softint_disestablish(sc->sc_si);
@@ -377,7 +379,7 @@ slopen(dev_t dev, struct tty *tp)
 				}
 			} else {
 				sc->sc_oldbufsize = sc->sc_oldbufquot = 0;
-				mutex_spin_exit(&tty_lock);
+				ttyunlock(tp);
 			}
 			return 0;
 		}

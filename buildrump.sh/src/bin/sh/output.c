@@ -1,4 +1,4 @@
-/*	$NetBSD: output.c,v 1.40 2017/11/21 03:42:39 kre Exp $	*/
+/*	$NetBSD: output.c,v 1.42 2024/10/03 20:14:01 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)output.c	8.2 (Berkeley) 5/4/95";
 #else
-__RCSID("$NetBSD: output.c,v 1.40 2017/11/21 03:42:39 kre Exp $");
+__RCSID("$NetBSD: output.c,v 1.42 2024/10/03 20:14:01 rillig Exp $");
 #endif
 #endif /* not lint */
 
@@ -188,7 +188,7 @@ static int
 inquote(const char *p)
 {
 	size_t l = strspn(p, norm_chars);
-	char *s = strchr(p, '\'');
+	const char *s = strchr(p, '\'');
 
 	return s == NULL ? p[l] != '\0' : s - p > (off_t)l;
 }
@@ -409,7 +409,7 @@ doformat(struct output *dest, const char *f, va_list ap)
 	if (s == NULL)
 		error("Could not allocate formatted output buffer");
 	outstr(s, dest);
-	free(s);     
+	free(s);
 #else	/* !HAVE_VASPRINTF */
 	static const char digit[] = "0123456789ABCDEF";
 	char c;

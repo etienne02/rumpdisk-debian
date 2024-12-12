@@ -1,5 +1,5 @@
 /* $KAME: sctp_pcb.c,v 1.39 2005/06/16 18:29:25 jinmei Exp $ */
-/* $NetBSD: sctp_pcb.c,v 1.21 2020/04/30 03:30:10 riastradh Exp $ */
+/* $NetBSD: sctp_pcb.c,v 1.27 2024/07/05 04:31:54 rin Exp $ */
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Cisco Systems, Inc.
@@ -33,7 +33,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctp_pcb.c,v 1.21 2020/04/30 03:30:10 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctp_pcb.c,v 1.27 2024/07/05 04:31:54 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -742,7 +742,7 @@ sctp_endpoint_probe(struct sockaddr *nam, struct sctppcbhead *head,
 		}
 #ifdef SCTP_DEBUG
 		if (sctp_debug_on & SCTP_DEBUG_PCB1) {
-			printf("Ok, found maching local port\n");
+			printf("Ok, found matching local port\n");
 		}
 #endif
 		LIST_FOREACH(laddr, &inp->sctp_addr_list, sctp_nxt_addr) {
@@ -1320,7 +1320,7 @@ sctp_inpcb_alloc(struct socket *so)
 	 * be taken out ... since the last set of fixes I
 	 * have not seen the "Found a GONE on list" has not
 	 * came out. But i am paranoid and we will leave this
-	 * in at the cost of efficency on allocation of PCB's.
+	 * in at the cost of efficiency on allocation of PCB's.
 	 * Probably we should move this to the invariant
 	 * compile options
 	 */
@@ -2021,14 +2021,10 @@ sctp_inpcb_free(struct sctp_inpcb *inp, int immediate)
 	}
 	sctp_timer_stop(SCTP_TIMER_TYPE_NEWCOOKIE, inp, NULL, NULL);
 
-	if (inp->control) {
-		sctp_m_freem(inp->control);
-		inp->control = NULL;
-	}
-	if (inp->pkt) {
-		sctp_m_freem(inp->pkt);
-		inp->pkt = NULL;
-	}
+	sctp_m_freem(inp->control);
+	inp->control = NULL;
+	sctp_m_freem(inp->pkt);
+	inp->pkt = NULL;
 	so = inp->sctp_socket;
 	ip_pcb = &inp->ip_inp.inp; /* we could just cast the main
 				   * pointer here but I will
@@ -3130,10 +3126,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 		chk = TAILQ_FIRST(&outs->outqueue);
 		while (chk) {
 			TAILQ_REMOVE(&outs->outqueue, chk, sctp_next);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			chk->whoTo = NULL;
 			chk->asoc = NULL;
 			/* Free the chunk */
@@ -3155,10 +3149,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 	chk = TAILQ_FIRST(&asoc->pending_reply_queue);
 	while (chk) {
 		TAILQ_REMOVE(&asoc->pending_reply_queue, chk, sctp_next);
-		if (chk->data) {
-			sctp_m_freem(chk->data);
-			chk->data = NULL;
-		}
+		sctp_m_freem(chk->data);
+		chk->data = NULL;
 		chk->whoTo = NULL;
 		chk->asoc = NULL;
 		/* Free the chunk */
@@ -3175,10 +3167,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 		chk = TAILQ_FIRST(&asoc->send_queue);
 		while (chk) {
 			TAILQ_REMOVE(&asoc->send_queue, chk, sctp_next);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 			sctppcbinfo.ipi_count_chunk--;
 			if ((int)sctppcbinfo.ipi_count_chunk < 0) {
@@ -3193,10 +3183,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 		chk = TAILQ_FIRST(&asoc->sent_queue);
 		while (chk) {
 			TAILQ_REMOVE(&asoc->sent_queue, chk, sctp_next);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 			sctppcbinfo.ipi_count_chunk--;
 			if ((int)sctppcbinfo.ipi_count_chunk < 0) {
@@ -3211,10 +3199,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 		chk = TAILQ_FIRST(&asoc->control_send_queue);
 		while (chk) {
 			TAILQ_REMOVE(&asoc->control_send_queue, chk, sctp_next);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 			sctppcbinfo.ipi_count_chunk--;
 			if ((int)sctppcbinfo.ipi_count_chunk < 0) {
@@ -3228,10 +3214,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 		chk = TAILQ_FIRST(&asoc->reasmqueue);
 		while (chk) {
 			TAILQ_REMOVE(&asoc->reasmqueue, chk, sctp_next);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 			sctppcbinfo.ipi_count_chunk--;
 			if ((int)sctppcbinfo.ipi_count_chunk < 0) {
@@ -3245,10 +3229,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 		chk = TAILQ_FIRST(&asoc->delivery_queue);
 		while (chk) {
 			TAILQ_REMOVE(&asoc->delivery_queue, chk, sctp_next);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 			sctppcbinfo.ipi_count_chunk--;
 			if ((int)sctppcbinfo.ipi_count_chunk < 0) {
@@ -3278,10 +3260,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 				while (chk) {
 					TAILQ_REMOVE(&asoc->strmin[i].inqueue,
 					    chk, sctp_next);
-					if (chk->data) {
-						sctp_m_freem(chk->data);
-						chk->data = NULL;
-					}
+					sctp_m_freem(chk->data);
+					chk->data = NULL;
 					SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk,
 					    chk);
 					sctppcbinfo.ipi_count_chunk--;
@@ -3310,10 +3290,8 @@ sctp_free_assoc(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 		TAILQ_REMOVE(&asoc->asconf_queue, aparam, next);
 		free(aparam, M_PCB);
 	}
-	if (asoc->last_asconf_ack_sent != NULL) {
-		sctp_m_freem(asoc->last_asconf_ack_sent);
-		asoc->last_asconf_ack_sent = NULL;
-	}
+	sctp_m_freem(asoc->last_asconf_ack_sent);
+	asoc->last_asconf_ack_sent = NULL;
 	/* Insert new items here :> */
 
 	/* Get rid of LOCK */
@@ -3787,7 +3765,7 @@ sctp_pcb_init(void)
 {
 	/*
 	 * SCTP initialization for the PCB structures
-	 * should be called by the sctp_init() funciton.
+	 * should be called by the sctp_init() function.
 	 */
 	int i;
 	int hashtblsize = SCTP_TCBHASHSIZE;
@@ -4016,7 +3994,7 @@ sctp_load_addresses_from_init(struct sctp_tcb *stcb, struct mbuf *m,
 			return (-1);
 		}
 	}
-	/* since a unlock occured we must check the
+	/* since a unlock occurred we must check the
 	 * TCB's state and the pcb's gone flags.
 	 */
 	if (l_inp->sctp_flags & (SCTP_PCB_FLAGS_SOCKET_GONE|SCTP_PCB_FLAGS_SOCKET_ALLGONE)) {
@@ -4540,10 +4518,8 @@ sctp_drain_mbufs(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 			asoc->cnt_on_reasm_queue--;
 			SCTP_UNSET_TSN_PRESENT(asoc->mapping_array, gap);
 			TAILQ_REMOVE(&asoc->reasmqueue, chk, sctp_next);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 			sctppcbinfo.ipi_count_chunk--;
 			if ((int)sctppcbinfo.ipi_count_chunk < 0) {
@@ -4578,10 +4554,8 @@ sctp_drain_mbufs(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 				    gap);
 				TAILQ_REMOVE(&asoc->strmin[strmat].inqueue,
 				    chk, sctp_next);
-				if (chk->data) {
-					sctp_m_freem(chk->data);
-					chk->data = NULL;
-				}
+				sctp_m_freem(chk->data);
+				chk->data = NULL;
 				SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 				sctppcbinfo.ipi_count_chunk--;
 				if ((int)sctppcbinfo.ipi_count_chunk < 0) {
@@ -4617,7 +4591,7 @@ sctp_drain_mbufs(struct sctp_inpcb *inp, struct sctp_tcb *stcb)
 
 	/*
 	 * Another issue, in un-setting the TSN's in the mapping array we
-	 * DID NOT adjust the higest_tsn marker.  This will cause one of
+	 * DID NOT adjust the highest_tsn marker.  This will cause one of
 	 * two things to occur. It may cause us to do extra work in checking
 	 * for our mapping array movement. More importantly it may cause us
 	 * to SACK every datagram. This may not be a bad thing though since

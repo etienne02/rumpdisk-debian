@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_cpu.c,v 1.16 2020/09/23 12:05:16 simonb Exp $	*/
+/*	$NetBSD: subr_cpu.c,v 1.22 2024/03/05 20:59:41 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008, 2009, 2010, 2012, 2019, 2020
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_cpu.c,v 1.16 2020/09/23 12:05:16 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_cpu.c,v 1.22 2024/03/05 20:59:41 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -137,6 +137,34 @@ cpu_softintr_p(void)
 	return (curlwp->l_pflag & LP_INTR) != 0;
 }
 
+bool
+curcpu_stable(void)
+{
+	struct lwp *const l = curlwp;
+	const int pflag = l->l_pflag;
+	const int nopreempt = l->l_nopreempt;
+
+	/*
+	 * - Softints (LP_INTR) never migrate between CPUs.
+	 * - Bound lwps (LP_BOUND), either kthreads created bound to
+	 *   a CPU or any lwps bound with curlwp_bind, never migrate.
+	 * - If kpreemption is disabled, the lwp can't migrate.
+	 * - If we're in interrupt context, preemption is blocked.
+	 *
+	 * We combine the LP_INTR, LP_BOUND, and l_nopreempt test into
+	 * a single predicted-true branch so this is cheap to assert in
+	 * most contexts where it will be used, then fall back to
+	 * calling the full kpreempt_disabled() and cpu_intr_p() as
+	 * subroutines.
+	 *
+	 * XXX Is cpu_intr_p redundant with kpreempt_disabled?
+	 */
+	return __predict_true(((pflag & (LP_INTR|LP_BOUND)) | nopreempt)
+		!= 0) ||
+	    kpreempt_disabled() ||
+	    cpu_intr_p();
+}
+
 /*
  * Collect CPU topology information as each CPU is attached.  This can be
  * called early during boot, so we need to be careful what we do.
@@ -195,7 +223,6 @@ cpu_topology_link(struct cpu_info *ci, struct cpu_info *ci2, enum cpu_rel rel)
 static void
 cpu_topology_dump(void)
 {
-#ifdef DEBUG
 	CPU_INFO_ITERATOR cii;
 	struct cpu_info *ci, *ci2;
 	const char *names[] = { "core", "pkg", "1st" };
@@ -209,25 +236,24 @@ cpu_topology_dump(void)
 
 	for (CPU_INFO_FOREACH(cii, ci)) {
 		if (cpu_topology_haveslow)
-			printf("%s ", ci->ci_is_slow ? "slow" : "fast");
+			aprint_debug("%s ", ci->ci_is_slow ? "slow" : "fast");
 		for (rel = 0; rel < __arraycount(ci->ci_sibling); rel++) {
-			printf("%s has %d %s siblings:", cpu_name(ci),
+			aprint_debug("%s has %d %s siblings:", cpu_name(ci),
 			    ci->ci_nsibling[rel], names[rel]);
 			ci2 = ci->ci_sibling[rel];
 			i = 0;
 			do {
-				printf(" %s", cpu_name(ci2));
+				aprint_debug(" %s", cpu_name(ci2));
 				ci2 = ci2->ci_sibling[rel];
 			} while (++i < 64 && ci2 != ci->ci_sibling[rel]);
 			if (i == 64) {
-				printf(" GAVE UP");
+				aprint_debug(" GAVE UP");
 			}
-			printf("\n");
+			aprint_debug("\n");
 		}
-		printf("%s first in package: %s\n", cpu_name(ci),
+		aprint_debug("%s first in package: %s\n", cpu_name(ci),
 		    cpu_name(ci->ci_package1st));
 	}
-#endif	/* DEBUG */
 }
 
 /*
@@ -450,7 +476,7 @@ cpu_count(enum cpu_count idx, int64_t delta)
 /*
  * Fetch fresh sum total for all counts.  Expensive - don't call often.
  *
- * If poll is true, the the caller is okay with with less recent values (but
+ * If poll is true, the caller is okay with less recent values (but
  * no more than 1/hz seconds old).  Where this is called very often that
  * should be the case.
  *

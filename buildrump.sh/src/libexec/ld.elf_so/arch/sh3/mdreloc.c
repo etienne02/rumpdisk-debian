@@ -1,9 +1,18 @@
-/*	$NetBSD: mdreloc.c,v 1.35 2017/08/10 19:03:26 joerg Exp $	*/
+/*	$NetBSD: mdreloc.c,v 1.37 2024/07/23 09:27:00 uwe Exp $	*/
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: mdreloc.c,v 1.35 2017/08/10 19:03:26 joerg Exp $");
+__RCSID("$NetBSD: mdreloc.c,v 1.37 2024/07/23 09:27:00 uwe Exp $");
 #endif /* not lint */
+
+/*
+ * SuperH ELF relocations.
+ *
+ * Reference:
+ *
+ *	[RM0197] SH-4 generic and C specific application binary interface
+ *	https://www.st.com/resource/en/reference_manual/rm0197-sh4-generic-and-c-specific-application-binary-interface-stmicroelectronics.pdf
+ */
 
 #include <sys/types.h>
 #include <sys/tls.h>
@@ -173,8 +182,8 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 			break;
 
 		case R_TYPE(TLS_TPOFF32):
-			if (!defobj->tls_done &&
-			    _rtld_tls_offset_allocate(obj))
+			if (!defobj->tls_static &&
+			    _rtld_tls_offset_allocate(__UNCONST(defobj)))
 				return -1;
 
 			*where = (Elf_Addr)def->st_value +

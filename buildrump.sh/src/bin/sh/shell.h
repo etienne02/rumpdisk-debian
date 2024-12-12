@@ -1,4 +1,4 @@
-/*	$NetBSD: shell.h,v 1.29 2019/01/22 13:48:28 kre Exp $	*/
+/*	$NetBSD: shell.h,v 1.33 2024/10/09 13:43:33 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -56,7 +56,7 @@
 #define SHELL_H
 #include <sys/param.h>
 
-#define JOBS 1
+#define JOBS 1		/* spaces in this line are important, do not alter */
 #ifndef BSD
 #define BSD 1
 #endif
@@ -76,9 +76,11 @@ typedef void *pointer;
 #endif
 #define MKINIT	/* empty */
 
+#include <stdbool.h>
 #include <sys/cdefs.h>
 
 extern const char nullstr[1];		/* null string */
+extern bool privileged;
 
 #ifdef	SMALL
 #undef	DEBUG
@@ -94,7 +96,7 @@ extern	int		ShNest;
  * matters for anything, just makes it easier to assign a different
  * command letter to each debug option.  We currently use only 18
  * so this could be reduced, but that is of no real benefit.  It can also
- * be increased, but that both limits the maximum value tha can be
+ * be increased, but that both limits the maximum value that can be
  * used with DBG_EXTRAS(), and causes problems with verbose option naming.
  */
 #define	DBG_VBOSE_SHIFT		27
@@ -110,42 +112,42 @@ extern	int		ShNest;
 #define CTRACE(when, param)	do {					\
 				    if ((DFlags & (when)) != 0)		\
 					trace param;			\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define CCTRACE(when,cond,param) do {					\
 				    if ((cond) && (DFlags & (when)) != 0) \
 					trace param;			\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define CTRACEV(when, param)	do {					\
 				    if ((DFlags & (when)) != 0)		\
 					tracev param;			\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define XTRACE(when, param, xtra) do {					\
 				    if ((DFlags & (when)) != 0) {	\
 					trace param;			\
 					xtra;				\
 				    }					\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define VTRACE(when, param)	do {					\
 				    if ((DFlags &			\
 					(when)<<DBG_VBOSE_SHIFT) != 0)	\
 					    trace param;		\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define CVTRACE(when,cond,param) do {					\
 				    if ((cond) && (DFlags &		\
 					(when)<<DBG_VBOSE_SHIFT) != 0)	\
 					    trace param;		\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define VTRACEV(when, param)	do {					\
 				    if ((DFlags &			\
 					(when)<<DBG_VBOSE_SHIFT) != 0)	\
 					    tracev param;		\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define VXTRACE(when, param, xtra) do {					\
 				    if ((DFlags &			\
@@ -153,7 +155,7 @@ extern	int		ShNest;
 					    trace param;		\
 					    xtra;			\
 				    }					\
-				} while (/*CONSTCOND*/ 0)
+				} while (0)
 
 #define SHELL_FORKED()	ShNest++
 #define VFORK_BLOCK	{ const int _ShNest = ShNest;

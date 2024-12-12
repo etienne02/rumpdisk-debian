@@ -1,4 +1,4 @@
-/*	$NetBSD: lock_stubs.S,v 1.35 2020/05/01 09:40:47 maxv Exp $	*/
+/*	$NetBSD: lock_stubs.S,v 1.38 2022/09/08 06:57:44 knakahara Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2008, 2009 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -31,11 +31,11 @@
 
 /*
  * Where possible we make each routine fit into an assumed 64-byte cache
- * line.  Please check alignment with 'objdump -d' after making changes. 
+ * line.  Please check alignment with 'objdump -d' after making changes.
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: lock_stubs.S,v 1.35 2020/05/01 09:40:47 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lock_stubs.S,v 1.38 2022/09/08 06:57:44 knakahara Exp $");
 
 #include "opt_lockdebug.h"
 
@@ -255,21 +255,24 @@ END(mutex_spin_enter)
 
 #ifndef XENPV
 /*
- * Release a spin mutex and post a store fence. Must occupy 96 bytes.
+ * Release a spin mutex and post a store fence. Must occupy 128 bytes.
  */
 ENTRY(mutex_spin_exit)
-	HOTPATCH(HP_NAME_MUTEX_EXIT, 96)
+	HOTPATCH(HP_NAME_MUTEX_EXIT, 128)
 	movl	4(%esp), %edx
 	movl	CPUVAR(MTX_OLDSPL), %ecx
 	incl	CPUVAR(MTX_COUNT)
 	movb	$0, MTX_LOCK(%edx)		/* zero */
 	jnz	1f
-	movl	%fs:CPU_INFO_IUNMASK(,%ecx,4), %edx
+	movl	CPUVAR(IUNMASK)(,%ecx,8), %edx
+	movl	CPUVAR(IUNMASK)+4(,%ecx,8), %eax
 	cli
 	testl	CPUVAR(IPENDING), %edx
 	movl    %ecx, 4(%esp)
 	jnz	_C_LABEL(Xspllower)		/* does sti */
-	movl	%ecx, CPUVAR(ILEVEL)
+	testl	CPUVAR(IPENDING)+4, %eax
+	jnz	_C_LABEL(Xspllower)		/* does sti */
+	movb	%cl, CPUVAR(ILEVEL)
 	sti
 1:	ret
 	.space	32, 0xCC
@@ -281,26 +284,42 @@ STRONG_ALIAS(mutex_spin_exit, i686_mutex_spin_exit)
 
 /*
  * Patch for i686 CPUs where cli/sti is prohibitively expensive.
- * Must be the same size as mutex_spin_exit(), that is, 96 bytes.
+ * Must be the same size as mutex_spin_exit(), that is, 128 bytes.
  */
 ENTRY(i686_mutex_spin_exit)
 	mov	4(%esp),%edx
 	movl	CPUVAR(MTX_OLDSPL), %ecx
 	incl	CPUVAR(MTX_COUNT)
-	movb	%ch, MTX_LOCK(%edx)		/* zero */
+	movb	$0, MTX_LOCK(%edx)		/* zero */
 	jnz	1f
 	pushl	%ebx
+	pushl	%esi
+	pushl	%edi
+	movl	%ecx, %esi
+	movl	%ecx, %edi
+	shll	$24, %edi
 0:
 	movl	CPUVAR(IPENDING), %eax
-	testl	%eax, %fs:CPU_INFO_IUNMASK(,%ecx,4)
+	testl	%eax, CPUVAR(IUNMASK)(,%esi,8)
+	jnz	2f
+	movl	CPUVAR(IPENDING)+4, %edx
+	testl	%edx, CPUVAR(IUNMASK)+4(,%esi,8)
 	jnz	2f
 	movl	%eax, %ebx
+	movl	%edx, %ecx
+	andl	$0x00ffffff, %ecx
+	orl	%edi, %ecx
 	cmpxchg8b CPUVAR(ISTATE)		/* swap in new ilevel */
 	jnz	0b
+	popl	%edi
+	popl	%esi
 	popl	%ebx
 1:
 	ret
 2:
+	movl	%esi,%ecx
+	popl	%edi
+	popl	%esi
 	popl	%ebx
 	movl	%ecx,4(%esp)
 
@@ -354,7 +373,7 @@ ENTRY(__cpu_simple_lock_try)
 	LOCK(7)
 	cmpxchgb %ah, (%edx)
 	movl	$0, %eax
-	setz	%al	
+	setz	%al
 	RET(8)
 END(__cpu_simple_lock_try)
 

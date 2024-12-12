@@ -1,4 +1,4 @@
-/*	$NetBSD: xen_bus_dma.c,v 1.32 2020/05/06 19:50:26 bouyer Exp $	*/
+/*	$NetBSD: xen_bus_dma.c,v 1.34 2024/05/14 19:00:44 andvar Exp $	*/
 /*	NetBSD bus_dma.c,v 1.21 2005/04/16 07:53:35 yamt Exp */
 
 /*-
@@ -32,16 +32,17 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xen_bus_dma.c,v 1.32 2020/05/06 19:50:26 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xen_bus_dma.c,v 1.34 2024/05/14 19:00:44 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/mbuf.h>
 #include <sys/proc.h>
-
 #include <sys/bus.h>
+
 #include <machine/bus_private.h>
+#include <machine/pmap_private.h>
 
 #include <uvm/uvm.h>
 
@@ -84,7 +85,7 @@ _xen_alloc_contig(bus_size_t size, bus_size_t alignment,
 	struct xen_memory_reservation res;
 
 	/*
-	 * When requesting a contigous memory region, the hypervisor will
+	 * When requesting a contiguous memory region, the hypervisor will
 	 * return a memory range aligned on size. 
 	 * The only way to enforce alignment is to request a memory region
 	 * of size max(alignment, size).
@@ -312,7 +313,7 @@ dorealloc:
 	/*
 	 * Too much segments, or memory doesn't fit
 	 * constraints. Free this memory and
-	 * get a contigous segment from the hypervisor.
+	 * get a contiguous segment from the hypervisor.
 	 */
 	uvm_pglistfree(&mlist);
 	for (curseg = 0; curseg < nsegs; curseg++) {

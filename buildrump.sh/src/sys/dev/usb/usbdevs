@@ -1,4 +1,4 @@
-$NetBSD: usbdevs,v 1.794 2021/06/13 09:23:42 mlelstv Exp $
+$NetBSD: usbdevs,v 1.818 2024/11/27 12:46:37 brad Exp $
 
 /*-
  * Copyright (c) 1998-2004 The NetBSD Foundation, Inc.
@@ -368,6 +368,7 @@ vendor GARMIN		0x091e	Garmin International
 vendor GOHUBS		0x0921	GoHubs
 vendor BIOMETRIC	0x0929	American Biometric Company
 vendor TOSHIBA		0x0930	Toshiba
+vendor PIXART		0x093a	PixArt
 vendor PLEXTOR		0x093b	Plextor
 vendor INTREPIDCS	0x093c	Intrepid
 vendor YANO		0x094f	Yano
@@ -519,6 +520,7 @@ vendor CONCEPTRONIC	0x14b2	Conceptronic
 vendor SUPERTOP		0x14cd	SuperTop
 vendor PLANEX3		0x14ea	Planex Communications
 vendor SILICONPORTALS	0x1527	Silicon Portals
+vendor TOPPING		0x152a	TOPPING Electronics & Technology co.
 vendor JMICRON		0x152d	JMicron
 vendor OQO		0x1557	OQO
 vendor UMEDIA		0x157e	U-MEDIA Communications
@@ -581,8 +583,10 @@ vendor TRIPPLITE	0x2478	Tripp-Lite
 vendor COOLERMASTER	0x2516	Cooler Master Technology Inc.
 vendor HAILUCK		0x258a	HAILUCK Co., Ltd
 vendor HIROSE		0x2631	Hirose Electric
+vendor ONEPLUS		0x2717	ONEPLUS
 vendor NHJ		0x2770	NHJ
 vendor PLANEX		0x2c02	Planex Communications
+vendor MERCUSYS		0x2c4e	Mercusys
 vendor VIDZMEDIA	0x3275	VidzMedia Pte Ltd
 vendor AEI		0x3334	AEI
 vendor HANK		0x3353	Hank Connection
@@ -823,6 +827,7 @@ product ALTEC ASC495		0xff05	ASC495 Speakers
 
 /* American Power Conversion products */
 product APC UPS			0x0002	Uninterruptible Power Supply
+product APC UPS3		0x0003	Uninterruptible Power Supply
 
 /* Ambit Microsystems products */
 product AMBIT NTL_250		0x6098	NTL 250 cable modem
@@ -1113,6 +1118,27 @@ product BILLIONTON USBEL100	0x0988	USB100EL
 product BILLIONTON USBE100	0x8511	USBE100
 product BILLIONTON USB2AR	0x90ff	USB2AR Ethernet
 
+/* Brainboxes Limited products */
+product BRAINBOXES US101	0x1011	US-101 USB2Serial 1xRS232
+product BRAINBOXES US159	0x1021	US-159 USB2Serial 1xRS232
+product BRAINBOXES US235	0x1017	US-235 USB2Serial 1xRS232
+product BRAINBOXES US257	0x5001	US-257 USB2Serial 2xRS232
+product BRAINBOXES US279_12	0x2021	US-279 USB2Serial 8xRS232 (Port 1 and 2)
+product BRAINBOXES US279_34	0x2022	US-279 USB2Serial 8xRS232 (Port 3 and 4)
+product BRAINBOXES US279_56	0x2023	US-279 USB2Serial 8xRS232 (Port 5 and 6)
+product BRAINBOXES US279_78	0x2024	US-279 USB2Serial 8xRS232 (Port 7 and 8)
+product BRAINBOXES US313	0x6001	US-313 USB2Serial 2xRS422/485
+product BRAINBOXES US320	0x1019	US-320 USB2Serial 1xRS422/485
+product BRAINBOXES US324	0x1013	US-324 USB2Serial 1xRS422/485
+product BRAINBOXES US346_12	0x3011	US-346 USB2Serial 4xRS422/485 (Port 1 and 2)
+product BRAINBOXES US346_34	0x3012	US-346 USB2Serial 4xRS422/485 (Port 3 and 4)
+product BRAINBOXES US701_12	0x2011	US-701 USB2Serial 4xRS232 (Port 1 and 2)
+product BRAINBOXES US701_34	0x2012	US-701 USB2Serial 4xRS232 (Port 3 and 4)
+product BRAINBOXES US842_12	0x8001	US-842 USB2Serial 8xRS422/485 (Port 1 and 2)
+product BRAINBOXES US842_34	0x8002	US-842 USB2Serial 8xRS422/485 (Port 3 and 4)
+product BRAINBOXES US842_56	0x8003	US-842 USB2Serial 8xRS422/485 (Port 5 and 6)
+product BRAINBOXES US842_78	0x8004	US-842 USB2Serial 8xRS422/485 (Port 7 and 8)
+
 /* Broadcom products */
 product BROADCOM BCMFW		0x0bdc	BCMFW
 product BROADCOM BCM2033	0x2000	BCM2033
@@ -1299,7 +1325,9 @@ product CMEDIA USBAUDIO		0x013c	USB Pnp Sound
 product CTX EX1300		0x9999	Ex1300 hub
 
 /* CyberPower Systems, Inc. products */
+product CYBERPOWER UPS0		0x0005	Uninterruptible Power Supply
 product CYBERPOWER UPS		0x0501	Uninterruptible Power Supply
+product CYBERPOWER UPS2		0x0601	Uninterruptible Power Supply
 
 /* CyberTAN Technology products */
 product CYBERTAN TG54USB	0x1666	TG54USB
@@ -1387,6 +1415,7 @@ product DISPLAYLINK SWDVI	0x024c	SUNWEIT DVI
 product DISPLAYLINK LUM70	0x02a9	Lilliput UM-70
 product DISPLAYLINK LCD8000UD_DVI	0x02b8	LCD-8000UD-DVI
 product DISPLAYLINK LDEWX015U	0x02e3	Logitec LDE-WX015U
+product DISPLAYLINK KC002N	0x02ee	SANWA SUPPLY 500-KC002N
 product DISPLAYLINK MIMO	0x0335	DisplayLink MIMO
 product DISPLAYLINK PLUGABLE	0x0377	Plugable docking station
 product DISPLAYLINK LT1421WIDE	0x03e0	Lenovo ThinkVision LT1421 Wide
@@ -1506,6 +1535,7 @@ product EDIMAX RTL8192CU	0x7822	RTL8192CU
 product EDIMAX EW7811UTC_1	0xa811	EW-7811UTC
 product EDIMAX EW7811UTC_2	0xa812	EW-7811UTC
 product EDIMAX ELECOM_WDC433SU2M 0xb711	ELECOM WDC-433SU2M
+product EDIMAX EW7811UNV2	0xb811	EW-7811Un V2
 
 /* eGalax Products */
 product EGALAX TPANEL		0x0001	Touch Panel
@@ -2189,6 +2219,8 @@ product LOGITECH BD58		0xc00c	BD58 mouse
 product LOGITECH USBPS2MOUSE	0xc00e	USB-PS/2 Optical Mouse
 product LOGITECH MUV55A		0xc016	M-UV55a
 product LOGITECH UN58A		0xc030	iFeel Mouse
+product LOGITECH B100_1		0xc05a	B100 Optical Mouse
+product LOGITECH B100_2		0xc077	B100 Optical Mouse
 product LOGITECH WMPAD		0xc208	WingMan GamePad Extreme
 product LOGITECH WMRPAD		0xc20a	WingMan RumblePad
 product LOGITECH WMJOY		0xc281	WingMan Force joystick
@@ -2280,6 +2312,9 @@ product MELCO WLIUCGNM		0x01a2	WLI-UC-GNM
 product MELCO WLIUCGNM2T	0x01ee	WLI-UC-GNM2T
 product MELCO WIU2300D		0x0241	WI-U2-300D
 
+/* Mercusys products */
+product	MERCUSYS MW150USV2	0x0102	MW150US V2
+
 /* Merlin products */
 product MERLIN V620		0x1110	Merlin V620
 
@@ -2324,8 +2359,10 @@ product MSI BLUETOOTH_3		0xa97a	Bluetooth
 /* Microchip Technology products */
 product MICROCHIP PICKIT1	0x0032	PICkit(TM) 1 FLASH Starter Kit
 product MICROCHIP PICKIT2	0x0033	PICkit 2 Microcontroller Programmer
+product MICROCHIP PICKIT3	0x900a	PICkit 3 Microcontroller Programmer
+product MICROCHIP MCP2221	0x00dd	USB to I2C/UART Protocol Converter
 
-/* Microdia / Sonix Techonology Co., Ltd. products */
+/* Microdia / Sonix Technology Co., Ltd. products */
 product MICRODIA YUREX		0x1010	YUREX
 
 /* Micronet Communications products */
@@ -2349,11 +2386,13 @@ product MICROSOFT XBOX_DVD_PLAYBACK	0x0284	Xbox DVD Movie Playback Kit
 product MICROSOFT XBOX_CONTROLLER_S10	0x0285	Xbox Controller S (1.0)
 product MICROSOFT XBOX_CONTROLLER_HUB	0x0288	Xbox Controller Hub
 product MICROSOFT XBOX_CONTROLLER_S12	0x0289	Xbox Controller S (1.2)
+product MICROSOFT XBOX_360_CONTROLLER	0x028e	Xbox 360 Controller
 product MICROSOFT XBOX_360_WIRELESS_RECEIVER 0x0291 Xbox 360 Wireless Receiver
 product MICROSOFT 24GHZ_XCVR10		0x071d	2.4GHz Transceiver V1.0
 product MICROSOFT 24GHZ_XCVR20		0x071f	2.4GHz Transceiver V2.0
 product MICROSOFT 24GHZ_XCVR70		0x0745	2.4GHz Transceiver V7.0
 product MICROSOFT 24GHZ_XCVR80		0x07b2	2.4GHz Transceiver V8.0
+product MICROSOFT 24GHZ_XCVR90		0x07a5	2.4GHz Transceiver V9.0
 product MICROSOFT CM6000		0x077d	Comfort Mouse 6000
 
 
@@ -2571,6 +2610,9 @@ product OMNIVISION OV511	0x0511	OV511 Camera
 product OMNIVISION OV511PLUS	0xa511	OV511+ Camera
 product OMNIVISION2 PSEYE	0x2000	Sony PLAYSTATION(R) Eye
 
+/* OnePlus products */
+product ONEPLUS A5010		0xff80	OnePlus 5T
+
 /* OnSpec Electronic, Inc. */
 product ONSPEC MD2		0x0103	disk
 product ONSPEC MDCFEB		0xa000	MDCFE-B USB CF Reader
@@ -2715,6 +2757,10 @@ product PINNACLE PCTVDVBTFLASH	0x0228	Pinnacle PCTV DVB-T Flash
 product PINNACLE PCTV72E	0x0236	Pinnacle PCTV 72e
 product PINNACLE PCTV73E	0x0237	Pinnacle PCTV 73e
 
+/* PixArt */
+product PIXART RPIMOUSE		0x2510	Raspberry Pi Mouse
+product LENOVO OPTUSBMOUSE	0x600e	Lenovo USB Optical Mouse
+
 /* Planex Communications products */
 product PLANEX  GW_US11H	0x14ea	GW-US11H WLAN
 product PLANEX2 RTL8188CUS	0x1201	RTL8188CUS
@@ -2795,6 +2841,12 @@ product PROLIFIC RSAQ2		0x04bb	PL2303 Serial adapter (IODATA USB-RSAQ2)
 product PROLIFIC PL2303		0x2303	PL2303 Serial adapter (ATEN/IOGEAR UC232A)
 product PROLIFIC PL2305		0x2305	Parallel printer adapter
 product PROLIFIC ATAPI4		0x2307	ATAPI-4 Bridge Controller
+product PROLIFIC PL2303GC	0x23a3	PL2303 Serial adapter
+product PROLIFIC PL2303GB	0x23b3	PL2303 Serial adapter
+product PROLIFIC PL2303GT	0x23c3	PL2303 Serial adapter
+product PROLIFIC PL2303GL	0x23d3	PL2303 Serial adapter
+product PROLIFIC PL2303GE	0x23e3	PL2303 Serial adapter
+product PROLIFIC PL2303GS	0x23f3	PL2303 Serial adapter
 product PROLIFIC PL2501		0x2501	PL2501 Host-Host interface
 product PROLIFIC PL25A1		0x25a1	PL25A1 Host-Host interface
 product PROLIFIC PL2303X	0xaaa0	PL2303 Serial adapter (Pharos GPS)
@@ -2872,6 +2924,7 @@ product REALTEK RTL8150L	0x8150	RTL8150L USB-Ethernet Bridge
 product REALTEK RTL8151		0x8151	RTL8151 PNA
 product REALTEK RTL8152		0x8152	RTL8152
 product REALTEK RTL8153		0x8153	RTL8153
+product REALTEK RTL8156		0x8156	RTL8156
 product REALTEK RTL8188CE_0	0x8170	RTL8188CE
 product REALTEK RTL8171		0x8171	RTL8171
 product REALTEK RTL8172		0x8172	RTL8172
@@ -2898,6 +2951,7 @@ product REALTEK RTL8712		0x8712	RTL8712
 product REALTEK RTL8713		0x8713	RTL8713
 product REALTEK RTL8188CU_COMBO	0x8754	RTL8188CU
 product REALTEK RTL8192SU	0xc512	RTL8192SU
+product REALTEK RTL8188FU	0xf179	RTL8188FU
 
 /* Research In Motion */
 product RIM BLACKBERRY			0x0001	BlackBerry
@@ -3397,6 +3451,9 @@ product TODOS ARGOS_MINI	0x0002	Argos Mini Smartcard Reader
 /* Topfield Co. Ltd products */
 product TOPFIELD TF5000PVR	0x1000	TF5000PVR Digital Video Recorder
 
+/* TOPPING Electronics & Technology co. */
+product TOPPING DX3_PRO		0x8750	DX3 Pro
+
 /* Toshiba Corporation products */
 product TOSHIBA POCKETPC_E740	0x0706	PocketPC e740
 product TOSHIBA RT3070		0x0a07	RT3070
@@ -3412,6 +3469,7 @@ product TPLINK RTL8188EU	0x010c	RTL8188EU
 product	TPLINK T4UV2		0x010d  Archer T4U ver 2
 product	TPLINK T4UHV2		0x010e  Archer T4UH ver 2
 product	TPLINK T2UNANO		0x011e  Archer T2U Nano
+product	TPLINK UE300		0x0601	UE300 10/100/1000 LAN
 
 /* Trek Technology products */
 product TREK THUMBDRIVE		0x1111	ThumbDrive
@@ -3420,6 +3478,7 @@ product TREK THUMBDRIVE_8MB	0x9988	ThumbDrive 8MB
 /* TRENDnet products */
 product TRENDNET RTL8192CU	0x624d	RTL8192CU
 product TRENDNET RTL8188CU	0x648b	RTL8188CU
+product TRENDNET TEW648UBM	0x648c	TEW-648UBM
 
 /* Tripp-Lite products */
 product TRIPPLITE U209		0x2008	U209 Serial adapter
@@ -3533,7 +3592,10 @@ product WACOM GRAPHIRE4_4X5	0x0015	Graphire4 4x5
 product WACOM INTUOSA5		0x0021	Intuos A5
 product WACOM GD0912U		0x0022	Intuos 9x12 Graphics Tablet
 product WACOM XD0912U		0x0043	Intuos2 A4 i-920 XD-0912-U
+product WACOM CTL671		0x0301	CTL-671 Tablet
+product WACOM CTH490K0		0x033c	Intuos Art CTH-490/K0
 product WACOM CTH690K0		0x033e	Intuos Art CTH-690/K0
+product WACOM CTL6100WL		0x0378	Intuos M
 
 /* Weltrend Semiconductor */
 product WELTREND HID		0x2201	HID Device

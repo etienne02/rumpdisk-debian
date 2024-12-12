@@ -1,4 +1,4 @@
-/*	$NetBSD: sif.c,v 1.11 2016/07/18 22:24:15 maya Exp $	*/
+/*	$NetBSD: sif.c,v 1.13 2023/11/05 21:54:27 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -30,10 +30,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sif.c,v 1.11 2016/07/18 22:24:15 maya Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sif.c,v 1.13 2023/11/05 21:54:27 andvar Exp $");
 
 #include "debug_playstation2.h"
 
+#include <sys/intr.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
@@ -101,7 +102,7 @@ iopdma_allocate_buffer(struct iopdma_segment *seg, size_t size)
 {
 	/* 
 	 * To avoid cache inconsistecy as the result of DMA(to memory), 
-	 * DMA buffer size is setted to multiple of CPU cache line size (64B)
+	 * DMA buffer size is set to multiple of CPU cache line size (64B)
 	 * and aligned to cache line.
 	 */
 	seg->size = ROUND64(size);
@@ -110,7 +111,7 @@ iopdma_allocate_buffer(struct iopdma_segment *seg, size_t size)
 
 	if (seg->iop_paddr == 0) {
 		printf("%s: can't allocate IOP memory.\n", __func__);
-		DPRINTF("request = %d byte, current total = %#x\n",
+		DPRINTF("request = %lu byte, current total = %#x\n",
 		    size, __spd_total_alloc);
 		return (1);
 	}
@@ -120,7 +121,7 @@ iopdma_allocate_buffer(struct iopdma_segment *seg, size_t size)
 #ifdef SIF_DEBUG
 	__spd_total_alloc += size;
 #endif
-	DPRINTF("0x%08lx+%#x (total=%#x)\n", seg->iop_paddr, size,
+	DPRINTF("0x%08x+%#lx (total=%#x)\n", seg->iop_paddr, size,
 	    __spd_total_alloc);
 
 	KDASSERT((seg->ee_vaddr & 63) == 0);
@@ -137,6 +138,6 @@ iopdma_free_buffer(struct iopdma_segment *seg)
 #ifdef SIF_DEBUG
 	__spd_total_alloc -= seg->size;
 #endif
-	DPRINTF("0x%08lx (total=%#x, result=%d)\n", seg->iop_paddr,
+	DPRINTF("0x%08x (total=%#x, result=%d)\n", seg->iop_paddr,
 	    __spd_total_alloc, ret);
 }

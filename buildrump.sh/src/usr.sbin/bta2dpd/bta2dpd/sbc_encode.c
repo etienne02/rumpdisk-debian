@@ -1,4 +1,4 @@
-/* $NetBSD: sbc_encode.c,v 1.10 2019/09/21 00:01:33 nat Exp $ */
+/* $NetBSD: sbc_encode.c,v 1.13 2023/07/21 02:11:18 nat Exp $ */
 
 /*-
  * Copyright (c) 2015 - 2016 Nathanial Sloss <nathanialsloss@yahoo.com.au>
@@ -32,6 +32,7 @@
  */
 
 #include <sys/cdefs.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/param.h>
 #include <errno.h>
@@ -813,11 +814,35 @@ make_frame(uint8_t *frame, int16_t *input)
 	return frame - frameStart;
 }
 
+static ssize_t
+readloop(int fd, void *buf, size_t nbytes)
+{
+	size_t count;
+	ssize_t ret;
+
+	count = 0;
+	while (nbytes > 0) {
+		ret = read(fd, ((char *)buf) + count, nbytes);
+		if (ret < 0) {
+			if (count == 0)
+				return ret;
+			break;
+		}
+		if (ret == 0)
+			break;
+		count += (size_t)ret;
+		nbytes -= (size_t)ret;
+	}
+
+	return (ssize_t) count;
+}
+
 ssize_t
 stream(int in, int outfd, uint8_t mode, uint8_t freq, uint8_t bands, uint8_t
     blocks, uint8_t alloc_method, uint8_t bitpool, size_t mtu, int volume)
 {
 	struct rtpHeader myHeader;
+	struct timeval myTime;
 	uint8_t *whole, *frameData;
 	int16_t music[2048];
 	ssize_t len, mySize[16], offset, next_pkt;
@@ -826,6 +851,7 @@ stream(int in, int outfd, uint8_t mode, uint8_t freq, uint8_t bands, uint8_t
 	size_t frequency;
 	static size_t ts = 0;
 	static uint16_t seqnumber = 0;
+	static time_t prevTime, readTime, sleepTime, timeNow;
 	int numpkts, tries;
 
 	global_mode = mode;
@@ -889,9 +915,11 @@ stream(int in, int outfd, uint8_t mode, uint8_t freq, uint8_t bands, uint8_t
 	next_pkt = 0;
 	len = 0;
 	pkt_len = 80;
+	readTime = 0;
 	while (totalSize + ((size_t)pkt_len * 2) <= mtu) {
 
-		len = read(in, music, readsize);
+		len = readloop(in, music, readsize);
+		readTime += (time_t)readsize;
 		if (len < (int)readsize)
 			break;
 
@@ -911,6 +939,8 @@ stream(int in, int outfd, uint8_t mode, uint8_t freq, uint8_t bands, uint8_t
 		return -1;
 	}
 
+	readTime = readTime * 1000000 / 2 / global_chan / (time_t)frequency;
+
 	myHeader.numFrames = (uint8_t)numpkts;
 	whole = malloc(totalSize);
 	if (whole == NULL)
@@ -921,6 +951,19 @@ stream(int in, int outfd, uint8_t mode, uint8_t freq, uint8_t bands, uint8_t
 
 	memcpy(whole + offset, frameData, (size_t)next_pkt);
 	free(frameData);
+
+	/* Wait if necessary to avoid rapid playback. */
+	gettimeofday(&myTime, NULL);
+	timeNow = myTime.tv_sec * 1000000 + myTime.tv_usec;
+	if (prevTime == 0)
+		prevTime = timeNow;
+	else
+		sleepTime += readTime - (timeNow - prevTime);
+	if (sleepTime >= 1000) {
+		usleep(500);
+		sleepTime -= 1000;
+	}
+	prevTime = timeNow;
 
 	tries = 1;
 send_again:

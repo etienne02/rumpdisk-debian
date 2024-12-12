@@ -1,4 +1,4 @@
-/*	$NetBSD: notifier.h,v 1.3 2018/08/27 07:18:18 riastradh Exp $	*/
+/*	$NetBSD: notifier.h,v 1.5 2021/12/19 11:47:08 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -34,30 +34,38 @@
 
 #include <sys/cdefs.h>
 
+#include <sys/pslist.h>
+
+#include <linux/spinlock.h>
+
+/* namespace */
+#define	ATOMIC_INIT_NOTIFIER_HEAD	linux_ATOMIC_INIT_NOTIFIER_HEAD
+#define	ATOMIC_CLEANUP_NOTIFIER_HEAD	linux_ATOMIC_CLEANUP_NOTIFIER_HEAD
+#define	atomic_notifier_call_chain	linux_atomic_notifier_call_chain
+#define	atomic_notifier_chain_register	linux_atomic_notifier_chain_register
+#define	atomic_notifier_chain_unregister linux_atomic_notifier_chain_unregister
+
 #define	NOTIFY_DONE	0
 #define	NOTIFY_OK	1
 
 struct notifier_block {
-	int	(*notifier_call)(struct notifier_block *, unsigned long,
-		    void *);
+	int (*notifier_call)(struct notifier_block *, unsigned long, void *);
+	struct pslist_entry	nb_entry;
 };
 
 struct atomic_notifier_head {
-	char	anh_blahdittyblahblah;
+	spinlock_t		anh_lock;
+	struct pslist_head	anh_list;
 };
 
-static struct atomic_notifier_head panic_notifier_list __unused;
+void ATOMIC_INIT_NOTIFIER_HEAD(struct atomic_notifier_head *);
+void ATOMIC_CLEANUP_NOTIFIER_HEAD(struct atomic_notifier_head *);
 
-static inline void
-atomic_notifier_chain_register(struct atomic_notifier_head *head __unused,
-    struct notifier_block *block __unused)
-{
-}
-
-static inline void
-atomic_notifier_chain_unregister(struct atomic_notifier_head *head __unused,
-    struct notifier_block *block __unused)
-{
-}
+void atomic_notifier_chain_register(struct atomic_notifier_head *,
+    struct notifier_block *);
+void atomic_notifier_chain_unregister(struct atomic_notifier_head *,
+    struct notifier_block *);
+void atomic_notifier_call_chain(struct atomic_notifier_head *, unsigned long,
+    void *);
 
 #endif  /* _LINUX_NOTIFIER_H_ */

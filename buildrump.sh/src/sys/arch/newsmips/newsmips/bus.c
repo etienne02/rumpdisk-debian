@@ -1,4 +1,4 @@
-/*	$NetBSD: bus.c,v 1.34 2020/11/21 17:54:48 thorpej Exp $	*/
+/*	$NetBSD: bus.c,v 1.38 2022/07/26 20:08:56 andvar Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bus.c,v 1.34 2020/11/21 17:54:48 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus.c,v 1.38 2022/07/26 20:08:56 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -132,10 +132,10 @@ bus_space_subregion(bus_space_tag_t t, bus_space_handle_t bsh,
 	return 0;
 }
 
-static size_t 
+static size_t
 _bus_dmamap_mapsize(int const nsegments)
-{ 
-	KASSERT(nsegments > 0); 
+{
+	KASSERT(nsegments > 0);
 	return sizeof(struct newsmips_bus_dmamap) +
 	    (sizeof(bus_dma_segment_t) * (nsegments - 1));
 }
@@ -507,7 +507,7 @@ _bus_dmamap_sync_r3k(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 		return;
 
 	/*
-	 * No cache invlidation is necessary if the DMA map covers
+	 * No cache invalidation is necessary if the DMA map covers
 	 * COHERENT DMA-safe memory (which is mapped un-cached).
 	 */
 	if (map->_dm_flags & NEWSMIPS_DMAMAP_COHERENT)
@@ -711,7 +711,7 @@ _bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t alignment,
 	return (_bus_dmamem_alloc_range_common(t, size, alignment, boundary,
 	    segs, nsegs, rsegs, flags,
 	    pmap_limits.avail_start /*low*/,
-	    pmap_limits.avail_end - PAGE_SIZE /*high*/));
+	    pmap_limits.avail_end - 1 /*high*/));
 }
 
 /*
@@ -770,7 +770,7 @@ _bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 }
 
 /*
- * Common functin for mmap(2)'ing DMA-safe memory.  May be called by
+ * Common function for mmap(2)'ing DMA-safe memory.  May be called by
  * bus-specific DMA mmap(2)'ing functions.
  */
 paddr_t
@@ -782,6 +782,6 @@ _bus_dmamem_mmap(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
 	rv = _bus_dmamem_mmap_common(t, segs, nsegs, off, prot, flags);
 	if (rv == (bus_addr_t)-1)
 		return (-1);
-	
+
 	return (mips_btop((char *)rv));
 }

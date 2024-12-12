@@ -1,4 +1,4 @@
-/*	$NetBSD: mutex.h,v 1.26 2021/08/25 04:13:41 thorpej Exp $	*/
+/*	$NetBSD: mutex.h,v 1.29 2023/07/12 12:50:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2007 The NetBSD Foundation, Inc.
@@ -31,6 +31,12 @@
 
 #ifndef _ARM_MUTEX_H_
 #define	_ARM_MUTEX_H_
+
+#include <sys/types.h>
+
+#ifdef _KERNEL
+#include <machine/intr.h>
+#endif
 
 /*
  * The ARM mutex implementation is troublesome, because pre-v6 ARM lacks a
@@ -81,5 +87,7 @@ struct kmutex {
 #define	__HAVE_SIMPLE_MUTEXES		1
 
 #endif	/* __MUTEX_PRIVATE */
+
+__CTASSERT(sizeof(struct kmutex) == sizeof(uintptr_t));
 
 #endif /* _ARM_MUTEX_H_ */

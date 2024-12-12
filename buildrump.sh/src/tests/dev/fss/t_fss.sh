@@ -1,4 +1,4 @@
-# $NetBSD: t_fss.sh,v 1.4 2021/01/14 04:30:40 simonb Exp $
+# $NetBSD: t_fss.sh,v 1.6 2023/05/11 01:56:31 gutteridge Exp $
 #
 # Copyright (c) 2006, 2007, 2008 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -29,13 +29,17 @@
 #
 
 vnddev=vnd0
-rawpart=$( sysctl -n kern.rawpartition | tr '01234' 'abcde' )
-vnd=/dev/${vnddev}${rawpart}
+vnd=/dev/${vnddev}
 
 orig_data="Original data"
 repl_data="Replacement data"
 
 atf_test_case basic cleanup
+basic_head() {
+	atf_set "descr" "Verify basic operation of fss(4) file system " \
+		"snapshot device"
+}
+
 basic_body() {
 
 # verify fss is available (or loadable as a module)
@@ -82,5 +86,5 @@ basic_cleanup() {
 
 atf_init_test_cases()
 {
-        atf_add_test_case basic
+	atf_add_test_case basic
 }

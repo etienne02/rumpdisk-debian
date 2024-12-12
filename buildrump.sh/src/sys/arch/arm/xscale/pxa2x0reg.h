@@ -1,4 +1,4 @@
-/* $NetBSD: pxa2x0reg.h,v 1.23 2011/06/23 11:26:22 kiyohara Exp $ */
+/* $NetBSD: pxa2x0reg.h,v 1.28 2024/12/09 22:00:44 andvar Exp $ */
 
 /*
  * Copyright (c) 2002  Genetec Corporation.  All rights reserved.
@@ -94,7 +94,7 @@
 #define PXA2X0_I2S_SIZE		0x84
 #define PXA2X0_AC97_BASE	0x40500000 /* AC '97 Controller */
 #define PXA2X0_AC97_SIZE	0x600
-#define PXA2X0_USBDC_BASE 	0x40600000 /* USB Client Contoller */
+#define PXA2X0_USBDC_BASE 	0x40600000 /* USB Client Controller */
 #define PXA250_USBDC_SIZE 	0xe04
 #define PXA270_USBDC_SIZE 	0x460
 #define PXA2X0_STUART_BASE	0x40700000 /* Standard UART */
@@ -485,9 +485,9 @@ struct pxa2x0_dma_desc {
 #define  MDREFR_K1FREE	(1<<24)	/* SDCLK1 free run */
 #define  MDREFR_K2FREE	(1<<25)	/* SDCLK2 free run */
 
-#define MEMCTL_MSC0	0x08	/* Asychronous Statis memory Control CS[01] */
-#define MEMCTL_MSC1	0x0c	/* Asychronous Statis memory Control CS[23] */
-#define MEMCTL_MSC2	0x10	/* Asychronous Statis memory Control CS[45] */
+#define MEMCTL_MSC0	0x08	/* Asynchronous Statis memory Control CS[01] */
+#define MEMCTL_MSC1	0x0c	/* Asynchronous Statis memory Control CS[23] */
+#define MEMCTL_MSC2	0x10	/* Asynchronous Statis memory Control CS[45] */
 #define  MSC_RBUFF_SHIFT 15	/* return data buffer */
 #define  MSC_RBUFF	(1<<MSC_RBUFF_SHIFT)
 #define  MSC_RRR_SHIFT   12  	/* recovery time */
@@ -828,7 +828,7 @@ struct pxa2x0_dma_desc {
 
 /* address to access codec registers */
 #define AC97_PRIAUDIO	0x0200	/* Primary audio codec */
-#define AC97_SECAUDIO	0x0300	/* Secondary autio codec */
+#define AC97_SECAUDIO	0x0300	/* Secondary audio codec */
 #define AC97_PRIMODEM	0x0400	/* Primary modem codec */
 #define AC97_SECMODEM	0x0500	/* Secondary modem codec */
 #define	AC97_CODEC_BASE(c)	(AC97_PRIAUDIO + ((c) * 0x100))
@@ -985,7 +985,7 @@ struct pxa2x0_dma_desc {
 #define  USBDC_UDCECR_DE	(1<<1)	/* Double-Buffering Enable */
 #define  USBDC_UDCECR_MPE	(1023<<2) /* Maximum Packet Size */
 #define  USBDC_UDCECR_ED	(1<<12)	/* USB Endpoint Direction */
-#define  USBDC_UDCECR_ET	(3<<13)	/* USB Enpoint Type */
+#define  USBDC_UDCECR_ET	(3<<13)	/* USB Endpoint Type */
 #define  USBDC_UDCECR_EN	(15<<15) /* Endpoint Number */
 #define  USBDC_UDCECR_AISN	(7<<19)	/* Alternate Interface Number */
 #define  USBDC_UDCECR_IN	(7<<22)	/* Interface Number */
@@ -1005,7 +1005,7 @@ struct pxa2x0_dma_desc {
 #define USBHC_UHCRHDB	0x004c	/* UHC Root Hub Descriptor B */
 #define  UHCRHDB_PPCM(p) ((1<<(p))<<16)	/* Port Power Control Mask [1:3] */
 #define  UHCRHDB_DNR(p)	 ((1<<(p))<<0)	/* Device Not Removable [1:3] */
-#define USBHC_UHCRHS	0x0050	/* UHC Root Hub Stauts */
+#define USBHC_UHCRHS	0x0050	/* UHC Root Hub Status */
 #define USBHC_UHCHR	0x0064	/* UHC Reset Register */
 #define  UHCHR_SSEP3	(1<<11)	/* Sleep standby enable for port3 */
 #define  UHCHR_SSEP2	(1<<10)	/* Sleep standby enable for port2 */

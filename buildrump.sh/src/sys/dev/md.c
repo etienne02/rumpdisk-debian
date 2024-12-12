@@ -1,4 +1,4 @@
-/*	$NetBSD: md.c,v 1.85 2020/05/14 08:34:18 msaitoh Exp $	*/
+/*	$NetBSD: md.c,v 1.87 2023/01/13 15:46:40 hannken Exp $	*/
 
 /*
  * Copyright (c) 1995 Gordon W. Ross, Leo Weppelman.
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: md.c,v 1.85 2020/05/14 08:34:18 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: md.c,v 1.87 2023/01/13 15:46:40 hannken Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_md.h"
@@ -50,7 +50,7 @@ __KERNEL_RCSID(0, "$NetBSD: md.c,v 1.85 2020/05/14 08:34:18 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
 #include <sys/bufq.h>
@@ -273,7 +273,7 @@ mdopen(dev_t dev, int flag, int fmt, struct lwp *l)
 			mutex_exit(&md_device_lock);
 			return ENXIO;
 		}
-		cf = malloc(sizeof(*cf), M_DEVBUF, M_WAITOK);
+		cf = kmem_zalloc(sizeof(*cf), KM_SLEEP);
 		cf->cf_name = md_cd.cd_name;
 		cf->cf_atname = md_cd.cd_name;
 		cf->cf_unit = unit;
@@ -369,7 +369,7 @@ mdclose(dev_t dev, int flag, int fmt, struct lwp *l)
 	cf = device_cfdata(sc->sc_dev);
 	error = config_detach(sc->sc_dev, DETACH_QUIET);
 	if (! error)
-		free(cf, M_DEVBUF);
+		kmem_free(cf, sizeof(*cf));
 	mutex_exit(&md_device_lock);
 	return error;
 }
@@ -589,10 +589,13 @@ md_ioctl_kalloc(struct md_softc *sc, struct md_conf *umd,
 	vaddr_t addr;
 	vsize_t size;
 
-	mutex_exit(&sc->sc_lock);
-
 	/* Sanity check the size. */
 	size = umd->md_size;
+	if (size < DEV_BSIZE || (size % DEV_BSIZE) != 0)
+		return EINVAL;
+
+	mutex_exit(&sc->sc_lock);
+
 	addr = uvm_km_alloc(kernel_map, size, 0, UVM_KMF_WIRED|UVM_KMF_ZERO);
 
 	mutex_enter(&sc->sc_lock);

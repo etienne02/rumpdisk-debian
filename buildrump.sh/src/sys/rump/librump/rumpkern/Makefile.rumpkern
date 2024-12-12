@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.rumpkern,v 1.187 2020/08/27 14:11:57 riastradh Exp $
+#	$NetBSD: Makefile.rumpkern,v 1.191 2023/06/03 09:09:15 lukem Exp $
 #
 
 IOCONFDIR:=	${.PARSEDIR}
@@ -20,6 +20,7 @@ MAN=		rump.3 rump_lwproc.3
 	${RUMPTOP}/../crypto/cprng_fast				\
 	${RUMPTOP}/../crypto/nist_hash_drbg			\
 	${RUMPTOP}/../secmodel					\
+	${RUMPTOP}/../secmodel/extensions			\
 	${RUMPTOP}/../secmodel/suser				\
 	${RUMPTOP}/../compat/common
 
@@ -145,11 +146,8 @@ SRCS+=	uvm_page_array.c uvm_page_status.c
 # 4.4BSD secmodel.  selection is hardcoded for now
 SRCS+=	secmodel.c
 SRCS+=	secmodel_suser.c
-
-# the funny bit.  this doesn't really belong here, but helps with the
-# needs of kern_descrip.c.  And since it's a fully dynamic interface,
-# it doesn't pull in other gunk.
-SRCS+=	vnode_if.c
+SRCS+=	secmodel_extensions.c
+SRCS+=	secmodel_extensions_rump.c	# stubs
 
 # sys/dev
 SRCS+=	clock_subr.c
@@ -245,11 +243,11 @@ SRCS+=		atomic_cas_generic.c
 #SRCS+=		rump_atomic_cas_up.c
 .endif
 
-COPTS.if_ethersubr.c+=		${GCC_NO_CAST_FUNCTION_TYPE}
-COPTS.kern_hook.c+=		${GCC_NO_CAST_FUNCTION_TYPE}
-COPTS.subr_vmem.c+=		${GCC_NO_CAST_FUNCTION_TYPE}
-COPTS.subr_pool.c+=		${GCC_NO_CAST_FUNCTION_TYPE}
-COPTS.rump.c+=			${GCC_NO_CAST_FUNCTION_TYPE}
+COPTS.if_ethersubr.c+=		${CC_WNO_CAST_FUNCTION_TYPE}
+COPTS.kern_hook.c+=		${CC_WNO_CAST_FUNCTION_TYPE}
+COPTS.subr_vmem.c+=		${CC_WNO_CAST_FUNCTION_TYPE}
+COPTS.subr_pool.c+=		${CC_WNO_CAST_FUNCTION_TYPE}
+COPTS.rump.c+=			${CC_WNO_CAST_FUNCTION_TYPE}
 
 .include <bsd.lib.mk>
 .include <bsd.klinks.mk>

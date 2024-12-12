@@ -1,4 +1,4 @@
-/*	$NetBSD: mb89352.c,v 1.60 2021/08/07 16:19:12 thorpej Exp $	*/
+/*	$NetBSD: mb89352.c,v 1.63 2023/05/10 00:10:54 riastradh Exp $	*/
 /*	NecBSD: mb89352.c,v 1.4 1998/03/14 07:31:20 kmatsuda Exp	*/
 
 /*-
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mb89352.c,v 1.60 2021/08/07 16:19:12 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mb89352.c,v 1.63 2023/05/10 00:10:54 riastradh Exp $");
 
 #ifdef DDB
 #define	integrate
@@ -321,13 +321,13 @@ spc_childdet(device_t self, device_t child)
 int
 spc_detach(device_t self, int flags)
 {
-	struct spc_softc *sc = device_private(self);
-	int rv = 0;
+	int error;
 
-	if (sc->sc_child != NULL)
-		rv = config_detach(sc->sc_child, flags);
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
-	return (rv);
+	return 0;
 }
 
 /*
@@ -1441,7 +1441,7 @@ out:
  * and ACK deasserted (i.e. waiting for a data byte)
  *
  * This new revision has been optimized (I tried) to make the common case fast,
- * and the rarer cases (as a result) somewhat more comlex
+ * and the rarer cases (as a result) somewhat more complex
  */
 int
 spc_dataout_pio(struct spc_softc *sc, uint8_t *p, int n)
@@ -1829,7 +1829,7 @@ loop:
 		/* disable disconnect interrupt */
 		bus_space_write_1(iot, ioh, PCTL,
 		    bus_space_read_1(iot, ioh, PCTL) & ~PCTL_BFINT_ENAB);
-		/* XXX reset interrput */
+		/* XXX reset interrupt */
 		bus_space_write_1(iot, ioh, INTS, ints);
 
 		switch (sc->sc_state) {

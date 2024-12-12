@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.71 2021/06/29 10:22:36 nia Exp $
+# $NetBSD: GENERIC,v 1.81 2024/09/23 13:12:45 andvar Exp $
 #
 # GENERIC machine description file
 #
@@ -22,7 +22,7 @@ include 	"arch/landisk/conf/std.landisk"
 
 options         INCLUDE_CONFIG_FILE     # embed config file in kernel binary
 
-#ident          "GENERIC-$Revision: 1.71 $"
+#ident          "GENERIC-$Revision: 1.81 $"
 
 maxusers	16		# estimated number of users
 
@@ -48,6 +48,11 @@ options 	SH4_CACHE_DISABLE_EMODE
 
 # Standard system options
 
+# sh3 uses only one page by default; if anything goes slightly awry or
+# if you have any USB devices - that single page can't hold even the
+# full initial dmesg at boot time, so bump it up a bit
+options 	MSGBUFSIZE=0x2000
+
 options 	RTC_OFFSET=0	# hardware clock is this many mins. west of GMT
 #options 	HZ=64		# clock interrupt generates every 1/HZ sec
 options 	NTP		# NTP phase/frequency locked loop
@@ -71,7 +76,7 @@ options 	SYSCTL_INCLUDE_DESCR	# Include sysctl descriptions in kernel
 options 	BUFQ_PRIOCSCAN
 
 # Diagnostic/debugging support options
-#options 	DIAGNOSTIC	# cheap kernel consistency checks
+options 	DIAGNOSTIC	# cheap kernel consistency checks
 #options 	DEBUG		# expensive debugging checks/support
 options 	DDB		# in-kernel debugger
 #options 	DDB_ONPANIC=1	# see also sysctl(7): `ddb.onpanic'
@@ -107,17 +112,16 @@ file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
 # File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	DISKLABEL_EI	# disklabel Endian Independent support
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER	# Network File System server
-#options 	FFS_NO_SNAPSHOT	# ffs snapshots
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
+options 	WAPBL		# File system journaling support
+#options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
+#options 	DISKLABEL_EI	# disklabel Endian Independent support
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 #options 	GATEWAY		# packet forwarding
@@ -281,7 +285,7 @@ wskbd*	at ukbd? console ? mux 1
 udl*	at uhub? port ?		# DisplayLink DL-1x0/1x5
 wsdisplay* at udl?
 
-# USB serial adpater
+# USB serial adapter
 ucycom* at uhidev? reportid ?
 
 # USB Generic HID devices
@@ -388,10 +392,6 @@ pwrsw0	at obio?
 # Reset button, USL-5P misc button
 btn0	at obio?
 
-# Pull in optional local configuration
-cinclude "arch/landisk/conf/GENERIC.local"
-
-
 # Pseudo-Devices
 
 #
@@ -401,7 +401,7 @@ pseudo-device   accf_http		# "httpready" accept filter
 
 # disk/mass storage pseudo-devices
 pseudo-device	ccd			# concatenated/striped disk devices
-#pseudo-device	cgd			# cryptographic disk devices
+pseudo-device	cgd			# cryptographic disk devices
 pseudo-device	raid			# RAIDframe disk driver
 options 	RAID_AUTOCONFIG		# auto-configuration of RAID components
 # Options to enable various other RAIDframe RAID types.
@@ -414,6 +414,8 @@ options 	RAID_AUTOCONFIG		# auto-configuration of RAID components
 #options 	RF_INCLUDE_PARITY_DECLUSTERING_DS=1
 pseudo-device	fss			# file system snapshot device
 
+pseudo-device 	crypto			# /dev/crypto device
+pseudo-device	swcrypto		# software crypto implementation
 pseudo-device	md			# memory disk device (ramdisk)
 pseudo-device	vnd			# disk-like interface to files
 options 	VND_COMPRESSION		# compressed vnd(4)
@@ -445,6 +447,7 @@ pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	drvctl			# user control of drive subsystem
 pseudo-device	ksyms			# /dev/ksyms
 pseudo-device	putter			# for puffs and pud
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 # a pseudo device needed for Coda	# also needs CODA (above)
 pseudo-device	vcoda			# coda minicache <-> venus comm.
@@ -460,3 +463,6 @@ options 	PAX_SEGVGUARD=0		# PaX Segmentation fault guard
 options 	PAX_MPROTECT=1		# PaX mprotect(2) restrictions
 options 	PAX_MPROTECT_DEBUG=1	# PaX mprotect debug
 options 	PAX_ASLR=1		# PaX Address Space Layout Randomization
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/landisk/conf/GENERIC.local"

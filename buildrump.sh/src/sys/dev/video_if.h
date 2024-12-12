@@ -1,4 +1,4 @@
-/* $NetBSD: video_if.h,v 1.9 2020/05/22 11:23:51 jmcneill Exp $ */
+/* $NetBSD: video_if.h,v 1.12 2022/07/05 20:15:40 andvar Exp $ */
 
 /*
  * Copyright (c) 2008 Patrick Mahoney <pat@polycrystal.org>
@@ -124,7 +124,7 @@ enum video_control_id {
 	VIDEO_CONTROL_HFLIP,
 	VIDEO_CONTROL_VFLIP,
 	/* Custom controls start here; any controls beyond this are
-	 * valid and condsidered "extended". */
+	 * valid and considered "extended". */
 	VIDEO_CONTROL_EXTENDED
 };
 
@@ -311,7 +311,7 @@ struct video_colorspace {
 };
 
 #ifdef undef
-/* Stucts for future split into format/frame/interval.  All functions
+/* Structs for future split into format/frame/interval.  All functions
  * interacting with the hardware layer will deal with these structs.
  * This video layer will handle translating them to V4L2 structs as
  * necessary. */
@@ -501,9 +501,10 @@ struct video_hw_if {
 
 struct video_attach_args {
 	const struct video_hw_if *hw_if;
+	void	*hw_softc;
 };
 
-device_t video_attach_mi(const struct video_hw_if *, device_t);
+device_t video_attach_mi(const struct video_hw_if *, device_t, void *);
 void video_submit_payload(device_t, const struct video_payload *);
 
 #endif	/* _SYS_DEV_VIDEO_IF_H_ */

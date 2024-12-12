@@ -1,4 +1,4 @@
-/*	$NetBSD: mfs_vfsops.c,v 1.114 2020/03/16 21:20:13 pgoyette Exp $	*/
+/*	$NetBSD: mfs_vfsops.c,v 1.116 2022/03/19 13:53:33 hannken Exp $	*/
 
 /*
  * Copyright (c) 1989, 1990, 1993, 1994
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mfs_vfsops.c,v 1.114 2020/03/16 21:20:13 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mfs_vfsops.c,v 1.116 2022/03/19 13:53:33 hannken Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"

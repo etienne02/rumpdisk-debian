@@ -1,4 +1,4 @@
-/*	$NetBSD: kgdb_hppa.c,v 1.9 2019/04/15 20:45:08 skrll Exp $	*/
+/*	$NetBSD: kgdb_hppa.c,v 1.11 2023/09/03 20:52:13 andvar Exp $	*/
 
 /*
  * Copyright (c) 1990, 1993
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kgdb_hppa.c,v 1.9 2019/04/15 20:45:08 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kgdb_hppa.c,v 1.11 2023/09/03 20:52:13 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/kgdb.h>
@@ -121,7 +121,7 @@ kgdb_signal(int type)
 	case T_EXCEPTION:	/* assist exception */
 	case T_TLB_DIRTY:	/* TLB dirty bit */
 	case T_PAGEREF:		/* page reference */
-	case T_HIGHERPL:	/* higher-privelege transfer */
+	case T_HIGHERPL:	/* higher-privilege transfer */
 	case T_LOWERPL:		/* lower-privilege transfer */
 #endif
 	default:
@@ -206,7 +206,7 @@ kgdb_signal(int type)
 	KGDB_MOVEREG(54, tf_ccr);	/* cr10 */		\
 	KGDB_MOVEREG(55, tf_pidr3);	/* cr12 */		\
 	KGDB_MOVEREG(56, tf_pidr4);	/* cr13 */		\
-	KGDB_MOVEREG(57, tf_hptm);	/* cr24 - DDB */	\
+	KGDB_MOVEREG(57, tf_cr24);	/* cr24 - DDB */	\
 	KGDB_MOVEREG(58, tf_vtop);	/* cr25 - DDB */	\
 	/* 59 should be cr26, which we don't have available */	\
 	KGDB_MOVEREG(60, tf_cr27);	/*      - DDB */	\

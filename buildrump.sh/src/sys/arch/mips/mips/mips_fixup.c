@@ -1,4 +1,4 @@
-/*	$NetBSD: mips_fixup.c,v 1.21 2021/02/16 06:06:58 simonb Exp $	*/
+/*	$NetBSD: mips_fixup.c,v 1.23 2022/01/02 16:03:46 christos Exp $	*/
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mips_fixup.c,v 1.21 2021/02/16 06:06:58 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mips_fixup.c,v 1.23 2022/01/02 16:03:46 christos Exp $");
 
 #include "opt_mips3_wired.h"
 #include "opt_multiprocessor.h"
@@ -120,6 +120,7 @@ mips_fixup_exceptions(mips_fixup_callback_t callback, void *arg)
 			if (addr <= load_addr
 			    && load_addr < addr + size
 			    && base == lui_reg) {
+#if defined(DIAGNOSTIC) || defined(DEBUG_VERBOSE)
 				KASSERT(rt == _R_K0 || rt == _R_K1);
 #ifdef DEBUG_VERBOSE
 				printf("%s: %#x: insn %08x: %s r%zu, %%lo(%08x)(r%zu)\n",
@@ -129,6 +130,7 @@ mips_fixup_exceptions(mips_fixup_callback_t callback, void *arg)
 					? INSN_LW_P(insn) ? "lw" : "ld"
 					: INSN_SW_P(insn) ? "sw" : "sd",
 				    rt, load_addr, base);
+#endif
 #endif
 				new_insns[0] = lui_insn;
 				new_insns[1] = *insnp;
@@ -545,7 +547,7 @@ mips_fixup_stubs(uint32_t *start, uint32_t *end)
 void	mips_cpu_switch_resume(struct lwp *)		__stub;
 tlb_asid_t
 	tlb_get_asid(void)				__stub;
-void	tlb_set_asid(uint32_t)				__stub;
+void	tlb_set_asid(uint32_t, struct pmap *)		__stub;
 void	tlb_invalidate_all(void)			__stub;
 void	tlb_invalidate_globals(void)			__stub;
 void	tlb_invalidate_asids(uint32_t, uint32_t)	__stub;
@@ -575,7 +577,7 @@ tlb_get_asid(void)
 }
 
 void
-tlb_set_asid(uint32_t asid)
+tlb_set_asid(uint32_t asid, struct pmap *pm)
 {
 	(*mips_locore_jumpvec.ljv_tlb_set_asid)(asid);
 }

@@ -1,4 +1,4 @@
-#	$NetBSD: list,v 1.53 2020/04/04 15:39:16 jdolecek Exp $
+#	$NetBSD: list,v 1.55 2022/05/16 14:55:56 christos Exp $
 
 SRCDIRS	bin
 

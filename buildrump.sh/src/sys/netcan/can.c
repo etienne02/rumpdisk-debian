@@ -1,4 +1,4 @@
-/*	$NetBSD: can.c,v 1.9 2020/01/29 05:20:26 thorpej Exp $	*/
+/*	$NetBSD: can.c,v 1.14 2024/07/05 04:31:54 rin Exp $	*/
 
 /*-
  * Copyright (c) 2003, 2017 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: can.c,v 1.9 2020/01/29 05:20:26 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: can.c,v 1.14 2024/07/05 04:31:54 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -46,7 +46,7 @@ __KERNEL_RCSID(0, "$NetBSD: can.c,v 1.9 2020/01/29 05:20:26 thorpej Exp $");
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
+#include <net/pktqueue.h>
 #include <net/route.h>
 #include <net/bpf.h> 
 
@@ -61,7 +61,7 @@ struct canpcb canrawpcb;
 
 struct	canpcbtable cbtable;
 
-struct ifqueue	canintrq;
+pktqueue_t *		can_pktq		__read_mostly;
 int	canqmaxlen = IFQ_MAXLEN;
 
 int can_copy_output = 0;
@@ -86,11 +86,14 @@ static int can_output(struct mbuf *, struct canpcb *);
 
 static int can_control(struct socket *, u_long, void *, struct ifnet *);
 
+static void canintr(void *);
+
 void
 can_init(void)
 {
-	canintrq.ifq_maxlen = canqmaxlen;
-	IFQ_LOCK_INIT(&canintrq);
+	can_pktq = pktq_create(canqmaxlen, canintr, NULL);
+	KASSERT(can_pktq != NULL);
+
 	can_pcbinit(&cbtable, canhashsize, canhashsize);
 }
 
@@ -132,10 +135,10 @@ can_set_netlink(struct ifnet *ifp, struct ifdrv *ifd)
 	if (ifp->if_dlt != DLT_CAN_SOCKETCAN || csc == NULL)
 		return EOPNOTSUPP;
 
-	error = kauth_authorize_network(curlwp->l_cred,
-		    KAUTH_NETWORK_INTERFACE,
-		    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp,
-	            (void *)SIOCSDRVSPEC, NULL);
+	error = kauth_authorize_network(kauth_cred_get(),
+	    KAUTH_NETWORK_INTERFACE,
+	    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp,
+	    (void *)SIOCSDRVSPEC, NULL);
 	if (error != 0)
 		return error;
 
@@ -187,7 +190,7 @@ can_control(struct socket *so, u_long cmd, void *data, struct ifnet *ifp)
 	default:
 		if (ifp->if_ioctl == 0)
 			return (EOPNOTSUPP);
-		return ((*ifp->if_ioctl)(ifp, cmd, data));
+		return (if_ioctl(ifp, cmd, data));
 	}
 	return (0);
 }
@@ -290,30 +293,21 @@ can_mbuf_tag_clean(struct mbuf *m)
 void
 can_input(struct ifnet *ifp, struct mbuf *m)
 {
-	struct ifqueue *inq;
-
 	if ((ifp->if_flags & IFF_UP) == 0) {
 		m_freem(m);
 		return;
 	}
 
-	inq = &canintrq;
-	
-	IFQ_LOCK(inq);
-	if (IF_QFULL(inq)) {
-		IF_DROP(inq);
-		IFQ_UNLOCK(inq);
+	const int pktlen = m->m_pkthdr.len;
+	if (__predict_false(!pktq_enqueue(can_pktq, m, 0))) {
 		m_freem(m);
 	} else {
-		IF_ENQUEUE(inq, m);
-		IFQ_UNLOCK(inq);
-		if_statadd2(ifp, if_ipackets, 1, if_ibytes, m->m_pkthdr.len);
-		schednetisr(NETISR_CAN);
+		if_statadd2(ifp, if_ipackets, 1, if_ibytes, pktlen);
 	}
 }
 
-void
-canintr(void)
+static void
+canintr(void *arg __unused)
 {
 	int		rcv_ifindex;
 	struct mbuf    *m;
@@ -324,14 +318,7 @@ canintr(void)
 	struct canpcb	*sender_canp;
 
 	mutex_enter(softnet_lock);
-	for (;;) {
-		IFQ_LOCK(&canintrq);
-		IF_DEQUEUE(&canintrq, m);
-		IFQ_UNLOCK(&canintrq);
-
-		if (m == NULL)	/* no more queued packets */
-			break;
-
+	while ((m = pktq_dequeue(can_pktq)) != NULL) {
 #if 0
 		m_claim(m, &can_rx_mowner);
 #endif
@@ -414,9 +401,7 @@ canintr(void)
 			canp_unref(sender_canp);
 		}
 		/* If it didn't go anywhere just delete it */
-		if (m) {
-			m_freem(m);
-		}
+		m_freem(m);
 	}
 	mutex_exit(softnet_lock);
 }
@@ -853,14 +838,14 @@ can_ctlinput(int cmd, struct sockaddr *sa, void *v)
 		return NULL;
 	errno = inetctlerrmap[cmd];
 	if (PRC_IS_REDIRECT(cmd))
-		notify = in_rtchange, ip = 0;
+		notify = inpcb_rtchange, ip = 0;
 	else if (cmd == PRC_HOSTDEAD)
 		ip = 0;
 	else if (errno == 0)
 		return NULL;
 	if (ip) {
 		uh = (struct canhdr *)((caddr_t)ip + (ip->ip_hl << 2));
-		in_pcbnotify(&udbtable, satosin(sa)->sin_addr, uh->uh_dport,
+		inpcb_notify(&udbtable, satosin(sa)->sin_addr, uh->uh_dport,
 		    ip->ip_src, uh->uh_sport, errno, notify);
 
 		/* XXX mapped address case */

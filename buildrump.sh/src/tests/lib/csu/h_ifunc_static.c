@@ -1,4 +1,4 @@
-/*	$NetBSD: h_ifunc_static.c,v 1.4 2021/06/07 17:11:17 christos Exp $	*/
+/*	$NetBSD: h_ifunc_static.c,v 1.7 2022/06/21 06:52:17 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -29,7 +29,13 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#if defined(__i386__) || defined(__x86_64__) || defined(__powerpc__) || defined(__sparc__)
+#if \
+    defined(__aarch64__) || \
+    defined(__arm__) || \
+    defined(__i386__) || \
+    defined(__powerpc__) || \
+    defined(__sparc__) || \
+    defined(__x86_64__)
 #include <stdlib.h>
 #include <string.h>
 

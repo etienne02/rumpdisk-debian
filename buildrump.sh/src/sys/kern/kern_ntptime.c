@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_ntptime.c,v 1.60 2018/10/29 22:02:25 christos Exp $	*/
+/*	$NetBSD: kern_ntptime.c,v 1.64 2022/10/26 23:23:52 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -60,7 +60,7 @@
 
 #include <sys/cdefs.h>
 /* __FBSDID("$FreeBSD: src/sys/kern/kern_ntptime.c,v 1.59 2005/05/28 14:34:41 rwatson Exp $"); */
-__KERNEL_RCSID(0, "$NetBSD: kern_ntptime.c,v 1.60 2018/10/29 22:02:25 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_ntptime.c,v 1.64 2022/10/26 23:23:52 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ntp.h"
@@ -189,8 +189,6 @@ static l_fp time_freq;			/* frequency offset (ns/s) */
 
 static l_fp time_adj;			/* tick adjust (ns/s) */
 int64_t time_adjtime;		/* correction from adjtime(2) (usec) */
-
-extern int time_adjusted;	/* ntp might have changed the system time */
 
 #ifdef NTP
 #ifdef PPS_SYNC
@@ -347,7 +345,8 @@ ntp_adjtime1(struct timex *ntv)
 	if (modes & MOD_CLKA)
 		time_status &= ~STA_CLK;
 	if (modes & MOD_FREQUENCY) {
-		freq = (ntv->freq * 1000LL) >> 16;
+		freq = MIN(INT32_MAX, MAX(INT32_MIN, ntv->freq));
+		freq = (freq * (int64_t)1000) >> 16;
 		if (freq > MAXFREQ)
 			L_LINT(time_freq, MAXFREQ);
 		else if (freq < -MAXFREQ)
@@ -364,10 +363,14 @@ ntp_adjtime1(struct timex *ntv)
 #endif /* PPS_SYNC */
 	}
 	if (modes & MOD_OFFSET) {
-		if (time_status & STA_NANO)
+		if (time_status & STA_NANO) {
 			hardupdate(ntv->offset);
-		else
-			hardupdate(ntv->offset * 1000);
+		} else {
+			long offset = ntv->offset;
+			offset = MIN(offset, MAXPHASE/1000);
+			offset = MAX(offset, -MAXPHASE/1000);
+			hardupdate(offset * 1000);
+		}
 	}
 
 	/*
@@ -378,7 +381,10 @@ ntp_adjtime1(struct timex *ntv)
 		ntv->offset = L_GINT(time_offset);
 	else
 		ntv->offset = L_GINT(time_offset) / 1000; /* XXX rounding ? */
-	ntv->freq = L_GINT((time_freq / 1000LL) << 16);
+	if (time_freq < 0)
+		ntv->freq = L_GINT(-((-time_freq / 1000LL) << 16));
+	else
+		ntv->freq = L_GINT((time_freq / 1000LL) << 16);
 	ntv->maxerror = time_maxerror;
 	ntv->esterror = time_esterror;
 	ntv->status = time_status;

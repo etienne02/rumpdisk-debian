@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.245 2020/08/14 00:53:16 riastradh Exp $
+#	$NetBSD: Makefile.inc,v 1.257 2024/10/03 16:59:15 christos Exp $
 #	@(#)Makefile.inc	8.3 (Berkeley) 10/24/94
 
 # sys sources
@@ -7,9 +7,10 @@
 # other sources shared with the kernel, used in syscalls
 SRCS+=	cpuset.c
 # glue to offer userland wrappers for some syscalls
-SRCS+=	accept4.c clock_getcpuclockid.c posix_fadvise.c posix_madvise.c \
-	ppoll.c sched.c sigqueue.c sigtimedwait.c sigwait.c sigwaitinfo.c \
-	statvfs.c swapon.c semctl.c vadvise.c
+SRCS+=	accept4.c clock_getcpuclockid.c eventfd_read.c \
+	eventfd_write.c posix_fadvise.c posix_madvise.c ppoll.c sched.c \
+	sigqueue.c sigtimedwait.c sigwait.c sigwaitinfo.c statvfs.c swapon.c \
+	semctl.c vadvise.c
 
 .if ${RUMPRUN} != "yes"
 # modules with non-default implementations on at least one architecture:
@@ -20,7 +21,7 @@ SRCS+=	__clone.S __vfork14.S brk.S fork.S pipe.S \
 
 _LSRC+=	Lint___clone.c Lint___vfork14.c Lint_brk.c Lint_clone.c \
 	Lint_getcontext.c Lint_pipe.c Lint_ptrace.c \
-	Lint_sbrk.c Lint___sigaction14.c Lint_syscall.c Lint___syscall.c \
+	Lint_sbrk.c Lint___sigaction_siginfo.c Lint_syscall.c Lint___syscall.c \
 	LintSysNormal.c LintSysNoerr.c LintSysPseudoNoerr.c
 
 .if ${MKLINT} != "no"
@@ -89,6 +90,8 @@ ASM_GLUE+= tmp___${glue:.c=}50.S
 .endfor
 
 # modules with default implementations on all architectures:
+SRCS+=	__sigaction_siginfo.c
+
 ASM=\
     __acl_get_link.S __acl_set_link.S __acl_delete_link.S \
     __acl_aclcheck_link.S __acl_get_file.S __acl_set_file.S __acl_get_fd.S \
@@ -96,10 +99,11 @@ ASM=\
     __acl_aclcheck_file.S __acl_aclcheck_fd.S \
     access.S acct.S \
 	    bind.S \
-	chdir.S chflags.S chmod.S chown.S chroot.S clock_nanosleep.S \
+	chdir.S chflags.S chmod.S chown.S chroot.S \
 		clock_getcpuclockid2.S \
 		__clock_getres50.S __clock_gettime50.S \
-	dup.S dup2.S dup3.S \
+	dup.S dup2.S __dup3100.S \
+	eventfd.S \
 	extattrctl.S \
 		extattr_delete_fd.S extattr_delete_file.S \
 		extattr_delete_link.S extattr_get_fd.S extattr_get_file.S \
@@ -130,20 +134,20 @@ ASM=\
 		_lwp_unpark_all.S _lwp_suspend.S _lwp_continue.S \
 		_lwp_wakeup.S _lwp_detach.S _lwp_setprivate.S \
 		_lwp_setname.S _lwp_getname.S _lwp_ctl.S \
-	madvise.S mincore.S minherit.S mkdir.S mkdirat.S mkfifo.S mkfifoat.S \
+	madvise.S memfd_create.S mincore.S minherit.S mkdir.S mkdirat.S \
+		mkfifo.S mkfifoat.S \
 		__mknod50.S mlock.S mlockall.S modctl.S __mount50.S \
 		mprotect.S __msgctl50.S msgget.S munlock.S munlockall.S \
 		munmap.S \
 	nfssvc.S __ntp_gettime50.S \
-	openat.S \
 	pathconf.S pipe2.S \
 		__posix_chown.S __posix_fchown.S __posix_lchown.S \
 		__posix_rename.S profil.S \
 	__quotactl.S \
-	rasctl.S readlinkat.S reboot.S recvfrom.S recvmmsg.S recvmsg.S \
+	rasctl.S readlinkat.S reboot.S \
 		rename.S renameat.S revoke.S rmdir.S \
-	semconfig.S semget.S semop.S \
-		sendmmsg.S sendmsg.S sendto.S setegid.S seteuid.S \
+	semconfig.S semget.S semop.S semtimedop.S \
+		setegid.S seteuid.S \
 		setgid.S setgroups.S __setitimer50.S __setlogin.S setpgid.S \
 		setpriority.S \
 		setregid.S setreuid.S setrlimit.S setsid.S setsockopt.S \
@@ -154,6 +158,7 @@ ASM=\
 		__statvfs190.S swapctl.S symlink.S symlinkat.S __sysctl.S \
 	timer_create.S timer_delete.S __timer_gettime50.S timer_getoverrun.S \
 		____semctl50.S __timer_settime50.S \
+	timerfd_create.S timerfd_gettime.S timerfd_settime.S \
 	umask.S undelete.S unlink.S unlinkat.S unmount.S __utimes50.S \
 		utimensat.S utrace.S uuidgen.S
 
@@ -172,15 +177,19 @@ ASM_MD=	_lwp_getprivate.S mremap.S
 . endif
 .endfor
 
-WEAKASM= accept.S __aio_suspend50.S close.S connect.S execve.S \
+WEAKASM= accept.S __aio_suspend50.S clock_nanosleep.S close.S connect.S \
+	execve.S \
 	fcntl.S fdatasync.S fsync.S \
-	fsync_range.S __kevent50.S \
+	fsync_range.S __kevent100.S \
 	kill.S mq_receive.S mq_send.S __mq_timedreceive50.S __mq_timedsend50.S \
-	msgrcv.S msgsnd.S __msync13.S  __nanosleep50.S open.S paccept.S poll.S \
+	msgrcv.S msgsnd.S __msync13.S  __nanosleep50.S open.S openat.S \
+	paccept.S poll.S \
 	__pollts50.S __pselect50.S read.S readlink.S \
-	readv.S _sched_setparam.S _sched_getparam.S _sched_setaffinity.S \
+	readv.S recvfrom.S recvmmsg.S recvmsg.S \
+	_sched_setparam.S _sched_getparam.S _sched_setaffinity.S \
 	_sched_getaffinity.S sched_yield.S _sched_protect.S \
-	__select50.S setcontext.S __sigprocmask14.S __sigsuspend14.S sysarch.S \
+	__select50.S sendmmsg.S sendmsg.S sendto.S \
+	setcontext.S __sigprocmask14.S __sigsuspend14.S sysarch.S \
 	__wait450.S wait6.S write.S writev.S
 
 NOERR=	getegid.S geteuid.S getgid.S getpid.S getppid.S getuid.S \
@@ -251,7 +260,7 @@ LintSysPseudoNoerr.c: ${LIBCDIR}/sys/makelintstub \
 MAN+=	accept.2 access.2 acct.2 adjtime.2 bind.2 brk.2 chdir.2 \
 	chflags.2 chmod.2 chown.2 chroot.2 clock_getcpuclockid2.2 \
 	clock_settime.2 clone.2 close.2 \
-	connect.2 dup.2 execve.2 _exit.2 extattr_get_file.2 \
+	connect.2 dup.2 eventfd.2 execve.2 _exit.2 extattr_get_file.2 \
 	fcntl.2 fdatasync.2 fdiscard.2 fhopen.2 \
 	flock.2 fork.2 fsync.2 getcontext.2 getdents.2 \
 	getfh.2 getvfsstat.2 getgid.2 getgroups.2 \
@@ -267,7 +276,7 @@ MAN+=	accept.2 access.2 acct.2 adjtime.2 bind.2 brk.2 chdir.2 \
 	_lwp_suspend.2 _lwp_wakeup.2 _lwp_wait.2 _lwp_kill.2 \
 	_lwp_getname.2 _lwp_getprivate.2 \
 	_lwp_park.2 _lwp_unpark.2 _lwp_unpark_all.2 \
-	mkdir.2 mkfifo.2 mknod.2 \
+	memfd_create.2 mkdir.2 mkfifo.2 mknod.2 \
 	madvise.2 mincore.2 minherit.2 mlock.2 mlockall.2 mmap.2 modctl.2 \
 	mount.2 \
 	mprotect.2 mremap.2 msgctl.2 msgget.2 msgrcv.2 msgsnd.2 msync.2 \
@@ -284,7 +293,7 @@ MAN+=	accept.2 access.2 acct.2 adjtime.2 bind.2 brk.2 chdir.2 \
 	socket.2 \
 	socketpair.2 stat.2 statvfs.2 swapctl.2 swapon.3 symlink.2 \
 	sync.2 sysarch.2 syscall.2 timer_create.2 timer_delete.2 \
-	timer_settime.2 truncate.2 umask.2 undelete.2 \
+	timer_settime.2 timerfd.2 truncate.2 umask.2 undelete.2 \
 	unlink.2 utimes.2 utrace.2 uuidgen.2 vfork.2 wait.2 write.2
 
 MLINKS+=_exit.2 _Exit.2
@@ -299,6 +308,8 @@ MLINKS+=chown.2 fchown.2 chown.2 lchown.2
 MLINKS+=chroot.2 fchroot.2
 MLINKS+=clock_settime.2 clock_gettime.2
 MLINKS+=clock_settime.2 clock_getres.2
+MLINKS+=eventfd.2 eventfd_read.2 \
+	eventfd.2 eventfd_write.2
 MLINKS+=extattr_get_file.2 extattr_set_file.2 \
 	extattr_get_file.2 extattr_delete_file.2 \
 	extattr_get_file.2 extattr_list_file.2 \
@@ -372,6 +383,7 @@ MLINKS+=setuid.2 setegid.2 setuid.2 seteuid.2 setuid.2 setgid.2
 MLINKS+=shmat.2 shmdt.2
 MLINKS+=symlink.2 symlinkat.2
 MLINKS+=timer_settime.2 timer_gettime.2 timer_settime.2 timer_getoverrun.2
+MLINKS+=semop.2 semtimedop.2
 MLINKS+=sigqueue.2 sigqueueinfo.2
 MLINKS+=sigtimedwait.2 sigwaitinfo.2
 MLINKS+=sigtimedwait.2 sigwait.2
@@ -380,6 +392,9 @@ MLINKS+=statvfs.2 fstatvfs.2
 MLINKS+=statvfs.2 statvfs1.2
 MLINKS+=statvfs.2 fstatvfs1.2
 MLINKS+=syscall.2 __syscall.2
+MLINKS+=timerfd.2 timerfd_create.2 \
+	timerfd.2 timerfd_gettime.2 \
+	timerfd.2 timerfd_settime.2
 MLINKS+=truncate.2 ftruncate.2
 MLINKS+=unlink.2 unlinkat.2
 MLINKS+=utimes.2 futimes.2 utimes.2 lutimes.2

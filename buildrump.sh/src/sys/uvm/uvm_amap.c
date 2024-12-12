@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_amap.c,v 1.126 2021/03/13 15:29:55 skrll Exp $	*/
+/*	$NetBSD: uvm_amap.c,v 1.129 2023/09/10 14:54:34 ad Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_amap.c,v 1.126 2021/03/13 15:29:55 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_amap.c,v 1.129 2023/09/10 14:54:34 ad Exp $");
 
 #include "opt_uvmhist.h"
 
@@ -305,9 +305,9 @@ uvm_amap_init(void)
 
 	mutex_init(&amap_list_lock, MUTEX_DEFAULT, IPL_NONE);
 
-	pool_cache_bootstrap(&uvm_amap_cache, sizeof(struct vm_amap), 0, 0,
-	    PR_LARGECACHE, "amappl", NULL, IPL_NONE, amap_ctor, amap_dtor,
-	    NULL);
+	pool_cache_bootstrap(&uvm_amap_cache, sizeof(struct vm_amap),
+	    COHERENCY_UNIT, 0, 0, "amappl", NULL, IPL_NONE,
+	    amap_ctor, amap_dtor, NULL);
 }
 
 /*
@@ -323,7 +323,8 @@ amap_free(struct vm_amap *amap)
 
 	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
 
-	KASSERT(amap->am_ref == 0 && amap->am_nused == 0);
+	KASSERT(amap->am_ref == 0);
+	KASSERT(amap->am_nused == 0);
 	KASSERT((amap->am_flags & AMAP_SWAPOFF) == 0);
 	slots = amap->am_maxslot;
 	kmem_free(amap->am_slots, slots * sizeof(*amap->am_slots));
@@ -774,7 +775,8 @@ amap_wipeout(struct vm_amap *amap)
 
 		slot = amap->am_slots[lcv];
 		anon = amap->am_anon[slot];
-		KASSERT(anon != NULL && anon->an_ref != 0);
+		KASSERT(anon != NULL);
+		KASSERT(anon->an_ref != 0);
 
 		KASSERT(anon->an_lock == amap->am_lock);
 		UVMHIST_LOG(maphist,"  processing anon %#jx, ref=%jd",
@@ -891,7 +893,7 @@ amap_copy(struct vm_map *map, struct vm_map_entry *entry, int flags,
 	 * First check and see if we are the only map entry referencing
 	 * he amap we currently have.  If so, then just take it over instead
 	 * of copying it.  Note that we are reading am_ref without lock held
-	 * as the value value can only be one if we have the only reference
+	 * as the value can only be one if we have the only reference
 	 * to the amap (via our locked map).  If the value is greater than
 	 * one, then allocate amap and re-check the value.
 	 */
@@ -1069,7 +1071,8 @@ ReStart:
 		if (pg->loan_count != 0) {
 			continue;
 		}
-		KASSERT(pg->uanon == anon && pg->uobject == NULL);
+		KASSERT(pg->uanon == anon);
+		KASSERT(pg->uobject == NULL);
 
 		/*
 		 * If the page is busy, then we have to unlock, wait for

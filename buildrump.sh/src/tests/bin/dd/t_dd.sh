@@ -1,4 +1,4 @@
-# $NetBSD: t_dd.sh,v 1.1 2012/03/17 16:33:11 jruoho Exp $
+# $NetBSD: t_dd.sh,v 1.3 2022/05/24 21:42:37 rillig Exp $
 #
 # Copyright (c) 2007 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -122,9 +122,37 @@ seek_body() {
 	atf_check_equal $st_size 8
 }
 
+atf_test_case swab
+swab_head() {
+	atf_set "descr" "Tests conv=swab"
+}
+
+swab_body() {
+	echo -n abcdefgh > testfile
+
+	test_swab() {
+		atf_check -o inline:"$1" \
+		    dd if=testfile conv=swab msgfmt=quiet $2
+	}
+
+	atf_check -o inline:badcfehg \
+	    dd if=testfile conv=swab msgfmt=quiet
+
+	test_swap badcfehg # default block size
+	test_swab abcdefgh bs=1
+	test_swab badcfehg bs=2
+	test_swab bacedfhg bs=3
+	test_swab badcfehg bs=4
+	test_swab badcegfh bs=5
+	test_swab badcfehg bs=6
+	test_swab badcfegh bs=7
+	test_swab badcfehg bs=8
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case length
 	atf_add_test_case io
 	atf_add_test_case seek
+	atf_add_test_case swab
 }

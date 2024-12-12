@@ -1,4 +1,4 @@
-/* $NetBSD: if_ie.c,v 1.49 2021/07/24 22:30:59 andvar Exp $ */
+/* $NetBSD: if_ie.c,v 1.56 2024/10/06 20:55:12 andvar Exp $ */
 
 /*
  * Copyright (c) 1995 Melvin Tang-Richardson.
@@ -53,7 +53,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ie.c,v 1.49 2021/07/24 22:30:59 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ie.c,v 1.56 2024/10/06 20:55:12 andvar Exp $");
 
 #define IGNORE_ETHER1_IDROM_CHECKSUM
 
@@ -67,7 +67,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_ie.c,v 1.49 2021/07/24 22:30:59 andvar Exp $");
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/conf.h>
-#include <sys/malloc.h>
 #include <sys/device.h>
 #include <machine/io.h>
 #include <machine/intr.h>
@@ -115,7 +114,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_ie.c,v 1.49 2021/07/24 22:30:59 andvar Exp $");
 
 #define	xoffsetof(type, member)	(offsetof(type, member) << 1)
 
-/* Some data structres local to this file */
+/* Some data structures local to this file */
 
 struct ie_softc {
 	device_t	sc_dev;
@@ -342,7 +341,7 @@ ieattach(device_t parent, device_t self, void *aux)
 
 	/* Verify the podulebus probe incase RiscOS lied */
         if ( ReadByte ( sc->sc_rom + (3<<2) ) != 0x03 ) {
-		printf(": Ether1 ROM probablly broken.  ECID corrupt\n");
+		printf(": Ether1 ROM probably broken.  ECID corrupt\n");
 		sc->sc_flags |= IE_BROKEN;
 		return;
 	}
@@ -456,7 +455,7 @@ ieattach(device_t parent, device_t self, void *aux)
 
 	/* "Hmm," said nuts, "what if the attach fails" */
 
-	/* Write some pretty things on the annoucement line */
+	/* Write some pretty things on the announcement line */
 	printf ( ": %s using %dk card ram",
 	    ether_sprintf(hwaddr),
 	    ((NRXBUF*IE_RXBUF_SIZE)+(NTXBUF*IE_TXBUF_SIZE))/1024 );
@@ -909,7 +908,6 @@ ieinit(struct ie_softc *sc)
     ptr = setup_rfa(sc, ptr);
 
     ifp->if_flags |= IFF_RUNNING;
-    ifp->if_flags &= ~IFF_OACTIVE;
 
     /* Setup transmit buffers */
 
@@ -1347,7 +1345,7 @@ ieintr(void *arg)
     if (in_intr == 1)
 	panic ( "ie: INTERRUPT REENTERED\n" );
 
-    /* Clear the interrrupt */
+    /* Clear the interrupt */
     ie_cli (sc);
 
     setpage(sc, IE_IBASE + IE_SCB_OFF );
@@ -1389,7 +1387,7 @@ loop:
 	return(0);
     }
 
-    /* This is prehaps a little over cautious */
+    /* This is perhaps a little over cautious */
     if ( safety_catch++ > 10 )
     {
 	printf ( "ie: Interrupt couldn't be cleared\n" );
@@ -1452,19 +1450,12 @@ iestart(struct ifnet *ifp)
 	char txbuf[IE_TXBUF_SIZE];
 	int safety_catch = 0;
 
-	if ((ifp->if_flags & IFF_OACTIVE) != 0)
-		return;
-
-	for (;;) {
+	while (sc->xmit_free != 0) {
 		if ( (safety_catch++)>100 )
 		{
 		    printf ( "ie: iestart safety catch tripped\n" );
 		    iereset(sc);
 		    return;
-		}
-		if (sc->xmit_free == 0) {
-			ifp->if_flags |= IFF_OACTIVE;
-			break;
 		}
 
 		IF_DEQUEUE(&ifp->if_snd, m);
@@ -1520,7 +1511,6 @@ ietint(struct ie_softc *sc)
     int status;
 
     ifp->if_timer=0;
-    ifp->if_flags &= ~IFF_OACTIVE;
 
     READ_MEMBER(sc,struct ie_xmit_cmd, ie_xmit_status,
 	sc->xmit_cmds[sc->xctail], status );

@@ -1,4 +1,4 @@
-/* $NetBSD: ofwoea_machdep.c,v 1.61 2021/04/02 16:59:59 macallan Exp $ */
+/* $NetBSD: ofwoea_machdep.c,v 1.64 2024/05/28 11:06:07 macallan Exp $ */
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ofwoea_machdep.c,v 1.61 2021/04/02 16:59:59 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ofwoea_machdep.c,v 1.64 2024/05/28 11:06:07 macallan Exp $");
 
 #include "ksyms.h"
 #include "wsdisplay.h"
@@ -113,7 +113,7 @@ struct OF_translation ofw_translations[OFW_MAX_TRANSLATIONS];
 struct pmap ofw_pmap;
 struct bat ofw_battable[BAT_VA2IDX(0xffffffff)+1];
 
-char bootpath[256];
+char bootpath[256] = "";
 char model_name[64];
 #if NKSYMS || defined(DDB) || defined(MODULAR)
 void *startsym, *endsym;
@@ -165,7 +165,10 @@ ofwoea_initppc(u_int startkernel, u_int endkernel, char *args)
 			while (*args)
 				BOOT_FLAG(*args++, boothowto);
 		}
-	} else {
+	}
+
+	/* if bootpath is still empty, get it from /chosen */
+	if (bootpath[0] == 0) {
 		int chs = OF_finddevice("/chosen");
 		int len;
 
@@ -270,7 +273,9 @@ ofwoea_initppc(u_int startkernel, u_int endkernel, char *args)
 
 	restore_ofmap();
 
+#if NWSDISPLAY > 0
 	rascons_finalize();
+#endif
 
 #if NKSYMS || defined(DDB) || defined(MODULAR)
 	ksyms_addsyms_elf((int)((uintptr_t)endsym - (uintptr_t)startsym), startsym, endsym);
@@ -463,7 +468,7 @@ find_ranges(int base, rangemap_t *regions, int *cur, int type)
 	 * There exist ISA buses with empty ranges properties.  This is
 	 * known to occur on the Pegasos II machine, and likely others.
 	 * According to them, that means that the isa bus is a fake bus, and
-	 * the real maps are the PCI maps of the preceeding bus.  To deal
+	 * the real maps are the PCI maps of the preceding bus.  To deal
 	 * with this, we will set cur to -1 and return.
 	 */
 	if (type == RANGE_TYPE_ISA && strcmp("isa", tmp) == 0 && len == 0) {

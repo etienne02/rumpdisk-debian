@@ -1,7 +1,7 @@
-/*	$NetBSD: cpufunc.S,v 1.49 2020/07/19 07:35:08 maxv Exp $	*/
+/*	$NetBSD: cpufunc.S,v 1.52 2024/07/16 22:44:38 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 1998, 2007, 2020 The NetBSD Foundation, Inc.
+ * Copyright (c) 1998, 2007, 2020, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -38,8 +38,10 @@
 #include <sys/errno.h>
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: cpufunc.S,v 1.49 2020/07/19 07:35:08 maxv Exp $");
+#include <machine/frameasm.h>
+__KERNEL_RCSID(0, "$NetBSD: cpufunc.S,v 1.52 2024/07/16 22:44:38 riastradh Exp $");
 
+#include "opt_dtrace.h"
 #include "opt_xen.h"
 
 #include <machine/specialreg.h>
@@ -65,12 +67,46 @@ ENTRY(x86_mfence)
 	ret
 END(x86_mfence)
 
+#ifdef XEN
+ENTRY(xen_mb)
+	/*
+	 * Store-before-load ordering with respect to matching logic
+	 * on the hypervisor side.
+	 *
+	 * This is the same as membar_sync, but without hotpatching
+	 * away the LOCK prefix on uniprocessor boots -- because under
+	 * Xen, we still have to coordinate with a `device' backed by a
+	 * hypervisor that is potentially on another physical CPU even
+	 * if we observe only one virtual CPU as the guest.
+	 *
+	 * See common/lib/libc/arch/i386/atomic/atomic.S for
+	 * rationale and keep this in sync with the implementation
+	 * of membar_sync there.
+	 */
+	lock
+	addl	$0,-4(%esp)
+	ret
+END(xen_mb)
+#endif	/* XEN */
+
 #ifndef XENPV
 ENTRY(lidt)
 	movl	4(%esp), %eax
 	lidt	(%eax)
 	ret
 END(lidt)
+
+#ifdef KDTRACE_HOOKS
+ENTRY(dtrace_smap_enable)
+	SMAP_ENABLE
+	ret
+END(dtrace_smap_enable)
+
+ENTRY(dtrace_smap_disable)
+	SMAP_DISABLE
+	ret
+END(dtrace_smap_disable)
+#endif
 
 ENTRY(x86_hotpatch)
 	/* save EFLAGS, and disable intrs */
@@ -174,12 +210,13 @@ END(msr_onfault)
 ENTRY(cpu_ ## counter ## _ ## fence)	;\
 	pushl	%ebx			;\
 	movl	CPUVAR(CURLWP), %ecx	;\
+	leal	L_RU+RU_NIVCSW(%ecx), %ecx ;\
 1:					;\
-	movl	L_NCSW(%ecx), %ebx	;\
+	movl	(%ecx), %ebx		;\
 	SERIALIZE_ ## fence		;\
 	rdtsc				;\
 	ADD_ ## counter			;\
-	cmpl	%ebx, L_NCSW(%ecx)	;\
+	cmpl	%ebx, (%ecx)		;\
 	jne	2f			;\
 	popl	%ebx			;\
 	ret				;\
@@ -197,15 +234,16 @@ ENTRY(cpu_ ## counter ## _cpuid)	;\
 	pushl	%ebx			;\
 	pushl	%esi			;\
 	movl	CPUVAR(CURLWP), %ecx	;\
+	leal	L_RU+RU_NIVCSW(%ecx), %ecx ;\
 1:					;\
-	movl	L_NCSW(%ecx), %esi	;\
+	movl	(%ecx), %esi		;\
 	pushl	%ecx			;\
 	xor	%eax, %eax		;\
 	cpuid				;\
 	rdtsc				;\
 	ADD_ ## counter			;\
 	popl	%ecx			;\
-	cmpl	%esi, L_NCSW(%ecx)	;\
+	cmpl	%esi, (%ecx)		;\
 	jne	2f			;\
 	popl	%esi			;\
 	popl	%ebx			;\

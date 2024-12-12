@@ -1,7 +1,7 @@
-/*	$Id: at91sam9261bus.c,v 1.2 2008/07/03 01:15:38 matt Exp $	*/
+/*	$Id: at91sam9261bus.c,v 1.4 2023/04/21 15:04:47 skrll Exp $	*/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: at91sam9261bus.c,v 1.2 2008/07/03 01:15:38 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: at91sam9261bus.c,v 1.4 2023/04/21 15:04:47 skrll Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -46,21 +46,12 @@ void at91sam9261bus_init(struct at91bus_clocks *clocks)
 const struct pmap_devmap *at91sam9261bus_devmap(void)
 {
 	static const struct pmap_devmap devmap[] = {
-	    {
+	    DEVMAP_ENTRY(
 		AT91SAM9261_APB_VBASE,
 		AT91SAM9261_APB_HWBASE,
-		AT91SAM9261_APB_SIZE,
-		VM_PROT_READ | VM_PROT_WRITE,
-		PTE_NOCACHE
-	    },
-
-	    {
-		0,
-		0,
-		0,
-		0,
-		0
-	    }
+		AT91SAM9261_APB_SIZE
+	    ),
+	    DEVMAP_ENTRY_END
 	};
 
 	return devmap;
@@ -87,7 +78,7 @@ at91pio_port at91sam9261bus_pio_port(int pid)
 	case PID_PIOC:	return AT91_PIOC;
 	default:		panic("%s: pid %d not valid", __FUNCTION__, pid);
 	}
-	
+
 }
 
 uint32_t at91sam9261bus_gpio_mask(int pid)
@@ -126,7 +117,7 @@ const char *at91sam9261bus_peripheral_name(int pid)
 	}
 }
 
-void at91sam9261bus_search_peripherals(device_t self, 
+void at91sam9261bus_search_peripherals(device_t self,
 				       device_t (*found_func)(device_t, bus_addr_t, int))
 {
 	static const struct {

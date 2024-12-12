@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.99 2021/08/07 16:19:07 thorpej Exp $	*/
+/*	$NetBSD: autoconf.c,v 1.101 2023/12/20 15:34:45 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1994 Ludd, University of Lule}, Sweden.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.99 2021/08/07 16:19:07 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.101 2023/12/20 15:34:45 thorpej Exp $");
 
 #include "opt_compat_netbsd.h"
 #include "opt_cputype.h"
@@ -40,7 +40,6 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.99 2021/08/07 16:19:07 thorpej Exp $"
 #include <sys/buf.h>
 #include <sys/bufq.h>
 #include <sys/conf.h>
-#include <sys/malloc.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -173,7 +172,7 @@ cpu_mainbus_attach(device_t parent, device_t self, void *aux)
 
 	KASSERT(device_private(self) == NULL);
 	ci = curcpu();
-	self->dv_private = ci;
+	device_set_private(self, ci);
 	ci->ci_dev = self;
 	ci->ci_cpuid = device_unit(self);
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: null_vfsops.c,v 1.99 2020/04/13 19:23:19 ad Exp $	*/
+/*	$NetBSD: null_vfsops.c,v 1.101 2023/02/06 10:32:58 hannken Exp $	*/
 
 /*
  * Copyright (c) 1999 National Aeronautics & Space Administration
@@ -76,7 +76,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: null_vfsops.c,v 1.99 2020/04/13 19:23:19 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: null_vfsops.c,v 1.101 2023/02/06 10:32:58 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -138,7 +138,7 @@ nullfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 	/* Create the mount point. */
 	nmp = kmem_zalloc(sizeof(struct null_mount), KM_SLEEP);
 	mp->mnt_data = nmp;
-	mp->mnt_iflag |= IMNT_MPSAFE;
+	mp->mnt_iflag |= lowerrootvp->v_mount->mnt_iflag & IMNT_MPSAFE;
 	mp->mnt_iflag |= lowerrootvp->v_mount->mnt_iflag & IMNT_SHRLOOKUP;
 
 	/*
@@ -146,7 +146,12 @@ nullfs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 	 * that the node create call will work.
 	 */
 	vfs_getnewfsid(mp);
-	mp->mnt_lower = lowerrootvp->v_mount;
+	error = vfs_set_lowermount(mp, lowerrootvp->v_mount);
+	if (error) {
+		vput(lowerrootvp);
+		kmem_free(nmp, sizeof(struct null_mount));
+		return error;
+	}
 
 	nmp->nullm_size = sizeof(struct null_node);
 	nmp->nullm_tag = VT_NULL;

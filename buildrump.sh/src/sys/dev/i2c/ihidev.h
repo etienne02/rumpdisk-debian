@@ -1,4 +1,4 @@
-/* $NetBSD: ihidev.h,v 1.4 2020/01/09 04:04:01 thorpej Exp $ */
+/* $NetBSD: ihidev.h,v 1.7 2024/12/08 20:49:56 jmcneill Exp $ */
 /* $OpenBSD ihidev.h,v 1.4 2016/01/31 18:24:35 jcs Exp $ */
 
 /*-
@@ -30,6 +30,11 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef	_DEV_I2C_IHIDEV_H_
+#define	_DEV_I2C_IHIDEV_H_
+
+/* ihidevreg.h */
+
 /*
  * HID-over-i2c driver
  *
@@ -47,6 +52,8 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+
+#include <sys/types.h>
 
 /* from usbdi.h: Match codes. */
 /* First five codes is for a whole device. */
@@ -93,15 +100,32 @@ struct i2c_hid_desc {
 	uint32_t reserved;
 } __packed;
 
+/* ihidevvar.h */
+
+#include <sys/types.h>
+
+#include <sys/device.h>
+#include <sys/mutex.h>
+#include <sys/workqueue.h>
+#include <sys/gpio.h>
+
+#include <dev/i2c/i2cvar.h>
+#include <dev/gpio/gpiovar.h>
+
 struct ihidev_softc {
 	device_t	sc_dev;
 	i2c_tag_t	sc_tag;
 	i2c_addr_t	sc_addr;
 	uint64_t	sc_phandle;
+	kmutex_t	sc_lock;
 
 	void *		sc_ih;
-	void *		sc_sih;
-	kmutex_t	sc_intr_lock;
+	void *		sc_ih_gpio;
+	struct gpio_pinmap sc_ih_gpiomap;
+	int		sc_ih_gpiopins[1];
+	struct workqueue *sc_wq;
+	struct work	sc_work;
+	volatile unsigned sc_work_pending;
 	int		sc_intr_type;
 
 	u_int		sc_hid_desc_addr;
@@ -160,3 +184,4 @@ int ihidev_set_report(device_t, int, int, void *, int);
 int ihidev_get_report(device_t, int, int, void *, int);
 int ihidev_report_type_conv(int);
 
+#endif	/* _DEV_I2C_IHIDEV_H_ */

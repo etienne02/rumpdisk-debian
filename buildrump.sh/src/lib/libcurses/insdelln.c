@@ -1,4 +1,4 @@
-/*	$NetBSD: insdelln.c,v 1.18 2017/01/06 13:53:18 roy Exp $	*/
+/*	$NetBSD: insdelln.c,v 1.23 2022/10/19 06:09:27 blymn Exp $	*/
 
 /*
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: insdelln.c,v 1.18 2017/01/06 13:53:18 roy Exp $");
+__RCSID("$NetBSD: insdelln.c,v 1.23 2022/10/19 06:09:27 blymn Exp $");
 #endif				/* not lint */
 
 /*
@@ -75,10 +75,8 @@ winsdelln(WINDOW *win, int nlines)
 #endif /* HAVE_WCHAR */
 	attr_t	attr;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE,
 	    "winsdelln: (%p) cury=%d lines=%d\n", win, win->cury, nlines);
-#endif
 
 	if (!nlines)
 		return OK;
@@ -118,15 +116,15 @@ winsdelln(WINDOW *win, int nlines)
 			for (i = 0; i < win->maxx; i++) {
 				win->alines[y]->line[i].ch = win->bch;
 				win->alines[y]->line[i].attr = attr;
-#ifndef HAVE_WCHAR
-				win->alines[y]->line[i].ch = win->bch;
-#else
-				win->alines[y]->line[i].ch
-					= (wchar_t)btowc((int)win->bch );
+				win->alines[y]->line[i].cflags |= 
+				    CA_BACKGROUND;
+				win->alines[y]->line[i].cflags &= 
+				    ~CA_CONTINUATION;
+#ifdef HAVE_WCHAR
 				lp = &win->alines[y]->line[i];
 				if (_cursesi_copy_nsp(win->bnsp, lp) == ERR)
 					return ERR;
-				SET_WCOL(*lp, 1);
+				lp->wcols = 1;
 #endif /* HAVE_WCHAR */
 			}
 		for (y = last; y >= win->cury; --y)
@@ -162,13 +160,13 @@ winsdelln(WINDOW *win, int nlines)
 			for (i = 0; i < win->maxx; i++) {
 				win->alines[y]->line[i].ch = win->bch;
 				win->alines[y]->line[i].attr = attr;
-#ifndef HAVE_WCHAR
-				win->alines[y]->line[i].ch = win->bch;
-#else
-				win->alines[y]->line[i].ch
-					= (wchar_t)btowc((int)win->bch);
+				win->alines[y]->line[i].cflags |= 
+				    CA_BACKGROUND;
+				win->alines[y]->line[i].cflags &= 
+				    ~CA_CONTINUATION;
+#ifdef HAVE_WCHAR
 				lp = &win->alines[y]->line[i];
-				SET_WCOL( *lp, 1 );
+				lp->wcols = 1;
 				if (_cursesi_copy_nsp(win->bnsp, lp) == ERR)
 					return ERR;
 #endif /* HAVE_WCHAR */

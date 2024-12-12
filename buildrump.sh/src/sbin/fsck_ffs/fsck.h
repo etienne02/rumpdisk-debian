@@ -1,4 +1,4 @@
-/*	$NetBSD: fsck.h,v 1.55 2020/04/18 12:54:38 jdolecek Exp $	*/
+/*	$NetBSD: fsck.h,v 1.58 2023/07/04 20:40:53 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -97,10 +97,9 @@ struct inostat {
  * which are described by the following structure.
  */
 extern struct inostatlist {
-	long    il_numalloced;  /* number of inodes allocated in this cg */
+	size_t  il_numalloced;  /* number of inodes allocated in this cg */
 	struct inostat *il_stat;/* inostat info for this cylinder group */
 } *inostathead;
-
 
 /*
  * buffer cache structure.
@@ -166,6 +165,7 @@ extern struct fs *sblocksave;
 		sb_oldfscompat_write(sblk.b_un.b_fs, sblocksave); \
 		if (needswap) \
 			ffs_sb_swap(sblk.b_un.b_fs, sblk.b_un.b_fs); \
+		cvt_magic(sblk.b_un.b_fs); \
 		sblk.b_dirty = 1; \
 	} while (0)
 #define	cgdirty()	do {copyback_cg(&cgblk); cgblk.b_dirty = 1;} while (0)
@@ -204,14 +204,14 @@ struct inodesc {
 
 /*
  * Linked list of duplicate blocks.
- * 
+ *
  * The list is composed of two parts. The first part of the
  * list (from duplist through the node pointed to by muldup)
- * contains a single copy of each duplicate block that has been 
+ * contains a single copy of each duplicate block that has been
  * found. The second part of the list (from muldup to the end)
  * contains duplicate blocks that have been found more than once.
  * To check if a block has been found as a duplicate it is only
- * necessary to search from duplist through muldup. To find the 
+ * necessary to search from duplist through muldup. To find the
  * total number of times that a block has been found as a duplicate
  * the entire list must be searched for occurrences of the block
  * in question. The following diagram shows a sample list where
@@ -280,12 +280,15 @@ extern int	zflag;		/* zero unused directory space */
 extern int	cvtlevel;	/* convert to newer file system format */
 extern int	doinglevel1;	/* converting to new cylinder group format */
 extern int	doinglevel2;	/* converting to new inode format */
+extern int	doing2ea;	/* converting UFS2 to UFS2ea */
+extern int	doing2noea;	/* converting UFS2ea to UFS2 */
 extern int	newinofmt;	/* filesystem has new inode format */
 extern char	usedsoftdep;	/* just fix soft dependency inconsistencies */
 extern int	preen;		/* just fix normal inconsistencies */
 extern int	quiet;		/* Don't print anything if clean */
 extern int	forceimage;	/* file system is an image file */
 extern int	is_ufs2;	/* we're dealing with an UFS2 filesystem */
+extern int	is_ufs2ea;	/* is the variant that supports exattrs */
 extern int	markclean;	/* mark file system clean when done */
 extern char	havesb;		/* superblock has been read */
 extern char	skipclean;	/* skip clean file systems if preening */

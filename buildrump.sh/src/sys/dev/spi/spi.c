@@ -1,4 +1,4 @@
-/* $NetBSD: spi.c,v 1.19 2021/08/07 16:19:16 thorpej Exp $ */
+/* $NetBSD: spi.c,v 1.26 2022/05/17 05:05:20 andvar Exp $ */
 
 /*-
  * Copyright (c) 2006 Urbana-Champaign Independent Media Center.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: spi.c,v 1.19 2021/08/07 16:19:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: spi.c,v 1.26 2022/05/17 05:05:20 andvar Exp $");
 
 #include "locators.h"
 
@@ -62,6 +62,7 @@ __KERNEL_RCSID(0, "$NetBSD: spi.c,v 1.19 2021/08/07 16:19:16 thorpej Exp $");
 #include "locators.h"
 
 struct spi_softc {
+	device_t		sc_dev;
 	struct spi_controller	sc_controller;
 	int			sc_mode;
 	int			sc_speed;
@@ -271,6 +272,14 @@ spi_compatible_match(const struct spi_attach_args *sa, const cfdata_t cf,
 	return 1;
 }
 
+const struct device_compatible_entry *
+spi_compatible_lookup(const struct spi_attach_args *sa,
+    const struct device_compatible_entry *compats)
+{
+	return device_compatible_lookup(sa->sa_compat, sa->sa_ncompat,
+					compats);
+}
+
 /*
  * API for device drivers.
  *
@@ -291,6 +300,7 @@ spi_attach(device_t parent, device_t self, void *aux)
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_VM);
 	cv_init(&sc->sc_cv, "spictl");
 
+	sc->sc_dev = self;
 	sc->sc_controller = *sba->sba_controller;
 	sc->sc_nslaves = sba->sba_controller->sct_nslaves;
 	/* allocate slave structures */
@@ -360,7 +370,8 @@ spi_ioctl(dev_t dev, u_long cmd, void *data, int flag, lwp_t *l)
 			break;
 		}
 		sh = &sc->sc_slaves[sic->sic_addr];
-		error = spi_configure(sh, sic->sic_mode, sic->sic_speed);
+		error = spi_configure(sc->sc_dev, sh, sic->sic_mode,
+		    sic->sic_speed);
 		break;
 	case SPI_IOCTL_TRANSFER:
 		sit = (spi_ioctl_transfer_t *)data;
@@ -369,7 +380,7 @@ spi_ioctl(dev_t dev, u_long cmd, void *data, int flag, lwp_t *l)
 			break;
 		}
 		if ((sit->sit_send && sit->sit_sendlen == 0)
-		    || (sit->sit_recv && sit->sit_recv == 0)) {
+		    || (sit->sit_recv && sit->sit_recvlen == 0)) {
 			error = EINVAL;
 			break;
 		}
@@ -428,11 +439,14 @@ CFATTACH_DECL_NEW(spi, sizeof(struct spi_softc),
  * returned.
  */
 int
-spi_configure(struct spi_handle *sh, int mode, int speed)
+spi_configure(device_t dev __unused, struct spi_handle *sh, int mode, int speed)
 {
 
 	sh->sh_mode = mode;
 	sh->sh_speed = speed;
+
+	/* No need to report errors; no failures. */
+
 	return 0;
 }
 
@@ -530,7 +544,7 @@ spi_transfer(struct spi_handle *sh, struct spi_transfer *st)
 	spi_acquire(sh);
 
 	st->st_spiprivate = (void *)sh;
-	
+
 	/*
 	 * Reconfigure controller
 	 *
@@ -601,7 +615,7 @@ spi_done(struct spi_transfer *st, int err)
  *
  * spi_send_recv - sends data to the bus, and then receives.  Note that this is
  * done synchronously, i.e. send a command and get the response.  This is
- * not full duplex.  If you wnat full duplex, you can't use these convenience
+ * not full duplex.  If you want full duplex, you can't use these convenience
  * wrappers.
  */
 int
@@ -666,4 +680,3 @@ spi_send_recv(struct spi_handle *sh, int scnt, const uint8_t *snd,
 
 	return 0;
 }
-

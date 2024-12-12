@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.51 2020/06/15 18:04:42 ad Exp $	*/
+/*	$NetBSD: cpu.h,v 1.54 2024/03/05 20:59:41 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2007 YAMAMOTO Takashi,
@@ -84,6 +84,7 @@ int	cpu_setstate(struct cpu_info *, bool);
 int	cpu_setintr(struct cpu_info *, bool);
 bool	cpu_intr_p(void);
 bool	cpu_softintr_p(void);
+bool	curcpu_stable(void);
 bool	cpu_kpreempt_enter(uintptr_t, int);
 void	cpu_kpreempt_exit(uintptr_t);
 bool	cpu_kpreempt_disabled(void);

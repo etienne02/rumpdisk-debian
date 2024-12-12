@@ -1,4 +1,4 @@
-/*	$NetBSD: trap_subr.S,v 1.13 2020/07/06 10:16:12 rin Exp $	*/
+/*	$NetBSD: trap_subr.S,v 1.15 2022/07/05 20:15:40 andvar Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -34,7 +34,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-RCSID("$NetBSD: trap_subr.S,v 1.13 2020/07/06 10:16:12 rin Exp $")
+RCSID("$NetBSD: trap_subr.S,v 1.15 2022/07/05 20:15:40 andvar Exp $")
 
 #ifdef _KERNEL_OPT
 #include "opt_altivec.h"
@@ -48,9 +48,9 @@ RCSID("$NetBSD: trap_subr.S,v 1.13 2020/07/06 10:16:12 rin Exp $")
 	/*
 	 * We have a problem with critical (MSR[CE] or machine check (MSR[ME])
 	 * or debug (MSR[DE]) interrupts/exception in that they could happen
-	 * inbetween the mtsprg1 %r2 and mfsprg1 %r2.  If that happens, %r2
+	 * in-between the mtsprg1 %r2 and mfsprg1 %r2.  If that happens, %r2
 	 * will be lost.  Even if we moved to a different sprg, subsequent
-	 * expceptions would use SPRG1 and its value would be lost.  The only
+	 * exceptions would use SPRG1 and its value would be lost.  The only
 	 * way to be safe for CE/ME/DE faults to save and restore SPRG1.
 	 *
 	 * Since CE/ME/DE faults may happen anytime, we need r1 to always
@@ -61,22 +61,27 @@ RCSID("$NetBSD: trap_subr.S,v 1.13 2020/07/06 10:16:12 rin Exp $")
 	 * mchk) uses a unique sprg to save %r2 (sprg1, sprg4, sprg5).
 	 *
 	 * Since we can't control how many nested exceptions we might get,
-	 * we don't use a dedicated save area.  Instead we have a upwards
+	 * we don't use a dedicated save area.  Instead we have an upwards
 	 * growing "stack" of them; the pointer to which is kept in sprg3.
 	 *
 	 * To allocate from the stack, one fetches sprg3, adds the amount
 	 * needed, saves sprg3, and then refers to the save using a
 	 * displacement of -amount.
 	 */
+	/*
+	 * XXXclang
+	 * At the moment, clang cannot correctly assemble m[ft]sprgN
+	 * (N >= 4); use m[ft]spr for SPR_SPRGN instead.
+	 */
 #define	FRAME_EXC_PROLOGUE(start, sprg, srr)				\
-	mt##sprg %r2;			/* save r2 */			\
+	mtspr	sprg,%r2;		/* save r2 */			\
 	mfsprg3	%r2;			/* get save_area pointer */	\
 	addi	%r2,%r2,4*(32-start);					\
 					/* allocate save area */	\
 	mtsprg3	%r2;			/* save updated pointer */	\
 	stmw	%r##start,-4*(32-start)(%r2);				\
 					/* free r24-r31 for use */	\
-	mf##sprg %r26;			/* get saved r2 */		\
+	mfspr	%r26,sprg;		/* get saved r2 */		\
 	mfcr	%r27;			/* get Condition Register */	\
 	mfxer	%r28;			/* get XER */			\
 	mfspr	%r30, SPR_##srr##0;	/* get SRR0 */			\
@@ -103,41 +108,41 @@ RCSID("$NetBSD: trap_subr.S,v 1.13 2020/07/06 10:16:12 rin Exp $")
 				mtsrr1	r
 
 #define	FRAME_PROLOGUE		\
-	FRAME_EXC_PROLOGUE(26, sprg1, SRR)
+	FRAME_EXC_PROLOGUE(26, SPR_SPRG1, SRR)
 
 #define	FRAME_PROLOGUE_DEAR_ESR	\
-	FRAME_EXC_PROLOGUE(24, sprg1, SRR); \
+	FRAME_EXC_PROLOGUE(24, SPR_SPRG1, SRR); \
 	PROLOGUE_GET_ESR; \
 	PROLOGUE_GET_DEAR
 
 #define	FRAME_PROLOGUE_ESR	\
-	FRAME_EXC_PROLOGUE(25, sprg1, SRR); \
+	FRAME_EXC_PROLOGUE(25, SPR_SPRG1, SRR); \
 	PROLOGUE_GET_ESR
 
 #define	FRAME_TLBPROLOGUE	\
-	FRAME_EXC_PROLOGUE(20, sprg1, SRR); \
+	FRAME_EXC_PROLOGUE(20, SPR_SPRG1, SRR); \
 	PROLOGUE_GET_ESR; \
 	PROLOGUE_GET_DEAR
 
 #define	FRAME_INTR_PROLOGUE	\
-	FRAME_EXC_PROLOGUE(26, sprg1, SRR)
+	FRAME_EXC_PROLOGUE(26, SPR_SPRG1, SRR)
 
 /*
  * These need to save SRR0/SRR1 as well their SRR0/SRR1 in case normal
  * exceptions happened during their execution.
  */
 #define	FRAME_CRIT_PROLOGUE	\
-	FRAME_EXC_PROLOGUE(24, sprg4, CSRR); \
+	FRAME_EXC_PROLOGUE(24, SPR_SPRG4, CSRR); \
 	PROLOGUE_GET_SPRG1; \
 	PROLOGUE_GET_SRRS
 
 #define	FRAME_MCHK_PROLOGUE	\
-	FRAME_EXC_PROLOGUE(24, sprg5, MCSRR); \
+	FRAME_EXC_PROLOGUE(24, SPR_SPRG5, MCSRR); \
 	PROLOGUE_GET_SPRG1; \
 	PROLOGUE_GET_SRRS
 
 #define	FRAME_DEBUG_PROLOGUE	\
-	FRAME_EXC_PROLOGUE(24, sprg4, CSRR); \
+	FRAME_EXC_PROLOGUE(24, SPR_SPRG4, CSRR); \
 	PROLOGUE_GET_SPRG1; \
 	PROLOGUE_GET_SRRS
 
@@ -176,10 +181,10 @@ RCSID("$NetBSD: trap_subr.S,v 1.13 2020/07/06 10:16:12 rin Exp $")
 #define	FRAME_RESTORE_SPEFSCR
 #endif
 /*
- * Before the first memory refernence, we must have our state inside registers
+ * Before the first memory reference, we must have our state inside registers
  * since the first memory access might cause an exception which would cause
  * SRR0/SRR1 and DEAR/ESR to become unrecoverable.  CR and XER also need to be
- * saved early since they will modified by instrction flow.  The saved stack
+ * saved early since they will modified by instruction flow.  The saved stack
  * pointer is also critical but LR and CTR can be deferred being saved until
  * we are actually filling a trapframe.
  */

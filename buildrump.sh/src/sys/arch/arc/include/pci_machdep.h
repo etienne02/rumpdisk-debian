@@ -1,4 +1,4 @@
-/* $NetBSD: pci_machdep.h,v 1.12 2020/07/07 03:38:45 thorpej Exp $ */
+/* $NetBSD: pci_machdep.h,v 1.15 2022/08/16 14:00:03 skrll Exp $ */
 /* NetBSD: pci_machdep.h,v 1.3 1999/03/19 03:40:46 cgd Exp  */
 
 /*
@@ -27,6 +27,9 @@
  * any improvements or extensions that they make and grant Carnegie the
  * rights to redistribute these changes.
  */
+
+#ifndef	_MACHINE_PCI_MACHDEP_H_
+#define	_MACHINE_PCI_MACHDEP_H_
 
 /*
  * Machine-specific definitions for PCI autoconfiguration.
@@ -63,6 +66,8 @@ struct arc_pci_chipset {
 			    pci_intr_handle_t *);
 	const char	*(*pc_intr_string)(pci_chipset_tag_t,
 			    pci_intr_handle_t, char *, size_t);
+	int		(*pc_intr_setattr)(void *, pci_intr_handle_t *,
+			    int, uint64_t);
 	void		*(*pc_intr_establish)(pci_chipset_tag_t,
 			    pci_intr_handle_t, int, int (*)(void *), void *);
 	void		(*pc_intr_disestablish)(pci_chipset_tag_t, void *);
@@ -97,5 +102,16 @@ struct arc_pci_chipset {
     (*(c)->pc_intr_disestablish)((c), (iv))
 #define	pci_conf_interrupt(c, b, d, f, s, i)				\
     (*(c)->pc_conf_interrupt)((c), (b), (d), (f), (s), (i))
-#define	pci_conf_hook(c, b, d, f, i)				\
+#define	pci_conf_hook(c, b, d, f, i)					\
     (*(c)->pc_conf_hook)((c), (b), (d), (f), (i))
+
+static inline int
+pci_intr_setattr(pci_chipset_tag_t pc, pci_intr_handle_t *ihp,
+    int attr, uint64_t data)
+{
+	if (!pc->pc_intr_setattr)
+		return ENODEV;
+	return pc->pc_intr_setattr(pc, ihp, attr, data);
+}
+
+#endif /* _MACHINE_PCI_MACHDEP_H_ */

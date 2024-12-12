@@ -1,4 +1,4 @@
-/*	$NetBSD: copy.S,v 1.34 2020/06/30 16:20:00 maxv Exp $	*/
+/*	$NetBSD: copy.S,v 1.36 2024/09/24 20:19:30 andvar Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -120,7 +120,7 @@ END(do_pmap_load)
  * However the use of 'rep movsb' for the final bytes should be killed.
  *
  * Newer Intel cpus have a much lower setup time, and may (someday)
- * be ably to do cache-line size copies....
+ * be able to do cache-line size copies....
  */
 
 /*
@@ -150,7 +150,7 @@ ENTRY(kcopy)
 
 /*
  * Using 'rep movs' to copy backwards is not as fast as for forwards copies
- * and ought not be done when the copy doesn't acually overlap.
+ * and ought not be done when the copy doesn't actually overlap.
  * However kcopy() isn't used any that looks even vaguely used often.
  * I'm also not sure it is ever asked to do overlapping copies!
  */

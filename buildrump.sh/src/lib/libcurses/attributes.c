@@ -1,4 +1,4 @@
-/*	$NetBSD: attributes.c,v 1.31 2019/07/25 20:18:50 uwe Exp $	*/
+/*	$NetBSD: attributes.c,v 1.35 2022/10/25 06:20:01 blymn Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: attributes.c,v 1.31 2019/07/25 20:18:50 uwe Exp $");
+__RCSID("$NetBSD: attributes.c,v 1.35 2022/10/25 06:20:01 blymn Exp $");
 #endif				/* not lint */
 
 #include "curses.h"
@@ -143,9 +143,10 @@ attrset(int attr)
 int
 wattr_get(WINDOW *win, attr_t *attr, short *pair, void *opts)
 {
-#ifdef DEBUG
+	if (__predict_false(win == NULL))
+		return ERR;
+
 	__CTRACE(__CTRACE_ATTR, "wattr_get: win %p\n", win);
-#endif
 	if (attr != NULL) {
 		*attr = win->wattr;
 #ifdef HAVE_WCHAR
@@ -195,10 +196,8 @@ wattr_off(WINDOW *win, attr_t attr, void *opts)
 int
 wattr_set(WINDOW *win, attr_t attr, short pair, void *opts)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_ATTR, "wattr_set: win %p, attr %08x, pair %d\n",
 	    win, attr, pair);
-#endif
 	if (__predict_false(opts != NULL))
 		return ERR;
 
@@ -221,9 +220,7 @@ wattr_set(WINDOW *win, attr_t attr, short pair, void *opts)
 int
 wcolor_set(WINDOW *win, short pair, void *opts)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_COLOR, "wolor_set: win %p, pair %d\n", win, pair);
-#endif
 	__wcolor_set(win, (attr_t) COLOR_PAIR(pair));
 	return OK;
 }
@@ -237,9 +234,10 @@ wcolor_set(WINDOW *win, short pair, void *opts)
 chtype
 getattrs(WINDOW *win)
 {
-#ifdef DEBUG
+	if (__predict_false(win == NULL))
+		return ERR;
+
 	__CTRACE(__CTRACE_ATTR, "getattrs: win %p\n", win);
-#endif
 	return((chtype) win->wattr);
 }
 
@@ -250,9 +248,7 @@ getattrs(WINDOW *win)
 int
 wattron(WINDOW *win, int attr)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_ATTR, "wattron: win %p, attr %08x\n", win, attr);
-#endif
 	return __wattr_on(win, (attr_t) attr);
 }
 
@@ -263,9 +259,7 @@ wattron(WINDOW *win, int attr)
 int
 wattroff(WINDOW *win, int attr)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_ATTR, "wattroff: win %p, attr %08x\n", win, attr);
-#endif
 	return __wattr_off(win, (attr_t) attr);
 }
 
@@ -277,9 +271,7 @@ wattroff(WINDOW *win, int attr)
 int
 wattrset(WINDOW *win, int attr)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_ATTR, "wattrset: win %p, attr %08x\n", win, attr);
-#endif
 	__wattr_off(win, __ATTRIBUTES);
 	__wattr_on(win, (attr_t) attr);
 	return OK;
@@ -294,13 +286,9 @@ termattrs(void)
 {
 	chtype ch = 0;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_ATTR, "termattrs\n");
-#endif
 	if (exit_attribute_mode != NULL) {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_ATTR, "termattrs: have exit attribute mode\n");
-#endif
 		if (enter_blink_mode != NULL)
 			ch |= __BLINK;
 		if (enter_bold_mode != NULL)
@@ -335,9 +323,7 @@ term_attrs(void)
 {
 	attr_t attr = 0;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_ATTR, "term_attrs\n");
-#endif
 	if (exit_attribute_mode != NULL) {
 		if (enter_blink_mode != NULL)
 			attr |= __BLINK;
@@ -381,12 +367,15 @@ term_attrs(void)
 static int
 __wattr_on(WINDOW *win, attr_t attr)
 {
-	const TERMINAL *t = win->screen->term;
+	const TERMINAL *t;
 
-#ifdef DEBUG
+	if (__predict_false(win == NULL))
+		return ERR;
+
+	t = win->screen->term;
+
 	__CTRACE(__CTRACE_ATTR, "wattr_on: win %p, attr %08x\n", win, attr);
-#endif
-	/* If can enter modes, set the relevent attribute bits. */
+	/* If can enter modes, set the relevant attribute bits. */
 	if (t_exit_attribute_mode(t) != NULL) {
 		if (attr & __BLINK && t_enter_blink_mode(t) != NULL)
 			win->wattr |= __BLINK;
@@ -430,12 +419,15 @@ __wattr_on(WINDOW *win, attr_t attr)
 static int
 __wattr_off(WINDOW *win, attr_t attr)
 {
-	const TERMINAL *t = win->screen->term;
+	const TERMINAL *t;
 
-#ifdef DEBUG
+	if (__predict_false(win == NULL))
+		return ERR;
+
+	t = win->screen->term;
+
 	__CTRACE(__CTRACE_ATTR, "wattr_off: win %p, attr %08x\n", win, attr);
-#endif
-	/* If can do exit modes, unset the relevent attribute bits. */
+	/* If can do exit modes, unset the relevant attribute bits. */
 	if (t_exit_attribute_mode(t) != NULL) {
 		if (attr & __BLINK)
 			win->wattr &= ~__BLINK;
@@ -479,11 +471,16 @@ __wattr_off(WINDOW *win, attr_t attr)
 static void
 __wcolor_set(WINDOW *win, attr_t attr)
 {
-	const TERMINAL *t = win->screen->term;
+	const TERMINAL *t;
+
+	if (__predict_false(win == NULL))
+		return;
+
+	t = win->screen->term;
 
 	/* If another color pair is set, turn that off first. */
 	win->wattr &= ~__COLOR;
 	/* If can do color video, set the color pair bits. */
-	if (t_max_colors(t) != 0 && attr & __COLOR)
+	if (t_max_colors(t) != 0)
 		win->wattr |= attr & __COLOR;
 }

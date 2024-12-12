@@ -1,4 +1,4 @@
-/*	$NetBSD: module.h,v 1.7 2018/08/27 15:22:54 riastradh Exp $	*/
+/*	$NetBSD: module.h,v 1.13 2022/10/25 23:31:49 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -35,8 +35,12 @@
 /* XXX Get this first so we don't nuke the module_init declaration.  */
 #include <sys/module.h>
 
+#include <sys/cdefs.h>
+
 #include <linux/export.h>
 #include <linux/moduleparam.h>
+#include <linux/rbtree.h>
+#include <linux/stringify.h>
 
 #define	module_init(INIT)
 #define	module_exit(EXIT)
@@ -46,19 +50,11 @@
 #define	MODULE_DEVICE_TABLE(DESCRIPTION, IDLIST)
 #define	MODULE_FIRMWARE(FIRMWARE)
 #define	MODULE_LICENSE(LICENSE)
-struct linux_module_param_desc {
-	const char *name;
-	const char *description;
-};
-#define	MODULE_PARM_DESC(PARAMETER, DESCRIPTION) \
-static __attribute__((__used__)) \
-const struct linux_module_param_desc PARAMETER ## _desc = { \
-    .name = # PARAMETER, \
-    .description = DESCRIPTION, \
-}; \
-__link_set_add_rodata(linux_module_param_desc, PARAMETER ## _desc)
+#define	MODULE_VERSION(VERSION)
 
 #define	THIS_MODULE	0
 #define	KBUILD_MODNAME	__file__
+
+#define	__MODULE_STRING(x)	__STRING(x)
 
 #endif  /* _LINUX_MODULE_H_ */

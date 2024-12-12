@@ -1,4 +1,4 @@
-/*	$NetBSD: pic_splfuncs.c,v 1.21 2021/08/10 15:31:55 jmcneill Exp $	*/
+/*	$NetBSD: pic_splfuncs.c,v 1.24 2022/06/25 13:24:35 jmcneill Exp $	*/
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -27,8 +27,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+
+#include "opt_modular.h"
+
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pic_splfuncs.c,v 1.21 2021/08/10 15:31:55 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pic_splfuncs.c,v 1.24 2022/06/25 13:24:35 jmcneill Exp $");
 
 #define _INTR_PRIVATE
 #include <sys/param.h>
@@ -46,16 +49,8 @@ __KERNEL_RCSID(0, "$NetBSD: pic_splfuncs.c,v 1.21 2021/08/10 15:31:55 jmcneill E
 
 #include <arm/pic/picvar.h>
 
-static int	pic_default_splraise(int);
-static int	pic_default_spllower(int);
-static void	pic_default_splx(int);
-
-int (*_splraise)(int) = pic_default_splraise;
-int (*_spllower)(int) = pic_default_spllower;
-void (*splx)(int) = pic_default_splx;
-
-static int
-pic_default_splraise(int newipl)
+int
+_splraise(int newipl)
 {
 	struct cpu_info * const ci = curcpu();
 	const int oldipl = ci->ci_cpl;
@@ -66,8 +61,8 @@ pic_default_splraise(int newipl)
 	return oldipl;
 }
 
-static int
-pic_default_spllower(int newipl)
+int
+_spllower(int newipl)
 {
 	struct cpu_info * const ci = curcpu();
 	const int oldipl = ci->ci_cpl;
@@ -84,8 +79,8 @@ pic_default_spllower(int newipl)
 	return oldipl;
 }
 
-static void
-pic_default_splx(int savedipl)
+void
+splx(int savedipl)
 {
 	struct cpu_info * const ci = curcpu();
 	KASSERT(savedipl < NIPL);
@@ -94,17 +89,22 @@ pic_default_splx(int savedipl)
 		return;
 	}
 
-	register_t psw = DISABLE_INTERRUPT_SAVE();
-	KASSERTMSG(panicstr != NULL || savedipl < ci->ci_cpl,
-	    "splx(%d) to a higher ipl than %d", savedipl, ci->ci_cpl);
+	if (ci->ci_cpl >= IPL_VM) {
+		register_t psw = DISABLE_INTERRUPT_SAVE();
+		KASSERTMSG(panicstr != NULL || savedipl < ci->ci_cpl,
+		    "splx(%d) to a higher ipl than %d", savedipl, ci->ci_cpl);
 
-	ci->ci_intr_depth++;
-	pic_do_pending_ints(psw, savedipl, NULL);
-	ci->ci_intr_depth--;
-	KASSERTMSG(ci->ci_cpl == savedipl, "cpl %d savedipl %d",
-	    ci->ci_cpl, savedipl);
-	if ((psw & I32_bit) == 0)
-		ENABLE_INTERRUPT();
+		ci->ci_intr_depth++;
+		pic_do_pending_ints(psw, savedipl, NULL);
+		ci->ci_intr_depth--;
+		KASSERTMSG(ci->ci_cpl == savedipl, "cpl %d savedipl %d",
+		    ci->ci_cpl, savedipl);
+		if ((psw & I32_bit) == 0)
+			ENABLE_INTERRUPT();
+	} else {
+		pic_set_priority(ci, savedipl);
+	}
+
 	cpu_dosoftints();
 	KASSERTMSG(ci->ci_cpl == savedipl, "cpl %d savedipl %d",
 	    ci->ci_cpl, savedipl);

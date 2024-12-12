@@ -1,4 +1,4 @@
-/*      $NetBSD: rumpclient.c,v 1.67 2016/09/06 07:45:41 martin Exp $	*/
+/*      $NetBSD: rumpclient.c,v 1.71 2023/07/31 04:37:04 rin Exp $	*/
 
 /*
  * Copyright (c) 2010, 2011 Antti Kantee.  All Rights Reserved.
@@ -50,7 +50,7 @@
 #define USE_SIGNALFD
 #endif
 
-__RCSID("$NetBSD: rumpclient.c,v 1.67 2016/09/06 07:45:41 martin Exp $");
+__RCSID("$NetBSD: rumpclient.c,v 1.71 2023/07/31 04:37:04 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/mman.h>
@@ -200,7 +200,7 @@ send_with_recon(struct spclient *spc, struct iovec *iov, size_t iovlen)
 				continue;
 
 			/*
-			 * ok, reconnect succesful.  we need to return to
+			 * ok, reconnect successful.  we need to return to
 			 * the upper layer to get the entire PDU resent.
 			 */
 			if (reconretries != 1)
@@ -926,8 +926,10 @@ rumpclient_init(void)
 #ifdef __NetBSD__
 #if !__NetBSD_Prereq__(5,99,7)
 	FINDSYM(kevent)
-#else
+#elif !__NetBSD_Prereq__(10,99,7)
 	FINDSYM2(kevent,_sys___kevent50)
+#else
+	FINDSYM2(kevent,_sys___kevent100)
 #endif
 #else
 	FINDSYM(kevent)
@@ -1087,7 +1089,7 @@ int
 rumpclient__closenotify(int *fdp, enum rumpclient_closevariant variant)
 {
 	int fd = *fdp;
-	int untilfd, rv;
+	int untilfd;
 	int newfd;
 
 	switch (variant) {
@@ -1096,9 +1098,7 @@ rumpclient__closenotify(int *fdp, enum rumpclient_closevariant variant)
 		for (; fd <= untilfd; fd++) {
 			if (fd == clispc.spc_fd || fd == holyfd)
 				continue;
-			rv = host_close(fd);
-			if (rv == -1)
-				return -1;
+			(void)host_close(fd);
 		}
 		*fdp = fd;
 		break;

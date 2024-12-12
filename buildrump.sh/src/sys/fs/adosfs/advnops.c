@@ -1,4 +1,4 @@
-/*	$NetBSD: advnops.c,v 1.57 2021/07/18 23:57:13 dholland Exp $	*/
+/*	$NetBSD: advnops.c,v 1.60 2024/05/13 00:24:18 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1994 Christian E. Hopps
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: advnops.c,v 1.57 2021/07/18 23:57:13 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: advnops.c,v 1.60 2024/05/13 00:24:18 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -61,8 +61,6 @@ int	adosfs_getattr(void *);
 int	adosfs_read(void *);
 int	adosfs_write(void *);
 int	adosfs_strategy(void *);
-int	adosfs_link(void *);
-int	adosfs_symlink(void *);
 int	adosfs_bmap(void *);
 int	adosfs_print(void *);
 int	adosfs_readdir(void *);
@@ -97,11 +95,11 @@ const struct vnodeopv_entry_desc adosfs_vnodeop_entries[] = {
 	{ &vop_fsync_desc, genfs_nullop },		/* fsync */
 	{ &vop_seek_desc, genfs_seek },			/* seek */
 	{ &vop_remove_desc, genfs_eopnotsupp },		/* remove */
-	{ &vop_link_desc, adosfs_link },		/* link */
+	{ &vop_link_desc, genfs_erofs_link },		/* link */
 	{ &vop_rename_desc, genfs_eopnotsupp },		/* rename */
 	{ &vop_mkdir_desc, genfs_eopnotsupp },		/* mkdir */
 	{ &vop_rmdir_desc, genfs_eopnotsupp },		/* rmdir */
-	{ &vop_symlink_desc, adosfs_symlink },		/* symlink */
+	{ &vop_symlink_desc, genfs_erofs_symlink },	/* symlink */
 	{ &vop_readdir_desc, adosfs_readdir },		/* readdir */
 	{ &vop_readlink_desc, adosfs_readlink },	/* readlink */
 	{ &vop_abortop_desc, genfs_abortop },		/* abortop */
@@ -171,7 +169,7 @@ adosfs_getattr(void *v)
 		vap->va_nlink = 1 + (ap->linkto != 0);
 		/*
 		 * round up to nearest blocks add number of file list
-		 * blocks needed and mutiply by number of bytes per block.
+		 * blocks needed and multiply by number of bytes per block.
 		 */
 		fblks = howmany(ap->fsize, amp->dbsize);
 		fblks += howmany(fblks, ANODENDATBLKENT(ap));
@@ -275,7 +273,7 @@ adosfs_read(void *v)
 		/*
 		 * read ahead could possibly be worth something
 		 * but not much as ados makes little attempt to
-		 * make things contigous
+		 * make things contiguous
 		 */
 		error = bread(sp->a_vp, lbn, amp->bsize, 0, &bp);
 		if (error) {
@@ -385,34 +383,6 @@ reterr:
 	printf(" %d)", error);
 #endif
 	return(error);
-}
-
-int
-adosfs_link(void *v)
-{
-	struct vop_link_v2_args /* {
-		struct vnode *a_dvp;
-		struct vnode *a_vp;
-		struct componentname *a_cnp;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
-}
-
-int
-adosfs_symlink(void *v)
-{
-	struct vop_symlink_v3_args /* {
-		struct vnode *a_dvp;
-		struct vnode **a_vpp;
-		struct componentname *a_cnp;
-		struct vattr *a_vap;
-		char *a_target;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
 }
 
 /*

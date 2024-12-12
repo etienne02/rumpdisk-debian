@@ -1,4 +1,4 @@
-/* $NetBSD: udf_subr.c,v 1.156 2021/08/21 09:59:46 andvar Exp $ */
+/* $NetBSD: udf_subr.c,v 1.176 2024/02/10 09:21:53 andvar Exp $ */
 
 /*
  * Copyright (c) 2006, 2008 Reinoud Zandijk
@@ -29,7 +29,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__KERNEL_RCSID(0, "$NetBSD: udf_subr.c,v 1.156 2021/08/21 09:59:46 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udf_subr.c,v 1.176 2024/02/10 09:21:53 andvar Exp $");
 #endif /* not lint */
 
 
@@ -614,7 +614,7 @@ udf_search_writing_tracks(struct udf_mount *ump)
 
 /*
  * Check if the blob starts with a good UDF tag. Tags are protected by a
- * checksum over the reader except one byte at position 4 that is the checksum
+ * checksum over the header except one byte at position 4 that is the checksum
  * itself.
  */
 
@@ -1521,7 +1521,7 @@ udf_writeout_lvint(struct udf_mount *ump, int lvflag)
 		"space = %d\n", trace->start, trace->end, trace->pos,
 		trace->wpos, space));
 	DPRINTF(VOLUMES, ("finished writing out logvol integrity descriptor "
-		"successfull\n"));
+		"successfully\n"));
 
 	return error;
 }
@@ -2064,7 +2064,7 @@ udf_process_vds(struct udf_mount *ump) {
 			}
 			break;
 		default:
-			panic("bad alloction type in udf's ump->vtop\n");
+			panic("bad allocation type in udf's ump->vtop\n");
 		}
 	}
 
@@ -2087,7 +2087,7 @@ udf_process_vds(struct udf_mount *ump) {
 	}
 
 	/*
-	 * Determine sheduler error behaviour. For virtual partitions, update
+	 * Determine scheduler error behaviour. For virtual partitions, update
 	 * the trackinfo; for sparable partitions replace a whole block on the
 	 * sparable table. Always requeue.
 	 */
@@ -2098,7 +2098,7 @@ udf_process_vds(struct udf_mount *ump) {
 		ump->lvreadwrite = UDF_REMAP_BLOCK;
 
 	/*
-	 * Select our sheduler
+	 * Select our scheduler
 	 */
 	ump->strategy = &udf_strat_rmw;
 	if (n_virt || (ump->discinfo.mmc_cur & MMC_CAP_PSEUDOOVERWRITE))
@@ -2110,7 +2110,7 @@ udf_process_vds(struct udf_mount *ump) {
 		ump->strategy = &udf_strat_rmw;
 
 #if 0
-	/* read-only access won't benefit from the other shedulers */
+	/* read-only access won't benefit from the other schedulers */
 	if (ump->vfs_mountp->mnt_flag & MNT_RDONLY)
 		ump->strategy = &udf_strat_direct;
 #endif
@@ -2130,7 +2130,7 @@ udf_process_vds(struct udf_mount *ump) {
 	snprintb(bits, sizeof(bits), UDFONERROR_BITS, ump->lvreadwrite);
 	DPRINTF(VOLUMES, ("\tactions on logvol errors %s\n", bits));
 
-	DPRINTF(VOLUMES, ("\tselected sheduler `%s`\n",
+	DPRINTF(VOLUMES, ("\tselected scheduler `%s`\n",
 		(ump->strategy == &udf_strat_direct) ? "Direct" :
 		(ump->strategy == &udf_strat_sequential) ? "Sequential" :
 		(ump->strategy == &udf_strat_rmw) ? "RMW" : "UNKNOWN!"));
@@ -2161,7 +2161,7 @@ udf_update_logvolname(struct udf_mount *ump, char *logvol_id)
 	if (ump->implementation)
 		lvi = &ump->implementation->_impl_use.lv_info;
 
-	/* logvol's id might be specified as origional so use memmove here */
+	/* logvol's id might be specified as original so use memmove here */
 	memmove(lvd->logvol_id, logvol_id, 128);
 	if (fsd)
 		memmove(fsd->logvol_id, logvol_id, 128);
@@ -2404,7 +2404,7 @@ udf_extattr_search_intern(struct udf_node *node,
 	/* looking for Ecma-167 attributes? */
 	offset = sizeof(struct extattrhdr_desc);
 
-	/* looking for either implemenation use or application use */
+	/* looking for either implementation use or application use */
 	if (sattr == 2048) {				/* [4/48.10.8] */
 		offset = udf_rw32(eahdr->impl_attr_loc);
 		if (offset == UDF_IMPL_ATTR_LOC_NOT_PRESENT)
@@ -2439,11 +2439,11 @@ udf_extattr_search_intern(struct udf_node *node,
 		if ((a_l == 0) || (a_l > l_ea))
 			return EINVAL;
 
-		if (attrhdr->type != sattr)
+		if (udf_rw32(attrhdr->type) != sattr)
 			goto next_attribute;
 
 		/* we might have found it! */
-		if (attrhdr->type < 2048) {	/* Ecma-167 attribute */
+		if (udf_rw32(attrhdr->type) < 2048) {	/* Ecma-167 attribute */
 			*offsetp = offset;
 			*lengthp = a_l;
 			return 0;		/* success */
@@ -2765,10 +2765,11 @@ udf_update_vat_descriptor(struct udf_mount *ump)
 	struct icb_tag *icbtag;
 	struct udf_oldvat_tail *oldvat_tl;
 	struct udf_vat *vat;
+	struct regid *regid;
 	uint64_t unique_id;
 	uint32_t lb_size;
 	uint8_t *raw_vat;
-	int filetype, error;
+	int vat_length, impl_use_len, filetype, error;
 
 	KASSERT(vat_node);
 	KASSERT(lvinfo);
@@ -2813,11 +2814,20 @@ udf_update_vat_descriptor(struct udf_mount *ump)
 			sizeof(struct udf_oldvat_tail), ump->vat_entries * 4);
 	} else {
 		/* compose the VAT2 header */
+		vat_length = sizeof(struct udf_vat);
 		vat = (struct udf_vat *) raw_vat;
-		memset(vat, 0, sizeof(struct udf_vat));
 
-		vat->header_len       = udf_rw16(152);	/* as per spec */
-		vat->impl_use_len     = udf_rw16(0);
+		error = udf_vat_read(vat_node, raw_vat, vat_length, 0);
+		if (error)
+			goto errout;
+
+		impl_use_len = udf_rw16(vat->impl_use_len);
+		vat_length += impl_use_len;
+
+		error = udf_vat_read(vat_node, raw_vat, vat_length, 0);
+		if (error)
+			goto errout;
+
 		memmove(vat->logvol_id, ump->logical_vol->logvol_id, 128);
 		vat->prev_vat         = udf_rw32(0xffffffff);
 		vat->num_files        = lvinfo->num_files;
@@ -2826,9 +2836,20 @@ udf_update_vat_descriptor(struct udf_mount *ump)
 		vat->min_udf_writever = lvinfo->min_udf_writever;
 		vat->max_udf_writever = lvinfo->max_udf_writever;
 
-		error = udf_vat_write(vat_node, raw_vat,
-			sizeof(struct udf_vat), 0);
+		if (impl_use_len >= sizeof(struct regid)) {
+			/* insert our implementation identification */
+			memset(vat->data, 0, impl_use_len);
+			regid = (struct regid *) vat->data;
+			udf_set_regid(regid, IMPL_NAME);
+			udf_add_app_regid(ump, regid);
+		} else {
+			if (impl_use_len)
+				memset(vat->data, 0, impl_use_len);
+			vat->impl_use_len = 0;
+		}
+		error = udf_vat_write(vat_node, raw_vat, vat_length, 0);
 	}
+errout:
 	free(raw_vat, M_TEMP);
 
 	return error;	/* success! */
@@ -2950,7 +2971,7 @@ udf_check_for_vat(struct udf_node *vat_node)
 	/*
 	 * check contents of the file if its the old 1.50 VAT table format.
 	 * Its notoriously broken and allthough some implementations support an
-	 * extention as defined in the UDF 1.50 errata document, its doubtfull
+	 * extension as defined in the UDF 1.50 errata document, its doubtful
 	 * to be useable since a lot of implementations don't maintain it.
 	 */
 	lvinfo = ump->logvol_info;
@@ -2997,7 +3018,7 @@ udf_check_for_vat(struct udf_node *vat_node)
 
 		/* definition */
 		vat = (struct udf_vat *) raw_vat;
-		vat_offset  = vat->header_len;
+		vat_offset  = udf_rw16(vat->header_len);
 		vat_entries = (vat_length - vat_offset)/4;
 
 		assert(lvinfo);
@@ -3102,7 +3123,7 @@ udf_search_vat(struct udf_mount *ump, union udf_pmap *mapping)
 			if (vat_node)
 				vput(vat_node->vnode);
 			vat_loc++;	/* walk forward */
-		} while (vat_loc < late_vat_loc);
+		} while (vat_loc <= late_vat_loc);
 		if (accepted_vat_node)
 			break;
 
@@ -3406,7 +3427,7 @@ udf_read_rootdirs(struct udf_mount *ump)
 	if (error)
 		return ENOENT;
 
-	/* aparently it read in fine */
+	/* apparently it reads in fine */
 
 	/*
 	 * Try the system stream directory; not very likely in the ones we
@@ -3776,10 +3797,11 @@ udf_close_logvol(struct udf_mount *ump, int mntflags)
 {
 	struct vnode *devvp = ump->devvp;
 	struct mmc_op mmc_op;
+	uint32_t phys;
 	int logvol_integrity;
 	int error = 0, error1 = 0, error2 = 0;
 	int tracknr;
-	int nvats, n, nok;
+	int nvats, n, relblk, wrtrack_skew, nok;
 
 	/* already/still closed? */
 	logvol_integrity = udf_rw32(ump->logvol_integrity->integrity_type);
@@ -3800,13 +3822,22 @@ udf_close_logvol(struct udf_mount *ump, int mntflags)
 		DPRINTF(VOLUMES, ("writeout vat_node\n"));
 		udf_writeout_vat(ump);
 
-		/* at least two DVD packets and 3 CD-R packets */
-		nvats = 32;
+		/*
+		 * For bug-compatibility with Windows, the last VAT sector
+		 * must be a multiple of 16/32 from the start of the track.
+		 * To allow for scratches, write out at least a 32 pieces.
+		 */
+		phys = ump->data_track.track_start;
+		wrtrack_skew = phys % 32;
+
+		phys = ump->data_track.next_writable;
+		relblk = phys % 32;
+		nvats = 32 + 32 - (relblk - wrtrack_skew);
 
 #if notyet
 		/*
 		 * TODO calculate the available space and if the disc is
-		 * allmost full, write out till end-256-1 with banks, write
+		 * almost full, write out till end-256-1 with banks, write
 		 * AVDP and fill up with VATs, then close session and close
 		 * disc.
 		 */
@@ -4280,7 +4311,7 @@ udf_timestamp_to_timespec(struct udf_mount *ump,
 	 */
 	tz  = udf_rw16(timestamp->type_tz);
 	tz &= 0x0fff;			/* only lower 12 bits are significant */
-	if (tz & 0x0800)		/* sign extention */
+	if (tz & 0x0800)		/* sign extension */
 		tz |= 0xf000;
 
 	/* TODO check timezone conversion */
@@ -4652,7 +4683,7 @@ udf_create_new_fe(struct udf_mount *ump, struct file_entry *fe, int file_type,
 	icb = &fe->icbtag;
 
 	/*
-	 * Always use strategy type 4 unless on WORM wich we don't support
+	 * Always use strategy type 4 unless on WORM which we don't support
 	 * (yet). Fill in defaults and set for internal allocation of data.
 	 */
 	icb->strat_type      = udf_rw16(4);
@@ -4734,7 +4765,7 @@ udf_create_new_efe(struct udf_mount *ump, struct extfile_entry *efe,
 	icb = &efe->icbtag;
 
 	/*
-	 * Always use strategy type 4 unless on WORM wich we don't support
+	 * Always use strategy type 4 unless on WORM which we don't support
 	 * (yet). Fill in defaults and set for internal allocation of data.
 	 */
 	icb->strat_type      = udf_rw16(4);
@@ -4888,7 +4919,7 @@ udf_dir_detach(struct udf_mount *ump, struct udf_node *dir_node,
 		refcnt = udf_rw16(udf_node->efe->link_cnt);
 	}
 #ifdef UDF_COMPLETE_DELETE
-	/* substract reference counter in attached node */
+	/* subtract reference counter in attached node */
 	refcnt -= 1;
 	if (udf_node->fe) {
 		udf_node->fe->link_cnt = udf_rw16(refcnt);
@@ -4903,7 +4934,7 @@ udf_dir_detach(struct udf_mount *ump, struct udf_node *dir_node,
 	if (fid->file_char & UDF_FILE_CHAR_DIR) {
 		int drefcnt;
 
-		/* substract reference counter in directory node */
+		/* subtract reference counter in directory node */
 		/* note subtract 2 (?) for its was also backreferenced */
 		if (dir_node->fe) {
 			drefcnt  = udf_rw16(dir_node->fe->link_cnt);
@@ -5313,7 +5344,7 @@ error_out:
  *
  * Since the size of the space reserved for allocation descriptors is limited,
  * there is a mechanim provided for extending this space; this is done by a
- * special extent to allow schrinking of the allocations without breaking the
+ * special extent to allow shrinking of the allocations without breaking the
  * linkage to the allocation extent descriptor.
  */
 
@@ -5489,17 +5520,17 @@ udf_loadvnode(struct mount *mp, struct vnode *vp,
 	/*
 	 * Remember where to record an updated version of the descriptor. If
 	 * there is a sequence of indirect entries, icb_loc will have been
-	 * updated. Its the write disipline to allocate new space and to make
+	 * updated. It's the write discipline to allocate new space and to make
 	 * sure the chain is maintained.
 	 *
 	 * `needs_indirect' flags if the next location is to be filled with
-	 * with an indirect entry.
+	 * an indirect entry.
 	 */
 	udf_node->write_loc = icb_loc;
 	udf_node->needs_indirect = needs_indirect;
 
 	/*
-	 * Go trough all allocations extents of this descriptor and when
+	 * Go through all allocations extents of this descriptor and when
 	 * encountering a redirect read in the allocation extension. These are
 	 * daisy-chained.
 	 */
@@ -5890,7 +5921,7 @@ udf_newvnode(struct mount *mp, struct vnode *dvp, struct vnode *vp,
 	/* initialise genfs */
 	genfs_node_init(vp, &udf_genfsops);
 
-	/* get parent's unique ID for refering '..' if its a directory */
+	/* get parent's unique ID for referring '..' if its a directory */
 	if (dir_node->fe) {
 		parent_unique_id = udf_rw64(dir_node->fe->unique_id);
 		parent_gid       = (gid_t) udf_rw32(dir_node->fe->gid);
@@ -6674,7 +6705,7 @@ udf_read_filebuf(struct udf_node *udf_node, struct buf *buf)
 	}
 #endif
 
-	/* request read-in of data from disc sheduler */
+	/* request read-in of data from disc scheduler */
 	buf->b_resid = buf->b_bcount;
 	for (sector = 0; sector < sectors; sector++) {
 		buf_offset = sector * sector_size;
@@ -6720,7 +6751,7 @@ udf_read_filebuf(struct udf_node *udf_node, struct buf *buf)
 			nestbuf->b_lblkno   = lblkno;
 			assert(nestbuf->b_vp == udf_node->vnode);
 
-			/* CD shedules on raw blkno */
+			/* CD schedules on raw blkno */
 			nestbuf->b_blkno      = rblk;
 			nestbuf->b_proc       = NULL;
 			nestbuf->b_rawblkno   = rblk;
@@ -6794,7 +6825,7 @@ udf_write_filebuf(struct udf_node *udf_node, struct buf *buf)
 	}
 	DPRINTF(WRITE, ("\tnot intern\n"));
 
-	/* request write out of data to disc sheduler */
+	/* request write out of data to disc scheduler */
 	buf->b_resid = buf->b_bcount;
 	for (lb_num = 0; lb_num < num_lb; lb_num++) {
 		buf_offset = lb_num * lb_size;
@@ -6834,7 +6865,7 @@ udf_write_filebuf(struct udf_node *udf_node, struct buf *buf)
 		nestbuf->b_lblkno   = lblkno;
 		KASSERT(nestbuf->b_vp == udf_node->vnode);
 
-		/* CD shedules on raw blkno */
+		/* CD schedules on raw blkno */
 		nestbuf->b_blkno      = rblk;
 		nestbuf->b_proc       = NULL;
 		nestbuf->b_rawblkno   = rblk;

@@ -1,4 +1,4 @@
-/* $NetBSD: cpu_acpi.c,v 1.10 2021/01/23 12:34:19 jmcneill Exp $ */
+/* $NetBSD: cpu_acpi.c,v 1.16 2024/06/30 17:58:08 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -33,7 +33,7 @@
 #include "opt_multiprocessor.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_acpi.c,v 1.10 2021/01/23 12:34:19 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_acpi.c,v 1.16 2024/06/30 17:58:08 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -45,6 +45,7 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_acpi.c,v 1.10 2021/01/23 12:34:19 jmcneill Exp $
 
 #include <dev/acpi/acpireg.h>
 #include <dev/acpi/acpivar.h>
+#include <dev/acpi/acpi_srat.h>
 
 #include <arm/armreg.h>
 #include <arm/cpu.h>
@@ -65,7 +66,9 @@ static void	cpu_acpi_attach(device_t, device_t, void *);
 static void	cpu_acpi_tprof_init(device_t);
 #endif
 
-CFATTACH_DECL_NEW(cpu_acpi, 0, cpu_acpi_match, cpu_acpi_attach, NULL, NULL);
+CFATTACH_DECL2_NEW(cpu_acpi, 0,
+    cpu_acpi_match, cpu_acpi_attach, NULL, NULL,
+    cpu_rescan, cpu_childdetached);
 
 #ifdef MULTIPROCESSOR
 static register_t
@@ -93,10 +96,12 @@ cpu_acpi_match(device_t parent, cfdata_t cf, void *aux)
 static void
 cpu_acpi_attach(device_t parent, device_t self, void *aux)
 {
+	prop_dictionary_t dict = device_properties(self);
 	ACPI_MADT_GENERIC_INTERRUPT *gicc = aux;
 	const uint64_t mpidr = gicc->ArmMpidr;
 	const int unit = device_unit(self);
 	struct cpu_info *ci = &cpu_info_store[unit];
+	struct acpisrat_node *node;
 
 #ifdef MULTIPROCESSOR
 	if (cpu_mpidr_aff_read() != mpidr && (boothowto & RB_MD1) == 0) {
@@ -123,14 +128,27 @@ cpu_acpi_attach(device_t parent, device_t self, void *aux)
 	}
 #endif /* MULTIPROCESSOR */
 
+	/* Assume that less efficient processors are faster. */
+	prop_dictionary_set_uint32(dict, "capacity_dmips_mhz",
+	    gicc->EfficiencyClass);
+
 	/* Store the ACPI Processor UID in cpu_info */
 	ci->ci_acpiid = gicc->Uid;
+
+	/* Scan SRAT for NUMA info. */
+	if (cpu_mpidr_aff_read() == mpidr) {
+		acpisrat_init();
+	}
+	node = acpisrat_get_node(gicc->Uid);
+	if (node != NULL) {
+		ci->ci_numa_id = node->nodeid;
+	}
 
 	/* Attach the CPU */
 	cpu_attach(self, mpidr);
 
 #if NTPROF > 0
-	if (cpu_mpidr_aff_read() == mpidr)
+	if (cpu_mpidr_aff_read() == mpidr && armv8_pmu_detect())
 		config_interrupts(self, cpu_acpi_tprof_init);
 #endif
 }
@@ -168,7 +186,7 @@ cpu_acpi_tprof_intr_establish(ACPI_SUBTABLE_HEADER *hdrp, void *aux)
 	if ((gicc->Flags & ACPI_MADT_ENABLED) == 0)
 		return AE_OK;
 
-	const bool cpu_primary_p = cpu_mpidr_aff_read() == gicc->ArmMpidr;
+	const bool cpu_primary_p = cpu_info_store[0].ci_cpuid == gicc->ArmMpidr;
 	const bool intr_ppi_p = gicc->PerformanceInterrupt < 32;
 	const int type = (gicc->Flags & ACPI_MADT_PERFORMANCE_IRQ_MODE) ?
 	    IST_EDGE : IST_LEVEL;
@@ -220,7 +238,12 @@ cpu_acpi_tprof_intr_establish(ACPI_SUBTABLE_HEADER *hdrp, void *aux)
 static void
 cpu_acpi_tprof_init(device_t self)
 {
-	armv8_pmu_init();
+	int err = armv8_pmu_init();
+	if (err) {
+		aprint_error_dev(self,
+		    "failed to initialize PMU event counter\n");
+		return;
+	}
 
 	if (acpi_madt_map() != AE_OK) {
 		aprint_error_dev(self,

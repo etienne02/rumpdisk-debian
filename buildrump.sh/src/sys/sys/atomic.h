@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic.h,v 1.21 2019/12/03 04:57:38 riastradh Exp $	*/
+/*	$NetBSD: atomic.h,v 1.26 2022/07/31 11:28:46 martin Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008 The NetBSD Foundation, Inc.
@@ -181,11 +181,17 @@ uint8_t 	atomic_cas_8(volatile uint8_t *, uint8_t, uint8_t);
 /*
  * Memory barrier operations
  */
-void		membar_enter(void);
-void		membar_exit(void);
+void		membar_acquire(void);
+void		membar_release(void);
 void		membar_producer(void);
 void		membar_consumer(void);
 void		membar_sync(void);
+
+/*
+ * Deprecated memory barriers
+ */
+void		membar_enter(void);
+void		membar_exit(void);
 
 #ifdef	__HAVE_MEMBAR_DATADEP_CONSUMER
 void		membar_datadep_consumer(void);
@@ -391,6 +397,8 @@ __END_DECLS
 
 #include <sys/cdefs.h>
 
+#include <lib/libkern/libkern.h>
+
 #ifdef _LP64
 #define	__HAVE_ATOMIC64_LOADSTORE	1
 #define	__ATOMIC_SIZE_MAX		8
@@ -425,8 +433,13 @@ void kcsan_atomic_store(volatile void *, const void *, int);
 	__typeof__(*(p)) v = *(p)
 #define __END_ATOMIC_LOAD(v) \
 	v
+#ifdef __HAVE_HASHLOCKED_ATOMICS
+#define __DO_ATOMIC_STORE(p, v)						      \
+	__do_atomic_store(p, __UNVOLATILE(&v), sizeof(v))
+#else  /* !__HAVE_HASHLOCKED_ATOMICS */
 #define __DO_ATOMIC_STORE(p, v) \
 	*p = v
+#endif
 #endif
 
 #define	atomic_load_relaxed(p)						      \
@@ -446,18 +459,12 @@ void kcsan_atomic_store(volatile void *, const void *, int);
 	__END_ATOMIC_LOAD(__al_val);					      \
 })
 
-/*
- * We want {loads}-before-{loads,stores}.  It is tempting to use
- * membar_enter, but that provides {stores}-before-{loads,stores},
- * which may not help.  So we must use membar_sync, which does the
- * slightly stronger {loads,stores}-before-{loads,stores}.
- */
 #define	atomic_load_acquire(p)						      \
 ({									      \
 	const volatile __typeof__(*(p)) *__al_ptr = (p);		      \
 	__ATOMIC_PTR_CHECK(__al_ptr);					      \
 	__BEGIN_ATOMIC_LOAD(__al_ptr, __al_val);			      \
-	membar_sync();							      \
+	membar_acquire();						      \
 	__END_ATOMIC_LOAD(__al_val);					      \
 })
 
@@ -474,9 +481,54 @@ void kcsan_atomic_store(volatile void *, const void *, int);
 	volatile __typeof__(*(p)) *__as_ptr = (p);			      \
 	__typeof__(*(p)) __as_val = (v);				      \
 	__ATOMIC_PTR_CHECK(__as_ptr);					      \
-	membar_exit();							      \
+	membar_release();						      \
 	__DO_ATOMIC_STORE(__as_ptr, __as_val);				      \
 })
+
+#ifdef __HAVE_HASHLOCKED_ATOMICS
+static __inline __always_inline void
+__do_atomic_store(volatile void *p, const void *q, size_t size)
+{
+	switch (size) {
+	case 1: {
+		uint8_t v;
+		unsigned s = 8 * ((uintptr_t)p & 3);
+		uint32_t o, n, m = ~(0xffU << s);
+		memcpy(&v, q, 1);
+		do {
+			o = atomic_load_relaxed((const volatile uint32_t *)p);
+			n = (o & m) | ((uint32_t)v << s);
+		} while (atomic_cas_32((volatile uint32_t *)p, o, n) != o);
+		break;
+	}
+	case 2: {
+		uint16_t v;
+		unsigned s = 8 * (((uintptr_t)p & 2) >> 1);
+		uint32_t o, n, m = ~(0xffffU << s);
+		memcpy(&v, q, 2);
+		do {
+			o = atomic_load_relaxed((const volatile uint32_t *)p);
+			n = (o & m) | ((uint32_t)v << s);
+		} while (atomic_cas_32((volatile uint32_t *)p, o, n) != o);
+		break;
+	}
+	case 4: {
+		uint32_t v;
+		memcpy(&v, q, 4);
+		(void)atomic_swap_32(p, v);
+		break;
+	}
+#ifdef __HAVE_ATOMIC64_LOADSTORE
+	case 8: {
+		uint64_t v;
+		memcpy(&v, q, 8);
+		(void)atomic_swap_64(p, v);
+		break;
+	}
+#endif
+	}
+}
+#endif	/* __HAVE_HASHLOCKED_ATOMICS */
 
 #else  /* __STDC_VERSION__ >= 201112L */
 

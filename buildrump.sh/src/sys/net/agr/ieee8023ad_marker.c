@@ -1,4 +1,4 @@
-/*	$NetBSD: ieee8023ad_marker.c,v 1.4 2007/02/22 06:20:16 thorpej Exp $	*/
+/*	$NetBSD: ieee8023ad_marker.c,v 1.6 2021/11/30 01:17:02 yamaguchi Exp $	*/
 
 /*-
  * Copyright (c)2005 YAMAMOTO Takashi,
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ieee8023ad_marker.c,v 1.4 2007/02/22 06:20:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ieee8023ad_marker.c,v 1.6 2021/11/30 01:17:02 yamaguchi Exp $");
 
 #include <sys/param.h>
 #include <sys/callout.h>
@@ -36,9 +36,9 @@ __KERNEL_RCSID(0, "$NetBSD: ieee8023ad_marker.c,v 1.4 2007/02/22 06:20:16 thorpe
 
 #include <net/if.h>
 #include <net/if_ether.h>
+#include <net/ether_slowprotocols.h>
 
 #include <net/agr/if_agrvar_impl.h>
-#include <net/agr/ieee8023_slowprotocols.h>
 #include <net/agr/ieee8023_tlv.h>
 #include <net/agr/ieee8023ad.h>
 #include <net/agr/ieee8023ad_marker.h>
@@ -60,7 +60,7 @@ ieee8023ad_marker_input(struct ifnet *ifp, struct mbuf *m)
 	struct agr_port *port;
 	int error = 0;
 
-	port = ifp->if_agrprivate; /* XXX race with agr_remport. */
+	port = ifp->if_lagg; /* XXX race with agr_remport. */
 	KASSERT(port);
 	if (__predict_false(port->port_flags & AGRPORT_DETACHING)) {
 		goto bad;

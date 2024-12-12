@@ -1,4 +1,4 @@
-/*	$NetBSD: lst.h,v 1.98 2021/04/03 11:08:40 rillig Exp $	*/
+/*	$NetBSD: lst.h,v 1.105 2024/04/27 17:33:46 rillig Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990 The Regents of the University of California.
@@ -98,19 +98,10 @@ struct List {
 	ListNode *last;
 };
 
-/* Free the datum of a node, called before freeing the node itself. */
-typedef void LstFreeProc(void *);
-
-/* Create or destroy a list */
-
-/* Create a new list. */
-List *Lst_New(void);
-/* Free the list nodes, but not the list itself. */
+/* Free the list nodes. */
 void Lst_Done(List *);
-/* Free the list nodes, freeing the node data using the given function. */
-void Lst_DoneCall(List *, LstFreeProc);
-/* Free the list, leaving the node data unmodified. */
-void Lst_Free(List *);
+/* Free the list nodes, as well as each node's datum. */
+void Lst_DoneFree(List *);
 
 #define LST_INIT { NULL, NULL }
 
@@ -124,22 +115,22 @@ Lst_Init(List *list)
 
 /* Get information about a list */
 
-MAKE_INLINE bool
+MAKE_INLINE bool MAKE_ATTR_USE
 Lst_IsEmpty(List *list)
 {
 	return list->first == NULL;
 }
 
 /* Find the first node that contains the given datum, or NULL. */
-ListNode *Lst_FindDatum(List *, const void *);
+ListNode *Lst_FindDatum(List *, const void *) MAKE_ATTR_USE;
 
 /* Modify a list */
 
 /* Insert a datum before the given node. */
 void Lst_InsertBefore(List *, ListNode *, void *);
-/* Place a datum at the front of the list. */
+/* Add a datum at the head of the list. */
 void Lst_Prepend(List *, void *);
-/* Place a datum at the end of the list. */
+/* Add a datum at the tail of the list. */
 void Lst_Append(List *, void *);
 /* Remove the node from the list. */
 void Lst_Remove(List *, ListNode *);
@@ -158,12 +149,13 @@ void LstNode_SetNull(ListNode *);
 
 /* Add a datum at the tail of the queue. */
 MAKE_INLINE void
-Lst_Enqueue(List *list, void *datum) {
+Lst_Enqueue(List *list, void *datum)
+{
 	Lst_Append(list, datum);
 }
 
 /* Remove the head node of the queue and return its datum. */
-void *Lst_Dequeue(List *);
+void *Lst_Dequeue(List *) MAKE_ATTR_USE;
 
 /*
  * A vector is an ordered collection of items, allowing for fast indexed
@@ -182,7 +174,7 @@ void Vector_Init(Vector *, size_t);
  * Return the pointer to the given item in the vector.
  * The returned data is valid until the next modifying operation.
  */
-MAKE_INLINE void *
+MAKE_INLINE void * MAKE_ATTR_USE
 Vector_Get(Vector *v, size_t i)
 {
 	unsigned char *items = v->items;
@@ -193,8 +185,9 @@ void *Vector_Push(Vector *);
 void *Vector_Pop(Vector *);
 
 MAKE_INLINE void
-Vector_Done(Vector *v) {
+Vector_Done(Vector *v)
+{
 	free(v->items);
 }
 
-#endif /* MAKE_LST_H */
+#endif

@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.11 2020/06/29 23:44:01 riastradh Exp $
+#	$NetBSD: Makefile,v 1.13 2022/08/12 10:49:17 riastradh Exp $
 #
 
 .include <bsd.own.mk>
@@ -7,7 +7,11 @@ TESTSDIR=	${TESTSBASE}/dev/cgd
 FILES=		paramsfile
 FILESDIR=	${TESTSDIR}
 
-TESTS_SH=	t_cgd
+TESTS_SH+=	t_cgd
+TESTS_SH+=	t_cgdconfig
+
+SCRIPTSDIR=	${TESTSDIR}
+SCRIPTS+=	h_countkey.sh
 
 .if ${MKRUMP} != "no"
 TESTS_C+=	t_cgd_3des

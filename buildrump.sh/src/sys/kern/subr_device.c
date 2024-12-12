@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_device.c,v 1.8 2021/08/07 18:16:42 thorpej Exp $	*/
+/*	$NetBSD: subr_device.c,v 1.14 2024/08/27 13:44:55 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2006, 2021 The NetBSD Foundation, Inc.
@@ -27,11 +27,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_device.c,v 1.8 2021/08/07 18:16:42 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_device.c,v 1.14 2024/08/27 13:44:55 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
+#include <sys/device_impl.h>
 #include <sys/systm.h>
+
+#include <sys/device_calls.h>
 
 /* Root device. */
 device_t			root_device;
@@ -55,11 +58,14 @@ devhandle_is_valid(devhandle_t handle)
 	return devhandle_is_valid_internal(&handle);
 }
 
-void
-devhandle_invalidate(devhandle_t * const handlep)
+devhandle_t
+devhandle_invalid(void)
 {
-	handlep->impl = NULL;
-	handlep->uintptr = 0;
+	static const devhandle_t invalid_devhandle = {
+		.impl = NULL,
+		.uintptr = 0,
+	};
+	return invalid_devhandle;
 }
 
 devhandle_type_t
@@ -70,6 +76,49 @@ devhandle_type(devhandle_t handle)
 	}
 
 	return handle.impl->type;
+}
+
+int
+devhandle_compare(devhandle_t handle1, devhandle_t handle2)
+{
+	devhandle_type_t type1 = devhandle_type(handle1);
+	devhandle_type_t type2 = devhandle_type(handle2);
+
+	if (type1 == DEVHANDLE_TYPE_INVALID) {
+		return -1;
+	}
+	if (type2 == DEVHANDLE_TYPE_INVALID) {
+		return 1;
+	}
+
+	if (type1 < type2) {
+		return -1;
+	}
+	if (type1 > type2) {
+		return 1;
+	}
+
+	/* For private handles, we also compare the impl pointers. */
+	if (type1 == DEVHANDLE_TYPE_PRIVATE) {
+		intptr_t impl1 = (intptr_t)handle1.impl;
+		intptr_t impl2 = (intptr_t)handle2.impl;
+
+		if (impl1 < impl2) {
+			return -1;
+		}
+		if (impl1 > impl2) {
+			return 1;
+		}
+	}
+
+	if (handle1.integer < handle2.integer) {
+		return -1;
+	}
+	if (handle1.integer > handle2.integer) {
+		return 1;
+	}
+
+	return 0;
 }
 
 device_call_t
@@ -98,11 +147,28 @@ devhandle_lookup_device_call(devhandle_t handle, const char *name,
 }
 
 void
-devhandle_impl_inherit(struct devhandle_impl *impl,
-    const struct devhandle_impl *super)
+devhandle_impl_subclass(struct devhandle_impl *new_impl,
+    const struct devhandle_impl *super,
+    device_call_t (*new_lookup)(devhandle_t, const char *, devhandle_t *))
 {
-	memcpy(impl, super, sizeof(*impl));
-	impl->super = super;
+	new_impl->type = super->type;
+	new_impl->super = super;
+	new_impl->lookup_device_call = new_lookup;
+}
+
+/*
+ * Helper function that provides a short-hand method of the common
+ * "subclass a device handle" flow.
+ */
+devhandle_t
+devhandle_subclass(devhandle_t handle,
+    struct devhandle_impl *new_impl,
+    device_call_t (*new_lookup)(devhandle_t, const char *, devhandle_t *))
+{
+	devhandle_impl_subclass(new_impl, handle.impl, new_lookup);
+	handle.impl = new_impl;
+
+	return handle;
 }
 
 /*
@@ -230,6 +296,17 @@ device_private(device_t dev)
 	return dev == NULL ? NULL : dev->dv_private;
 }
 
+void
+device_set_private(device_t dev, void *private)
+{
+
+	KASSERTMSG(dev->dv_private == NULL, "device_set_private(%p, %p):"
+	    " device %s already has private set to %p",
+	    dev, private, device_xname(dev), device_private(dev));
+	KASSERT(private != NULL);
+	dev->dv_private = private;
+}
+
 prop_dictionary_t
 device_properties(device_t dev)
 {
@@ -285,17 +362,17 @@ device_handle(device_t dev)
 }
 
 int
-device_call(device_t dev, const char *name, void *arg)
+device_call_generic(device_t dev, devhandle_t handle,
+    const struct device_call_generic *gen)
 {
-	devhandle_t handle = device_handle(dev);
 	device_call_t call;
 	devhandle_t call_handle;
 
-	call = devhandle_lookup_device_call(handle, name, &call_handle);
+	call = devhandle_lookup_device_call(handle, gen->name, &call_handle);
 	if (call == NULL) {
 		return ENOTSUP;
 	}
-	return call(dev, call_handle, arg);
+	return call(dev, call_handle, gen->args);
 }
 
 int
@@ -308,5 +385,5 @@ device_enumerate_children(device_t dev,
 		.callback_arg = callback_arg,
 	};
 
-	return device_call(dev, "device-enumerate-children", &args);
+	return device_call(dev, DEVICE_ENUMERATE_CHILDREN(&args));
 }

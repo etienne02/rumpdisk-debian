@@ -1,7 +1,7 @@
-/*	$NetBSD: kobj_machdep.c,v 1.6 2020/12/11 18:03:33 skrll Exp $	*/
+/*	$NetBSD: kobj_machdep.c,v 1.9 2024/02/16 17:18:19 andvar Exp $	*/
 
 /*
- * Copyright (c) 2018 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2018 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kobj_machdep.c,v 1.6 2020/12/11 18:03:33 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kobj_machdep.c,v 1.9 2024/02/16 17:18:19 andvar Exp $");
 
 #define ELFSIZE		ARCH_ELFSIZE
 
@@ -168,6 +168,12 @@ kobj_reloc(kobj_t ko, uintptr_t relocbase, const void *data,
 		return 0;
 	}
 
+	const Elf_Sym *sym = kobj_symbol(ko, symidx);
+
+	if (!local && ELF_ST_BIND(sym->st_info) == STB_LOCAL) {
+		return 0;
+	}
+
 	error = kobj_sym_lookup(ko, symidx, &saddr);
 	if (error != 0) {
 		printf("kobj_reloc: symidx %d lookup failure."
@@ -184,7 +190,7 @@ kobj_reloc(kobj_t ko, uintptr_t relocbase, const void *data,
 	old = *where;
 #ifdef DDB
 	snprintf(disasmbuf, sizeof(disasmbuf), "%08x %s",
-	    le32toh(*insn), strdisasm((vaddr_t)insn), 0);
+	    le32toh(*insn), strdisasm((vaddr_t)insn, 0));
 #endif
 #endif /* KOBJ_MACHDEP_DEBUG */
 

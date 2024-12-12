@@ -1,4 +1,4 @@
-/*	$NetBSD: strftime.c,v 1.48 2020/10/09 18:38:48 christos Exp $	*/
+/*	$NetBSD: strftime.c,v 1.56 2024/06/07 13:53:23 riastradh Exp $	*/
 
 /* Convert a broken-down timestamp to a string.  */
 
@@ -35,7 +35,7 @@
 static char	elsieid[] = "@(#)strftime.c	7.64";
 static char	elsieid[] = "@(#)strftime.c	8.3";
 #else
-__RCSID("$NetBSD: strftime.c,v 1.48 2020/10/09 18:38:48 christos Exp $");
+__RCSID("$NetBSD: strftime.c,v 1.56 2024/06/07 13:53:23 riastradh Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -81,7 +81,7 @@ __weak_alias(strftime_z, _strftime_z)
 
 #include "sys/localedef.h"
 #define _TIME_LOCALE(loc) \
-    ((_TimeLocale *)((loc)->part_impl[(size_t)LC_TIME]))
+    ((_TimeLocale *)((loc)->part_impl[LC_TIME]))
 #define c_fmt   d_t_fmt
 
 enum warn { IN_NONE, IN_SOME, IN_THIS, IN_ALL };
@@ -93,7 +93,7 @@ static char *	_fmt(const timezone_t, const char *, const struct tm *, char *,
 static char *	_yconv(int, int, bool, bool, char *, const char *, locale_t);
 
 #ifndef YEAR_2000_NAME
-#define YEAR_2000_NAME	"CHECK_STRFTIME_FORMATS_FOR_TWO_DIGIT_YEARS"
+# define YEAR_2000_NAME "CHECK_STRFTIME_FORMATS_FOR_TWO_DIGIT_YEARS"
 #endif /* !defined YEAR_2000_NAME */
 
 #define	IN_NONE	0
@@ -134,8 +134,9 @@ strftime_z(const timezone_t sp, char * __restrict s, size_t maxsize,
 
 #if HAVE_STRFTIME_L
 size_t
-strftime_l(char *s, size_t maxsize, char const *format, struct tm const *t,
-	   locale_t locale)
+strftime_l(char *restrict s, size_t maxsize, char const *restrict format,
+	   struct tm const *restrict t,
+	   ATTRIBUTE_MAYBE_UNUSED locale_t locale)
 {
   /* Just call strftime, as only the C locale is supported.  */
   return strftime(s, maxsize, format, t);
@@ -374,31 +375,32 @@ label:
 								time_t) + 1];
 					time_t		mkt;
 
-					tm = *t;
+					tm.tm_sec = t->tm_sec;
+					tm.tm_min = t->tm_min;
+					tm.tm_hour = t->tm_hour;
+					tm.tm_mday = t->tm_mday;
+					tm.tm_mon = t->tm_mon;
+					tm.tm_year = t->tm_year;
+					tm.tm_isdst = t->tm_isdst;
+#if defined TM_GMTOFF && ! UNINIT_TRAP
+					tm.TM_GMTOFF = t->TM_GMTOFF;
+#endif
 					mkt = mktime_z(sp, &tm);
-					if (mkt == (time_t) -1) {
-						/* Fail unless this -1
-						 * represents a valid time.
-						 */
-						struct tm tm_1;
-#define sametm(tm1, tm2) \
-	((tm1)->tm_year == (tm2)->tm_year && \
-	(tm1)->tm_yday == (tm2)->tm_yday && \
-	(tm1)->tm_hour == (tm2)->tm_hour && \
-	(tm1)->tm_min == (tm2)->tm_min && \
-	(tm1)->tm_sec == (tm2)->tm_sec)
-						if (!localtime_rz(sp, &mkt,
-						    &tm_1))
-							return NULL;
-						if (!sametm(&tm, &tm_1))
-							return NULL;
-					}
+					/* If mktime fails, %s expands to the
+					   value of (time_t) -1 as a failure
+					   marker; this is better in practice
+					   than strftime failing.  */
 					/* CONSTCOND */
-					if (TYPE_SIGNED(time_t))
+					if (TYPE_SIGNED(time_t)) {
+						intmax_t n = mkt;
 						(void)snprintf(buf, sizeof(buf),
-						    "%jd", (intmax_t) mkt);
-					else	(void)snprintf(buf, sizeof(buf),
-						    "%ju", (uintmax_t) mkt);
+						    "%"PRIdMAX, n);
+					} else {
+						/*LINTED possibly unreached*/
+						uintmax_t n = mkt;
+						(void)snprintf(buf, sizeof(buf),
+						    "%"PRIuMAX, n);
+					}
 					pt = _add(buf, pt, ptlim);
 				}
 				continue;
@@ -663,15 +665,15 @@ label:
 # endif
 				negative = diff < 0;
 				if (diff == 0) {
-#ifdef TM_ZONE
+# ifdef TM_ZONE
 				  negative = t->TM_ZONE[0] == '-';
-#else
+# else
 				  negative = t->tm_isdst < 0;
-# if HAVE_TZNAME
+#  if HAVE_TZNAME
 				  if (tzname[t->tm_isdst != 0][0] == '-')
 				    negative = true;
+#  endif
 # endif
-#endif
 				}
 				if (negative) {
 					sign = "-";
@@ -731,7 +733,8 @@ label:
 }
 
 size_t
-strftime(char *s, size_t maxsize, const char *format, const struct tm *t)
+strftime(char *restrict s, size_t maxsize, char const *restrict format,
+	 struct tm const *restrict t)
 {
 	size_t r;
 	
@@ -789,7 +792,7 @@ _yconv(int a, int b, bool convert_top, bool convert_yy,
 	int	lead;
 	int	trail;
 
-#define DIVISOR	100
+	int DIVISOR = 100;
 	trail = a % DIVISOR + b % DIVISOR;
 	lead = a / DIVISOR + b / DIVISOR + trail / DIVISOR;
 	trail %= DIVISOR;

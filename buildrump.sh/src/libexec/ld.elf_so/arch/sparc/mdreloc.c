@@ -1,4 +1,4 @@
-/*	$NetBSD: mdreloc.c,v 1.55 2018/04/03 21:10:27 joerg Exp $	*/
+/*	$NetBSD: mdreloc.c,v 1.60 2024/08/03 21:59:58 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2002 The NetBSD Foundation, Inc.
@@ -29,9 +29,18 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * SPARC ELF relocations.
+ *
+ * Reference:
+ *
+ *	SPARC Compliance Definition 2.4.1
+ *	http://sparc.org/wp-content/uploads/2014/01/SCD.2.4.1.pdf.gz
+ */
+
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: mdreloc.c,v 1.55 2018/04/03 21:10:27 joerg Exp $");
+__RCSID("$NetBSD: mdreloc.c,v 1.60 2024/08/03 21:59:58 riastradh Exp $");
 #endif /* not lint */
 
 #include <machine/elf_support.h>
@@ -109,15 +118,15 @@ static const char *reloc_names[] = {
 	"PLT32",
 	"HIPLT22", "LOPLT10", "LOPLT10", "PCPLT22", "PCPLT32",
 	"10", "11", "64", "OLO10", "HH22",
-	"HM10", "LM22", "PC_HH22", "PC_HM10", "PC_LM22", 
+	"HM10", "LM22", "PC_HH22", "PC_HM10", "PC_LM22",
 	"WDISP16", "WDISP19", "GLOB_JMP", "7", "5", "6",
-	"DISP64", "PLT64", "HIX22", "LOX10", "H44", "M44", 
+	"DISP64", "PLT64", "HIX22", "LOX10", "H44", "M44",
 	"L44", "REGISTER", "UA64", "UA16",
 	"TLS_GD_HI22", "TLS_GD_LO10", "TLS_GD_ADD", "TLS_GD_CALL",
 	"TLS_LDM_HI22", "TLS_LDM_LO10", "TLS_LDM_ADD", "TLS_LDM_CALL",
-	"TLS_LDO_HIX22", "TLS_LDO_LOX10", "TLS_LDO_ADD", "TLS_IE_HI22", 
-	"TLS_IE_LO10", "TLS_IE_LD", "TLS_IE_LDX", "TLS_IE_ADD", "TLS_LE_HIX22", 
-	"TLS_LE_LOX10", "TLS_DTPMOD32", "TLS_DTPMOD64", "TLS_DTPOFF32", 
+	"TLS_LDO_HIX22", "TLS_LDO_LOX10", "TLS_LDO_ADD", "TLS_IE_HI22",
+	"TLS_IE_LO10", "TLS_IE_LD", "TLS_IE_LDX", "TLS_IE_ADD", "TLS_LE_HIX22",
+	"TLS_LE_LOX10", "TLS_DTPMOD32", "TLS_DTPMOD64", "TLS_DTPOFF32",
 	"TLS_DTPOFF64", "TLS_TPOFF32", "TLS_TPOFF64",
 };
 #endif
@@ -140,7 +149,7 @@ static const int reloc_target_bitmask[] = {
 	_BM(22), _BM(22),		/* HI22, _22 */
 	_BM(13), _BM(10),		/* RELOC_13, _LO10 */
 	_BM(10), _BM(13), _BM(22),	/* GOT10, GOT13, GOT22 */
-	_BM(10), _BM(22),		/* _PC10, _PC22 */  
+	_BM(10), _BM(22),		/* _PC10, _PC22 */
 	_BM(30), 0,			/* _WPLT30, _COPY */
 	-1, -1, -1,			/* _GLOB_DAT, JMP_SLOT, _RELATIVE */
 	_BM(32)				/* _UA32 */
@@ -282,9 +291,9 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 				break;
 
 			case R_TYPE(TLS_TPOFF32):
-				if (!defobj->tls_done &&
-					_rtld_tls_offset_allocate(obj))
-					     return -1;
+				if (!defobj->tls_static &&
+				    _rtld_tls_offset_allocate(__UNCONST(defobj)))
+					return -1;
 
 				*where = (Elf_Addr)(def->st_value -
 				    defobj->tlsoffset + rela->r_addend);
@@ -301,7 +310,7 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 
 		/*
 		 * If it is no TLS relocation (handled above), we can not
-		 * deal with it if it is beyound R_SPARC_6.
+		 * deal with it if it is beyond R_SPARC_6.
 		 */
 		if (type > R_TYPE(6))
 			return (-1);
@@ -384,7 +393,7 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 #ifdef RTLD_DEBUG_RELOC
 		if (RELOC_RESOLVE_SYMBOL(type)) {
 			rdbg(("%s %s in %s --> %p in %s", reloc_names[type],
-			    obj->strtab + obj->symtab[symnum].st_name,
+			    obj->strtab + obj->symtab[ELF_R_SYM(rela->r_info)].st_name,
 			    obj->path, (void *)value, defobj->path));
 		} else {
 			rdbg(("%s in %s --> %p", reloc_names[type],
@@ -465,7 +474,7 @@ _rtld_relocate_plt_object(const Obj_Entry *obj, const Elf_Rela *rela, Elf_Addr *
 	} else {
 		value = (Elf_Addr)(defobj->relocbase + def->st_value);
 	}
-	rdbg(("bind now/fixup in %s --> new=%p", 
+	rdbg(("bind now/fixup in %s --> new=%p",
 	    defobj->strtab + def->st_name, (void *)value));
 
 	sparc_write_branch(where + 1, (void *)value);

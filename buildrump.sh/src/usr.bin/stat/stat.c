@@ -1,4 +1,4 @@
-/*	$NetBSD: stat.c,v 1.47 2021/08/27 18:11:07 rillig Exp $ */
+/*	$NetBSD: stat.c,v 1.53 2024/03/14 21:17:54 rillig Exp $ */
 
 /*
  * Copyright (c) 2002-2011 The NetBSD Foundation, Inc.
@@ -37,7 +37,7 @@
 
 #include <sys/cdefs.h>
 #if !defined(lint)
-__RCSID("$NetBSD: stat.c,v 1.47 2021/08/27 18:11:07 rillig Exp $");
+__RCSID("$NetBSD: stat.c,v 1.53 2024/03/14 21:17:54 rillig Exp $");
 #endif
 
 #if ! HAVE_NBTOOL_CONFIG_H
@@ -63,6 +63,9 @@ __RCSID("$NetBSD: stat.c,v 1.47 2021/08/27 18:11:07 rillig Exp $");
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#if HAVE_STRUCT_STAT_ST_FLAGS && !HAVE_NBTOOL_CONFIG_H
+#include <util.h>
+#endif
 #include <vis.h>
 
 #if HAVE_STRUCT_STAT_ST_FLAGS
@@ -322,9 +325,10 @@ main(int argc, char *argv[])
 
 	errs = 0;
 	do {
-		if (argc == 0)
+		if (argc == 0) {
+			fn = 0;
 			rc = fstat(STDIN_FILENO, &st);
-		else if (usestat) {
+		} else if (usestat) {
 			/*
 			 * Try stat() and if it fails, fall back to
 			 * lstat() just in case we're examining a
@@ -334,8 +338,7 @@ main(int argc, char *argv[])
 			    errno == ENOENT &&
 			    (rc = lstat(argv[0], &st)) == -1)
 				errno = ENOENT;
-		}
-		else
+		} else
 			rc = lstat(argv[0], &st);
 
 		if (rc == -1) {
@@ -345,8 +348,7 @@ main(int argc, char *argv[])
 				warn("%s: %s",
 				    argc == 0 ? "(stdin)" : argv[0],
 				    usestat ? "stat" : "lstat");
-		}
-		else
+		} else
 			output(&st, argv[0], statfmt, fn, nonl, quiet);
 
 		argv++;
@@ -868,8 +870,11 @@ format1(const struct stat *st,
 	case SHOW_st_flags:
 		small = (sizeof(st->st_flags) == 4);
 		data = st->st_flags;
-		sdata = NULL;
 		formats = FMTF_DECIMAL | FMTF_OCTAL | FMTF_UNSIGNED | FMTF_HEX;
+#if !HAVE_NBTOOL_CONFIG_H
+		sdata = flags_to_string((u_long)st->st_flags, "-");
+		formats |= FMT_STRING;
+#endif
 		if (ofmt == 0)
 			ofmt = FMTF_UNSIGNED;
 		break;
@@ -1030,17 +1035,19 @@ format1(const struct stat *st,
 			char majdev[20], mindev[20];
 			int l1, l2;
 
+			if (size == 0)		/* avoid -1/2 */
+				size++;		/* 1/2 == 0/2 so this is safe */
 			l1 = format1(st,
 			    file,
 			    fmt, flen,
 			    majdev, sizeof(majdev),
-			    flags, size, prec,
+			    flags, (size - 1) / 2, prec,
 			    ofmt, HIGH_PIECE, SHOW_st_rdev, quiet);
 			l2 = format1(st,
 			    file,
 			    fmt, flen,
 			    mindev, sizeof(mindev),
-			    flags, size, prec,
+			    flags | FLAG_MINUS , size / 2, prec,
 			    ofmt, LOW_PIECE, SHOW_st_rdev, quiet);
 			return (snprintf(buf, blen, "%.*s,%.*s",
 			    l1, majdev, l2, mindev));
@@ -1058,11 +1065,11 @@ format1(const struct stat *st,
 		errx(1, "%.*s: bad format", (int)flen, fmt);
 	}
 
-	/*
-	 * If a subdatum was specified but not supported, or an output
-	 * format was selected that is not supported, that's an error.
-	 */
-	if (hilo != 0 || (ofmt & formats) == 0)
+	if (hilo != 0			// subdatum not supported
+	    || !(ofmt & formats)	// output format not supported
+	    || (ofmt == FMTF_STRING && flags & FLAG_SPACE)
+	    || (ofmt == FMTF_STRING && flags & FLAG_PLUS)
+	    || (ofmt == FMTF_STRING && flags & FLAG_ZERO))
 		errx(1, "%.*s: bad format", (int)flen, fmt);
 
 	/*
@@ -1070,7 +1077,7 @@ format1(const struct stat *st,
 	 * First prefixlen chars are not encoded.
 	 */
 	if ((flags & FLAG_POUND) != 0 && ofmt == FMTF_STRING) {
-		flags &= !FLAG_POUND;
+		flags &= ~FLAG_POUND;
 		strncpy(visbuf, sdata, prefixlen);
 		/* Avoid GCC warnings. */
 		visbuf[prefixlen] = 0;

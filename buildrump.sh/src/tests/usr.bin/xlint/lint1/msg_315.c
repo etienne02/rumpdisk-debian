@@ -1,7 +1,15 @@
-/*	$NetBSD: msg_315.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_315.c,v 1.4 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_315.c"
 
 // Test for message: GCC style struct or union member name in initializer [315]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-flags: -Sw -X 351 */
+
+struct point {
+	int x, y;
+} p = {
+	/* expect+1: warning: GCC style struct or union member name in initializer [315] */
+	x: 3,
+	/* expect+1: warning: GCC style struct or union member name in initializer [315] */
+	y: 4,
+};

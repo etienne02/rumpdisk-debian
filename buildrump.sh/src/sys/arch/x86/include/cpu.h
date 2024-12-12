@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.131 2021/08/14 17:51:20 ryo Exp $	*/
+/*	$NetBSD: cpu.h,v 1.138 2024/12/06 10:53:41 bouyer Exp $	*/
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -64,6 +64,10 @@
 #include <sys/cpu_data.h>
 #include <sys/evcnt.h>
 #include <sys/device_if.h> /* for device_t */
+
+#ifdef SVS
+#include <sys/mutex.h>
+#endif
 
 #ifdef XEN
 #include <xen/include/public/xen.h>
@@ -139,18 +143,19 @@ struct cpu_info {
 	volatile int	ci_mtx_oldspl;	/* Old SPL at this ci_idepth */
 
 	/* The following must be aligned for cmpxchg8b. */
-	struct {
-		uint32_t	ipending;
-		int		ilevel;
-		uint32_t	imasked;
-	} ci_istate __aligned(8);
-#define ci_ipending	ci_istate.ipending
-#define	ci_ilevel	ci_istate.ilevel
-#define	ci_imasked	ci_istate.imasked
+	union {
+		uint64_t	ci_istate;
+		struct {
+			uint64_t	ci_ipending:56;
+			uint64_t	ci_ilevel:8;
+		};
+	} __aligned(8);
+	uint64_t	ci_imasked;
+
 	int		ci_idepth;
 	void *		ci_intrstack;
-	uint32_t	ci_imask[NIPL];
-	uint32_t	ci_iunmask[NIPL];
+	uint64_t	ci_imask[NIPL];
+	uint64_t	ci_iunmask[NIPL];
 
 	uint32_t	ci_signature;	/* X86 cpuid type (cpuid.1.%eax) */
 	uint32_t	ci_vendor[4];	/* vendor string */
@@ -320,6 +325,8 @@ struct cpu_info {
 	struct evcnt	ci_xen_raw_systime_backwards_evcnt;
 	struct evcnt	ci_xen_systime_backwards_hardclock_evcnt;
 	struct evcnt	ci_xen_missed_hardclock_evcnt;
+	struct evcnt	ci_xen_timecounter_backwards_evcnt;
+	struct evcnt	ci_xen_timecounter_jump_evcnt;
 #endif	/* XEN */
 
 #if defined(GPROF) && defined(MULTIPROCESSOR)
@@ -496,6 +503,7 @@ void	identify_hypervisor(void);
 
 /* identcpu_subr.c */
 uint64_t cpu_tsc_freq_cpuid(struct cpu_info *);
+void	cpu_dcp_cacheinfo(struct cpu_info *, uint32_t);
 
 typedef enum vm_guest {
 	VM_GUEST_NO = 0,
@@ -508,6 +516,7 @@ typedef enum vm_guest {
 	VM_GUEST_VMWARE,
 	VM_GUEST_KVM,
 	VM_GUEST_VIRTUALBOX,
+	VM_GUEST_GENPVH,
 	VM_LAST
 } vm_guest_t;
 extern vm_guest_t vm_guest;
@@ -531,6 +540,18 @@ vm_guest_is_xenpvh_or_pvhvm(void)
 	switch(vm_guest) {
 	case VM_GUEST_XENPVH:
 	case VM_GUEST_XENPVHVM:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static __inline bool __unused
+vm_guest_is_pvh(void)
+{
+	switch(vm_guest) {
+	case VM_GUEST_XENPVH:
+	case VM_GUEST_GENPVH:
 		return true;
 	default:
 		return false;

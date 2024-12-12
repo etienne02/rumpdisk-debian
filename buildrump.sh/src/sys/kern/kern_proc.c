@@ -1,7 +1,8 @@
-/*	$NetBSD: kern_proc.c,v 1.262 2020/12/24 12:14:50 nia Exp $	*/
+/*	$NetBSD: kern_proc.c,v 1.276 2024/07/14 05:10:40 kre Exp $	*/
 
 /*-
- * Copyright (c) 1999, 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
+ * Copyright (c) 1999, 2006, 2007, 2008, 2020, 2023
+ *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -62,7 +63,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_proc.c,v 1.262 2020/12/24 12:14:50 nia Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_proc.c,v 1.276 2024/07/14 05:10:40 kre Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_kstack.h"
@@ -118,7 +119,7 @@ __KERNEL_RCSID(0, "$NetBSD: kern_proc.c,v 1.262 2020/12/24 12:14:50 nia Exp $");
 struct proclist		allproc		__cacheline_aligned;
 struct proclist		zombproc	__cacheline_aligned;
 
- kmutex_t		proc_lock	__cacheline_aligned;
+kmutex_t		proc_lock	__cacheline_aligned;
 static pserialize_t	proc_psz;
 
 /*
@@ -184,8 +185,6 @@ static u_int		last_free_pt	__cacheline_aligned;
 static pid_t		pid_max		__read_mostly;
 
 /* Components of the first process -- never freed. */
-
-extern struct emul emul_netbsd;	/* defined in kern_exec.c */
 
 struct session session0 = {
 	.s_count = 1,
@@ -354,7 +353,17 @@ proc_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 static int
 proc_ctor(void *arg __unused, void *obj, int flags __unused)
 {
-	memset(obj, 0, sizeof(struct proc));
+	struct proc *p = obj;
+
+	memset(p, 0, sizeof(*p));
+	klist_init(&p->p_klist);
+
+	/*
+	 * There is no need for a proc_dtor() to do a klist_fini(),
+	 * since knote_proc_exit() ensures that p->p_klist is empty
+	 * when a process exits.
+	 */
+
 	return 0;
 }
 
@@ -529,7 +538,7 @@ proc0_init(void)
 	rlim[RLIMIT_MEMLOCK].rlim_cur = lim / 3;
 
 	rlim[RLIMIT_NTHR].rlim_max = maxlwp;
-	rlim[RLIMIT_NTHR].rlim_cur = maxlwp < maxuprc ? maxlwp : maxuprc;
+	rlim[RLIMIT_NTHR].rlim_cur = maxlwp / 2;
 
 	/* Note that default core name has zero length. */
 	limit0.pl_corename = defcorename;
@@ -619,7 +628,7 @@ pgid_in_session(struct proc *p, pid_t pg_id)
 	struct session *session;
 	int error;
 
-	if (pg_id == INT_MIN)
+	if (pg_id <= INT_MIN)
 		return EINVAL;
 
 	mutex_enter(&proc_lock);
@@ -672,6 +681,7 @@ struct lwp *
 proc_find_lwp(proc_t *p, pid_t pid)
 {
 	struct pid_table *pt;
+	unsigned pt_mask;
 	struct lwp *l = NULL;
 	uintptr_t slot;
 	int s;
@@ -679,13 +689,22 @@ proc_find_lwp(proc_t *p, pid_t pid)
 	KASSERT(mutex_owned(p->p_lock));
 
 	/*
-	 * Look in the pid_table.  This is done unlocked inside a pserialize
-	 * read section covering pid_table's memory allocation only, so take
-	 * care to read the slot atomically and only once.  This issues a
-	 * memory barrier for dependent loads on alpha.
+	 * Look in the pid_table.  This is done unlocked inside a
+	 * pserialize read section covering pid_table's memory
+	 * allocation only, so take care to read things in the correct
+	 * order:
+	 *
+	 * 1. First read the table mask -- this only ever increases, in
+	 *    expand_pid_table, so a stale value is safely
+	 *    conservative.
+	 *
+	 * 2. Next read the pid table -- this is always set _before_
+	 *    the mask increases, so if we see a new table and stale
+	 *    mask, the mask is still valid for the table.
 	 */
 	s = pserialize_read_enter();
-	pt = &pid_table[pid & pid_tbl_mask];
+	pt_mask = atomic_load_acquire(&pid_tbl_mask);
+	pt = &atomic_load_consume(&pid_table)[pid & pt_mask];
 	slot = atomic_load_consume(&pt->pt_slot);
 	if (__predict_false(!PT_IS_LWP(slot))) {
 		pserialize_read_exit(s);
@@ -732,18 +751,28 @@ struct lwp *
 proc_find_lwp_unlocked(proc_t *p, pid_t pid)
 {
 	struct pid_table *pt;
+	unsigned pt_mask;
 	struct lwp *l = NULL;
 	uintptr_t slot;
 
 	KASSERT(pserialize_in_read_section());
 
 	/*
-	 * Look in the pid_table.  This is done unlocked inside a pserialize
-	 * read section covering pid_table's memory allocation only, so take
-	 * care to read the slot atomically and only once.  This issues a
-	 * memory barrier for dependent loads on alpha.
+	 * Look in the pid_table.  This is done unlocked inside a
+	 * pserialize read section covering pid_table's memory
+	 * allocation only, so take care to read things in the correct
+	 * order:
+	 *
+	 * 1. First read the table mask -- this only ever increases, in
+	 *    expand_pid_table, so a stale value is safely
+	 *    conservative.
+	 *
+	 * 2. Next read the pid table -- this is always set _before_
+	 *    the mask increases, so if we see a new table and stale
+	 *    mask, the mask is still valid for the table.
 	 */
-	pt = &pid_table[pid & pid_tbl_mask];
+	pt_mask = atomic_load_acquire(&pid_tbl_mask);
+	pt = &atomic_load_consume(&pid_table)[pid & pt_mask];
 	slot = atomic_load_consume(&pt->pt_slot);
 	if (__predict_false(!PT_IS_LWP(slot))) {
 		return NULL;
@@ -993,8 +1022,9 @@ expand_pid_table(void)
 	/* Save old table size and switch tables */
 	tsz = pt_size * sizeof(struct pid_table);
 	n_pt = pid_table;
-	pid_table = new_pt;
-	pid_tbl_mask = new_pt_mask;
+	atomic_store_release(&pid_table, new_pt);
+	KASSERT(new_pt_mask >= pid_tbl_mask);
+	atomic_store_release(&pid_tbl_mask, new_pt_mask);
 
 	/*
 	 * pid_max starts as PID_MAX (= 30000), once we have 16384
@@ -1044,7 +1074,7 @@ proc_alloc(void)
 }
 
 /*
- * proc_alloc_pid_slot: allocate PID and record the occcupant so that
+ * proc_alloc_pid_slot: allocate PID and record the occupant so that
  * proc_find_raw() can find it by the PID.
  */
 static pid_t __noinline
@@ -1172,6 +1202,8 @@ static void __noinline
 proc_free_pid_internal(pid_t pid, uintptr_t type __diagused)
 {
 	struct pid_table *pt;
+
+	KASSERT(mutex_owned(&proc_lock));
 
 	pt = &pid_table[pid & pid_tbl_mask];
 
@@ -1784,8 +1816,7 @@ proc_crmod_enter(void)
 
 	/* Ensure the LWP cached credentials are up to date. */
 	if ((oc = l->l_cred) != p->p_cred) {
-		kauth_cred_hold(p->p_cred);
-		l->l_cred = p->p_cred;
+		l->l_cred = kauth_cred_hold(p->p_cred);
 		kauth_cred_free(oc);
 	}
 }
@@ -1793,8 +1824,7 @@ proc_crmod_enter(void)
 /*
  * Set in a new process credential, and drop the write lock.  The credential
  * must have a reference already.  Optionally, free a no-longer required
- * credential.  The scheduler also needs to inspect p_cred, so we also
- * briefly acquire the sched state mutex.
+ * credential.
  */
 void
 proc_crmod_leave(kauth_cred_t scred, kauth_cred_t fcred, bool sugid)
@@ -1809,14 +1839,17 @@ proc_crmod_leave(kauth_cred_t scred, kauth_cred_t fcred, bool sugid)
 	if (scred != NULL) {
 		p->p_cred = scred;
 		LIST_FOREACH(l2, &p->p_lwps, l_sibling) {
-			if (l2 != l)
-				l2->l_prflag |= LPR_CRMOD;
+			if (l2 != l) {
+				lwp_lock(l2);
+				l2->l_flag |= LW_CACHECRED;
+				lwp_need_userret(l2);
+				lwp_unlock(l2);
+			}
 		}
 
 		/* Ensure the LWP cached credentials are up to date. */
 		if ((oc = l->l_cred) != scred) {
-			kauth_cred_hold(scred);
-			l->l_cred = scred;
+			l->l_cred = kauth_cred_hold(scred);
 		}
 	} else
 		oc = NULL;	/* XXXgcc */
@@ -2014,7 +2047,8 @@ proc_active_lwp(struct proc *p)
 
 	struct lwp *l, *lp = NULL;
 	LIST_FOREACH(l, &p->p_lwps, l_sibling) {
-		KASSERT(l->l_stat >= 0 && l->l_stat < __arraycount(ostat));
+		KASSERT(l->l_stat >= 0);
+		KASSERT(l->l_stat < __arraycount(ostat));
 		if (lp == NULL ||
 		    ostat[l->l_stat] > ostat[lp->l_stat] ||
 		    (ostat[l->l_stat] == ostat[lp->l_stat] &&
@@ -2120,8 +2154,9 @@ sysctl_doeproc(SYSCTLFN_ARGS)
 		/*
 		 * Hande all the operations in one switch on the cost of
 		 * algorithm complexity is on purpose. The win splitting this
-		 * function into several similar copies makes maintenance burden
-		 * burden, code grow and boost is neglible in practical systems.
+		 * function into several similar copies makes maintenance
+		 * burden, code grow and boost is negligible in practical
+		 * systems.
 		 */
 		switch (op) {
 		case KERN_PROC_PID:
@@ -2723,7 +2758,7 @@ void
 fill_kproc2(struct proc *p, struct kinfo_proc2 *ki, bool zombie, bool allowaddr)
 {
 	struct tty *tp;
-	struct lwp *l, *l2;
+	struct lwp *l;
 	struct timeval ut, st, rt;
 	sigset_t ss1, ss2;
 	struct rusage ru;
@@ -2877,13 +2912,9 @@ fill_kproc2(struct proc *p, struct kinfo_proc2 *ki, bool zombie, bool allowaddr)
 		ki->p_ustime_usec = st.tv_usec;
 
 		memcpy(&ru, &p->p_stats->p_ru, sizeof(ru));
-		ki->p_uru_nvcsw = 0;
-		ki->p_uru_nivcsw = 0;
-		LIST_FOREACH(l2, &p->p_lwps, l_sibling) {
-			ki->p_uru_nvcsw += (l2->l_ncsw - l2->l_nivcsw);
-			ki->p_uru_nivcsw += l2->l_nivcsw;
-			ruadd(&ru, &l2->l_ru);
-		}
+		rulwps(p, &ru);
+		ki->p_uru_nvcsw = ru.ru_nvcsw;
+		ki->p_uru_nivcsw = ru.ru_nivcsw;
 		ki->p_uru_maxrss = ru.ru_maxrss;
 		ki->p_uru_ixrss = ru.ru_ixrss;
 		ki->p_uru_idrss = ru.ru_idrss;

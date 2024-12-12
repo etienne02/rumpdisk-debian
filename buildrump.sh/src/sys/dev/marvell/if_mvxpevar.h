@@ -1,4 +1,4 @@
-/*	$NetBSD: if_mvxpevar.h,v 1.5 2019/09/13 07:55:07 msaitoh Exp $	*/
+/*	$NetBSD: if_mvxpevar.h,v 1.9 2022/04/04 19:33:45 andvar Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -102,7 +102,7 @@
  * DMA Descriptor
  *
  * the ethernet device has 8 rx/tx DMA queues. each of queue has its own
- * decriptor list. descriptors are simply index by counter inside the device.
+ * descriptor list. descriptors are simply index by counter inside the device.
  */
 #define MVXPE_TX_RING_CNT	IFQ_MAXLEN
 #define MVXPE_TX_RING_MSK	(MVXPE_TX_RING_CNT - 1)
@@ -117,7 +117,7 @@ struct mvxpe_rx_ring {
 	struct mvxpe_rx_desc		*rx_descriptors;
 	bus_dmamap_t			rx_descriptors_map;
 
-	/* Managment entries for each of descritors */
+	/* Management entries for each of descriptors */
 	struct mvxpe_rx_handle {
 		struct mvxpe_rx_desc	*rxdesc_va;
 		off_t			rxdesc_off; /* from rx_descriptors[0] */
@@ -143,7 +143,7 @@ struct mvxpe_tx_ring {
 	struct mvxpe_tx_desc		*tx_descriptors;
 	bus_dmamap_t			tx_descriptors_map;
 
-	/* Managment entries for each of descritors */
+	/* Management entries for each of descriptors */
 	struct mvxpe_tx_handle {
 		struct mvxpe_tx_desc	*txdesc_va;
 		off_t			txdesc_off; /* from tx_descriptors[0] */
@@ -393,8 +393,8 @@ struct mvxpe_softc {
 
 	/*
 	 * sc_mtx must be held by interface functions to/from
-	 * other frameworks. interrupt hander, sysctl hander,
-	 * ioctl hander, and so on.
+	 * other frameworks. interrupt handler, sysctl handler,
+	 * ioctl handler, and so on.
 	 */
 	kmutex_t sc_mtx;
 
@@ -433,7 +433,7 @@ struct mvxpe_softc {
 	struct mvxpbm_softc *sc_bm;
 
 	/*
-	 * Maintance clock
+	 * Maintenance clock
 	 */
 	callout_t sc_tick_ch;		/* tick callout */
 

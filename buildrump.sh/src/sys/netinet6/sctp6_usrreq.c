@@ -1,5 +1,5 @@
 /* $KAME: sctp6_usrreq.c,v 1.38 2005/08/24 08:08:56 suz Exp $ */
-/* $NetBSD: sctp6_usrreq.c,v 1.22 2020/04/27 19:33:48 rjs Exp $ */
+/* $NetBSD: sctp6_usrreq.c,v 1.26 2024/07/06 10:09:15 andvar Exp $ */
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Cisco Systems, Inc.
@@ -33,7 +33,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctp6_usrreq.c,v 1.22 2020/04/27 19:33:48 rjs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctp6_usrreq.c,v 1.26 2024/07/06 10:09:15 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -234,7 +234,7 @@ sctp_skip_csum:
 	/*
 	 * Check AH/ESP integrity.
 	 */
-	if (ipsec_used && ipsec_in_reject(m, (struct in6pcb *)in6p_ip)) {
+	if (ipsec_used && ipsec_in_reject(m, in6p_ip)) {
 /* XXX */
 #if 0
 		/* FIX ME: need to find right stat */
@@ -262,9 +262,9 @@ sctp_skip_csum:
 		ip6_savecontrol(in6p_ip, m, &opts, NULL);
 #endif
 #elif defined(__NetBSD__)
-		ip6_savecontrol((struct in6pcb *)in6p_ip, &opts, ip6, m);
+		ip6_savecontrol(in6p_ip, &opts, ip6, m);
 #else
-		ip6_savecontrol((struct in6pcb *)in6p_ip, m, &opts);
+		ip6_savecontrol(in6p_ip, m, &opts);
 #endif
 	}
 
@@ -280,10 +280,8 @@ sctp_skip_csum:
 	/* inp's ref-count reduced && stcb unlocked */
 	splx(s);
 	/* XXX this stuff below gets moved to appropriate parts later... */
-	if (m)
-		m_freem(m);
-	if (opts)
-		m_freem(opts);
+	m_freem(m);
+	m_freem(opts);
 
 	if ((in6p) && refcount_up){
 		/* reduce ref-count */
@@ -305,12 +303,8 @@ bad:
 		SCTP_INP_DECR_REF(in6p);
 		SCTP_INP_WUNLOCK(in6p);
 	}
-	if (m) {
-		m_freem(m);
-	}
-	if (opts) {
-		m_freem(opts);
-	}
+	m_freem(m);
+	m_freem(opts);
 	return IPPROTO_DONE;
 }
 
@@ -483,8 +477,7 @@ sctp6_ctlinput(int cmd, const struct sockaddr *pktdst, void *d)
 			}
 		} else {
 			if (PRC_IS_REDIRECT(cmd) && inp) {
-				in6_rtchange((struct in6pcb *)inp,
-					     inet6ctlerrmap[cmd]);
+				in6pcb_rtchange((struct inpcb *)inp, inet6ctlerrmap[cmd]);
 			}
 			if (inp) {
 				/* reduce inp's ref-count */
@@ -502,7 +495,7 @@ sctp6_ctlinput(int cmd, const struct sockaddr *pktdst, void *d)
 }
 
 /*
- * this routine can probably be collasped into the one in sctp_userreq.c
+ * this routine can probably be collapsed into the one in sctp_userreq.c
  * since they do the same thing and now we lookup with a sockaddr
  */
 #ifdef __FreeBSD__
@@ -808,10 +801,8 @@ sctp6_send(struct socket *so, struct mbuf *m, struct sockaddr *nam,
 
 	inp = (struct sctp_inpcb *)so->so_pcb;
 	if (inp == NULL) {
-	        if (control) {
-			m_freem(control);
-			control = NULL;
-		}
+		m_freem(control);
+		control = NULL;
 		m_freem(m);
 		return EINVAL;
 	}
@@ -825,10 +816,8 @@ sctp6_send(struct socket *so, struct mbuf *m, struct sockaddr *nam,
 	}
 	if (nam == NULL) {
 		m_freem(m);
-		if (control) {
-			m_freem(control);
-			control = NULL;
-		}
+		m_freem(control);
+		control = NULL;
 		return (EDESTADDRREQ);
 	}
 
@@ -898,8 +887,8 @@ sctp6_send(struct socket *so, struct mbuf *m, struct sockaddr *nam,
 		 * note with the current version this code will only be
 		 * used by OpenBSD, NetBSD and FreeBSD have methods for
 		 * re-defining sosend() to use sctp_sosend().  One can
-		 * optionaly switch back to this code (by changing back
-		 * the defininitions but this is not advisable.
+		 * optionally switch back to this code (by changing back
+		 * the definitions but this is not advisable.
 		 */
 		int ret;
 		ret = sctp_output(inp, inp->pkt , nam, inp->control, l, 0);

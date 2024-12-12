@@ -1,4 +1,4 @@
-/*	$NetBSD: awi.c,v 1.100 2020/01/29 14:09:58 thorpej Exp $	*/
+/*	$NetBSD: awi.c,v 1.102 2024/07/05 04:31:51 rin Exp $	*/
 
 /*-
  * Copyright (c) 1999,2000,2001 The NetBSD Foundation, Inc.
@@ -78,7 +78,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: awi.c,v 1.100 2020/01/29 14:09:58 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: awi.c,v 1.102 2024/07/05 04:31:51 rin Exp $");
 
 #include "opt_inet.h"
 
@@ -86,7 +86,6 @@ __KERNEL_RCSID(0, "$NetBSD: awi.c,v 1.100 2020/01/29 14:09:58 thorpej Exp $");
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
@@ -638,10 +637,8 @@ awi_stop(struct ifnet *ifp, int disable)
 	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
 	ifp->if_timer = 0;
 	sc->sc_tx_timer = sc->sc_rx_timer = 0;
-	if (sc->sc_rxpend != NULL) {
-		m_freem(sc->sc_rxpend);
-		sc->sc_rxpend = NULL;
-	}
+	m_freem(sc->sc_rxpend);
+	sc->sc_rxpend = NULL;
 	IFQ_PURGE(&ifp->if_snd);
 
 	if (disable) {

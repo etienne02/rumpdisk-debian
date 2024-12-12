@@ -1,5 +1,7 @@
-.\"	$NetBSD: tzset.3,v 1.42 2019/07/03 15:50:16 christos Exp $
-.Dd July 2, 2019
+.\"	$NetBSD: tzset.3,v 1.46 2023/09/16 18:40:26 christos Exp $
+.\" This file is in the public domain, so clarified as of
+.\" 2009-05-17 by Arthur David Olson.
+.Dd September 16, 2023
 .Dt TZSET 3
 .Os
 .Sh NAME
@@ -36,7 +38,7 @@ and
 functions.
 .Pp
 If
-.Ar tz
+.Ar zone
 is not a valid timezone description, or if the object cannot be allocated,
 .Fn tzalloc
 returns a
@@ -105,7 +107,7 @@ If there is no match, then
 is returned and
 .Va errno
 is set to
-.Dv ESRCH .
+.Er ESRCH .
 The
 .Fn tzset
 function acts like
@@ -407,7 +409,9 @@ local timezone information directory
 .\" .It Pa /usr/share/zoneinfo/localtime
 .\" local timezone file
 .It Pa /usr/share/zoneinfo/posixrules
-used with POSIX-style TZ's
+default DST rules (obsolete,
+and can cause bugs if present)
+used with POSIX-style TZ
 .It Pa /usr/share/zoneinfo/GMT
 for UTC leap seconds
 .El

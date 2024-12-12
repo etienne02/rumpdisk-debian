@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_ioctl.h,v 1.78 2021/04/14 16:26:23 mlelstv Exp $	*/
+/*	$NetBSD: netbsd32_ioctl.h,v 1.80 2024/05/11 10:22:17 martin Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -316,6 +316,35 @@ struct netbsd32_if_clonereq {
 	netbsd32_charp ifcr_buffer;
 };
 
+struct netbsd32_if_data {
+	u_char	ifi_type;
+	u_char	ifi_addrlen;
+	u_char	ifi_hdrlen;
+	u_char  __pack_dummy;
+	int	ifi_link_state;
+	uint64_t ifi_mtu;
+	uint64_t ifi_metric;
+	uint64_t ifi_baudrate;
+	uint64_t ifi_ipackets;
+	uint64_t ifi_ierrors;
+	uint64_t ifi_opackets;
+	uint64_t ifi_oerrors;
+	uint64_t ifi_collisions;
+	uint64_t ifi_ibytes;
+	uint64_t ifi_obytes;
+	uint64_t ifi_imcasts;
+	uint64_t ifi_omcasts;
+	uint64_t ifi_iqdrops;
+	uint64_t ifi_noproto;
+	struct	netbsd32_timespec ifi_lastchange;
+} __packed;
+
+struct netbsd32_ifdatareq {
+	char	ifdr_name[IFNAMSIZ];		/* if name, e.g. "en0" */
+	struct	netbsd32_if_data ifdr_data;
+};
+
+
 /* from <dev/pci/if_devar.h> */
 #define	SIOCGADDRROM32		_IOW('i', 240, struct netbsd32_ifreq)	/* get 128 bytes of ROM */
 #define	SIOCGCHIPID32		_IOWR('i', 241, struct netbsd32_ifreq)	/* get chipid */
@@ -388,6 +417,10 @@ struct netbsd32_if_clonereq {
 
 #define	SIOCGIFMTU32	_IOWR('i', 126, struct netbsd32_ifreq)	/* get ifnet mtu */
 #define	OSIOCGIFMTU32	_IOWR('i', 126, struct netbsd32_oifreq)	/* get ifnet mtu */
+
+#define SIOCGIFDATA32	_IOWR('i', 133, struct netbsd32_ifdatareq)
+#define SIOCZIFDATA32	_IOWR('i', 134, struct netbsd32_ifdatareq)
+
 /* was 125 SIOCSIFASYNCMAP32 */
 /* was 124 SIOCGIFASYNCMAP32 */
 /* from <net/bpf.h> */
@@ -479,6 +512,17 @@ struct netbsd32_sioc_vif_req {
 };
 /* from <sys/sockio.h> */
 #define	SIOCGETVIFCNT32	_IOWR('u', 51, struct netbsd32_sioc_vif_req)/* vif pkt cnt */
+
+/* from <netinet/if_arp.h> */
+struct netbsd32_in_nbrinfo {
+	char ifname[IFNAMSIZ];	/* if name, e.g. "en0" */
+	struct in_addr	addr;	/* IPv4 address of the neighbor */
+	netbsd32_long	asked;	/* number of queries already sent for this addr */
+	int	state;		/* reachability state */
+	int	expire;		/* lifetime for NDP state transition */
+};
+/* from <sys/sockio.h> */
+#define	SIOCGNBRINFO32		_IOWR('i', 249, struct netbsd32_in_nbrinfo)
 
 /* from <netinet6/nd6.h> */
 struct netbsd32_in6_nbrinfo {

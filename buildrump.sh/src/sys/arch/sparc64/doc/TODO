@@ -1,4 +1,4 @@
-/* $NetBSD: TODO,v 1.44 2021/07/05 16:59:54 palle Exp $ */
+/* $NetBSD: TODO,v 1.48 2023/12/12 20:24:00 andvar Exp $ */
 
 Things to be done:
 
@@ -13,17 +13,15 @@ sun4u:
 sun4v:
  - current status
      T5 ldom with 2 VCPU and 4GB  (primary ldom is Solaris 11.4 SRU30)::
-       - kernel boots from miniroot.fs via ldom fisk (vdsk)
+       - kernel boots from miniroot.fs via ldom disk (vdsk)
 	   - ldom virtual network interface (vnet) is working
 	     (verified by exiting sysinst and issuing a ping command)
-	   - the sysinst tool starts, disk setup is working,
-	     but the process crashes when selecting network installation method.
-		 The %i,%l and %o registers are corrupted, after a call to the libcurses
-		 wrefresh() function.
-		 If the sysinst insallation source is local directory, the sets are properly
-		 unpacked, but the system hangs afterwards when running the makedev script.
+	   - the sysinst tool starts, disk setup is working, network configuration is working,
+	     but after the selected (minimal) sets have been downloaded and installed
+		 the 'sh MAKEDEV all' command hangs.
 	 T2000 ldom with 8 VCPU and 4GB:
 	   - crashes in /sbin/init doing an access() call where %o0 is corrupted (zero)
+	   - device pci/ebus/com failes to enable interrupts (hv_intr_settarget() fails returning 6)
 	 S7 ldom with 8 VCPU and 16GB (primary ldom is Solaris 11.4 SRU33):
 	   - same status as T5 ldom
 - 64-bit kernel support
@@ -43,9 +41,9 @@ sun4v:
 - interrupts not handled properly (com at ebus only...)
 - mpt(4) complains: mpt0: Phy 0: Link Status Unknown
 - man pages for drivers imported from OpenBSD lke vpci, vbus, cbus, vdsk, ldc etc.
-- vdsk and ldc drivers: code maked with OPENBSD_BUSDMA - make the bus_dma stuff work properly
+- vdsk and ldc drivers: code marked with OPENBSD_BUSDMA - make the bus_dma stuff work properly
 - vbus.c: handle prom_getprop() memory leaks
-- locore.s: rft_user (sun4v specific manaul fill) - seems to work, but is it good enough (compared to openbsds rft_user?
+- locore.s: rft_user (sun4v specific manual fill) - seems to work, but is it good enough (compared to openbsds rft_user?
 - openfirmware interface
     bounce handlng could need rework
       - only #if __arch64__ independent for SUN4V, as OF for all ultrasparcs is

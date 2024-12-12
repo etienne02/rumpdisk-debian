@@ -88,7 +88,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 }
 EOF
 
-	c++ -fsanitize=fuzzer -o test -pg test.cc
+	c++ -fsanitize=fuzzer -static -o test -pg test.cc
 	paxctl +a test
 	atf_check -s ignore -o ignore -e match:"ERROR: libFuzzer: timeout" ./test -timeout=5
 }
@@ -121,9 +121,9 @@ EOF
 	atf_check -s ignore -o ignore -e match:"ERROR: libFuzzer: timeout" ./test -timeout=5
 }
 timeout_pie_body(){
-	
+
 	#check whether -pie flag is supported on this architecture
-	if ! c++ -pie -dM -E - < /dev/null 2>/dev/null >/dev/null; then 
+	if ! c++ -pie -dM -E - < /dev/null 2>/dev/null >/dev/null; then
 		atf_set_skip "c++ -pie not supported on this architecture"
 	fi
 	cat > test.cc << EOF

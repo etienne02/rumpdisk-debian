@@ -1,9 +1,9 @@
-/*	$NetBSD: vmwgfx_marker.c,v 1.2 2018/08/27 04:58:37 riastradh Exp $	*/
+/*	$NetBSD: vmwgfx_marker.c,v 1.4 2022/10/25 23:35:43 riastradh Exp $	*/
 
+// SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright (C) 2010 VMware, Inc., Palo Alto, CA., USA
- * All Rights Reserved.
+ * Copyright 2010 VMware, Inc., Palo Alto, CA., USA
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -29,7 +29,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vmwgfx_marker.c,v 1.2 2018/08/27 04:58:37 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vmwgfx_marker.c,v 1.4 2022/10/25 23:35:43 riastradh Exp $");
 
 #include "vmwgfx_drv.h"
 
@@ -51,11 +51,10 @@ void vmw_marker_queue_takedown(struct vmw_marker_queue *queue)
 {
 	struct vmw_marker *marker, *next;
 
-	spin_lock(&queue->lock);
 	list_for_each_entry_safe(marker, next, &queue->head, head) {
 		kfree(marker);
 	}
-	spin_unlock(&queue->lock);
+	spin_lock_destroy(&queue->lock);
 }
 
 int vmw_marker_push(struct vmw_marker_queue *queue,

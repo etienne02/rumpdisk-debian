@@ -6,7 +6,7 @@
 #include <machine/asm.h>
 
 #if defined(LIBC_SCCS)
-	RCSID("$NetBSD: strlen.S,v 1.2 2014/03/22 19:38:46 jakllsch Exp $")
+	RCSID("$NetBSD: strlen.S,v 1.5 2024/03/30 22:03:39 andvar Exp $")
 #endif
 
 ENTRY(strlen)
@@ -24,7 +24,7 @@ ENTRY(strlen)
 	/*
 	 * There are many well known branch-free sequences which are used
 	 * for determining whether a zero-byte is contained within a word.
-	 * These sequences are generally much more efficent than loading
+	 * These sequences are generally much more efficient than loading
 	 * and comparing each byte individually.
 	 *
 	 * The expression [1,2]:
@@ -81,7 +81,7 @@ ENTRY(strlen)
 	 * presented above, code that uses it will be faster as long as
 	 * the rate of false positives is low.
 	 *
-	 * This is likely, because the the false positive can only occur
+	 * This is likely, because the false positive can only occur
 	 * if the most siginificant bit of a byte within the word is set.
 	 * The expression will never fail for typical 7-bit ASCII strings.
 	 *
@@ -89,7 +89,7 @@ ENTRY(strlen)
 	 * to load constants.
 	 *
 	 *
-	 * [1] Henry S. Warren Jr., "Hacker's Delight", Addison-Westley 2003
+	 * [1] Henry S. Warren Jr., "Hacker's Delight", Addison-Wesley 2003
 	 *
 	 * [2] International Business Machines, "The PowerPC Compiler Writer's
 	 *     Guide", Warthman Associates, 1996

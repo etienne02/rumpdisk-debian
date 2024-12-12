@@ -1,4 +1,4 @@
-/*	$NetBSD: if_lagg_lacp.h,v 1.2 2021/05/24 06:08:28 yamaguchi Exp $	*/
+/*	$NetBSD: if_lagg_lacp.h,v 1.5 2023/11/22 03:49:13 yamaguchi Exp $	*/
 
 /*
  * Copyright (c) 2021 Internet Initiative Japan Inc.
@@ -41,20 +41,14 @@
 #define LACP_MAX_PORTS		16
 #define LACP_SYSTEM_PRIO	0x8000U
 #define LACP_PORT_PRIO		LAGG_PORT_PRIO
+#define LACP_SENDDU_PPS		3
+#define LACP_RCVDU_LIMIT	(LACP_SENDDU_PPS * LACP_MAX_PORTS)
 
 #define LACP_PARTNER_ADMIN_OPTIMISTIC	(LACP_STATE_SYNC | \
 					LACP_STATE_AGGREGATION | \
 					LACP_STATE_COLLECTING | \
 					LACP_STATE_DISTRIBUTING)
 #define LACP_PARTNER_ADMIN_STRICT	0
-
-#define SLOWPROTOCOLS_SUBTYPE_LACP	1
-#define SLOWPROTOCOLS_SUBTYPE_MARKER	2
-
-struct slowprothdr {
-	uint8_t		 sph_subtype;
-	uint8_t		 sph_version;
-} __packed;
 
 #define TLV_TYPE_TERMINATE	0
 
@@ -135,35 +129,4 @@ struct markerdu {
 	struct tlvhdr		 mdu_tlv_term;
 	uint8_t			 mdu_resv[90];
 } __packed;
-
-/*
- * lacp media:
- *   1byte
- * +-------+-------+-------+-------+
- * | media |                 speed |
- * +-------+-------+-------+-------+
- */
-
-enum lacp_linkspeed {
-	LACP_LINKSPEED_UNKNOWN = 0,
-	LACP_LINKSPEED_10,
-	LACP_LINKSPEED_100,
-	LACP_LINKSPEED_1000,
-	LACP_LINKSPEED_2500,
-	LACP_LINKSPEED_5000,
-	LACP_LINKSPEED_10G,
-	LACP_LINKSPEED_25G,
-	LACP_LINKSPEED_40G,
-	LACP_LINKSPEED_50G,
-	LACP_LINKSPEED_56G,
-	LACP_LINKSPEED_100G,
-	LACP_LINKSPEED_200G,
-};
-
-#define LACP_MEDIA_OFFSET	24
-#define LACP_MEDIA_MASK		0xff000000U
-#define LACP_MEDIA_ETHER	(__BIT(0) << LACP_MEDIA_OFFSET)
-#define LACP_MEDIA_FDX		(__BIT(1) << LACP_MEDIA_OFFSET)
-#define LACP_MEDIA_DEFAULT	(LACP_LINKSPEED_UNKNOWN |	\
-				 LACP_MEDIA_ETHER | LACP_MEDIA_FDX)
 #endif

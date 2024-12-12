@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.235 2021/08/06 05:22:21 tsutsui Exp $	*/
+/*	$NetBSD: machdep.c,v 1.239 2024/03/05 14:15:32 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.235 2021/08/06 05:22:21 tsutsui Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.239 2024/03/05 14:15:32 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_compat_netbsd.h"
@@ -370,8 +370,8 @@ static const struct hp300_model hp300_models[] = {
 static void
 identifycpu(void)
 {
-	const char *t, *mc, *s, *mmu;
-	int i; 
+	const char *t, *cpu, *s, *mmu;
+	int i;
 	char fpu[64], cache[64];
 
 	/*
@@ -397,13 +397,13 @@ identifycpu(void)
 	 */
 	switch (cputype) {
 	case CPU_68040:
-		mc = "40";
+		cpu = "MC68040";
 		break;
 	case CPU_68030:
-		mc = "30";
+		cpu = "MC68030";
 		break;
 	case CPU_68020:
-		mc = "20";
+		cpu = "MC68020";
 		break;
 	default:
 		printf("\nunknown cputype %d\n", cputype);
@@ -426,7 +426,7 @@ identifycpu(void)
 		mmu = ", HP MMU";
 		break;
 	default:
-		printf("MC680%s\nunknown MMU type %d\n", mc, mmutype);
+		printf("%s\nunknown MMU type %d\n", cpu, mmutype);
 		panic("startup");
 	}
 
@@ -478,7 +478,7 @@ identifycpu(void)
 		}
 	}
 
-	cpu_setmodel("HP 9000/%s (%sMHz MC680%s CPU%s%s%s)", t, s, mc,
+	cpu_setmodel("HP 9000/%s (%sMHz %s CPU%s%s%s)", t, s, cpu,
 	    mmu, fpu, cache);
 	printf("%s\n", cpu_getmodel());
 #ifdef DIAGNOSTIC
@@ -589,11 +589,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */
@@ -612,7 +607,9 @@ cpu_reboot(int howto, char *bootstr)
 #if defined(PANICWAIT) && !defined(DDB)
 	if ((howto & RB_HALT) == 0 && panicstr) {
 		printf("hit any key to reboot...\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 		printf("\n");
 	}
 #endif
@@ -620,7 +617,9 @@ cpu_reboot(int howto, char *bootstr)
 	/* Finally, halt/reboot the system. */
 	if (howto & RB_HALT) {
 		printf("System halted.  Hit any key to reboot.\n\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 	}
 
 	printf("rebooting...\n");

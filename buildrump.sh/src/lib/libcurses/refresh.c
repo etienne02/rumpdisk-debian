@@ -1,4 +1,4 @@
-/*	$NetBSD: refresh.c,v 1.113 2021/05/08 04:29:07 mrg Exp $	*/
+/*	$NetBSD: refresh.c,v 1.128 2023/06/24 05:18:13 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)refresh.c	8.7 (Berkeley) 8/13/94";
 #else
-__RCSID("$NetBSD: refresh.c,v 1.113 2021/05/08 04:29:07 mrg Exp $");
+__RCSID("$NetBSD: refresh.c,v 1.128 2023/06/24 05:18:13 msaitoh Exp $");
 #endif
 #endif				/* not lint */
 
@@ -57,22 +57,7 @@ static void	scrolln(int, int, int, int, int);
 
 static int	_wnoutrefresh(WINDOW *, int, int, int, int, int, int);
 
-#ifdef HAVE_WCHAR
-static int celleq(__LDATA *, __LDATA *);
 static int lineeq(__LDATA *, __LDATA *, size_t);
-#else  /* !HAVE_WCHAR */
-static inline int
-celleq(__LDATA *x, __LDATA *y)
-{
-	return memcmp(x, y, sizeof(__LDATA)) == 0;
-}
-
-static int
-lineeq(__LDATA *xl, __LDATA *yl, size_t len)
-{
-	return memcmp(xl, yl, len * __LDATASIZE) == 0;
-}
-#endif /* HAVE_WCHAR */
 
 #define	CHECK_INTERVAL		5 /* Change N lines before checking typeahead */
 
@@ -100,9 +85,9 @@ int
 wnoutrefresh(WINDOW *win)
 {
 
-#ifdef DEBUG
-	__CTRACE(__CTRACE_REFRESH, "wnoutrefresh: win %p, begy %d, begx %d, maxy %d, maxx %d\n", win, win->begy, win->begx, win->maxy, win->maxx);
-#endif
+	__CTRACE(__CTRACE_REFRESH,
+	    "wnoutrefresh: win %p, begy %d, begx %d, maxy %d, maxx %d\n",
+	    win, win->begy, win->begx, win->maxy, win->maxx);
 
 	return _wnoutrefresh(win, 0, 0, win->begy, win->begx,
 	    win->maxy, win->maxx);
@@ -118,13 +103,11 @@ pnoutrefresh(WINDOW *pad, int pbegy, int pbegx, int sbegy, int sbegx,
 {
 	int pmaxy, pmaxx;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "pnoutrefresh: pad %p, flags 0x%08x\n",
 	    pad, pad->flags);
 	__CTRACE(__CTRACE_REFRESH,
 	    "pnoutrefresh: (%d, %d), (%d, %d), (%d, %d)\n",
 	    pbegy, pbegx, sbegy, sbegx, smaxy, smaxx);
-#endif
 
 	/* SUS says if these are negative, they should be treated as zero */
 	if (pbegy < 0)
@@ -167,16 +150,18 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 	SCREEN *screen = win->screen;
 	short	sy, wy, wx, y_off, x_off, mx, dy_off, dx_off, endy;
 	int newy, newx;
+#ifdef HAVE_WCHAR
+	int i, tx;
+	wchar_t ch;
+#endif
 	__LINE	*wlp, *vlp, *dwlp;
 	WINDOW	*sub_win, *orig, *swin, *dwin;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "_wnoutrefresh: win %p, flags 0x%08x\n",
 	    win, win->flags);
 	__CTRACE(__CTRACE_REFRESH,
 	    "_wnoutrefresh: (%d, %d), (%d, %d), (%d, %d)\n",
 	    begy, begx, wbegy, wbegx, maxy, maxx);
-#endif
 
 	if (screen->curwin)
 		return OK;
@@ -196,11 +181,9 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 		    sub_win = sub_win->nextp) {
 			if (sub_win->flags & __ISDERWIN)
 				continue;
-#ifdef DEBUG
 			__CTRACE(__CTRACE_REFRESH,
 			    "wnout_refresh: win %p, sub_win %p\n",
 			    orig, sub_win);
-#endif
 			for (sy = 0; sy < sub_win->maxy; sy++) {
 				if (sub_win->alines[sy]->flags & __ISDIRTY) {
 					orig->alines[sy + sub_win->begy - orig->begy]->flags
@@ -260,20 +243,19 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 			_wintype = "dwin";
 
 		__CTRACE(__CTRACE_REFRESH,
-		"_wnoutrefresh: %s wy %d\tf %d\tl %d\tflags %x\n",
-		_wintype, dy_off, *dwlp->firstchp, *dwlp->lastchp, dwlp->flags);
+		    "_wnoutrefresh: %s wy %d\tf %d\tl %d\tflags %x\n",
+		    _wintype, dy_off, *dwlp->firstchp, *dwlp->lastchp,
+		    dwlp->flags);
 		__CTRACE(__CTRACE_REFRESH,
-		"_wnoutrefresh: %s maxx %d\tch_off %d wlp %p\n",
-		_wintype, dwin->maxx, dwin->ch_off, wlp);
+		    "_wnoutrefresh: %s maxx %d\tch_off %d wlp %p\n",
+		    _wintype, dwin->maxx, dwin->ch_off, wlp);
 #endif
 		if (((wlp->flags & (__ISDIRTY | __ISFORCED)) == 0) &&
 		    ((dwlp->flags & (__ISDIRTY | __ISFORCED)) == 0))
 			continue;
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH,
-		"_wnoutrefresh: line y_off %d (dy_off %d) is dirty\n",
-			y_off, dy_off);
-#endif
+		    "_wnoutrefresh: line y_off %d (dy_off %d) is dirty\n",
+		    y_off, dy_off);
 
 		wlp = swin->alines[wy];
 		vlp = screen->__virtscr->alines[y_off];
@@ -309,37 +291,61 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 
 			/* Copy line from "win" to "__virtscr". */
 			while (wx < mx) {
-#ifdef DEBUG
 				__CTRACE(__CTRACE_REFRESH,
 				    "_wnoutrefresh: copy from %d, "
-				    "%d to %d, %d: %s, 0x%x",
+				    "%d to %d, %d: '%s', 0x%x, 0x%x",
 				    wy, wx, y_off, x_off,
 				    unctrl(wlp->line[wx].ch),
-				    wlp->line[wx].attr);
-				__CTRACE(__CTRACE_REFRESH, " (curdest %s, 0x%x)",
+				    wlp->line[wx].attr, wlp->line[wx].cflags);
+				__CTRACE(__CTRACE_REFRESH,
+				    " (curdest %s, 0x%x, 0x%x)",
 				    unctrl(vlp->line[x_off].ch),
-				    vlp->line[x_off].attr);
-#endif
+				    vlp->line[x_off].attr,
+				    vlp->line[x_off].cflags);
 				/* Copy character */
 				vlp->line[x_off].ch = wlp->line[wx].ch;
 				/* Copy attributes  */
 				vlp->line[x_off].attr = wlp->line[wx].attr;
-				/* Check for nca conflict with colour */
-				if ((vlp->line[x_off].attr & __COLOR) &&
-				    (vlp->line[x_off].attr & screen->nca))
-					vlp->line[x_off].attr &= ~__COLOR;
+				/* Copy character flags  */
+				vlp->line[x_off].cflags = wlp->line[wx].cflags;
+#ifdef HAVE_WCHAR
+				vlp->line[x_off].wcols = wlp->line[wx].wcols;
+
+				ch = wlp->line[wx].ch;
+				for (tx = x_off + 1, i = wlp->line[wx].wcols - 1;
+				    i > 0; i--, tx++) {
+					vlp->line[tx].ch = ch;
+					vlp->line[tx].wcols = i;
+					vlp->line[tx].cflags =
+					    CA_CONTINUATION;
+				}
+#endif /* HAVE_WCHAR */
 				if (win->flags & __ISDERWIN) {
 					dwlp->line[dx_off].ch =
 						wlp->line[wx].ch;
 					dwlp->line[dx_off].attr =
 						wlp->line[wx].attr;
+					dwlp->line[dx_off].cflags =
+						wlp->line[wx].cflags;
+#ifdef HAVE_WCHAR
+					dwlp->line[dx_off].wcols =
+						wlp->line[wx].wcols;
+
+					for (tx = dx_off + 1, i = wlp->line[wx].wcols - 1;
+					    i > 0; i--, tx++) {
+						dwlp->line[tx].ch = ch;
+						dwlp->line[tx].wcols = i;
+						dwlp->line[tx].cflags =
+						    CA_CONTINUATION;
+					}
+#endif /* HAVE_WCHAR */
 				}
 
 #ifdef HAVE_WCHAR
-				if (wlp->line[wx].ch
-				    == (wchar_t)btowc((int) win->bch)) {
+				if (wlp->line[wx].ch == win->bch) {
 					vlp->line[x_off].ch = win->bch;
-					SET_WCOL(vlp->line[x_off], 1);
+					vlp->line[x_off].wcols = win->wcols;
+					vlp->line[x_off].cflags = CA_BACKGROUND;
 					if (_cursesi_copy_nsp(win->bnsp,
 							      &vlp->line[x_off])
 					    == ERR)
@@ -347,7 +353,10 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 					if (win->flags & __ISDERWIN) {
 						dwlp->line[dx_off].ch =
 							win->bch;
-						SET_WCOL(dwlp->line[dx_off], 1);
+						dwlp->line[dx_off].wcols =
+						    win->wcols;
+						dwlp->line[dx_off].cflags =
+							wlp->line[wx].cflags;
 						if (_cursesi_copy_nsp(win->bnsp,
 						     &dwlp->line[dx_off])
 						    == ERR)
@@ -355,14 +364,18 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 					}
 				}
 #endif /* HAVE_WCHAR */
-#ifdef DEBUG
-				__CTRACE(__CTRACE_REFRESH, " = %s, 0x%x\n",
+				__CTRACE(__CTRACE_REFRESH, " = '%s', 0x%x\n",
 				    unctrl(vlp->line[x_off].ch),
 				    vlp->line[x_off].attr);
-#endif
+#ifdef HAVE_WCHAR
+				x_off += wlp->line[wx].wcols;
+				dx_off += wlp->line[wx].wcols;
+				wx += wlp->line[wx].wcols;
+#else
 				wx++;
 				x_off++;
 				dx_off++;
+#endif /* HAVE_WCHAR */
 			}
 
 			/* Set flags on "__virtscr" and unset on "win". */
@@ -414,17 +427,15 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 				}
 			}
 
-#ifdef DEBUG
 			__CTRACE(__CTRACE_REFRESH,
 			    "__virtscr: firstch = %d, lastch = %d\n",
 			    *vlp->firstchp, *vlp->lastchp);
-#endif
 			/*
 			 * Unset change pointers only if a window and we
 			 * are not forcing a redraw. A pad can be displayed
 			 * again without any of the contents changing.
 			 */
-			if ((!(win->flags & __ISPAD)) ||
+			if (!((win->flags & __ISPAD)) ||
 			    ((wlp->flags & __ISFORCED) == __ISFORCED))
 			{
 				/* Set change pointers on "win". */
@@ -435,11 +446,9 @@ _wnoutrefresh(WINDOW *win, int begy, int begx, int wbegy, int wbegx,
 				if ((*wlp->lastchp < *wlp->firstchp) ||
 				    (*wlp->firstchp >= maxx + win->ch_off) ||
 				    (*wlp->lastchp <= win->ch_off)) {
-#ifdef DEBUG
 					__CTRACE(__CTRACE_REFRESH,
 					    "_wnoutrefresh: "
 					    "line %d notdirty\n", wy);
-#endif
 					wlp->flags &= ~(__ISDIRTY | __ISFORCED);
 				}
 			}
@@ -459,9 +468,7 @@ wrefresh(WINDOW *win)
 	int retval;
 	int pbegx, pbegy;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "wrefresh: win %p\n", win);
-#endif
 
 	_cursesi_screen->curwin = (win == _cursesi_screen->curscr);
 	if (!_cursesi_screen->curwin) {
@@ -469,10 +476,8 @@ wrefresh(WINDOW *win)
 		if ((win->flags & __ISDERWIN) == __ISDERWIN) {
 			pbegx = win->derx;
 			pbegy = win->dery;
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "wrefresh: derwin, begy = %d, begx = %x\n",
 		pbegy, pbegx);
-#endif
 		}
 		retval = _wnoutrefresh(win, pbegy, pbegx, win->begy, win->begx,
 		    win->maxy, win->maxx);
@@ -500,10 +505,8 @@ prefresh(WINDOW *pad, int pbegy, int pbegx, int sbegy, int sbegx,
 {
 	int retval;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "prefresh: pad %p, flags 0x%08x\n",
 	    pad, pad->flags);
-#endif
 	/* Retain values in case pechochar() is called. */
 	pad->pbegy = pbegy;
 	pad->pbegx = pbegx;
@@ -535,11 +538,6 @@ doupdate(void)
 	__LINE	*wlp, *vlp;
 	short	 wy;
 	int	 dnum, was_cleared, changed;
-#ifdef HAVE_WCHAR
-	__LDATA *lp;
-	nschar_t *np;
-	int x;
-#endif /* HAVE_WCHAR */
 
 	/* Check if we need to restart ... */
 	if (_cursesi_screen->endwin)
@@ -558,32 +556,8 @@ doupdate(void)
 	if (!_cursesi_screen->curwin) {
 		for (wy = 0; wy < win->maxy; wy++) {
 			wlp = win->alines[wy];
-			if (wlp->flags & __ISDIRTY) {
-#ifndef HAVE_WCHAR
-				wlp->hash = __hash(wlp->line,
-				    (size_t)(win->maxx * __LDATASIZE));
-#else
-				wlp->hash = 0;
-				for ( x = 0; x < win->maxx; x++ ) {
-					lp = &wlp->line[ x ];
-					wlp->hash = __hash_more( &lp->ch,
-						sizeof(wchar_t), wlp->hash );
-					wlp->hash = __hash_more( &lp->attr,
-						sizeof(attr_t), wlp->hash );
-					np = lp->nsp;
-					if (np) {
-						while (np) {
-							wlp->hash
-							    = __hash_more(
-								&np->ch,
-								sizeof(wchar_t),
-								wlp->hash);
-							np = np->next;
-						}
-					}
-				}
-#endif /* HAVE_WCHAR */
-			}
+			if (wlp->flags & __ISDIRTY)
+				wlp->hash = __hash_line(wlp->line, win->maxx);
 		}
 	}
 
@@ -602,7 +576,7 @@ doupdate(void)
 			curscr->curx = 0;
 			werase(curscr);
 		}
-		__touchwin(win);
+		__touchwin(win, 0);
 		win->flags &= ~__CLEAROK;
 		/* note we cleared for later */
 		was_cleared = 1;
@@ -613,11 +587,9 @@ doupdate(void)
 		if (!_cursesi_screen->curwin)
 			werase(curscr);
 	}
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "doupdate: (%p): curwin = %d\n", win,
 	    _cursesi_screen->curwin);
 	__CTRACE(__CTRACE_REFRESH, "doupdate: \tfirstch\tlastch\n");
-#endif
 
 	if (!_cursesi_screen->curwin) {
 		/*
@@ -641,7 +613,7 @@ doupdate(void)
 		    "stdscr(%p)-curscr(%p)-__virtscr(%p)\n",
 		    stdscr, curscr, _cursesi_screen->__virtscr);
 		for (i = 0; i < curscr->maxy; i++) {
-			__CTRACE(__CTRACE_REFRESH, "C: %d:", i);
+			__CTRACE(__CTRACE_REFRESH, "curscr: %d:", i);
 			__CTRACE(__CTRACE_REFRESH, " 0x%x \n",
 			    curscr->alines[i]->hash);
 			for (j = 0; j < curscr->maxx; j++)
@@ -653,7 +625,20 @@ doupdate(void)
 				__CTRACE(__CTRACE_REFRESH, " %x",
 				    curscr->alines[i]->line[j].attr);
 			__CTRACE(__CTRACE_REFRESH, "\n");
-			__CTRACE(__CTRACE_REFRESH, "W: %d:", i);
+#ifdef HAVE_WCHAR
+			__CTRACE(__CTRACE_REFRESH, " wcols:");
+			for (j = 0; j < curscr->maxx; j++)
+				__CTRACE(__CTRACE_REFRESH, " %d",
+				    curscr->alines[i]->line[j].wcols);
+			__CTRACE(__CTRACE_REFRESH, "\n");
+
+			__CTRACE(__CTRACE_REFRESH, " cflags:");
+			for (j = 0; j < curscr->maxx; j++)
+				__CTRACE(__CTRACE_REFRESH, " 0x%x",
+				    curscr->alines[i]->line[j].cflags);
+			__CTRACE(__CTRACE_REFRESH, "\n");
+#endif /* HAVE_WCHAR */
+			__CTRACE(__CTRACE_REFRESH, "win %p: %d:", win, i);
 			__CTRACE(__CTRACE_REFRESH, " 0x%x \n",
 			    win->alines[i]->hash);
 			__CTRACE(__CTRACE_REFRESH, " 0x%x ",
@@ -668,6 +653,16 @@ doupdate(void)
 				    win->alines[i]->line[j].attr);
 			__CTRACE(__CTRACE_REFRESH, "\n");
 #ifdef HAVE_WCHAR
+			__CTRACE(__CTRACE_REFRESH, " wcols:");
+			for (j = 0; j < win->maxx; j++)
+				__CTRACE(__CTRACE_REFRESH, " %d",
+				    win->alines[i]->line[j].wcols);
+			__CTRACE(__CTRACE_REFRESH, "\n");
+			__CTRACE(__CTRACE_REFRESH, " cflags:");
+			for (j = 0; j < win->maxx; j++)
+				__CTRACE(__CTRACE_REFRESH, " 0x%x",
+				    win->alines[i]->line[j].cflags);
+			__CTRACE(__CTRACE_REFRESH, "\n");
 			__CTRACE(__CTRACE_REFRESH, " nsp:");
 			for (j = 0; j < curscr->maxx; j++)
 				__CTRACE(__CTRACE_REFRESH, " %p",
@@ -687,27 +682,27 @@ doupdate(void)
 	for (wy = 0; wy < win->maxy; wy++) {
 		wlp = win->alines[wy];
 		vlp = _cursesi_screen->__virtscr->alines[win->begy + wy];
-/* XXX: remove this debug */
-#ifdef DEBUG
+/* XXX: remove this */
 		__CTRACE(__CTRACE_REFRESH,
 		    "doupdate: wy %d\tf: %d\tl:%d\tflags %x\n",
 		    wy, *wlp->firstchp, *wlp->lastchp, wlp->flags);
-#endif /* DEBUG */
 		if (!_cursesi_screen->curwin)
 			curscr->alines[wy]->hash = wlp->hash;
 		if (wlp->flags & __ISDIRTY || wlp->flags & __ISFORCED) {
-#ifdef DEBUG
 			__CTRACE(__CTRACE_REFRESH,
 			    "doupdate: [ISDIRTY]wy:%d\tf:%d\tl:%d\n", wy,
 			    *wlp->firstchp, *wlp->lastchp);
-#endif /* DEBUG */
 			/*
 			 * We have just cleared so don't force an update
-			 * otherwise we spray neeedless blanks to a cleared
-			 * screen.
+			 * otherwise we spray needless blanks to a cleared
+			 * screen.  That is, unless, we are using color,
+			 * in this case we need to force the background
+			 * color to default.
 			 */
-			if (was_cleared == 1)
-				win->alines[wy]->flags &= ~__ISFORCED;
+			if ((was_cleared == 1) && (__using_color == 0))
+				win->alines[wy]->flags &= ~ 0L;
+			/*if ((was_cleared == 1) && (__using_color == 0))
+				win->alines[wy]->flags &= ~__ISFORCED;*/
 
 			if (makech(wy) == ERR)
 				return ERR;
@@ -717,10 +712,8 @@ doupdate(void)
 				if (*wlp->lastchp < win->maxx)
 					*wlp->lastchp = win->ch_off;
 				if (*wlp->lastchp < *wlp->firstchp) {
-#ifdef DEBUG
 					__CTRACE(__CTRACE_REFRESH,
 					    "doupdate: line %d notdirty\n", wy);
-#endif /* DEBUG */
 					wlp->flags &= ~(__ISDIRTY | __ISFORCED);
 				}
 
@@ -750,16 +743,12 @@ doupdate(void)
 		if (*vlp->lastchp <= _cursesi_screen->__virtscr->maxx)
 			*vlp->lastchp = 0;
 
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH, "\t%d\t%d\n",
 		    *wlp->firstchp, *wlp->lastchp);
-#endif /* DEBUG */
 	}
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "doupdate: ly=%d, lx=%d\n",
 	    _cursesi_screen->ly, _cursesi_screen->lx);
-#endif /* DEBUG */
 
 	if (_cursesi_screen->curwin)
 		domvcur(win, _cursesi_screen->ly, _cursesi_screen->lx,
@@ -779,6 +768,7 @@ doupdate(void)
 cleanup:
 	/* Don't leave the screen with attributes set. */
 	__unsetattr(0);
+	__do_color_init = 0;
 #ifdef DEBUG
 #ifdef HAVE_WCHAR
 	{
@@ -792,13 +782,17 @@ cleanup:
 		for (i = 0; i < curscr->maxy; i++) {
 			for (j = 0; j < curscr->maxx; j++)
 				__CTRACE(__CTRACE_REFRESH,
-				    "[%d,%d](%x,%x,%p)-(%x,%x,%p)\n",
+				    "[%d,%d](%x,%x,%d,%x,%p)-(%x,%x,%d,%x,%p)\n",
 				    i, j,
 				    curscr->alines[i]->line[j].ch,
 				    curscr->alines[i]->line[j].attr,
+				    curscr->alines[i]->line[j].wcols,
+				    curscr->alines[i]->line[j].cflags,
 				    curscr->alines[i]->line[j].nsp,
 				    _cursesi_screen->__virtscr->alines[i]->line[j].ch,
 				    _cursesi_screen->__virtscr->alines[i]->line[j].attr,
+				    _cursesi_screen->__virtscr->alines[i]->line[j].wcols,
+				    _cursesi_screen->__virtscr->alines[i]->line[j].cflags,
 				    _cursesi_screen->__virtscr->alines[i]->line[j].nsp);
 		}
 	}
@@ -812,9 +806,8 @@ putattr(__LDATA *nsp)
 {
 	attr_t	off, on;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH,
-	    "makech: have attr %08x, need attr %08x\n",
+	    "putattr: have attr %08x, need attr %08x\n",
 	    curscr->wattr
 #ifndef HAVE_WCHAR
 	    & __ATTRIBUTES
@@ -828,7 +821,6 @@ putattr(__LDATA *nsp)
 	    & WA_ATTRIBUTES
 #endif
 	    );
-#endif
 
 	off = (~nsp->attr & curscr->wattr)
 #ifndef HAVE_WCHAR
@@ -1007,6 +999,10 @@ putattr_out(__LDATA *nsp)
 static int
 putch(__LDATA *nsp, __LDATA *csp, int wy, int wx)
 {
+#ifdef HAVE_WCHAR
+	int i;
+	__LDATA *tcsp;
+#endif /* HAVE_WCHAR */
 
 	if (csp != NULL)
 		putattr(nsp);
@@ -1014,22 +1010,38 @@ putch(__LDATA *nsp, __LDATA *csp, int wy, int wx)
 	if (!_cursesi_screen->curwin && csp) {
 		csp->attr = nsp->attr;
 		csp->ch = nsp->ch;
+		csp->cflags = nsp->cflags;
 #ifdef HAVE_WCHAR
 		if (_cursesi_copy_nsp(nsp->nsp, csp) == ERR)
 			return ERR;
+		csp->wcols = nsp->wcols;
+
+		if (nsp->wcols > 1) {
+			tcsp = csp;
+			tcsp++;
+			for (i = nsp->wcols - 1; i > 0; i--) {
+				tcsp->ch = csp->ch;
+				tcsp->attr = csp->attr;
+				tcsp->wcols = i;
+				tcsp->cflags = CA_CONTINUATION;
+				tcsp++;
+			}
+		}
 #endif /* HAVE_WCHAR */
 	}
 
 #ifndef HAVE_WCHAR
 	__cputchar((int)nsp->ch);
 #else
-	if (WCOL(*nsp) <= 0)
+	if ((nsp->wcols <= 0) || (nsp->cflags & CA_CONTINUATION))
 		goto out;
+
+	if (((_cursesi_screen->nca & nsp->attr) == 0) && (__using_color == 1) &&
+	    csp == NULL)
+		__set_color(curscr, nsp->attr & __COLOR);
 	__cputwchar((int)nsp->ch);
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH,
-	    "makech: (%d,%d)putwchar(0x%x)\n", wy, wx - 1, nsp->ch);
-#endif /* DEBUG */
+	    "putch: (%d,%d)putwchar(0x%x)\n", wy, wx, nsp->ch);
 
 	/* Output non-spacing characters for the cell. */
 	__cursesi_putnsp(nsp->nsp, wy, wx);
@@ -1060,8 +1072,8 @@ putchbr(__LDATA *nsp, __LDATA *csp, __LDATA *psp, int wy, int wx)
 
 	/* We need to insert characters. */
 #ifdef HAVE_WCHAR
-	cw = WCOL(*nsp);
-	pcw = WCOL(*psp);
+	cw = nsp->wcols;
+	pcw = psp->wcols;
 	if (cw < 1 || pcw < 1)
 		return ERR; /* Nothing to insert */
 
@@ -1120,10 +1132,13 @@ makech(int wy)
 	static __LDATA blank;
 	__LDATA *nsp, *csp, *cp, *cep, *fsp;
 	__LINE *wlp;
-	size_t	clsp, nlsp;	/* Last space in lines. */
-	int	lch, wx, chw;
+	int	nlsp;	/* offset to first space at eol. */
+	size_t	mlsp;
+	int	lch, wx, owx, chw;
 	const char	*ce;
 	attr_t	lspc;		/* Last space colour */
+	attr_t	battr;		/* background attribute bits */
+	attr_t	attr_mask;	/* attributes mask */
 
 #ifdef __GNUC__
 	nlsp = lspc = 0;	/* XXX gcc -Wuninitialized */
@@ -1132,13 +1147,20 @@ makech(int wy)
 		win = curscr;
 	else
 		win = __virtscr;
+
+	blank.ch = win->bch;
+	blank.attr = win->battr;
+	blank.cflags = CA_BACKGROUND;
 #ifdef HAVE_WCHAR
-	blank.ch = (wchar_t)btowc((int) win->bch);
-	blank.attr = 0;
 	if (_cursesi_copy_nsp(win->bnsp, &blank) == ERR)
 		return ERR;
-	SET_WCOL(blank, 1);
+	blank.wcols = win->wcols;
+	attr_mask = WA_ATTRIBUTES;
+#else
+	attr_mask = A_ATTRIBUTES;
 #endif /* HAVE_WCHAR */
+	battr = win->battr & attr_mask;
+
 #ifdef DEBUG
 #if HAVE_WCHAR
 	{
@@ -1152,16 +1174,17 @@ makech(int wy)
 			lp = &curscr->alines[wy]->line[x];
 			vlp = &__virtscr->alines[wy]->line[x];
 			__CTRACE(__CTRACE_REFRESH,
-			    "[%d,%d](%x,%x,%x,%x,%p)-"
-			    "(%x,%x,%x,%x,%p)\n",
-			    wy, x, lp->ch, lp->attr,
-			    win->bch, win->battr, lp->nsp,
-			    vlp->ch, vlp->attr,
-			    win->bch, win->battr, vlp->nsp);
+			    "[%d,%d](%x,%x,%d,%x,%x,%d,%p)-"
+			    "(%x,%x,%d,%x,%x,%d,%p)\n",
+			    wy, x, lp->ch, lp->attr, lp->wcols,
+			    win->bch, win->battr, win->wcols, lp->nsp,
+			    vlp->ch, vlp->attr, vlp->wcols,
+			    win->bch, win->battr, win->wcols, vlp->nsp);
 		}
 	}
 #endif /* HAVE_WCHAR */
 #endif /* DEBUG */
+
 	/* Is the cursor still on the end of the last line? */
 	if (wy > 0 && curscr->alines[wy - 1]->flags & __ISPASTEOL) {
 		domvcur(win, _cursesi_screen->ly, _cursesi_screen->lx,
@@ -1185,18 +1208,24 @@ makech(int wy)
 
 	if (_cursesi_screen->curwin) {
 		csp = &blank;
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH, "makech: csp is blank\n");
-#endif /* DEBUG */
 	} else {
 		csp = &curscr->alines[wy]->line[wx];
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH,
 		    "makech: csp is on curscr:(%d,%d)\n", wy, wx);
-#endif /* DEBUG */
+	}
+
+
+	while (win->alines[wy]->line[wx].cflags & CA_CONTINUATION) {
+		wx--;
+		if (wx <= 0) {
+			wx = 0;
+			break;
+		}
 	}
 
 	nsp = fsp = &win->alines[wy]->line[wx];
+
 #ifdef DEBUG
 	if (_cursesi_screen->curwin)
 		__CTRACE(__CTRACE_REFRESH,
@@ -1205,52 +1234,72 @@ makech(int wy)
 		__CTRACE(__CTRACE_REFRESH,
 		    "makech: nsp is at __virtscr:(%d,%d)\n", wy, wx);
 #endif /* DEBUG */
-	if (clr_eol && !_cursesi_screen->curwin) {
+
+	/*
+	 * Work out if we can use a clear to end of line.  If we are
+	 * using color then we can only erase the line if the terminal
+	 * can erase to the background color.
+	 */
+	if (clr_eol && !_cursesi_screen->curwin && (!(__using_color)
+	    || (__using_color && back_color_erase))) {
+		nlsp = win->maxx - 1;
 		cp = &win->alines[wy]->line[win->maxx - 1];
-		lspc = cp->attr & __COLOR;
-#ifndef HAVE_WCHAR
-		while (cp->ch == ' ' && cp->attr == lspc) /* XXX */
-			if (cp-- <= win->alines[wy]->line)
-				break;
+#ifdef HAVE_WCHAR
+		while ((_cursesi_celleq(cp, &blank) == 1) &&
 #else
-		while (cp->ch == ( wchar_t )btowc(( int )' ' )
-				&& ( cp->attr & WA_ATTRIBUTES ) == lspc)
-			if (cp-- <= win->alines[wy]->line)
-				break;
+		while (cp->ch == blank.ch &&
 #endif /* HAVE_WCHAR */
-		if (win->alines[wy]->line > cp)
+		    ((cp->attr & attr_mask) == battr)) {
+#ifdef HAVE_WCHAR
+			nlsp -= cp->wcols;
+			cp -= cp->wcols;
+#else
+			nlsp--;
+			cp--;
+#endif /* HAVE_WCHAR */
+
+			if (nlsp <= 0)
+				break;
+		}
+
+
+		if (nlsp < 0)
 			nlsp = 0;
-		else
-			nlsp = cp - win->alines[wy]->line;
 	}
-	if (!_cursesi_screen->curwin)
-		ce = clr_eol;
-	else
-		ce = NULL;
+
+	ce = clr_eol;
 
 	while (wx <= lch) {
-#ifdef DEBUG
-#ifndef HAVE_WCHAR
-		__CTRACE(__CTRACE_REFRESH, "makech: wx=%d,lch=%d\n", wx, lch);
-#else
-		__CTRACE(__CTRACE_REFRESH, "makech: nsp=(%x,%x,%x,%x,%p)\n",
-			nsp->ch, nsp->attr, win->bch, win->battr, nsp->nsp);
-		__CTRACE(__CTRACE_REFRESH, "makech: csp=(%x,%x,%x,%x,%p)\n",
-			csp->ch, csp->attr, win->bch, win->battr, csp->nsp);
+		__CTRACE(__CTRACE_REFRESH, "makech: wx=%d,lch=%d, nlsp=%d\n", wx, lch, nlsp);
+#ifdef HAVE_WCHAR
+		__CTRACE(__CTRACE_REFRESH, "makech: farnarkle: flags 0x%x, cflags 0x%x, color_init %d, celleq %d\n",
+			wlp->flags, nsp->cflags, __do_color_init, _cursesi_celleq(nsp, csp));
+		__CTRACE(__CTRACE_REFRESH, "makech: nsp=(%x,%x,%d,%x,%x,%d,%p)\n",
+			nsp->ch, nsp->attr, nsp->wcols, win->bch, win->battr,
+			win->wcols, nsp->nsp);
+		__CTRACE(__CTRACE_REFRESH, "makech: csp=(%x,%x,%d,%x,%x,%d,%p)\n",
+			csp->ch, csp->attr, csp->wcols, win->bch, win->battr,
+			win->wcols, csp->nsp);
 #endif
-#endif /* DEBUG */
 		if (!(wlp->flags & __ISFORCED) &&
 #ifdef HAVE_WCHAR
-		    ((nsp->attr & __WCWIDTH) != __WCWIDTH) &&
+		    ((nsp->cflags & CA_CONTINUATION) != CA_CONTINUATION) &&
 #endif
-		    celleq(nsp, csp))
+		    _cursesi_celleq(nsp, csp))
 		{
 			if (wx <= lch) {
-				while (wx <= lch && celleq(nsp, csp)) {
+				while (wx <= lch && _cursesi_celleq(nsp, csp)) {
+#ifdef HAVE_WCHAR
+					wx += nsp->wcols;
+					if (!_cursesi_screen->curwin)
+						csp += nsp->wcols;
+					nsp += nsp->wcols;
+#else
+					wx++;
 					nsp++;
 					if (!_cursesi_screen->curwin)
 						++csp;
-					++wx;
+#endif
 				}
 				continue;
 			}
@@ -1259,86 +1308,91 @@ makech(int wy)
 
 		domvcur(win, _cursesi_screen->ly, _cursesi_screen->lx, wy, wx);
 
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH, "makech: 1: wx = %d, ly= %d, "
-		    "lx = %d, newy = %d, newx = %d\n",
-		    wx, _cursesi_screen->ly, _cursesi_screen->lx, wy, wx);
-#endif
+		    "lx = %d, newy = %d, newx = %d, lch = %d\n",
+		    wx, _cursesi_screen->ly, _cursesi_screen->lx, wy, wx, lch);
 		_cursesi_screen->ly = wy;
 		_cursesi_screen->lx = wx;
+		owx = wx;
 		while (wx <= lch &&
-		       ((wlp->flags & __ISFORCED) || !celleq(nsp, csp)))
+		       ((wlp->flags & __ISFORCED) || !_cursesi_celleq(nsp, csp)))
 		{
-#ifndef HAVE_WCHAR
-			if (ce != NULL && wx >= nlsp
-			    && nsp->ch == ' ' && nsp->attr == lspc)
-#else
-			if (ce != NULL && wx >= nlsp
-			    && nsp->ch == (wchar_t)btowc((int)' ') /* XXX */
-			    && (nsp->attr & WA_ATTRIBUTES) == lspc)
-#endif
+			if ((ce != NULL) && (wx >= nlsp) &&
+			    (nsp->ch == blank.ch) &&
+			    (__do_color_init == 1 || nsp->attr == blank.attr))
 			{
 				/* Check for clear to end-of-line. */
-				cep = &curscr->alines[wy]->line[win->maxx - 1];
-#ifndef HAVE_WCHAR
-				while (cep->ch == ' ' && cep->attr == lspc) /* XXX */
-#else
-				while (cep->ch == (wchar_t)btowc((int)' ')
-				       && (cep->attr & WA_ATTRIBUTES) == lspc)
-#endif /* HAVE_WCHAR */
+				cep = &win->alines[wy]->line[win->maxx - 1];
+				while (cep->ch == blank.ch && cep->attr == battr)
 					if (cep-- <= csp)
 						break;
-				if (cep > (curscr->alines[wy]->line + win->begx * __LDATASIZE))
-					clsp = cep - curscr->alines[wy]->line -
-					win->begx * __LDATASIZE;
-				else
-					clsp = 0;
-#ifdef DEBUG
+
+				mlsp = &win->alines[wy]->line[win->maxx - 1]
+				    - win->alines[wy]->line
+				    - win->begx * __LDATASIZE;
+
 				__CTRACE(__CTRACE_REFRESH,
-				    "makech: clsp = %zu, nlsp = %zu\n",
-				    clsp, nlsp);
+				    "makech: nlsp = %d, max = %zu, strlen(ce) = %zu\n",
+				    nlsp, mlsp, strlen(ce));
 				__CTRACE(__CTRACE_REFRESH,
 				    "makech: line = %p, cep = %p, begx = %u\n",
-				    curscr->alines[wy]->line, cep, win->begx);
-#endif
-				if (((clsp - nlsp >= strlen(ce) &&
-				    clsp < win->maxx * __LDATASIZE) ||
-				    wy == win->maxy - 1) &&
-				    (!(lspc & __COLOR) ||
-				    ((lspc & __COLOR) && back_color_erase)))
-				{
-					__unsetattr(0);
-					if (__using_color &&
+				    win->alines[wy]->line, cep, win->begx);
+
+				/*
+				 * work out how to clear the line.  If:
+				 *  - clear len is greater than clear_to_eol len
+				 *  - background char == ' '
+				 *  - we are not at EOL
+				 *  - using color and term can erase to
+				 *    background color
+				 *  - if we are at the bottom of the window
+				 *    (to prevent a scroll)
+				 * then emit the ce string.
+				 */
+				if (((wy == win->maxy - 1) ||
+				    ((mlsp - wx) > strlen(ce))) &&
+				     ((__using_color && back_color_erase) ||
+				      (! __using_color))) {
+					if (wlp->line[wx].attr & win->screen->nca) {
+						__unsetattr(0);
+					} else if (__using_color &&
+					    ((__do_color_init == 1) ||
 					    ((lspc & __COLOR) !=
-					    (curscr->wattr & __COLOR)))
+					    (curscr->wattr & __COLOR)))) {
 						__set_color(curscr, lspc &
 						    __COLOR);
+					}
 					tputs(ce, 0, __cputchar);
 					_cursesi_screen->lx = wx + win->begx;
-					while (wx++ <= clsp) {
-						csp->attr = lspc;
-#ifndef HAVE_WCHAR
-						csp->ch = ' '; /* XXX */
+					csp = &curscr->alines[wy]->line[wx + win->begx];
+					wx = wx + win->begx;
+					while (wx++ <= (curscr->maxx - 1)) {
+						csp->attr = blank.attr;
+						csp->ch = blank.ch;
+						csp->cflags = CA_BACKGROUND;
+#ifdef HAVE_WCHAR
+						if (_cursesi_copy_nsp(blank.nsp, csp) == ERR)
+							return ERR;
+						csp->wcols = blank.wcols;
+						csp += blank.wcols;
 #else
-						csp->ch = (wchar_t)btowc((int)' ');
-						SET_WCOL( *csp, 1 );
+						csp++;
 #endif /* HAVE_WCHAR */
 						assert(csp != &blank);
-						csp++;
 					}
 					return OK;
 				}
-				ce = NULL;
 			}
 
 #ifdef HAVE_WCHAR
-			chw = WCOL(*nsp);
+			chw = nsp->wcols;
 			if (chw < 0)
 				chw = 0; /* match putch() */
 #else
 			chw = 1;
 #endif /* HAVE_WCHAR */
-			if (wx + chw >= win->maxx &&
+			owx = wx;
+			if (wx + chw >= (win->maxx) &&
 			    wy == win->maxy - 1 && !_cursesi_screen->curwin)
 			{
 				if (win->flags & __ENDLINE)
@@ -1348,10 +1402,11 @@ makech(int wy)
 
 					if (win->flags & __SCROLLOK)
 						e = putch(nsp, csp, wy, wx);
-					else
+					else {
 						e = putchbr(nsp, csp,
 						    nsp == fsp ? NULL : nsp - 1,
 						    wy, wx);
+					}
 					if (e == ERR)
 						return ERR;
 				}
@@ -1370,25 +1425,36 @@ makech(int wy)
 			{
 				if (putch(nsp, csp, wy, wx) == ERR)
 					return ERR;
-				if (!_cursesi_screen->curwin) {
-					assert(csp != &blank);
-					csp++;
-				}
 			} else {
 				putattr(nsp);
 				putattr_out(nsp);
 			}
 			wx += chw;
-			nsp++;
-#ifdef DEBUG
+			nsp += chw;
+			if (!_cursesi_screen->curwin)
+				csp += chw;
+
 			__CTRACE(__CTRACE_REFRESH,
 			    "makech: 2: wx = %d, lx = %d\n",
 			    wx, _cursesi_screen->lx);
-#endif
 		}
 		if (_cursesi_screen->lx == wx)	/* If no change. */
 			break;
-		_cursesi_screen->lx = wx;
+
+		/*
+		 * We need to work out if the cursor has been put in the
+		 * middle of a wide character so check if curx is between
+		 * where we were and where we are and we are on the right
+		 * line.  If so, move the cursor now.
+		 */
+		if ((wy == win->cury) && (wx > win->curx) &&
+		    (owx < win->curx)) {
+			_cursesi_screen->lx = win->curx;
+			domvcur(win, _cursesi_screen->ly, wx,
+			    _cursesi_screen->ly, _cursesi_screen->lx);
+		} else
+			_cursesi_screen->lx = wx;
+
 		if (_cursesi_screen->lx >= COLS && auto_right_margin)
 			_cursesi_screen->lx = COLS - 1;
 		else
@@ -1400,10 +1466,8 @@ makech(int wy)
 					(int)(win->maxx - 1));
 				_cursesi_screen->lx = win->maxx - 1;
 			}
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH, "makech: 3: wx = %d, lx = %d\n",
 		    wx, _cursesi_screen->lx);
-#endif
 	}
 #ifdef DEBUG
 #if HAVE_WCHAR
@@ -1418,12 +1482,12 @@ makech(int wy)
 			lp = &curscr->alines[wy]->line[x];
 			vlp = &__virtscr->alines[wy]->line[x];
 			__CTRACE(__CTRACE_REFRESH,
-			    "[%d,%d](%x,%x,%x,%x,%p)-"
-			    "(%x,%x,%x,%x,%p)\n",
-			    wy, x, lp->ch, lp->attr,
-			    win->bch, win->battr, lp->nsp,
-			    vlp->ch, vlp->attr,
-			    win->bch, win->battr, vlp->nsp);
+			    "[%d,%d](%x,%x,%d,%x,%x,%d,%p)-"
+			    "(%x,%x,%d,%x,%x,%d,%p)\n",
+			    wy, x, lp->ch, lp->attr, lp->wcols,
+			    win->bch, win->battr, win->wcols, lp->nsp,
+			    vlp->ch, vlp->attr, vlp->wcols,
+			    win->bch, win->battr, win->wcols, vlp->nsp);
 		}
 	}
 #endif /* HAVE_WCHAR */
@@ -1440,10 +1504,8 @@ static void
 domvcur(WINDOW *win, int oy, int ox, int ny, int nx)
 {
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "domvcur: (%d,%d)=>(%d,%d) win %p\n",
 	    oy, ox, ny, nx, win );
-#endif /* DEBUG */
 
 	__unsetattr(1);
 
@@ -1480,7 +1542,7 @@ quickch(void)
 	__LINE *clp, *tmp1, *tmp2;
 	int	bsize, curs, curw, starts, startw, i, j;
 	int	n, target, cur_period, bot, top, sc_region;
-	unsigned int	blank_hash;
+	unsigned int	blank_hash, found;
 	attr_t	bcolor;
 
 #ifdef __GNUC__
@@ -1494,9 +1556,9 @@ quickch(void)
 		    (__virtscr->alines[top]->hash != curscr->alines[top]->hash ||
 		     !lineeq(__virtscr->alines[top]->line,
 			     curscr->alines[top]->line,
-			     (size_t) __virtscr->maxx)))
+			     (size_t) __virtscr->maxx))) {
 			break;
-		else
+		} else
 			__virtscr->alines[top]->flags &= ~__ISDIRTY;
 	}
 	/*
@@ -1507,9 +1569,9 @@ quickch(void)
 		    (__virtscr->alines[bot]->hash != curscr->alines[bot]->hash ||
 		     !lineeq(__virtscr->alines[bot]->line,
 			     curscr->alines[bot]->line,
-			     (size_t) __virtscr->maxx)))
+			     (size_t) __virtscr->maxx))) {
 			break;
-		else
+		} else
 			__virtscr->alines[bot]->flags &= ~__ISDIRTY;
 	}
 
@@ -1556,37 +1618,39 @@ quickch(void)
 	 * - bsize is the current size of the examined block.
 	*/
 
+	found = 0;
 	for (bsize = bot - top; bsize >= THRESH; bsize--) {
 		for (startw = top; startw <= bot - bsize; startw++)
 			for (starts = top; starts <= bot - bsize; starts++) {
-				for (curw = startw, curs = starts;
+/*				for (curw = startw, curs = starts;
 				    curs < starts + bsize; curw++, curs++)
 					if (__virtscr->alines[curw]->hash !=
 					    curscr->alines[curs]->hash)
 						break;
 				if (curs != starts + bsize)
-					continue;
+					continue;*/
 				for (curw = startw, curs = starts;
 					curs < starts + bsize; curw++, curs++)
 					if (!lineeq(__virtscr->alines[curw]->line,
 						    curscr->alines[curs]->line,
-						    (size_t) __virtscr->maxx))
+						    (size_t) __virtscr->maxx)) {
+						found = 1;
 						break;
-				if (curs == starts + bsize)
+				}
+				if ((curs == starts + bsize) && (found == 1)) {
 					goto done;
+				}
 			}
 	}
 done:
 
+	__CTRACE(__CTRACE_REFRESH, "quickch:bsize=%d, THRESH=%d, starts=%d, "
+	    "startw=%d, curw=%d, curs=%d, top=%d, bot=%d\n",
+	    bsize, THRESH, starts, startw, curw, curs, top, bot);
+
 	/* Did not find anything */
 	if (bsize < THRESH)
 		return;
-
-#ifdef DEBUG
-	__CTRACE(__CTRACE_REFRESH, "quickch:bsize=%d, starts=%d, startw=%d, "
-	    "curw=%d, curs=%d, top=%d, bot=%d\n",
-	    bsize, starts, startw, curw, curs, top, bot);
-#endif
 
 	/*
 	 * Make sure that there is no overlap between the bottom and top
@@ -1601,6 +1665,7 @@ done:
 
 #ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH, "#####################################\n");
+	__CTRACE(__CTRACE_REFRESH, "quickch: n = %d\n", n);
 	for (i = 0; i < curscr->maxy; i++) {
 		__CTRACE(__CTRACE_REFRESH, "C: %d:", i);
 		__CTRACE(__CTRACE_REFRESH, " 0x%x \n", curscr->alines[i]->hash);
@@ -1631,20 +1696,22 @@ done:
 #endif
 
 #ifndef HAVE_WCHAR
-	if (buf[0].ch != ' ') {
+	if (buf[0].ch != curscr->bch) {
 		for (i = 0; i < BLANKSIZE; i++) {
-			buf[i].ch = ' ';
+			buf[i].ch = curscr->bch;
 			buf[i].attr = 0;
+			buf[i].cflags = CA_BACKGROUND;
 		}
 	}
 #else
-	if (buf[0].ch != (wchar_t)btowc((int)curscr->bch )) {
-		for (i = 0; i < BLANKSIZE; i++) {
-			buf[i].ch = (wchar_t)btowc((int)curscr->bch);
+	if (buf[0].ch != curscr->bch) {
+		for (i = 0; i < BLANKSIZE; i++) { /* XXXX: BLANKSIZE may not be valid if wcols > 1 */
+			buf[i].ch = curscr->bch;
 			if (_cursesi_copy_nsp(curscr->bnsp, &buf[i]) == ERR)
 				return;
 			buf[i].attr = 0;
-			SET_WCOL(buf[i], 1);
+			buf[i].cflags = CA_BACKGROUND;
+			buf[i].wcols = curscr->wcols;
 		}
 	}
 #endif /* HAVE_WCHAR */
@@ -1704,17 +1771,13 @@ done:
 		curscr->alines[target] = tmp1;
 		/* Mark block as clean and blank out scrolled lines. */
 		clp = curscr->alines[target];
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH,
 		    "quickch: n=%d startw=%d curw=%d i = %d target=%d ",
 		    n, startw, curw, i, target);
-#endif
 		if ((target >= startw && target < curw) || target < top
 		    || target > bot)
 		{
-#ifdef DEBUG
 			__CTRACE(__CTRACE_REFRESH, " notdirty\n");
-#endif
 			__virtscr->alines[target]->flags &= ~__ISDIRTY;
 		} else
 			if ((n > 0 && target >= top && target < top + n) ||
@@ -1723,7 +1786,7 @@ done:
 				if (clp->hash != blank_hash ||
 				    !lineeq(clp->line, clp->line + 1,
 					    (__virtscr->maxx - 1)) ||
-				    !celleq(clp->line, buf))
+				    !_cursesi_celleq(clp->line, buf))
 				{
 					for (i = __virtscr->maxx;
 					    i > BLANKSIZE;
@@ -1731,26 +1794,21 @@ done:
 						(void) memcpy(clp->line + i -
 						    BLANKSIZE, buf, sizeof(buf));
 					}
-					(void) memcpy(clp->line , buf, i *
-					    sizeof(buf[0]));
-#ifdef DEBUG
+					(void)memcpy(clp->line, buf,
+					    i * sizeof(buf[0]));
 					__CTRACE(__CTRACE_REFRESH,
 					    " blanked out: dirty\n");
-#endif
 					clp->hash = blank_hash;
 					__touchline(__virtscr, target, 0, (int) __virtscr->maxx - 1);
 				} else {
-#ifdef DEBUG
 					__CTRACE(__CTRACE_REFRESH,
 					    " -- blank line already: dirty\n");
-#endif
 					__touchline(__virtscr, target, 0, (int) __virtscr->maxx - 1);
 				}
 			} else {
-#ifdef DEBUG
 				__CTRACE(__CTRACE_REFRESH, " -- dirty\n");
-#endif
-				__touchline(__virtscr, target, 0, (int) __virtscr->maxx - 1);
+				__touchline(__virtscr, target, 0,
+				    (int)__virtscr->maxx - 1);
 			}
 		if (target == cur_period) {
 			i = target + 1;
@@ -1968,11 +2026,9 @@ __unsetattr(int checkms)
 			isms = 0;
 	} else
 		isms = 1;
-#ifdef DEBUG
 	__CTRACE(__CTRACE_REFRESH,
 	    "__unsetattr: checkms = %d, ms = %s, wattr = %08x\n",
 	    checkms, move_standout_mode ? "TRUE" : "FALSE", curscr->wattr);
-#endif
 
 	/*
 	 * Don't leave the screen in standout mode (check against ms).  Check
@@ -2009,31 +2065,6 @@ __unsetattr(int checkms)
 		__unset_color(curscr);
 }
 
-#ifdef HAVE_WCHAR
-/* compare two cells on screen, must have the same forground/background,
- * and the same sequence of non-spacing characters */
-static int
-celleq(__LDATA *x, __LDATA *y)
-{
-	nschar_t *xnp = x->nsp, *ynp = y->nsp;
-	int ret = ( x->ch == y->ch ) && ( x->attr == y->attr );
-
-	if (!ret)
-		return 0;
-	if (!xnp && !ynp)
-		return 1;
-	if ((xnp && !ynp) || (!xnp && ynp))
-		return 0;
-
-	while (xnp && ynp) {
-		if (xnp->ch != ynp->ch)
-			return 0;
-		xnp = xnp->next;
-		ynp = ynp->next;
-	}
-	return !xnp && !ynp;
-}
-
 /* compare two line segments */
 static int
 lineeq(__LDATA *xl, __LDATA *yl, size_t len)
@@ -2042,12 +2073,13 @@ lineeq(__LDATA *xl, __LDATA *yl, size_t len)
 	__LDATA *xp = xl, *yp = yl;
 
 	for (i = 0; i < len; i++, xp++, yp++) {
-		if (!celleq(xp, yp))
+		if (!_cursesi_celleq(xp, yp))
 			return 0;
 	}
 	return 1;
 }
 
+#ifdef HAVE_WCHAR
 /*
  * Output the non-spacing characters associated with the given character
  * cell to the screen.
@@ -2065,11 +2097,9 @@ __cursesi_putnsp(nschar_t *nsp, const int wy, const int wx)
 	p = nsp;
 	while (p != NULL) {
 		__cputwchar((int)p->ch);
-#ifdef DEBUG
 		__CTRACE(__CTRACE_REFRESH,
-		       "_cursesi_putnsp: (%d,%d) non-spacing putwchar(0x%x)\n",
-			 wy, wx - 1, p->ch);
-#endif
+		    "_cursesi_putnsp: (%d,%d) non-spacing putwchar(0x%x)\n",
+		    wy, wx - 1, p->ch);
 		p = p->next;
 	}
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: cons.h,v 1.27 2011/02/08 20:20:26 rmind Exp $	*/
+/*	$NetBSD: cons.h,v 1.29 2022/10/03 19:12:29 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -41,6 +41,8 @@
 #ifndef _SYS_DEV_CONS_H_
 #define _SYS_DEV_CONS_H_
 
+#include <sys/types.h>
+
 struct consdev {
 	void	(*cn_probe)	/* probe hardware and fill in consdev info */
 		   (struct consdev *);
@@ -73,6 +75,8 @@ struct consdev {
 
 extern	struct consdev constab[];
 extern	struct consdev *cn_tab;
+
+void	cn_set_tab(struct consdev *);
 
 void	cninit(void);
 int	cngetc(void);

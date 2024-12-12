@@ -1,4 +1,4 @@
-/* $NetBSD: cpu_fdt.c,v 1.41 2021/08/30 23:16:17 jmcneill Exp $ */
+/* $NetBSD: cpu_fdt.c,v 1.44 2024/05/10 14:42:21 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2017 Jared McNeill <jmcneill@invisible.ca>
@@ -30,7 +30,7 @@
 #include "psci_fdt.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_fdt.c,v 1.41 2021/08/30 23:16:17 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_fdt.c,v 1.44 2024/05/10 14:42:21 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -57,13 +57,9 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_fdt.c,v 1.41 2021/08/30 23:16:17 jmcneill Exp $"
 static int	cpu_fdt_match(device_t, cfdata_t, void *);
 static void	cpu_fdt_attach(device_t, device_t, void *);
 
-struct cpu_fdt_softc {
-	device_t		sc_dev;
-	int			sc_phandle;
-};
-
-CFATTACH_DECL_NEW(cpu_fdt, sizeof(struct cpu_fdt_softc),
-	cpu_fdt_match, cpu_fdt_attach, NULL, NULL);
+CFATTACH_DECL2_NEW(cpu_fdt, 0,
+    cpu_fdt_match, cpu_fdt_attach, NULL, NULL,
+    cpu_rescan, cpu_childdetached);
 
 static int
 cpu_fdt_match(device_t parent, cfdata_t cf, void *aux)
@@ -80,15 +76,11 @@ cpu_fdt_match(device_t parent, cfdata_t cf, void *aux)
 static void
 cpu_fdt_attach(device_t parent, device_t self, void *aux)
 {
-	struct cpu_fdt_softc * const sc = device_private(self);
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 	bus_addr_t cpuid;
 	const uint32_t *cap_ptr;
 	int len;
-
-	sc->sc_dev = self;
-	sc->sc_phandle = phandle;
 
  	cap_ptr = fdtbus_get_prop(phandle, "capacity-dmips-mhz", &len);
 	if (cap_ptr && len == 4) {
@@ -106,7 +98,7 @@ cpu_fdt_attach(device_t parent, device_t self, void *aux)
 	cpu_attach(self, cpuid);
 
 	/* Attach CPU frequency scaling provider */
-	config_found(self, faa, NULL, CFARGS_NONE);
+	config_found(self, faa, NULL, CFARGS(.iattr = "cpu"));
 }
 
 #if defined(MULTIPROCESSOR) && (NPSCI_FDT > 0 || defined(__aarch64__))

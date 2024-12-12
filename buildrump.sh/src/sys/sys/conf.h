@@ -1,4 +1,4 @@
-/*	$NetBSD: conf.h,v 1.154 2019/10/08 12:49:56 uwe Exp $	*/
+/*	$NetBSD: conf.h,v 1.162 2024/04/17 18:01:29 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -43,8 +43,9 @@
  * Definitions of device driver entry switches
  */
 
-#include <sys/queue.h>
 #include <sys/device_if.h>
+#include <sys/queue.h>
+#include <sys/types.h>
 
 struct buf;
 struct knote;
@@ -63,19 +64,22 @@ struct vnode;
 #define	D_TYPEMASK	0x00ff
 #define	D_MPSAFE	0x0100
 #define	D_NEGOFFSAFE	0x0200
-#define	D_MCLOSE	0x0400
+#define	D_UNUSED0	0x0400	/* was D_MCLOSE */
 
 /*
  * Block device switch table
  */
 struct bdevsw {
 	int		(*d_open)(dev_t, int, int, struct lwp *);
+	int		(*d_cancel)(dev_t, int, int, struct lwp *);
 	int		(*d_close)(dev_t, int, int, struct lwp *);
 	void		(*d_strategy)(struct buf *);
 	int		(*d_ioctl)(dev_t, u_long, void *, int, struct lwp *);
 	int		(*d_dump)(dev_t, daddr_t, void *, size_t);
 	int		(*d_psize)(dev_t);
 	int		(*d_discard)(dev_t, off_t, off_t);
+	int		(*d_devtounit)(dev_t);
+	struct cfdriver	*d_cfdriver;
 	int		d_flag;
 };
 
@@ -84,6 +88,7 @@ struct bdevsw {
  */
 struct cdevsw {
 	int		(*d_open)(dev_t, int, int, struct lwp *);
+	int		(*d_cancel)(dev_t, int, int, struct lwp *);
 	int		(*d_close)(dev_t, int, int, struct lwp *);
 	int		(*d_read)(dev_t, struct uio *, int);
 	int		(*d_write)(dev_t, struct uio *, int);
@@ -94,6 +99,8 @@ struct cdevsw {
 	paddr_t		(*d_mmap)(dev_t, off_t, int);
 	int		(*d_kqfilter)(dev_t, struct knote *);
 	int		(*d_discard)(dev_t, off_t, off_t);
+	int		(*d_devtounit)(dev_t);
+	struct cfdriver	*d_cfdriver;
 	int		d_flag;
 };
 
@@ -103,28 +110,44 @@ struct cdevsw {
 extern kmutex_t device_lock;
 
 int devsw_attach(const char *, const struct bdevsw *, devmajor_t *,
-		 const struct cdevsw *, devmajor_t *);
-int devsw_detach(const struct bdevsw *, const struct cdevsw *);
+    const struct cdevsw *, devmajor_t *);
+void devsw_detach(const struct bdevsw *, const struct cdevsw *);
 const struct bdevsw *bdevsw_lookup(dev_t);
 const struct cdevsw *cdevsw_lookup(dev_t);
 devmajor_t bdevsw_lookup_major(const struct bdevsw *);
 devmajor_t cdevsw_lookup_major(const struct cdevsw *);
 
-#define	dev_type_open(n)	int n (dev_t, int, int, struct lwp *)
-#define	dev_type_close(n)	int n (dev_t, int, int, struct lwp *)
-#define	dev_type_read(n)	int n (dev_t, struct uio *, int)
-#define	dev_type_write(n)	int n (dev_t, struct uio *, int)
-#define	dev_type_ioctl(n) \
-		int n (dev_t, u_long, void *, int, struct lwp *)
-#define	dev_type_stop(n)	void n (struct tty *, int)
-#define	dev_type_tty(n)		struct tty * n (dev_t)
-#define	dev_type_poll(n)	int n (dev_t, int, struct lwp *)
-#define	dev_type_mmap(n)	paddr_t n (dev_t, off_t, int)
-#define	dev_type_strategy(n)	void n (struct buf *)
-#define	dev_type_dump(n)	int n (dev_t, daddr_t, void *, size_t)
-#define	dev_type_size(n)	int n (dev_t)
-#define	dev_type_kqfilter(n)	int n (dev_t, struct knote *)
-#define dev_type_discard(n)	int n (dev_t, off_t, off_t)
+typedef int dev_open_t(dev_t, int, int, struct lwp *);
+typedef int dev_cancel_t(dev_t, int, int, struct lwp *);
+typedef int dev_close_t(dev_t, int, int, struct lwp *);
+typedef int dev_read_t(dev_t, struct uio *, int);
+typedef int dev_write_t(dev_t, struct uio *, int);
+typedef int dev_ioctl_t(dev_t, u_long, void *, int, struct lwp *);
+typedef void dev_stop_t(struct tty *, int);
+typedef struct tty *dev_tty_t(dev_t);
+typedef int dev_poll_t(dev_t, int, struct lwp *);
+typedef paddr_t dev_mmap_t(dev_t, off_t, int);
+typedef void dev_strategy_t(struct buf *);
+typedef int dev_dump_t(dev_t, daddr_t, void *, size_t);
+typedef int dev_size_t(dev_t);
+typedef int dev_kqfilter_t(dev_t, struct knote *);
+typedef int dev_discard_t(dev_t, off_t, off_t);
+
+#define	dev_type_open(n)	dev_open_t n
+#define	dev_type_cancel(n)	dev_cancel_t n
+#define	dev_type_close(n)	dev_close_t n
+#define	dev_type_read(n)	dev_read_t n
+#define	dev_type_write(n)	dev_write_t n
+#define	dev_type_ioctl(n)	dev_ioctl_t n
+#define	dev_type_stop(n)	dev_stop_t n
+#define	dev_type_tty(n)		dev_tty_t n
+#define	dev_type_poll(n)	dev_poll_t n
+#define	dev_type_mmap(n)	dev_mmap_t n
+#define	dev_type_strategy(n)	dev_strategy_t n
+#define	dev_type_dump(n)	dev_dump_t n
+#define	dev_type_size(n)	dev_size_t n
+#define	dev_type_kqfilter(n)	dev_kqfilter_t n
+#define dev_type_discard(n)	dev_discard_t n
 
 int devenodev(dev_t, ...);
 int deveopnotsupp(dev_t, ...);
@@ -133,34 +156,35 @@ int ttyenodev(struct tty *, ...);
 void ttyvenodev(struct tty *, ...);
 void ttyvnullop(struct tty *, ...);
 
-#define	noopen		((dev_type_open((*)))devenodev)
-#define	noclose		((dev_type_close((*)))devenodev)
-#define	noread		((dev_type_read((*)))devenodev)
-#define	nowrite		((dev_type_write((*)))devenodev)
-#define	noioctl		((dev_type_ioctl((*)))devenodev)
-#define	nostop		((dev_type_stop((*)))ttyvenodev)
+#define	noopen		((dev_open_t *)devenodev)
+#define	noclose		((dev_close_t *)devenodev)
+#define	noread		((dev_read_t *)devenodev)
+#define	nowrite		((dev_write_t *)devenodev)
+#define	noioctl		((dev_ioctl_t *)devenodev)
+#define	nostop		((dev_stop_t *)ttyvenodev)
 #define	notty		NULL
 #define	nopoll		seltrue
 paddr_t	nommap(dev_t, off_t, int);
-#define	nodump		((dev_type_dump((*)))devenodev)
+#define	nodump		((dev_dump_t *)devenodev)
 #define	nosize		NULL
 #define	nokqfilter	seltrue_kqfilter
-#define	nodiscard	((dev_type_discard((*)))devenodev)
+#define	nodiscard	((dev_discard_t *)devenodev)
 
-#define	nullopen	((dev_type_open((*)))devnullop)
-#define	nullclose	((dev_type_close((*)))devnullop)
-#define	nullread	((dev_type_read((*)))devnullop)
-#define	nullwrite	((dev_type_write((*)))devnullop)
-#define	nullioctl	((dev_type_ioctl((*)))devnullop)
-#define	nullstop	((dev_type_stop((*)))ttyvnullop)
-#define	nullpoll	((dev_type_poll((*)))devnullop)
-#define	nulldump	((dev_type_dump((*)))devnullop)
-#define	nullkqfilter	((dev_type_kqfilter((*)))deveopnotsupp)
-#define	nulldiscard	((dev_type_discard((*)))devnullop)
+#define	nullopen	((dev_open_t *)devnullop)
+#define	nullclose	((dev_close_t *)devnullop)
+#define	nullread	((dev_read_t *)devnullop)
+#define	nullwrite	((dev_write_t *)devnullop)
+#define	nullioctl	((dev_ioctl_t *)devnullop)
+#define	nullstop	((dev_stop_t *)ttyvnullop)
+#define	nullpoll	((dev_poll_t *)devnullop)
+#define	nulldump	((dev_dump_t *)devnullop)
+#define	nullkqfilter	((dev_kqfilter_t *)deveopnotsupp)
+#define	nulldiscard	((dev_discard_t *)devnullop)
 
 /* device access wrappers. */
 
 dev_type_open(bdev_open);
+dev_type_cancel(bdev_cancel);
 dev_type_close(bdev_close);
 dev_type_strategy(bdev_strategy);
 dev_type_ioctl(bdev_ioctl);
@@ -168,7 +192,10 @@ dev_type_dump(bdev_dump);
 dev_type_size(bdev_size);
 dev_type_discard(bdev_discard);
 
+void	bdev_detached(dev_t);
+
 dev_type_open(cdev_open);
+dev_type_cancel(cdev_cancel);
 dev_type_close(cdev_close);
 dev_type_read(cdev_read);
 dev_type_write(cdev_write);
@@ -179,6 +206,8 @@ dev_type_poll(cdev_poll);
 dev_type_mmap(cdev_mmap);
 dev_type_kqfilter(cdev_kqfilter);
 dev_type_discard(cdev_discard);
+
+void	cdev_detached(dev_t);
 
 int	cdev_type(dev_t);
 int	cdev_flags(dev_t);
@@ -276,6 +305,7 @@ devmajor_t devsw_name2blk(const char *, char *, size_t);
 devmajor_t devsw_name2chr(const char *, char *, size_t);
 dev_t devsw_chr2blk(dev_t);
 dev_t devsw_blk2chr(dev_t);
+int dev_minor_unit(dev_t);
 
 void mm_init(void);
 #endif /* _KERNEL */

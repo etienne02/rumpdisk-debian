@@ -1,4 +1,4 @@
-/*	$NetBSD: amdsmn.c,v 1.12 2021/08/07 16:19:07 thorpej Exp $	*/
+/*	$NetBSD: amdsmn.c,v 1.18 2024/10/17 14:02:40 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 2017, 2019 Conrad Meyer <cem@FreeBSD.org>
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: amdsmn.c,v 1.12 2021/08/07 16:19:07 thorpej Exp $ ");
+__KERNEL_RCSID(0, "$NetBSD: amdsmn.c,v 1.18 2024/10/17 14:02:40 msaitoh Exp $ ");
 
 /*
  * Driver for the AMD Family 15h (model 60+) and 17h CPU
@@ -73,7 +73,7 @@ static const struct pciid {
 	uint8_t		amdsmn_data_reg;
 } amdsmn_ids[] = {
 	{
-		.amdsmn_deviceid = PCI_PRODUCT_AMD_F15_60_RC,
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F15_6X_RC,
 		.amdsmn_addr_reg = F15H_SMN_ADDR_REG,
 		.amdsmn_data_reg = F15H_SMN_DATA_REG,
 	},
@@ -88,7 +88,37 @@ static const struct pciid {
 		.amdsmn_data_reg = F17H_SMN_DATA_REG,
 	},
 	{
-		.amdsmn_deviceid = PCI_PRODUCT_AMD_F17_7X_RC,
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F17_6X_RC,
+		.amdsmn_addr_reg = F17H_SMN_ADDR_REG,
+		.amdsmn_data_reg = F17H_SMN_DATA_REG,
+	},
+	{
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F17_7X_RC, /* or F19_0X */
+		.amdsmn_addr_reg = F17H_SMN_ADDR_REG,
+		.amdsmn_data_reg = F17H_SMN_DATA_REG,
+	},
+	{
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F17_AX_RC, /* or F19_4X */
+		.amdsmn_addr_reg = F17H_SMN_ADDR_REG,
+		.amdsmn_data_reg = F17H_SMN_DATA_REG,
+	},
+	{
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F19_1X_RC,
+		.amdsmn_addr_reg = F17H_SMN_ADDR_REG,
+		.amdsmn_data_reg = F17H_SMN_DATA_REG,
+	},
+	{
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F19_6X_RC,
+		.amdsmn_addr_reg = F17H_SMN_ADDR_REG,
+		.amdsmn_data_reg = F17H_SMN_DATA_REG,
+	},
+	{
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F19_7X_RC,
+		.amdsmn_addr_reg = F17H_SMN_ADDR_REG,
+		.amdsmn_data_reg = F17H_SMN_DATA_REG,
+	},
+	{
+		.amdsmn_deviceid = PCI_PRODUCT_AMD_F1A_0X_RC,
 		.amdsmn_addr_reg = F17H_SMN_ADDR_REG,
 		.amdsmn_data_reg = F17H_SMN_DATA_REG,
 	},
@@ -149,6 +179,8 @@ amdsmn_attach(device_t parent, device_t self, void *aux)
 
 	// aprint_normal(": AMD Family 17h System Management Network\n");
 	aprint_normal(": AMD System Management Network\n");
+
+	pmf_device_register(self, NULL, NULL);
 	amdsmn_rescan(self, NULL, NULL);
 }
 
@@ -167,6 +199,8 @@ static int
 amdsmn_detach(device_t self, int flags)
 {
 	struct amdsmn_softc *sc = device_private(self);
+
+	pmf_device_deregister(self);
 
 	mutex_destroy(&sc->smn_lock);
 	aprint_normal_dev(self,"detach!\n");

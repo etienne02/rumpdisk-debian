@@ -1,4 +1,4 @@
-/*	$NetBSD: mutex.h,v 1.12 2020/02/14 14:34:59 maya Exp $	*/
+/*	$NetBSD: mutex.h,v 1.17 2021/12/19 11:33:31 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -39,10 +39,7 @@
 #include <asm/processor.h>
 
 #include <linux/list.h>
-
-#define	__acquires(lock)			/* XXX lockdep stuff */
-#define	__releases(lock)			/* XXX lockdep stuff */
-#define might_lock(lock) do {} while(0) 	/* XXX lockdep stuff */
+#include <linux/spinlock.h>
 
 struct mutex {
 	kmutex_t mtx_lock;
@@ -112,16 +109,36 @@ mutex_lock_nest_lock(struct mutex *mutex, struct mutex *already)
 	mutex_lock(mutex);
 }
 
-#define	__lockdep_used		__unused
-#define	lockdep_assert_held(m)	do {} while (0)
-#define	lockdep_is_held(m)	1
-
-#define	SINGLE_DEPTH_NESTING	0
-
 static inline void
 mutex_lock_nested(struct mutex *mutex, unsigned subclass __unused)
 {
 	mutex_lock(mutex);
+}
+
+static inline int
+mutex_lock_interruptible_nested(struct mutex *mutex,
+    unsigned subclass __unused)
+{
+	return mutex_lock_interruptible(mutex);
+}
+
+/*
+ * `recursive locking is bad, do not use this ever.'
+ * -- linux/scripts/checkpath.pl
+ */
+static inline enum {
+	MUTEX_TRYLOCK_FAILED,
+	MUTEX_TRYLOCK_SUCCESS,
+	MUTEX_TRYLOCK_RECURSIVE,
+}
+mutex_trylock_recursive(struct mutex *mutex)
+{
+	if (mutex_owned(&mutex->mtx_lock))
+		return MUTEX_TRYLOCK_RECURSIVE;
+	else if (mutex_tryenter(&mutex->mtx_lock))
+		return MUTEX_TRYLOCK_SUCCESS;
+	else
+		return MUTEX_TRYLOCK_FAILED;
 }
 
 #endif  /* _LINUX_MUTEX_H_ */

@@ -1,7 +1,14 @@
-/*	$NetBSD: msg_062.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_062.c,v 1.8 2024/12/01 18:37:54 rillig Exp $	*/
 # 3 "msg_062.c"
 
 // Test for message: function prototype parameters must have types [62]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+/* expect+1: error: old-style declaration; add 'int' [1] */
+outer() {
+	/* expect+3: warning: function definition with identifier list is obsolete in C23 [384] */
+	/* expect+2: warning: function prototype parameters must have types [62] */
+	/* expect+1: warning: dubious static function 'inner' at block level [93] */
+	static int inner(a);
+}

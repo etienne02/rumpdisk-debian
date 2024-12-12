@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.9 2018/05/01 19:59:46 christos Exp $
+#	$NetBSD: Makefile,v 1.11 2024/04/01 18:33:23 riastradh Exp $
 
 .include <bsd.hostinit.mk>
 
@@ -37,7 +37,8 @@ HOST_CPPFLAGS+=	-I${OSNETDIR}/sys \
 		-I${OPENSOLARIS_DISTDIR}/tools/ctf/cvt \
 		-I${OPENSOLARIS_DISTDIR}/uts/common \
 		-I${LIBELF_DIR} \
-		-I${LIBDWARF_DIR}
+		-I${LIBDWARF_DIR} \
+		-I${TOOLDIR}/include
 
 HOST_CPPFLAGS+=	-DHAVE_NBTOOL_CONFIG_H=1
 
@@ -45,8 +46,8 @@ OSNETDIR=	${.CURDIR}/../../external/cddl/osnet
 OPENSOLARIS_DISTDIR= ${OSNETDIR}/dist
 
 CTFOBJ!=	cd ${.CURDIR}/../libctf && ${PRINTOBJDIR}
-DWARFOBJ!=	cd ${.CURDIR}/../libdwarf && ${PRINTOBJDIR}
-ELFOBJ!=	cd ${.CURDIR}/../libelf && ${PRINTOBJDIR}
+DWARFOBJ!=	cd ${.CURDIR}/../elftoolchain/libdwarf && ${PRINTOBJDIR}
+ELFOBJ!=	cd ${.CURDIR}/../elftoolchain/libelf && ${PRINTOBJDIR}
 LDADD+=		-L${CTFOBJ} -lctf
 DPADD+=		${CTFOBJ}/libctf.a
 LDADD+=		-L${DWARFOBJ} -ldwarf
@@ -57,5 +58,4 @@ DPADD+=		${ELFOBJ}/libelf.a
 .PATH:		${OPENSOLARIS_DISTDIR}/tools/ctf/common
 .PATH:		${OPENSOLARIS_DISTDIR}/tools/ctf/cvt
 
-.include "${.CURDIR}/../Makefile.nbincludes"
 .include "${.CURDIR}/../Makefile.host"

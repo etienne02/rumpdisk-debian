@@ -1,4 +1,4 @@
-/* $NetBSD: udf_vfsops.c,v 1.81 2021/07/24 21:31:38 andvar Exp $ */
+/* $NetBSD: udf_vfsops.c,v 1.85 2022/05/03 07:33:07 hannken Exp $ */
 
 /*
  * Copyright (c) 2006, 2008 Reinoud Zandijk
@@ -28,7 +28,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__KERNEL_RCSID(0, "$NetBSD: udf_vfsops.c,v 1.81 2021/07/24 21:31:38 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udf_vfsops.c,v 1.85 2022/05/03 07:33:07 hannken Exp $");
 #endif /* not lint */
 
 
@@ -182,7 +182,7 @@ SYSCTL_SETUP(udf_sysctl_setup, "udf sysctl")
 		       SYSCTL_DESCR("OSTA Universal File System"),
 		       NULL, 0, NULL, 0,
 		       CTL_VFS, 24, CTL_EOL);
-#ifdef DEBUG
+#ifdef UDF_DEBUG
 	sysctl_createv(clog, 0, NULL, &node,
 		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
 		       CTLTYPE_INT, "verbose",
@@ -411,7 +411,7 @@ udf_mount(struct mount *mp, const char *path,
 	spec_node_setmountedfs(devvp, mp);
 
 	/* successfully mounted */
-	DPRINTF(VOLUMES, ("udf_mount() successfull\n"));
+	DPRINTF(VOLUMES, ("udf_mount() successful\n"));
 
 	error = set_statvfs_info(path, UIO_USERSPACE, args->fspec, UIO_USERSPACE,
 			mp->mnt_op->vfs_name, mp, l);
@@ -574,7 +574,10 @@ udf_mountfs(struct vnode *devvp, struct mount *mp,
 	int    num_anchors, error;
 
 	/* flush out any old buffers remaining from a previous use. */
-	if ((error = vinvalbuf(devvp, V_SAVE, l->l_cred, l, 0, 0)))
+	vn_lock(devvp, LK_EXCLUSIVE | LK_RETRY);
+	error = vinvalbuf(devvp, V_SAVE, l->l_cred, l, 0, 0);
+	VOP_UNLOCK(devvp);
+	if (error)
 		return error;
 
 	/* setup basic mount information */
@@ -647,7 +650,7 @@ udf_mountfs(struct vnode *devvp, struct mount *mp,
 			 * is enough space to open/close new session
 			 */
 		}
-		/* double check if we're not mounting a pervious session RW */
+		/* double check if we're not mounting a previous session RW */
 		if (args->sessionnr != 0) {
 			printf("UDF mount: updating a previous session "
 				"not yet allowed\n");

@@ -1,4 +1,4 @@
-/*	$NetBSD: shf.c,v 1.13 2017/06/30 03:56:12 kamil Exp $	*/
+/*	$NetBSD: shf.c,v 1.16 2024/02/05 21:20:09 andvar Exp $	*/
 
 /*
  *  Shell file I/O routines
@@ -6,7 +6,7 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: shf.c,v 1.13 2017/06/30 03:56:12 kamil Exp $");
+__RCSID("$NetBSD: shf.c,v 1.16 2024/02/05 21:20:09 andvar Exp $");
 #endif
 
 #include <sys/stat.h>
@@ -709,7 +709,7 @@ shf_write(buf, nbytes, shf)
 	if (nbytes < 0)
 		internal_errorf(1, "shf_write: nbytes %d", nbytes);
 
-	/* Don't buffer if buffer is empty and we're writting a large amount. */
+	/* Don't buffer if buffer is empty and we're writing a large amount. */
 	if ((ncopy = shf->wnleft)
 	    && (shf->wp != shf->buf || nbytes < shf->wnleft))
 	{
@@ -843,7 +843,7 @@ shf_smprintf(const char *fmt, ...)
 #define FL_ZERO		0x040	/* `0' seen */
 #define FL_DOT		0x080	/* '.' seen */
 #define FL_UPPER	0x100	/* format character was uppercase */
-#define FL_NUMBER	0x200	/* a number was formated %[douxefg] */
+#define FL_NUMBER	0x200	/* a number was formatted %[douxefg] */
 
 
 #ifdef FP
@@ -984,6 +984,7 @@ shf_vfprintf(shf, fmt, args)
 			if (sizeof(char *) > sizeof(int))
 				flags |= FL_LONG; /* hope it fits.. */
 			/* aaahhh... */
+			/*FALLTHROUGH*/
 		case 'd':
 		case 'i':
 		case 'o':
@@ -1000,7 +1001,7 @@ shf_vfprintf(shf, fmt, args)
 				else
 					tmp = 0;
 				/* aaahhhh..... */
-
+				/*FALLTHROUGH*/
 			case 'u':
 				do {
 					*--s = lnum % 10 + '0';

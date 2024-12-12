@@ -1,4 +1,4 @@
-/*	$NetBSD: union_vnops.c,v 1.78 2021/07/04 11:24:09 hannken Exp $	*/
+/*	$NetBSD: union_vnops.c,v 1.83 2022/03/19 13:48:04 hannken Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993, 1994, 1995
@@ -72,7 +72,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: union_vnops.c,v 1.78 2021/07/04 11:24:09 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: union_vnops.c,v 1.83 2022/03/19 13:48:04 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -771,6 +771,23 @@ union_access(void *v)
 		}
 	}
 
+	/*
+	 * Copy up to prevent checking (and failing) against
+	 * underlying file system mounted read only.
+	 * Check for read access first to prevent implicit
+	 * copy of inaccessible underlying vnode.
+	 */
+	if (un->un_uppervp == NULLVP &&
+	    (un->un_lowervp->v_type == VREG) &&
+	    (ap->a_accmode & VWRITE)) {
+		vn_lock(un->un_lowervp, LK_EXCLUSIVE | LK_RETRY);
+		error = VOP_ACCESS(un->un_lowervp, VREAD, ap->a_cred);
+		VOP_UNLOCK(un->un_lowervp);
+		if (error == 0)
+			error = union_copyup(un, 1, ap->a_cred, curlwp);
+		if (error)
+			return error;
+	}
 
 	if ((vp = un->un_uppervp) != NULLVP) {
 		ap->a_vp = vp;
@@ -1179,10 +1196,11 @@ union_seek(void *v)
 int
 union_remove(void *v)
 {
-	struct vop_remove_v2_args /* {
+	struct vop_remove_v3_args /* {
 		struct vnode *a_dvp;
 		struct vnode *a_vp;
 		struct componentname *a_cnp;
+		nlink_t ctx_vp_new_nlink;
 	} */ *ap = v;
 	int error;
 	struct union_node *dun = VTOUNION(ap->a_dvp);
@@ -1296,7 +1314,7 @@ union_link(void *v)
 int
 union_rename(void *v)
 {
-	struct vop_rename_args  /* {
+	struct vop_rename_args /* {
 		struct vnode *a_fdvp;
 		struct vnode *a_fvp;
 		struct componentname *a_fcnp;
@@ -1691,15 +1709,6 @@ union_lock(void *v)
 		lockvp = LOCKVP(vp);
 		error = union_lock1(vp, lockvp, flags);
 		mutex_exit(&un->un_lock);
-		if (error)
-			return error;
-		if (mutex_tryenter(vp->v_interlock)) {
-			error = vdead_check(vp, VDEAD_NOWAIT);
-			mutex_exit(vp->v_interlock);
-		} else
-			error = EBUSY;
-		if (error)
-			union_unlock1(vp, lockvp);
 		return error;
 	}
 
@@ -1708,7 +1717,7 @@ union_lock(void *v)
 		lockvp = LOCKVP(vp);
 		mutex_exit(&un->un_lock);
 		error = union_lock1(vp, lockvp, flags);
-		if (error != 0)
+		if (error != 0 || (flags & (LK_DOWNGRADE | LK_UPGRADE)) != 0)
 			return error;
 		mutex_enter(&un->un_lock);
 		if (lockvp == LOCKVP(vp))
@@ -1717,14 +1726,6 @@ union_lock(void *v)
 	}
 	mutex_exit(&un->un_lock);
 
-	mutex_enter(vp->v_interlock);
-	error = vdead_check(vp, VDEAD_NOWAIT);
-	if (error) {
-		union_unlock1(vp, lockvp);
-		error = vdead_check(vp, 0);
-		KASSERT(error == ENOENT);
-	}
-	mutex_exit(vp->v_interlock);
 	return error;
 }
 

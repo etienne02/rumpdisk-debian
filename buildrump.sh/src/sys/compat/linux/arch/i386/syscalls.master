@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.124 2020/04/26 18:53:32 thorpej Exp $
+	$NetBSD: syscalls.master,v 1.137 2024/09/28 19:35:55 christos Exp $
 
 ;	@(#)syscalls.master	8.1 (Berkeley) 7/19/93
 
@@ -47,6 +47,8 @@
 #include <compat/linux/common/linux_signal.h>
 #include <compat/linux/common/linux_siginfo.h>
 #include <compat/linux/common/linux_machdep.h>
+#include <compat/linux/common/linux_mqueue.h>
+#include <compat/linux/common/linux_sched.h>
 
 #include <compat/linux/linux_syscallargs.h>
 
@@ -383,7 +385,8 @@
 222	UNIMPL		/* unused */
 223	UNIMPL		/* unused */
 224	NOARGS		{ pid_t|linux_sys||gettid(void); }
-225	UNIMPL		readahead
+225	STD		{ ssize_t|linux_sys||readahead(int fd, off_t offset, \
+			    size_t count); }
 226	STD		{ int|linux_sys||setxattr(char *path, char *name, \
 			    void *value, size_t size, int flags); }
 227	STD		{ int|linux_sys||lsetxattr(char *path, char *name, \
@@ -428,16 +431,23 @@
 251	UNIMPL		/* unused */
 252	STD		{ int|linux_sys||exit_group(int error_code); }
 253	UNIMPL		lookup_dcookie
-254	UNIMPL		epoll_create
-255	UNIMPL		epoll_ctl
-256	UNIMPL		epoll_wait
+254	STD		{ int|linux_sys||epoll_create(int size); }
+255	STD		{ int|linux_sys||epoll_ctl(int epfd, int op, int fd, \
+			    struct linux_epoll_event *event); }
+256	STD		{ int|linux_sys||epoll_wait(int epfd, \
+			    struct linux_epoll_event *events, int maxevents, \
+			    int timeout); }
 257	UNIMPL		remap_file_pages
 258	STD		{ int|linux_sys||set_tid_address(int *tid); }
-259	UNIMPL		timer_create
-260	UNIMPL		timer_settime
-261	UNIMPL		timer_gettime
-262	UNIMPL		timer_getoverrun
-263	UNIMPL		timer_delete
+259	STD		{ int|linux_sys||timer_create(clockid_t clockid, \
+			    struct linux_sigevent *evp, timer_t *timerid); }
+260	STD		{ int|linux_sys||timer_settime(timer_t timerid, \
+			    int flags, const struct linux_itimerspec *tim, \
+			    struct linux_itimerspec *otim); }
+261	STD		{ int|linux_sys||timer_gettime(timer_t timerid, \
+			    struct linux_itimerspec *tim); }
+262	NOARGS		{ int|sys||timer_getoverrun(timer_t timerid); }
+263	NOARGS		{ int|sys||timer_delete(timer_t timerid); }
 264	STD		{ int|linux_sys||clock_settime(clockid_t which, \
 			    struct linux_timespec *tp); }
 265	STD		{ int|linux_sys||clock_gettime(clockid_t which, \
@@ -460,23 +470,37 @@
 274	UNIMPL		mbind
 275	UNIMPL		get_mempolicy
 276	UNIMPL		set_mempolicy
-277	UNIMPL		mq_open
-278	UNIMPL		mq_unlink
-279	UNIMPL		mq_timedsend
-280	UNIMPL		mq_timedreceive
-281	UNIMPL		mq_notify
-282	UNIMPL		mq_getsetattr
+277	STD		{ linux_mqd_t|linux_sys||mq_open(const char *name, \
+			    int oflag, linux_umode_t mode, \
+			    struct linux_mq_attr *attr); }
+278	STD		{ int|linux_sys||mq_unlink(const char *name); }
+279	STD		{ int|linux_sys||mq_timedsend(linux_mqd_t mqdes, \
+			    const char *msg_ptr, size_t msg_len, \
+			    unsigned int msg_prio, \
+			    const struct linux_timespec *abs_timeout); }
+280	STD		{ ssize_t|linux_sys||mq_timedreceive(linux_mqd_t mqdes, \
+			    char *msg_ptr, size_t msg_len, \
+			    unsigned int *msg_prio, \
+			    const struct linux_timespec *abs_timeout); }
+281	STD		{ int|linux_sys||mq_notify(linux_mqd_t mqdes, \
+			    const struct linux_sigevent *sevp); }
+282	STD		{ int|linux_sys||mq_getsetattr(linux_mqd_t mqdes, \
+			    const struct linux_mq_attr *newattr, \
+			    struct linux_mq_attr *oldattr); }
 283	UNIMPL		sys_kexec_load
-284	UNIMPL		waitid
+284	STD		{ int|linux_sys||waitid(int idtype, id_t id, \
+			    linux_siginfo_t *infop, int options, \
+			    struct rusage50 *rusage); }
 285	UNIMPL		/* unused */
 286	UNIMPL		add_key
 287	UNIMPL		request_key
 288	UNIMPL		keyctl
 289	UNIMPL		ioprio_set
 290	UNIMPL		ioprio_get
-291	UNIMPL		inotify_init
-292	UNIMPL		inotify_add_watch
-293	UNIMPL		inotify_rm_watch
+291	STD		{ int|linux_sys||inotify_init(void); }
+292	STD		{ int|linux_sys||inotify_add_watch(int fd, \
+			    const char *pathname, uint32_t mask); }
+293	STD		{ int|linux_sys||inotify_rm_watch(int fd, int wd); }
 294	UNIMPL		migrate_pages
 295	STD 		{ int|linux_sys||openat(int fd, const char *path, \
 			    int flags, ... linux_umode_t mode); }
@@ -516,42 +540,163 @@
 312	NOARGS		{ int|sys||__futex_get_robust_list(lwpid_t lwpid, \
 			    void **headp, size_t *lenp); }
 313	UNIMPL		splice
-314	UNIMPL		sync_file_range
+314	STD		{ int|linux_sys||sync_file_range(int fd, \
+			    off_t offset, off_t nbytes, unsigned int flags); }
 315	UNIMPL		tee
 316	UNIMPL		vmsplice
 317	UNIMPL		move_pages
-318	UNIMPL		getcpu
-319	UNIMPL		epoll_wait
+318	STD		{ int|linux_sys||getcpu(unsigned int *cpu, \
+			    unsigned int *node, \
+			    struct linux_getcpu_cache *tcache); }
+319	STD		{ int|linux_sys||epoll_pwait(int epfd, \
+			    struct linux_epoll_event *events, int maxevents, \
+			    int timeout, const linux_sigset_t *sigmask); }
 320	STD		{ int|linux_sys||utimensat(int fd, const char *path, \
 			    struct linux_timespec *times, int flag); }
 321	UNIMPL		signalfd
-322	UNIMPL		timerfd_create
-323	UNIMPL		eventfd
+322	STD		{ int|linux_sys||timerfd_create(clockid_t clock_id, \
+			    int flags); }
+323	STD		{ int|linux_sys||eventfd(unsigned int initval); }
 324	STD		{ int|linux_sys||fallocate(int fd, int mode, \
 			    off_t offset, off_t len); }
-325	UNIMPL		timerfd_settime
-326	UNIMPL		timerfd_gettime
+325	STD		{ int|linux_sys||timerfd_settime(int fd, int flags, \
+			    const struct linux_itimerspec *tim, \
+			    struct linux_itimerspec *otim); }
+326	STD		{ int|linux_sys||timerfd_gettime(int fd, \
+			    struct linux_itimerspec *tim); }
 327	UNIMPL		signalfd4
-328	UNIMPL		eventfd2
-329	UNIMPL		epoll_create1
-330     STD             { int|linux_sys||dup3(int from, int to, int flags); }
-331     STD             { int|linux_sys||pipe2( int *pfds, int flags); }
-332	UNIMPL		inotify_init1
-333	UNIMPL		preadv
-334	UNIMPL		pwritev
+328	STD		{ int|linux_sys||eventfd2(unsigned int initval, \
+			    int flags); }
+329	STD		{ int|linux_sys||epoll_create1(int flags); }
+330	STD             { int|linux_sys||dup3(int from, int to, int flags); }
+331	STD             { int|linux_sys||pipe2( int *pfds, int flags); }
+332	STD		{ int|linux_sys||inotify_init1(int flags); }
+333	STD		{ int|linux_sys||preadv(int fd, \
+			    const struct iovec *iovp, int iovcnt, \
+			    unsigned long off_lo, unsigned long off_hi); }
+334	STD		{ int|linux_sys||pwritev(int fd, \
+			    const struct iovcnt *iovp, int iovcnt, \
+			    unsigned long off_lo, unsigned long off_hi); }
 335	UNIMPL		rt_tgsigqueueinfo
 336	UNIMPL		perf_counter_open
 337	UNIMPL		recvmmsg
 338	UNIMPL		fanotify_init
 339	UNIMPL		fanotify_mark
-340	UNIMPL		prlimit64
+340	STD		{ int|linux_sys||prlimit64(pid_t pid, int which, \
+			    struct rlimit *new_rlp, struct rlimit *old_rlp); }
 341	UNIMPL		name_to_handle_at
 342	UNIMPL		open_by_handle_at
 343	UNIMPL		clock_adjtime
-344	UNIMPL		syncfs
+344	STD		{ int|linux_sys||syncfs(int fd); }
 345	UNIMPL		sendmmsg
 346	UNIMPL		setns
 347	UNIMPL		process_vm_readv
 348	UNIMPL		process_vm_writev
 349	UNIMPL		kcmp
 350	UNIMPL		finit_module
+351	UNIMPL		sched_setattr
+352	UNIMPL		sched_getattr
+353	STD		{ int|linux_sys||renameat2(int fromfd, \
+			    const char *from, int tofd, const char *to, \
+			    unsigned int flags); }
+354	UNIMPL		seccomp
+355	NOARGS		{ ssize_t|sys||getrandom(void *buf, size_t buflen, \
+			    unsigned int flags); }
+356	STD		{ int|linux_sys||memfd_create(const char *name, \
+			    unsigned int flags); }
+357	UNIMPL		bpf
+358	UNIMPL		execveat
+359	UNIMPL		socket
+360	UNIMPL		socketpair
+361	UNIMPL		bind
+362	UNIMPL		connect
+363	UNIMPL		listen
+364	UNIMPL		accept4
+365	UNIMPL		getsockopt
+366	UNIMPL		setsockopt
+367	UNIMPL		getsockname
+368	UNIMPL		getpeername
+369	UNIMPL		sendto
+370	UNIMPL		sendmsg
+371	UNIMPL		recvfrom
+372	UNIMPL		recvmsg
+373	UNIMPL		shutdown
+374	UNIMPL		userfaultfd
+375	UNIMPL		membarrier
+376	UNIMPL		mlock2
+377	STD		{ ssize_t|linux_sys||copy_file_range(int fd_in, \
+			off_t * off_in, int fd_out, off_t * off_out, \
+			size_t len, unsigned int flags); }
+378	UNIMPL		preadv2
+379	UNIMPL		pwritev2
+380	UNIMPL		pkey_mprotect
+381	UNIMPL		pkey_alloc
+382	UNIMPL		pkey_free
+383	UNIMPL		statx
+384	UNIMPL		arch_prctl
+385	UNIMPL		io_pgetevents
+386	UNIMPL		rseq
+387	UNIMPL
+388	UNIMPL
+389	UNIMPL
+390	UNIMPL
+391	UNIMPL
+392	UNIMPL
+393	UNIMPL		semget
+394	UNIMPL		semctl
+395	UNIMPL		shmget
+396	UNIMPL		shmctl
+397	STD		{ int|linux_sys||statx(int fd, const char *path, \
+			    int flag, unsigned int mask, \
+			    struct linux_statx *sp); }
+398	UNIMPL		shmdt
+399	UNIMPL		msgget
+400	UNIMPL		msgsnd
+401	UNIMPL		msgrcv
+402	UNIMPL		msgctl
+403	UNIMPL		clock_gettime64
+404	UNIMPL		clock_settime64
+405	UNIMPL		clock_adjtime64
+406	UNIMPL		clock_getres_time64
+407	UNIMPL		clock_nanosleep_time64
+408	UNIMPL		timer_gettime64
+409	UNIMPL		timer_settime64
+410	UNIMPL		timerfd_gettime64
+411	UNIMPL		timerfd_settime64
+412	UNIMPL		utimensat_time64
+413	UNIMPL		pselect6_time64
+414	UNIMPL		ppoll_time64
+415	UNIMPL
+416	UNIMPL		io_pgetevents_time64
+417	UNIMPL		recvmmsg_time64
+418	UNIMPL		mq_timedsend_time64
+419	UNIMPL		mq_timedreceive_time64
+420	UNIMPL		semtimedop_time64
+421	UNIMPL		rt_sigtimedwait_time64
+422	UNIMPL		futex_time64
+423	UNIMPL		sched_rr_get_interval_time64
+424	UNIMPL		pidfd_send_signal
+425	UNIMPL		io_uring_setup
+426	UNIMPL		io_uring_enter
+427	UNIMPL		io_uring_register
+428	UNIMPL		open_tree
+429	UNIMPL		move_mount
+430	UNIMPL		fsopen
+431	UNIMPL		fsconfig
+432	UNIMPL		fsmount
+433	UNIMPL		fspick
+434	UNIMPL		pidfd_open
+435	STD		{ int|linux_sys||clone3(\
+			    struct linux_user_clone3_args *cl_args, \
+			    size_t size); }
+436	STD		{ int|linux_sys||close_range(unsigned int first, \
+			    unsigned int last, unsigned int flags); }
+437	UNIMPL		openat2
+438	UNIMPL		pidfd_getfd
+439	STD		{ int|linux_sys||faccessat2(int fd, const char *path, \
+			    int amode, int flags); }
+440	UNIMPL		process_madvise
+441	STD		{ int|linux_sys||epoll_pwait2(int epfd, \
+			    struct linux_epoll_event *events, int maxevents, \
+			    const struct linux_timespec *timeout, \
+			    const linux_sigset_t *sigmask); }

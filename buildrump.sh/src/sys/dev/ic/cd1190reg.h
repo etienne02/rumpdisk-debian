@@ -1,4 +1,4 @@
-/*	$NetBSD: cd1190reg.h,v 1.5 2008/07/02 10:16:20 plunky Exp $	*/
+/*	$NetBSD: cd1190reg.h,v 1.7 2024/02/05 21:46:06 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1998 Iain Hibbert.
@@ -131,7 +131,7 @@
 
 #define CD1190_SCR_STATUS	(CD1190_SCR_IP3 | CD1190_SCR_IP2 | CD1190_SCR_IP1)
 
-/* Outout signals - Active High?
+/* Output signals - Active High?
  *
  *	IP3 	-	SLIN
  *	IP2 	-	*INIT / *RESET
@@ -168,7 +168,7 @@
 /* Strobe Width Register */
 #define CD1190_SWR		0x02
 
-/* Timer Multipler Register */
+/* Timer Multiplier Register */
 #define CD1190_TMR		0x05
 
 /* Timer Prescale Register */

@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_configure.c,v 1.34 2020/09/06 05:31:46 mrg Exp $ */
+/*	$NetBSD: rf_configure.c,v 1.37 2022/07/21 09:19:53 kre Exp $ */
 
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
@@ -49,7 +49,7 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: rf_configure.c,v 1.34 2020/09/06 05:31:46 mrg Exp $");
+__RCSID("$NetBSD: rf_configure.c,v 1.37 2022/07/21 09:19:53 kre Exp $");
 #endif
 
 
@@ -59,6 +59,7 @@ __RCSID("$NetBSD: rf_configure.c,v 1.34 2020/09/06 05:31:46 mrg Exp $");
 #include <strings.h>
 #include <err.h>
 #include <util.h>
+#include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -212,29 +213,45 @@ rf_MakeConfig(char *configname, RF_Config_t *cfgPtr)
 		warnx("[No disk queue discipline specified in config file %s. "
 		    "Using %s.]", configname, cfgPtr->diskQueueType);
 	}
+    else {
 
 	/*
 	 * the queue specifier line contains two entries: 1st char of first
 	 * word specifies queue to be used 2nd word specifies max num reqs
 	 * that can be outstanding on the disk itself (typically 1)
 	 */
-	if (sscanf(buf, "%s %d", buf1, &val) != 2) {
+	assert(64 < sizeof buf1);
+	if (sscanf(buf, "%64s %d", buf1, &val) != 2 || strlen(buf1) >= 60) {
 		warnx("Can't determine queue type and/or max outstanding "
-		    "reqs from line: %*s", (int)(sizeof(buf) - 1), buf);
+		    "reqs from line: %.*s", (int)(sizeof(buf) - 1), buf);
 		warnx("Using %s-%d", cfgPtr->diskQueueType,
 		    cfgPtr->maxOutstandingDiskReqs);
 	} else {
+#if 0
 		char *ch;
+#endif
 		memcpy(cfgPtr->diskQueueType, buf1,
 		    RF_MIN(sizeof(cfgPtr->diskQueueType), strlen(buf1) + 1));
+		cfgPtr->diskQueueType[sizeof cfgPtr->diskQueueType - 1] = '\0';
+
+#if 0	/* this indicates a lack of understanding of how scanf() works */
+	/* it was also pointless as buf1 data was (b4) never used again */
 		for (ch = buf1; *ch; ch++) {
 			if (*ch == ' ') {
 				*ch = '\0';
 				break;
 			}
 		}
+#endif
 		cfgPtr->maxOutstandingDiskReqs = val;
+		if (cfgPtr->maxOutstandingDiskReqs != val) {
+			warnx("Queue length for %s out of range"
+			    " [%d interp as %d], assuming 1",
+			    buf1, val, cfgPtr->maxOutstandingDiskReqs);
+			cfgPtr->maxOutstandingDiskReqs = 1;
+		}
 	}
+    }
 
 	rewind(fp);
 
@@ -250,8 +267,8 @@ rf_MakeConfig(char *configname, RF_Config_t *cfgPtr)
 
 		if (rf_get_next_nonblank_line(
 		    buf, sizeof(buf), fp, NULL)) {
-			warnx("Config file error: unable to get device "
-			    "file for disk at row %d col %d", 0, c);
+			warnx("Config file error: unable to find device "
+			    "file name for disk at col %d", c);
 			retcode = -1;
 			goto out;
 		}
@@ -259,9 +276,9 @@ rf_MakeConfig(char *configname, RF_Config_t *cfgPtr)
 		b = getfsspecname(b1, sizeof(b1), buf);
 		if (b == NULL) {
 			warnx("Config file error: warning: unable to "
-			    "get device file for disk at row %d col "
-			    "%d: %s", 0, c, b1);
-			b = buf;
+			    "get device file for disk at col %d: %s",
+			    c, b1);
+			b = "absent";
 		}
 
 		strlcpy(cfgPtr->devnames[0][c], b,

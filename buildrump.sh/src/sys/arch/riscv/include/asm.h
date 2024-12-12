@@ -1,4 +1,4 @@
-/*	$NetBSD: asm.h,v 1.6 2021/05/01 07:05:07 skrll Exp $	*/
+/*	$NetBSD: asm.h,v 1.8 2024/08/04 08:16:25 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -96,6 +96,7 @@
 
 #define	ENTRY_NP(x)	.text; .align 2; _ENTRY(x)
 #define	ENTRY(x)	ENTRY_NP(x); _PROF_PROLOGUE
+#define	ALTENTRY(x)	_ENTRY(x)
 #define	END(x)		.size _C_LABEL(x), . - _C_LABEL(x)
 
 /*
@@ -112,7 +113,7 @@
 	MSG(msg)
 
 #define	MSG(msg)			\
-        .pushsection .rodata.str1.8,"aMS",@progbits,1; \
+	.pushsection .rodata.str1.8,"aMS",@progbits,1; \
 9:	.asciiz	msg;			\
 	.popsection
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: bignum.c,v 1.3 2019/10/04 09:16:38 mrg Exp $	*/
+/*	$NetBSD: bignum.c,v 1.6 2023/02/27 22:00:25 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2012 Alistair Crooks <agc@NetBSD.org>
@@ -196,7 +196,7 @@ lshift_digits(mp_int * a, int b)
 /* trim unused digits 
  *
  * This is used to ensure that leading zero digits are
- * trimed and the leading "used" digit will be non-zero
+ * trimmed and the leading "used" digit will be non-zero
  * Typically very fast.  Also fixes the sign if there
  * are no more leading digits
  */
@@ -363,7 +363,7 @@ mp_count_bits(const mp_int *a)
 	return r;
 }
 
-/* compare maginitude of two ints (unsigned) */
+/* compare magnitude of two ints (unsigned) */
 static int
 compare_magnitude(mp_int * a, mp_int * b)
 {
@@ -1664,7 +1664,7 @@ mp_2expt(mp_int * a, int b)
 }
 
 /* pre-calculate the value required for Barrett reduction
- * For a given modulus "b" it calulates the value required in "a"
+ * For a given modulus "b" it calculates the value required in "a"
  */
 static int
 mp_reduce_setup(mp_int * a, mp_int * b)
@@ -2086,7 +2086,7 @@ ERR:
  * are saved.  Note also that the call to signed_multiply can end up back 
  * in this function if the a0, a1, b0, or b1 are above the threshold.  
  * This is known as divide-and-conquer and leads to the famous 
- * O(N**lg(3)) or O(N**1.584) work which is asymptopically lower than 
+ * O(N**lg(3)) or O(N**1.584) work which is asymptotically lower than 
  * the standard O(N**2) that the baseline/comba methods use.  
  * Generally though the overhead of this method doesn't pay off 
  * until a certain size (N ~ 80) is reached.
@@ -2277,7 +2277,7 @@ fast_col_array_multiply(mp_int * a, mp_int * b, mp_int * c, int digs)
 		tmpx = a->dp + tx;
 		tmpy = b->dp + ty;
 
-		/* this is the number of times the loop will iterrate, essentially 
+		/* this is the number of times the loop will iterate, essentially 
 		while (tx++ < a->used && ty-- >= 0) { ... }
 		*/
 		iy = MIN(a->used-tx, ty+1);
@@ -2472,7 +2472,7 @@ fast_basic_multiply_partial_upper(mp_int * a, mp_int * b, mp_int * c, int digs)
 		tmpx = a->dp + tx;
 		tmpy = b->dp + ty;
 
-		/* this is the number of times the loop will iterrate, essentially its 
+		/* this is the number of times the loop will iterate, essentially its 
 		 while (tx++ < a->used && ty-- >= 0) { ... }
 		*/
 		iy = MIN(a->used-tx, ty+1);
@@ -3078,7 +3078,7 @@ fast_basic_square(mp_int * a, mp_int * b)
 		tmpx = a->dp + tx;
 		tmpy = a->dp + ty;
 
-		/* this is the number of times the loop will iterrate, essentially
+		/* this is the number of times the loop will iterate, essentially
 		 while (tx++ < a->used && ty-- >= 0) { ... }
 		*/
 		iy = MIN(a->used-tx, ty+1);
@@ -3642,7 +3642,7 @@ fast_mp_montgomery_reduce(mp_int * x, mp_int * n, mp_digit rho)
 		/* a = a + mu * m * b**i
 		*
 		* This is computed in place and on the fly.  The multiplication
-		* by b**i is handled by offseting which columns the results
+		* by b**i is handled by offsetting which columns the results
 		* are added to.
 		*
 		* Note the comba method normally doesn't handle carries in the
@@ -4004,7 +4004,7 @@ ERR:
  * shifts with subtractions when the result is greater than b.
  *
  * The method is slightly modified to shift B unconditionally upto just under
- * the leading bit of b.  This saves alot of multiple precision shifting.
+ * the leading bit of b.  This saves a lot of multiple precision shifting.
  */
 static int
 mp_montgomery_calc_normalization(mp_int * a, mp_int * b)
@@ -4295,7 +4295,7 @@ LBL_M:
 
 /* this is a shell function that calls either the normal or Montgomery
  * exptmod functions.  Originally the call to the montgomery code was
- * embedded in the normal function but that wasted alot of stack space
+ * embedded in the normal function but that wasted a lot of stack space
  * for nothing (since 99% of the time the Montgomery code would be called)
  */
 static int
@@ -4346,7 +4346,7 @@ exponent_modulo(mp_int * G, mp_int * X, mp_int * P, mp_int *Y)
 	/* is it a DR modulus? */
 	diminished_radix = is_diminished_radix_modulus(P);
 
-	/* if not, is it a unrestricted DR modulus? */
+	/* if not, is it an unrestricted DR modulus? */
 	if (!diminished_radix) {
 		diminished_radix = mp_reduce_is_2k(P) << 1;
 	}
@@ -4892,7 +4892,7 @@ LBL_B:
 	return err;
 }
 
-/* returns size of ASCII reprensentation */
+/* returns size of ASCII representation */
 static int
 mp_radix_size(mp_int *a, int radix, int *size)
 {
@@ -5008,7 +5008,7 @@ mp_toradix_n(mp_int * a, char *str, int radix, int maxlen)
 	}
 
 	/* reverse the digits of the string.  In this case _s points
-	* to the first digit [exluding the sign] of the number
+	* to the first digit [excluding the sign] of the number
 	*/
 	bn_reverse((unsigned char *)_s, digs);
 
@@ -5209,7 +5209,7 @@ LBL_U:
 
 /* BIGNUM emulation layer */
 
-/* essentiually, these are just wrappers around the libtommath functions */
+/* essentially, these are just wrappers around the libtommath functions */
 /* usually the order of args changes */
 /* the BIGNUM API tends to have more const poisoning */
 /* these wrappers also check the arguments passed for sanity */

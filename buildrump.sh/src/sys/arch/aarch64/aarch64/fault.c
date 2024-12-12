@@ -1,7 +1,7 @@
-/*	$NetBSD: fault.c,v 1.21 2020/12/11 18:03:33 skrll Exp $	*/
+/*	$NetBSD: fault.c,v 1.26 2024/02/07 04:20:26 msaitoh Exp $	*/
 
 /*
- * Copyright (c) 2017 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2017 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,9 +27,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fault.c,v 1.21 2020/12/11 18:03:33 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fault.c,v 1.26 2024/02/07 04:20:26 msaitoh Exp $");
 
 #include "opt_compat_netbsd32.h"
+#include "opt_cpuoptions.h"
 #include "opt_ddb.h"
 #include "opt_uvmhist.h"
 
@@ -160,7 +161,7 @@ data_abort_handler(struct trapframe *tf, uint32_t eclass)
 	p = l->l_proc;
 	va = trunc_page((vaddr_t)tf->tf_far);
 
-	/* eliminate addresss tag if ECR_EL1.TBI[01] is enabled */
+	/* eliminate address tag if ECR_EL1.TBI[01] is enabled */
 	va = aarch64_untag_address(va);
 
 	if ((VM_MIN_KERNEL_ADDRESS <= va) && (va < VM_MAX_KERNEL_ADDRESS)) {
@@ -199,9 +200,16 @@ data_abort_handler(struct trapframe *tf, uint32_t eclass)
 	}
 
 	/* reference/modified emulation */
-	if (pmap_fault_fixup(map->pmap, va, ftype, user)) {
-		UVMHIST_LOG(pmaphist, "fixed: va=%016llx", tf->tf_far, 0, 0, 0);
-		return;
+#ifdef ARMV81_HAFDBS
+	if (aarch64_hafdbs_enabled == ID_AA64MMFR1_EL1_HAFDBS_NONE ||
+	    (aarch64_hafdbs_enabled == ID_AA64MMFR1_EL1_HAFDBS_A &&
+	    ftype == VM_PROT_WRITE))
+#endif
+	{
+		if (pmap_fault_fixup(map->pmap, va, ftype, user)) {
+			UVMHIST_LOG(pmaphist, "fixed: va=%016llx", tf->tf_far, 0, 0, 0);
+			return;
+		}
 	}
 
 	fb = cpu_disable_onfault();
@@ -216,10 +224,12 @@ data_abort_handler(struct trapframe *tf, uint32_t eclass)
 		return;
 	}
 
-
  do_fault:
 	/* faultbail path? */
-	if (curcpu()->ci_intr_depth == 0) {
+	kpreempt_disable();
+	const bool intrdepthzero = (curcpu()->ci_intr_depth == 0);
+	kpreempt_enable();
+	if (intrdepthzero) {
 		fb = cpu_disable_onfault();
 		if (fb != NULL) {
 			cpu_jump_onfault(tf, fb, error);

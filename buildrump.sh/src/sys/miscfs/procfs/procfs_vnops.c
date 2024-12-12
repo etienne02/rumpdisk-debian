@@ -1,4 +1,4 @@
-/*	$NetBSD: procfs_vnops.c,v 1.218 2021/07/18 23:57:14 dholland Exp $	*/
+/*	$NetBSD: procfs_vnops.c,v 1.233 2024/07/01 01:35:53 christos Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
@@ -105,7 +105,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: procfs_vnops.c,v 1.218 2021/07/18 23:57:14 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: procfs_vnops.c,v 1.233 2024/07/01 01:35:53 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -162,15 +162,16 @@ static const struct proc_target {
 	{ DT_DIR, N("fd"),	PFSfd,		NULL },
 	{ DT_DIR, N("task"),	PFStask,	procfs_validfile_linux },
 	{ DT_LNK, N("cwd"),	PFScwd,		NULL },
-	{ DT_LNK, N("emul"),	PFSemul,	NULL },
+	{ DT_REG, N("emul"),	PFSemul,	NULL },
 	{ DT_LNK, N("root"),	PFSchroot,	NULL },
 	{ DT_REG, N("auxv"),	PFSauxv,	procfs_validauxv },
 	{ DT_REG, N("cmdline"), PFScmdline,	NULL },
 	{ DT_REG, N("environ"), PFSenviron,	NULL },
-	{ DT_REG, N("exe"),	PFSexe,		procfs_validfile },
+	{ DT_LNK, N("exe"),	PFSexe,		procfs_validfile },
 	{ DT_REG, N("file"),	PFSfile,	procfs_validfile },
 	{ DT_REG, N("fpregs"),	PFSfpregs,	procfs_validfpregs },
 	{ DT_REG, N("limit"),	PFSlimit,	NULL },
+	{ DT_REG, N("limits"),	PFSlimits,	procfs_validfile_linux },
 	{ DT_REG, N("map"),	PFSmap,		procfs_validmap },
 	{ DT_REG, N("maps"),	PFSmaps,	procfs_validmap },
 	{ DT_REG, N("mem"),	PFSmem,		NULL },
@@ -202,10 +203,74 @@ static const struct proc_target proc_root_targets[] = {
 	{ DT_REG, N("stat"),	    PFScpustat,        procfs_validfile_linux },
 	{ DT_REG, N("loadavg"),	    PFSloadavg,        procfs_validfile_linux },
 	{ DT_REG, N("version"),     PFSversion,        procfs_validfile_linux },
+	{ DT_DIR, N("sys"),         PFSsys,            procfs_validfile_linux },
+	{ DT_DIR, N("sysvipc"),     PFSsysvipc,        procfs_validfile_linux },
 #undef N
 };
 static const int nproc_root_targets =
     sizeof(proc_root_targets) / sizeof(proc_root_targets[0]);
+
+/*
+ * List of files in the sys directory
+ */
+static const struct proc_target proc_sys_targets[] = {
+#define N(s) sizeof(s)-1, s
+        /*        name              type            validp */
+	{ DT_DIR, N("."),	PFSsys,		procfs_validfile_linux },
+	{ DT_DIR, N(".."),	PFSroot,	NULL },
+	{ DT_REG, N("fs"),	PFSsysfs,	procfs_validfile_linux },
+#undef N
+};
+static const int nproc_sys_targets =
+    sizeof(proc_sys_targets) / sizeof(proc_sys_targets[0]);
+
+/*
+ * List of files in the sys/fs directory
+ */
+static const struct proc_target proc_sysfs_targets[] = {
+#define N(s) sizeof(s)-1, s
+        /*        name              type            validp */
+	{ DT_DIR, N("."),	PFSsysfs,	procfs_validfile_linux },
+	{ DT_DIR, N(".."),	PFSsys,		procfs_validfile_linux },
+	{ DT_REG, N("mqueue"),	PFSmqueue,	procfs_validfile_linux },
+#undef N
+};
+static const int nproc_sysfs_targets =
+    sizeof(proc_sysfs_targets) / sizeof(proc_sysfs_targets[0]);
+
+/*
+ * List of files in the sys/fs/mqueue directory
+ */
+static const struct proc_target proc_mqueue_targets[] = {
+#define N(s) sizeof(s)-1, s
+        /*        name              	type            validp */
+	{ DT_DIR, N("."),		PFSmqueue,	procfs_validfile_linux },
+	{ DT_DIR, N(".."),		PFSsysfs,	procfs_validfile_linux },
+	{ DT_REG, N("msg_default"),	PFSmq_msg_def,	procfs_validfile_linux },
+	{ DT_REG, N("msg_max"),		PFSmq_msg_max,	procfs_validfile_linux },
+	{ DT_REG, N("msgsize_default"),	PFSmq_siz_def,	procfs_validfile_linux },
+	{ DT_REG, N("msgsize_max"),	PFSmq_siz_max,	procfs_validfile_linux },
+	{ DT_REG, N("queues_max"),	PFSmq_qmax,	procfs_validfile_linux },
+#undef N
+};
+static const int nproc_mqueue_targets =
+    sizeof(proc_mqueue_targets) / sizeof(proc_mqueue_targets[0]);
+
+/*
+ * List of files in the sysvipc directory
+ */
+static const struct proc_target proc_sysvipc_targets[] = {
+#define N(s) sizeof(s)-1, s
+        /*        name              type            validp */
+	{ DT_DIR, N("."),	PFSsysvipc,	NULL },
+	{ DT_DIR, N(".."),	PFSroot,	NULL },
+	{ DT_REG, N("msg"),	PFSsysvipc_msg, procfs_validfile_linux },
+	{ DT_REG, N("sem"),	PFSsysvipc_sem, procfs_validfile_linux },
+	{ DT_REG, N("shm"),	PFSsysvipc_shm, procfs_validfile_linux },
+#undef N
+};
+static const int nproc_sysvipc_targets =
+    sizeof(proc_sysvipc_targets) / sizeof(proc_sysvipc_targets[0]);
 
 int	procfs_lookup(void *);
 int	procfs_open(void *);
@@ -213,8 +278,6 @@ int	procfs_close(void *);
 int	procfs_access(void *);
 int	procfs_getattr(void *);
 int	procfs_setattr(void *);
-int	procfs_link(void *);
-int	procfs_symlink(void *);
 int	procfs_readdir(void *);
 int	procfs_readlink(void *);
 int	procfs_inactive(void *);
@@ -223,6 +286,7 @@ int	procfs_print(void *);
 int	procfs_pathconf(void *);
 int	procfs_getpages(void *);
 
+static uint8_t fttodt(file_t *);
 static int atoi(const char *, size_t);
 
 /*
@@ -253,11 +317,11 @@ const struct vnodeopv_entry_desc procfs_vnodeop_entries[] = {
 	{ &vop_fsync_desc, genfs_nullop },		/* fsync */
 	{ &vop_seek_desc, genfs_nullop },		/* seek */
 	{ &vop_remove_desc, genfs_eopnotsupp },		/* remove */
-	{ &vop_link_desc, procfs_link },		/* link */
+	{ &vop_link_desc, genfs_erofs_link },		/* link */
 	{ &vop_rename_desc, genfs_eopnotsupp },		/* rename */
 	{ &vop_mkdir_desc, genfs_eopnotsupp },		/* mkdir */
 	{ &vop_rmdir_desc, genfs_eopnotsupp },		/* rmdir */
-	{ &vop_symlink_desc, procfs_symlink },		/* symlink */
+	{ &vop_symlink_desc, genfs_erofs_symlink },	/* symlink */
 	{ &vop_readdir_desc, procfs_readdir },		/* readdir */
 	{ &vop_readlink_desc, procfs_readlink },	/* readlink */
 	{ &vop_abortop_desc, genfs_abortop },		/* abortop */
@@ -438,6 +502,7 @@ procfs_reclaim(void *v)
 	mutex_enter(vp->v_interlock);
 	vp->v_data = NULL;
 	mutex_exit(vp->v_interlock);
+	procfs_hashrem(pfs);
 	kmem_free(pfs, sizeof(*pfs));
 	return 0;
 }
@@ -498,34 +563,6 @@ procfs_print(void *v)
 	printf("tag VT_PROCFS, type %d, pid %d, mode %x, flags %lx\n",
 	    pfs->pfs_type, pfs->pfs_pid, pfs->pfs_mode, pfs->pfs_flags);
 	return 0;
-}
-
-int
-procfs_link(void *v)
-{
-	struct vop_link_v2_args /* {
-		struct vnode *a_dvp;
-		struct vnode *a_vp;
-		struct componentname *a_cnp;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
-}
-
-int
-procfs_symlink(void *v)
-{
-	struct vop_symlink_v3_args /* {
-		struct vnode *a_dvp;
-		struct vnode **a_vpp;
-		struct componentname *a_cnp;
-		struct vattr *a_vap;
-		char *a_target;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
 }
 
 /*
@@ -732,6 +769,7 @@ procfs_getattr(void *v)
 	case PFSmap:
 	case PFSmaps:
 	case PFSlimit:
+	case PFSlimits:
 	case PFSauxv:
 		vap->va_nlink = 1;
 		vap->va_uid = kauth_cred_geteuid(procp->p_cred);
@@ -751,7 +789,31 @@ procfs_getattr(void *v)
 	case PFSself:
 	case PFScurproc:
 	case PFSroot:
+	case PFSmq_msg_def:
+	case PFSmq_msg_max:
+	case PFSmq_siz_def:
+	case PFSmq_siz_max:
+	case PFSmq_qmax:
+	case PFSsysvipc_msg:
+	case PFSsysvipc_sem:
+	case PFSsysvipc_shm:
 		vap->va_nlink = 1;
+		vap->va_uid = vap->va_gid = 0;
+		break;
+
+	case PFSsysvipc:
+		vap->va_nlink = 5;
+		vap->va_uid = vap->va_gid = 0;
+		break;
+
+	case PFSsys:	/* proc/sys only contains "fs" */
+	case PFSsysfs:	/* proc/sys/fs only contains "mqueue" */
+		vap->va_nlink = 3;
+		vap->va_uid = vap->va_gid = 0;
+		break;
+
+	case PFSmqueue:
+		vap->va_nlink = 7;
 		vap->va_uid = vap->va_gid = 0;
 		break;
 
@@ -869,9 +931,22 @@ procfs_getattr(void *v)
 	case PFSloadavg:
 	case PFSstatm:
 	case PFSversion:
+	case PFSsys:
+	case PFSsysfs:
+	case PFSmqueue:
+	case PFSmq_msg_def:
+	case PFSmq_msg_max:
+	case PFSmq_siz_def:
+	case PFSmq_siz_max:
+	case PFSmq_qmax:
+	case PFSsysvipc:
+	case PFSsysvipc_msg:
+	case PFSsysvipc_sem:
+	case PFSsysvipc_shm:
 		vap->va_bytes = vap->va_size = 0;
 		break;
 	case PFSlimit:
+	case PFSlimits:
 	case PFSmap:
 	case PFSmaps:
 		/*
@@ -1004,6 +1079,9 @@ procfs_lookup(void *v)
 	pfstype type;
 
 	*vpp = NULL;
+
+	if ((error = VOP_ACCESS(dvp, VEXEC, cnp->cn_cred)) != 0)
+		return (error);
 
 	if (cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME)
 		return (EROFS);
@@ -1142,7 +1220,8 @@ procfs_lookup(void *v)
 		fvp = fp->f_vnode;
 
 		/* Don't show directories */
-		if (fp->f_type == DTYPE_VNODE && fvp->v_type != VDIR) {
+		if (fp->f_type == DTYPE_VNODE && fvp->v_type != VDIR &&
+		    !procfs_proc_is_linux_compat()) {
 			vref(fvp);
 			closef(fp);
 			procfs_proc_unlock(p);
@@ -1180,6 +1259,67 @@ procfs_lookup(void *v)
 		procfs_proc_unlock(p);
 		return error;
 	}
+	case PFSsys:
+	case PFSsysfs:
+	case PFSmqueue:
+	case PFSsysvipc: {
+		const struct proc_target *targets;
+		int ntargets;
+		pfstype parent;
+
+		switch (pfs->pfs_type) {
+		case PFSsys:
+			targets = proc_sys_targets;
+			ntargets = nproc_sys_targets;
+			parent = PFSroot;
+			break;
+		case PFSsysfs:
+			targets = proc_sysfs_targets;
+			ntargets = nproc_sysfs_targets;
+			parent = PFSsys;
+			break;
+		case PFSmqueue:
+			targets = proc_mqueue_targets;
+			ntargets = nproc_mqueue_targets;
+			parent = PFSsysfs;
+			break;
+		case PFSsysvipc:
+			targets = proc_sysvipc_targets;
+			ntargets = nproc_sysvipc_targets;
+			parent = PFSroot;
+			break;
+		default:
+			return (EINVAL);
+		}
+
+		if (cnp->cn_flags & ISDOTDOT) {
+			error = procfs_allocvp(dvp->v_mount, vpp, 0, parent,
+			    -1);
+			return (error);
+		}
+
+		for (i = 0; i < ntargets; i++) {
+			pt = &targets[i];
+			/*
+			 * check for node match.  proc is always NULL here,
+			 * so call pt_valid with constant NULL lwp.
+			 */
+			if (cnp->cn_namelen == pt->pt_namlen &&
+			    memcmp(pt->pt_name, pname, cnp->cn_namelen) == 0 &&
+			    (pt->pt_valid == NULL ||
+			     (*pt->pt_valid)(NULL, dvp->v_mount)))
+				break;
+		}
+
+		if (i != ntargets) {
+			error = procfs_allocvp(dvp->v_mount, vpp, 0,
+			    pt->pt_pfstype, -1);
+			return (error);
+		}
+
+		return (ENOENT);
+	}
+
 	default:
 		return (ENOTDIR);
 	}
@@ -1221,15 +1361,15 @@ procfs_root_readdir_callback(struct proc *p, void *arg)
 	if (uiop->uio_resid < UIO_MX)
 		return -1; /* no space */
 
-	if (ctxp->off < ctxp->startoff) {
-		ctxp->off++;
-		return 0;
-	}
-
 	if (kauth_authorize_process(kauth_cred_get(),
 	    KAUTH_PROCESS_CANSEE, p,
 	    KAUTH_ARG(KAUTH_REQ_PROCESS_CANSEE_ENTRY), NULL, NULL) != 0)
 		return 0;
+
+	if (ctxp->off < ctxp->startoff) {
+		ctxp->off++;
+		return 0;
+	}
 
 	memset(&d, 0, UIO_MX);
 	d.d_reclen = UIO_MX;
@@ -1259,7 +1399,7 @@ procfs_root_readdir_callback(struct proc *p, void *arg)
  *
  * the strategy here with procfs is to generate a single
  * directory entry at a time (struct dirent) and then
- * copy that out to userland using uiomove.  a more efficent
+ * copy that out to userland using uiomove.  a more efficient
  * though more complex implementation, would try to minimize
  * the number of calls to uiomove().  for procfs, this is
  * hardly worth the added code complexity.
@@ -1287,8 +1427,10 @@ procfs_readdir(void *v)
 	struct vnode *vp;
 	const struct proc_target *pt;
 	struct procfs_root_readdir_ctx ctx;
+	struct proc *p = NULL;
 	struct lwp *l;
 	int nfd;
+	int nc = 0;
 
 	vp = ap->a_vp;
 	pfs = VTOPFS(vp);
@@ -1311,7 +1453,6 @@ procfs_readdir(void *v)
 	 * from the procent[] table (top of this file).
 	 */
 	case PFSproc: {
-		struct proc *p;
 
 		if (i >= nproc_targets)
 			return 0;
@@ -1354,9 +1495,8 @@ procfs_readdir(void *v)
 	    	break;
 	}
 	case PFSfd: {
-		struct proc *p;
 		file_t *fp;
-		int lim, nc = 0;
+		int lim;
 
 		if ((error = procfs_proc_lock(vp->v_mount, pfs->pfs_pid, &p,
 					      ESRCH)) != 0)
@@ -1399,10 +1539,8 @@ procfs_readdir(void *v)
 				*cookies++ = i + 1;
 			nc++;
 		}
-		if (error) {
-			ncookies = nc;
-			break;
-		}
+		if (error)
+			goto out;
 		for (; uio->uio_resid >= UIO_MX && i < nfd; i++) {
 			/* check the descriptor exists */
 			if ((fp = fd_getfile2(p, i - 2)) == NULL)
@@ -1412,20 +1550,16 @@ procfs_readdir(void *v)
 			d.d_fileno = PROCFS_FILENO(pfs->pfs_pid, PFSfd, i - 2);
 			d.d_namlen = snprintf(d.d_name, sizeof(d.d_name),
 			    "%lld", (long long)(i - 2));
-			d.d_type = VREG;
+			d.d_type = fttodt(fp);
 			if ((error = uiomove(&d, UIO_MX, uio)) != 0)
 				break;
 			if (cookies)
 				*cookies++ = i + 1;
 			nc++;
 		}
-		ncookies = nc;
-		procfs_proc_unlock(p);
-		break;
+		goto out;
 	}
 	case PFStask: {
-		struct proc *p;
-		int nc = 0;
 
 		if ((error = procfs_proc_lock(vp->v_mount, pfs->pfs_pid, &p,
 					      ESRCH)) != 0)
@@ -1453,10 +1587,8 @@ procfs_readdir(void *v)
 				*cookies++ = i + 1;
 			nc++;
 		}
-		if (error) {
-			ncookies = nc;
-			break;
-		}
+		if (error)
+			goto out;
 		for (; uio->uio_resid >= UIO_MX && i < nfd; i++) {
 			/* check the descriptor exists */
 			d.d_fileno = PROCFS_FILENO(pfs->pfs_pid, PFStask,
@@ -1470,9 +1602,68 @@ procfs_readdir(void *v)
 				*cookies++ = i + 1;
 			nc++;
 		}
-		ncookies = nc;
-		procfs_proc_unlock(p);
-		break;
+		goto out;
+	}
+
+	/*
+	 * misc subdirectories
+	 */
+	case PFSsys:
+	case PFSsysfs:
+	case PFSmqueue:
+	case PFSsysvipc: {
+		const struct proc_target *targets;
+		int ntargets;
+
+		switch (pfs->pfs_type) {
+		case PFSsys:
+			targets = proc_sys_targets;
+			ntargets = nproc_sys_targets;
+			break;
+		case PFSsysfs:
+			targets = proc_sysfs_targets;
+			ntargets = nproc_sysfs_targets;
+			break;
+		case PFSmqueue:
+			targets = proc_mqueue_targets;
+			ntargets = nproc_mqueue_targets;
+			break;
+		case PFSsysvipc:
+			targets = proc_sysvipc_targets;
+			ntargets = nproc_sysvipc_targets;
+			break;
+		default:
+			return (EINVAL);
+		}
+
+		if ((error = procfs_proc_lock(vp->v_mount, pfs->pfs_pid, &p,
+					      ESRCH)) != 0)
+			return error;
+		if (ap->a_ncookies) {
+			ncookies = uimin(ncookies, (ntargets - i));
+			cookies = malloc(ncookies * sizeof (off_t),
+			    M_TEMP, M_WAITOK);
+			*ap->a_cookies = cookies;
+		}
+
+		for (pt = &targets[i];
+		     uio->uio_resid >= UIO_MX && i < ntargets; pt++, i++) {
+			if (pt->pt_valid &&
+			    (*pt->pt_valid)(NULL, vp->v_mount) == 0)
+				continue;
+			d.d_fileno = PROCFS_FILENO(pfs->pfs_pid,
+			    pt->pt_pfstype, -1);
+			d.d_namlen = pt->pt_namlen;
+			memcpy(d.d_name, pt->pt_name, pt->pt_namlen + 1);
+			d.d_type = pt->pt_type;
+
+			if ((error = uiomove(&d, UIO_MX, uio)) != 0)
+				break;
+			if (cookies)
+				*cookies++ = i + 1;
+		}
+
+		goto out;
 	}
 
 	/*
@@ -1483,7 +1674,6 @@ procfs_readdir(void *v)
 	 */
 
 	case PFSroot: {
-		int nc = 0;
 
 		if (ap->a_ncookies) {
 			/*
@@ -1494,7 +1684,7 @@ procfs_readdir(void *v)
 			    M_TEMP, M_WAITOK);
 			*ap->a_cookies = cookies;
 		}
-		error = 0;
+
 		/* 0 ... 3 are static entries. */
 		for (; i <= 3 && uio->uio_resid >= UIO_MX; i++) {
 			switch (i) {
@@ -1528,6 +1718,8 @@ procfs_readdir(void *v)
 			if (cookies)
 				*cookies++ = i + 1;
 		}
+		if (error)
+			break;
 		/* 4 ... are process entries. */
 		ctx.uiop = uio;
 		ctx.error = 0;
@@ -1548,12 +1740,20 @@ procfs_readdir(void *v)
 			i = ctx.off;
 		if (i >= ctx.off + nproc_root_targets)
 			break;
+		error = procfs_proc_lock(vp->v_mount, pfs->pfs_pid, &p, ESRCH);
+		if (error)
+			break;
 		for (pt = &proc_root_targets[i - ctx.off];
 		    uio->uio_resid >= UIO_MX &&
 		    pt < &proc_root_targets[nproc_root_targets];
 		    pt++, i++) {
 			if (pt->pt_valid &&
 			    (*pt->pt_valid)(NULL, vp->v_mount) == 0)
+				continue;
+			if (kauth_authorize_process(kauth_cred_get(),
+			    KAUTH_PROCESS_CANSEE, p,
+			    KAUTH_ARG(KAUTH_REQ_PROCESS_CANSEE_ENTRY),
+			    NULL, NULL) != 0)
 				continue;
 			d.d_fileno = PROCFS_FILENO(0, pt->pt_pfstype, -1);
 			d.d_namlen = pt->pt_namlen;
@@ -1566,8 +1766,10 @@ procfs_readdir(void *v)
 			if (cookies)
 				*cookies++ = i + 1;
 		}
-
+out:
+		KASSERT(p != NULL);
 		ncookies = nc;
+		procfs_proc_unlock(p);
 		break;
 	}
 
@@ -1649,7 +1851,8 @@ procfs_readlink(void *v)
 		switch (fp->f_type) {
 		case DTYPE_VNODE:
 			vxp = fp->f_vnode;
-			if (vxp->v_type != VDIR) {
+			if (vxp->v_type != VDIR &&
+			    !procfs_proc_is_linux_compat()) {
 				error = EINVAL;
 				break;
 			}
@@ -1746,4 +1949,32 @@ atoi(const char *b, size_t len)
 	}
 
 	return p;
+}
+
+/**
+ * convert DTYPE_XXX to corresponding DT_XXX
+ * matching what procfs_loadvnode() does.
+ */
+static uint8_t
+fttodt(file_t *fp)
+{
+	switch (fp->f_type) {
+	case DTYPE_VNODE:
+		switch (fp->f_vnode->v_type) {
+		case VREG:	return DT_REG;
+		case VDIR:	return DT_LNK;	/* symlink */
+		case VBLK:	return DT_BLK;
+		case VCHR:	return DT_CHR;
+		case VLNK:	return DT_LNK;
+		case VSOCK:	return DT_SOCK;
+		case VFIFO:	return DT_FIFO;
+		default:	return DT_UNKNOWN;
+		}
+	case DTYPE_PIPE:	return DT_FIFO;
+	case DTYPE_SOCKET:	return DT_SOCK;
+	case DTYPE_KQUEUE:	/*FALLTHROUGH*/
+	case DTYPE_MISC:	/*FALLTHROUGH*/
+	case DTYPE_SEM:		return DT_LNK;	/* symlinks */
+	default:		return DT_UNKNOWN;
+	}
 }

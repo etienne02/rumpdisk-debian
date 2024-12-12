@@ -1,4 +1,4 @@
-/*	$NetBSD: sdhc.c,v 1.111 2021/08/07 16:19:16 thorpej Exp $	*/
+/*	$NetBSD: sdhc.c,v 1.119 2024/05/09 01:33:13 dyoung Exp $	*/
 /*	$OpenBSD: sdhc.c,v 1.25 2009/01/13 19:44:20 grange Exp $	*/
 
 /*
@@ -23,7 +23,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sdhc.c,v 1.111 2021/08/07 16:19:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sdhc.c,v 1.119 2024/05/09 01:33:13 dyoung Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_sdmmc.h"
@@ -77,6 +77,7 @@ struct sdhc_host {
 	uint16_t intr_status;		/* soft interrupt status */
 	uint16_t intr_error_status;	/* soft error status */
 	kmutex_t intr_lock;
+	kmutex_t bus_clock_lock;
 	kcondvar_t intr_cv;
 
 	callout_t tuning_timer;
@@ -141,6 +142,9 @@ hwrite1(struct sdhc_host *hp, bus_size_t o, uint8_t val)
 		tmp = (val << shift) | (tmp & ~(0xffU << shift));
 		bus_space_write_4(hp->iot, hp->ioh, o, tmp);
 	}
+	if (hp->sc->sc_write_delay != 0) {
+		delay(hp->sc->sc_write_delay);
+	}
 }
 
 static void
@@ -156,6 +160,9 @@ hwrite2(struct sdhc_host *hp, bus_size_t o, uint16_t val)
 		tmp = (val << shift) | (tmp & ~(0xffffU << shift));
 		bus_space_write_4(hp->iot, hp->ioh, o, tmp);
 	}
+	if (hp->sc->sc_write_delay != 0) {
+		delay(hp->sc->sc_write_delay);
+	}
 }
 
 static void
@@ -163,6 +170,9 @@ hwrite4(struct sdhc_host *hp, bus_size_t o, uint32_t val)
 {
 
 	bus_space_write_4(hp->iot, hp->ioh, o, val);
+	if (hp->sc->sc_write_delay != 0) {
+		delay(hp->sc->sc_write_delay);
+	}
 }
 
 #define HWRITE1(hp, reg, val)		hwrite1(hp, reg, val)
@@ -296,6 +306,7 @@ sdhc_host_found(struct sdhc_softc *sc, bus_space_tag_t iot,
 	hp->dmat = sc->sc_dmat;
 
 	mutex_init(&hp->intr_lock, MUTEX_DEFAULT, IPL_SDMMC);
+	mutex_init(&hp->bus_clock_lock, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&hp->intr_cv, "sdhcintr");
 	callout_init(&hp->tuning_timer, CALLOUT_MPSAFE);
 	callout_setfunc(&hp->tuning_timer, sdhc_tuning_timer, hp);
@@ -405,7 +416,7 @@ sdhc_host_found(struct sdhc_softc *sc, bus_space_tag_t iot,
 
 	/*
 	 * Use DMA if the host system and the controller support it.
-	 * Suports integrated or external DMA egine, with or without
+	 * Supports integrated or external DMA egine, with or without
 	 * SDHC_DMA_ENABLE in the command.
 	 */
 	if (ISSET(sc->sc_flags, SDHC_FLAG_FORCE_DMA) ||
@@ -413,8 +424,8 @@ sdhc_host_found(struct sdhc_softc *sc, bus_space_tag_t iot,
 	     ISSET(caps, SDHC_DMA_SUPPORT)))) {
 		SET(hp->flags, SHF_USE_DMA);
 
-		if (ISSET(sc->sc_flags, SDHC_FLAG_USE_ADMA2) &&
-		    ISSET(caps, SDHC_ADMA2_SUPP)) {
+		if (ISSET(caps, SDHC_ADMA2_SUPP) &&
+		    !ISSET(sc->sc_flags, SDHC_FLAG_BROKEN_ADMA)) {
 			SET(hp->flags, SHF_MODE_DMAEN);
 			/*
 			 * 64-bit mode was present in the 2.00 spec, removed
@@ -620,7 +631,8 @@ adma_done:
 	if (ISSET(sc->sc_flags, SDHC_FLAG_8BIT_MODE))
 		saa.saa_caps |= SMC_CAPS_8BIT_MODE;
 	if (ISSET(caps, SDHC_HIGH_SPEED_SUPP))
-		saa.saa_caps |= SMC_CAPS_SD_HIGHSPEED;
+		saa.saa_caps |= SMC_CAPS_SD_HIGHSPEED |
+				SMC_CAPS_MMC_HIGHSPEED;
 	if (ISSET(caps2, SDHC_SDR104_SUPP))
 		saa.saa_caps |= SMC_CAPS_UHS_SDR104 |
 				SMC_CAPS_UHS_SDR50 |
@@ -649,6 +661,7 @@ adma_done:
 err:
 	callout_destroy(&hp->tuning_timer);
 	cv_destroy(&hp->intr_cv);
+	mutex_destroy(&hp->bus_clock_lock);
 	mutex_destroy(&hp->intr_lock);
 	free(hp, M_DEVBUF);
 	sc->sc_host[--sc->sc_nhosts] = NULL;
@@ -884,6 +897,9 @@ sdhc_card_detect(sdmmc_chipset_handle_t sch)
 	struct sdhc_host *hp = (struct sdhc_host *)sch;
 	int r;
 
+	if (ISSET(hp->sc->sc_flags, SDHC_FLAG_NON_REMOVABLE))
+		return 1;
+
 	if (hp->sc->sc_vendor_card_detect)
 		return (*hp->sc->sc_vendor_card_detect)(hp->sc);
 
@@ -1096,8 +1112,6 @@ sdhc_bus_clock_ddr(sdmmc_chipset_handle_t sch, int freq, bool ddr)
 	int error = 0;
 	bool present __diagused;
 
-	mutex_enter(&hp->intr_lock);
-
 #ifdef DIAGNOSTIC
 	present = ISSET(HREAD4(hp, SDHC_PRESENT_STATE), SDHC_CMD_INHIBIT_MASK);
 
@@ -1109,10 +1123,14 @@ sdhc_bus_clock_ddr(sdmmc_chipset_handle_t sch, int freq, bool ddr)
 #endif
 
 	if (hp->sc->sc_vendor_bus_clock) {
+		mutex_enter(&hp->bus_clock_lock);
 		error = (*hp->sc->sc_vendor_bus_clock)(hp->sc, freq);
+		mutex_exit(&hp->bus_clock_lock);
 		if (error != 0)
-			goto out;
+			return error;
 	}
+
+	mutex_enter(&hp->intr_lock);
 
 	/*
 	 * Stop SD clock before changing the frequency.
@@ -1274,11 +1292,14 @@ sdhc_bus_clock_ddr(sdmmc_chipset_handle_t sch, int freq, bool ddr)
 			HCLR1(hp, SDHC_HOST_CTL, SDHC_HIGH_SPEED);
 	}
 
+	mutex_exit(&hp->intr_lock);
+
 	if (hp->sc->sc_vendor_bus_clock_post) {
+		mutex_enter(&hp->bus_clock_lock);
 		error = (*hp->sc->sc_vendor_bus_clock_post)(hp->sc, freq);
-		if (error != 0)
-			goto out;
+		mutex_exit(&hp->bus_clock_lock);
 	}
+	return error;
 
 out:
 	mutex_exit(&hp->intr_lock);
@@ -1826,20 +1847,20 @@ sdhc_start_command(struct sdhc_host *hp, struct sdmmc_command *cmd)
 		}
 		bus_dmamap_sync(sc->sc_dmat, hp->adma_map, 0, PAGE_SIZE,
 		    BUS_DMASYNC_PREWRITE);
+
+		const bus_addr_t desc_addr = hp->adma_map->dm_segs[0].ds_addr;
+		HWRITE4(hp, SDHC_ADMA_SYSTEM_ADDR, desc_addr & 0xffffffff);
+		if (ISSET(hp->flags, SHF_USE_ADMA2_64)) {
+			HWRITE4(hp, SDHC_ADMA_SYSTEM_ADDR + 4,
+			    (uint64_t)desc_addr >> 32);
+		}
+
 		if (ISSET(hp->sc->sc_flags, SDHC_FLAG_USDHC)) {
 			HCLR4(hp, SDHC_HOST_CTL, SDHC_USDHC_DMA_SELECT);
 			HSET4(hp, SDHC_HOST_CTL, SDHC_USDHC_DMA_SELECT_ADMA2);
 		} else {
 			HCLR1(hp, SDHC_HOST_CTL, SDHC_DMA_SELECT);
 			HSET1(hp, SDHC_HOST_CTL, SDHC_DMA_SELECT_ADMA2);
-		}
-
-		const bus_addr_t desc_addr = hp->adma_map->dm_segs[0].ds_addr;
-
-		HWRITE4(hp, SDHC_ADMA_SYSTEM_ADDR, desc_addr & 0xffffffff);
-		if (ISSET(hp->flags, SHF_USE_ADMA2_64)) {
-			HWRITE4(hp, SDHC_ADMA_SYSTEM_ADDR + 4,
-			    (uint64_t)desc_addr >> 32);
 		}
 	} else if (ISSET(mode, SDHC_DMA_ENABLE) &&
 	    !ISSET(sc->sc_flags, SDHC_FLAG_EXTERNAL_DMA)) {

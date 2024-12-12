@@ -1,11 +1,23 @@
-#	$NetBSD: Makefile,v 1.4 2020/09/26 20:56:53 mrg Exp $
+#	$NetBSD: Makefile,v 1.6 2024/09/28 21:18:55 bad Exp $
 #
 
 GNUHOSTDIST=   ${.CURDIR}/../../external/lgpl3/gmp/dist
 
 CONFIGURE_ARGS+=--disable-shared
 
+CPPFLAGS+=	${HOST_CPPFLAGS}
+
 .include "${.CURDIR}/../Makefile.gnuhost"
+
+# GMP uses 8-byte alignment for 16-byte align-requiring things that break
+# the build on modern macOS targets, turn off assembly on x86-64 for now.
+# https://trac.macports.org/ticket/70859
+.if ${BUILD_OSTYPE} == "Darwin"
+BUILD_MACHINE!=	uname -m
+. if ${BUILD_MACHINE} == "x86_64"
+CONFIGURE_ARGS+=	--disable-assembly
+. endif
+.endif
 
 # Don't override CFLAGS and CXXFLAGS, it breaks ABI detection.
 # PATH needs special treating since "make" tries to expand $PATH

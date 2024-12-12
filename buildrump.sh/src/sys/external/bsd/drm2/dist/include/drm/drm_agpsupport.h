@@ -1,5 +1,6 @@
-/*	$NetBSD: drm_agpsupport.h,v 1.8 2018/08/28 03:41:39 riastradh Exp $	*/
+/*	$NetBSD: drm_agpsupport.h,v 1.10 2022/07/19 22:24:34 riastradh Exp $	*/
 
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _DRM_AGPSUPPORT_H_
 #define _DRM_AGPSUPPORT_H_
 
@@ -19,8 +20,6 @@ struct drm_device;
 struct drm_file;
 
 struct drm_agp_hooks {
-	void __pci_iomem *
-		(*agph_borrow)(struct drm_device *, unsigned, bus_size_t);
 	void	(*agph_flush)(void);
 
 	struct drm_agp_head *
@@ -78,14 +77,9 @@ void drm_free_agp(struct agp_memory * handle, int pages);
 int drm_bind_agp(struct agp_memory * handle, unsigned int start);
 int drm_unbind_agp(struct agp_memory * handle);
 #endif
-struct agp_memory *drm_agp_bind_pages(struct drm_device *dev,
-				struct page **pages,
-				unsigned long num_pages,
-				uint32_t gtt_offset,
-				uint32_t type);
 
 struct drm_agp_head *drm_agp_init(struct drm_device *dev);
-void drm_agp_clear(struct drm_device *dev);
+void drm_legacy_agp_clear(struct drm_device *dev);
 int drm_agp_acquire(struct drm_device *dev);
 int drm_agp_acquire_ioctl(struct drm_device *dev, void *data,
 			  struct drm_file *file_priv);
@@ -112,7 +106,6 @@ int drm_agp_bind_ioctl(struct drm_device *dev, void *data,
 		       struct drm_file *file_priv);
 
 #ifdef __NetBSD__
-void __pci_iomem *drm_agp_borrow(struct drm_device *, unsigned, bus_size_t);
 void drm_agp_flush(void);
 void drm_agp_fini(struct drm_device *);
 int drm_agp_register(const struct drm_agp_hooks *);
@@ -139,24 +132,14 @@ static inline int drm_unbind_agp(struct agp_memory * handle)
 {
 	return -ENODEV;
 }
-
 #endif
-
-static inline struct agp_memory *drm_agp_bind_pages(struct drm_device *dev,
-					      struct page **pages,
-					      unsigned long num_pages,
-					      uint32_t gtt_offset,
-					      uint32_t type)
-{
-	return NULL;
-}
 
 static inline struct drm_agp_head *drm_agp_init(struct drm_device *dev)
 {
 	return NULL;
 }
 
-static inline void drm_agp_clear(struct drm_device *dev)
+static inline void drm_legacy_agp_clear(struct drm_device *dev)
 {
 }
 

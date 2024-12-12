@@ -1,4 +1,4 @@
-/* $NetBSD: com_acpi.c,v 1.42 2021/03/25 05:33:59 rin Exp $ */
+/* $NetBSD: com_acpi.c,v 1.44 2021/10/23 17:46:26 jmcneill Exp $ */
 
 /*
  * Copyright (c) 2002 Jared D. McNeill <jmcneill@invisible.ca>
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: com_acpi.c,v 1.42 2021/03/25 05:33:59 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: com_acpi.c,v 1.44 2021/10/23 17:46:26 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -118,6 +118,7 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 	bus_size_t size;
 	ACPI_STATUS rv;
 	ACPI_INTEGER clock_freq;
+	ACPI_INTEGER reg_shift;
 
 	sc->sc_dev = self;
 
@@ -149,8 +150,7 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 	/* find our IRQ */
 	irq = acpi_res_irq(&res, 0);
 	if (irq == NULL) {
-		aprint_error_dev(self, "unable to find irq resource\n");
-		goto out;
+		sc->sc_poll_ticks = 1;
 	}
 
 	if (!com_is_console(iot, base, &ioh))
@@ -158,7 +158,14 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 			aprint_error_dev(self, "can't map i/o space\n");
 			goto out;
 		}
-	com_init_regs(&sc->sc_regs, iot, ioh, base);
+
+	rv = acpi_dsd_integer(aa->aa_node->ad_handle, "reg-shift",
+	    &reg_shift);
+	if (ACPI_FAILURE(rv)) {
+		reg_shift = 0;
+	}
+
+	com_init_regs_stride(&sc->sc_regs, iot, ioh, base, reg_shift);
 
 	aprint_normal("%s", device_xname(self));
 
@@ -167,13 +174,9 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_type = dce->value;
 
-	if (sc->sc_type == COM_TYPE_DW_APB) {
-		sc->sc_poll_ticks = 1;	/* XXX */
-	} else {
-		if (com_probe_subr(&sc->sc_regs) == 0) {
-			aprint_error(": com probe failed\n");
-			goto out;
-		}
+	if (com_probe_subr(&sc->sc_regs) == 0) {
+		aprint_error(": com probe failed\n");
+		goto out;
 	}
 
 	rv = acpi_dsd_integer(aa->aa_node->ad_handle, "clock-frequency",
@@ -185,10 +188,11 @@ com_acpi_attach(device_t parent, device_t self, void *aux)
 
 	com_attach_subr(sc);
 
-	if (sc->sc_poll_ticks == 0)
+	if (sc->sc_poll_ticks == 0) {
 		asc->sc_ih = acpi_intr_establish(self,
 		    (uint64_t)(uintptr_t)aa->aa_node->ad_handle,
 		    IPL_SERIAL, true, comintr, sc, device_xname(self));
+	}
 
 	if (!pmf_device_register(self, NULL, com_resume))
 		aprint_error_dev(self, "couldn't establish a power handler\n");

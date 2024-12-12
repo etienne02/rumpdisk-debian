@@ -1,4 +1,4 @@
-/*	$NetBSD: compress.c,v 1.26 2011/08/30 23:08:05 joerg Exp $	*/
+/*	$NetBSD: compress.c,v 1.29 2022/05/22 21:39:44 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1992, 1993\
 #if 0
 static char sccsid[] = "@(#)compress.c	8.2 (Berkeley) 1/7/94";
 #else
-__RCSID("$NetBSD: compress.c,v 1.26 2011/08/30 23:08:05 joerg Exp $");
+__RCSID("$NetBSD: compress.c,v 1.29 2022/05/22 21:39:44 rillig Exp $");
 #endif
 #endif /* not lint */
 
@@ -71,7 +71,7 @@ static int isstdout, isstdin;
 int
 main(int argc, char **argv)
 {
-        enum {COMPRESS, DECOMPRESS} style = COMPRESS;
+	enum {COMPRESS, DECOMPRESS} style = COMPRESS;
 	size_t len;
 	int bits, cat, ch;
 	char *p, newname[MAXPATHLEN];
@@ -82,18 +82,17 @@ main(int argc, char **argv)
 		++p;
 	if (!strcmp(p, "uncompress"))
 		style = DECOMPRESS;
-        else if (!strcmp(p, "compress"))
-                style = COMPRESS;
-        else if (!strcmp(p, "zcat")) {
-                style = DECOMPRESS;
-                cat = 1;
-        }
-	else
+	else if (!strcmp(p, "compress"))
+		style = COMPRESS;
+	else if (!strcmp(p, "zcat")) {
+		style = DECOMPRESS;
+		cat = 1;
+	} else
 		errx(1, "unknown program name");
 
 	bits = cat = 0;
 	while ((ch = getopt(argc, argv, "b:cdfv")) != -1)
-		switch(ch) {
+		switch (ch) {
 		case 'b':
 			bits = strtol(optarg, &p, 10);
 			if (*p)
@@ -119,7 +118,7 @@ main(int argc, char **argv)
 	argv += optind;
 
 	if (argc == 0) {
-		switch(style) {
+		switch (style) {
 		case COMPRESS:
 			isstdout = 1;
 			isstdin = 1;
@@ -139,7 +138,7 @@ main(int argc, char **argv)
 
 	for (; *argv; ++argv) {
 		isstdout = 0;
-		switch(style) {
+		switch (style) {
 		case COMPRESS:
 			if (cat) {
 				isstdout = 1;
@@ -314,10 +313,6 @@ decompress(const char *in, const char *out, int bits)
 		oreg = 0;
 
 	ifp = ofp = NULL;
-	if ((ofp = fopen(out, "w")) == NULL) {
-		cwarn("%s", out);
-		return;
-	}
 
 	if ((ifp = zopen(in, "r", bits)) == NULL) {
 		cwarn("%s", in);
@@ -334,6 +329,19 @@ decompress(const char *in, const char *out, int bits)
 			isreg = 1;
 	} else
 		isreg = 0;
+	if ((nr = fread(buf, 1, sizeof(buf), ifp)) == 0) {
+		cwarn("%s", in);
+		goto err;
+	}
+
+	if ((ofp = fopen(out, "w")) == NULL) {
+		cwarn("%s", out);
+		goto err;
+	}
+	if (fwrite(buf, 1, nr, ofp) != nr) {
+		cwarn("%s", out);
+		goto err;
+	}
 
 	oreg <<= 1;
 	while ((nr = fread(buf, 1, sizeof(buf), ifp)) != 0)

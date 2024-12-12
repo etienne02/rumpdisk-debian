@@ -1,4 +1,4 @@
-/*	$NetBSD: cd.c,v 1.352 2021/08/21 23:00:32 andvar Exp $	*/
+/*	$NetBSD: cd.c,v 1.356 2024/12/01 20:23:45 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2001, 2003, 2004, 2005, 2008 The NetBSD Foundation,
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cd.c,v 1.352 2021/08/21 23:00:32 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cd.c,v 1.356 2024/12/01 20:23:45 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -942,7 +942,7 @@ cd_interpret_sense(struct scsipi_xfer *xs)
 	int retval = EJUSTRETURN;
 
 	/*
-	 * If it isn't a extended or extended/deferred error, let
+	 * If it isn't an extended or extended/deferred error, let
 	 * the generic code handle it.
 	 */
 	if (SSD_RCODE(sense->response_code) != SSD_RCODE_CURRENT &&
@@ -1092,7 +1092,7 @@ lba2msf(u_long lba, u_char *m, u_char *s, u_char *f)
 #endif /* XXX Not used */
 
 /*
- * Convert an hour:minute:second:frame address to a logical block adres. In
+ * Convert an hour:minute:second:frame address to a logical block address. In
  * theory the number of secs/minute and number of frames/second could be
  * configured differently in the device  as could the block offset but in
  * practice these values are rock solid and most drives don't even allow
@@ -1544,6 +1544,11 @@ read_cd_capacity(struct scsipi_periph *periph, uint32_t *blksize, u_long *last_l
 			    *blksize);
 		*blksize = 2048;	/* some drives lie ! */
 	}
+
+	/* If the device doesn't handle READ_DISCINFO properly, */
+	/* return the dummies */
+	if (periph->periph_quirks & PQUIRK_NOREADDISCINFO)
+		return 0;
 
 	/* recordables have READ_DISCINFO implemented */
 	flags = XS_CTL_DATA_IN | XS_CTL_SILENT;
@@ -2414,11 +2419,12 @@ cd_setblksize(struct cd_softc *cd)
 	}
 
 	if (bsize == 0) {
-printf("cd_setblksize: trying to change bsize, but no blk_desc\n");
+		printf("cd_setblksize: trying to change bsize, but no blk_desc\n");
+		
 		return (EINVAL);
 	}
 	if (_3btol(bdesc->blklen) == 2048) {
-printf("cd_setblksize: trying to change bsize, but blk_desc is correct\n");
+		printf("cd_setblksize: trying to change bsize, but blk_desc is correct\n");
 		return (EINVAL);
 	}
 
@@ -2461,7 +2467,7 @@ mmc_profile2class(uint16_t mmc_profile)
 		return MMC_CLASS_DVD;
 	case 0x40 : /* BD-ROM  */
 	case 0x41 : /* BD-R Sequential recording (SRM) */
-	case 0x42 : /* BD-R Ramdom Recording (RRM) */
+	case 0x42 : /* BD-R Random Recording (RRM) */
 	case 0x43 : /* BD-RE */
 		return MMC_CLASS_BD;
 	}
@@ -2519,7 +2525,7 @@ mmc_process_feature(struct mmc_discinfo *mmc_discinfo,
 		flags |= MMC_CAP_RECORDABLE;
 		flags |= MMC_CAP_FORMATTABLE;
 		break;
-	case 0x0024 :	/* hardware assised defect management feature */
+	case 0x0024 :	/* hardware assisted defect management feature */
 		flags |= MMC_CAP_HW_DEFECTFREE;
 		break;
 	case 0x0025 : 	/* write once */
@@ -3118,7 +3124,7 @@ mmc_gettrackinfo_dvdrom(struct scsipi_periph *periph,
 	toc_hdr = (struct scsipi_toc_header *) buffer;
 	if (_2btol(toc_hdr->length) > buffer_size - 2) {
 #ifdef DIAGNOSTIC
-		printf("incease buffersize in mmc_readtrackinfo_dvdrom\n");
+		printf("increase buffersize in mmc_readtrackinfo_dvdrom\n");
 #endif
 		error = ENOBUFS;
 		goto out;
@@ -3139,7 +3145,7 @@ mmc_gettrackinfo_dvdrom(struct scsipi_periph *periph,
 	toc     = (struct scsipi_toc_formatted *) (buffer + 4);
 
 	/* as in read disc info, all sessions are converted to tracks      */
-	/* track 1..  -> offsets, sizes can be (rougly) estimated (16 ECC) */
+	/* track 1..  -> offsets, sizes can be (roughly) estimated (16 ECC) */
 	/* last track -> we got the size from the lead-out                 */
 
 	tracknr      = 0;
@@ -3334,7 +3340,7 @@ mmc_do_closetrack(struct scsipi_periph *periph, struct mmc_op *mmc_op)
 	case 0x12 : /* DVD-RAM */
 	case 0x1a : /* DVD+RW  */
 	case 0x2a : /* DVD+RW Dual layer */
-	case 0x42 : /* BD-R Ramdom Recording (RRM) */
+	case 0x42 : /* BD-R Random Recording (RRM) */
 	case 0x43 : /* BD-RE */
 	case 0x52 : /* HD DVD-RW ; DVD-RAM like */
 		return EINVAL;
@@ -3393,7 +3399,7 @@ mmc_do_close_or_finalise(struct scsipi_periph *periph, struct mmc_op *mmc_op)
 	case 0x12 : /* DVD-RAM */
 	case 0x1a : /* DVD+RW  */
 	case 0x2a : /* DVD+RW Dual layer */
-	case 0x42 : /* BD-R Ramdom Recording (RRM) */
+	case 0x42 : /* BD-R Random Recording (RRM) */
 	case 0x43 : /* BD-RE */
 	case 0x52 : /* HD DVD-RW; DVD-RAM like */
 		return EINVAL;
@@ -3552,7 +3558,7 @@ mmc_setup_writeparams(struct scsipi_periph *periph,
 	if (error)
 		return error;
 
-	/* set page length for reasurance */
+	/* set page length for reassurance */
 	page5[1] = P5LEN;	/* page length */
 
 	/* write type packet/incremental */

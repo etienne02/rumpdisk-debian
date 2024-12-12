@@ -1,4 +1,4 @@
-/*	$NetBSD: kernel.h,v 1.33 2020/04/02 16:29:30 maxv Exp $	*/
+/*	$NetBSD: kernel.h,v 1.35 2022/10/26 23:27:32 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -53,10 +53,10 @@ extern int domainnamelen;
 extern int rtc_offset;		/* offset of rtc from UTC in minutes */
 
 extern int cold;		/* still working on startup */
+extern int start_init_exec;	/* init(8) may have started */
 extern int shutting_down;	/* system is shutting down */
 extern int tick;		/* usec per tick (1000000 / hz) */
 extern int tickadj;		/* "standard" clock skew, us./tick */
-extern int hardclock_ticks;	/* # of hardclock ticks; XXX use getticks()! */
 extern int hz;			/* system clock's frequency */
 extern int stathz;		/* statistics clock's frequency */
 extern int profhz;		/* profiling clock's frequency */

@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.14 2020/02/20 08:27:39 skrll Exp $
+#	$NetBSD: genassym.cf,v 1.17 2024/06/19 15:21:59 rin Exp $
 
 #
 # Copyright (c) 1982, 1990, 1993
@@ -76,6 +76,7 @@ include <uvm/uvm_extern.h>
 
 include <machine/cpu.h>
 include <machine/dvma.h>
+include <machine/fcode.h>
 include <machine/mon.h>
 include <machine/pcb.h>
 include <machine/pmap.h>
@@ -85,13 +86,15 @@ include <machine/vmparam.h>
 
 include <sun2/sun2/buserr.h>
 include <sun2/sun2/control.h>
-include <sun2/sun2/fc.h>
 include <sun2/sun2/enable.h>
 
 include <dev/ic/am9513reg.h>
 
 # XXX: for copy.s
 define	M68010			1
+
+# for m68k_intr.c / m68k_intr_stubs.s
+define	__HAVE_M68K_INTR_VECTORED	1
 
 # bus error stuff
 define	BUSERR_REG			BUSERR_REG
@@ -126,7 +129,9 @@ define	AM9513_CLK_CMD			AM9513_CLK_CMD
 define	SUN2_CLK_TIMER_CLEAR_OUTPUT	AM9513_CMD_CLEAR_OUTPUT(AM9513_TIMER2)
 
 # kernel-isms
+ifndef _MODULE
 define	KERNBASE			KERNBASE
+endif
 define	USPACE				USPACE
 define	PAGE_SIZE			PAGE_SIZE
 define	NBPG				NBPG

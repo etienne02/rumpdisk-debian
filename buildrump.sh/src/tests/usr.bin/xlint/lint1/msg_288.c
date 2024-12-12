@@ -1,7 +1,26 @@
-/*	$NetBSD: msg_288.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_288.c,v 1.4 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_288.c"
 
 // Test for message: dubious use of /* VARARGS */ with /* %s */ [288]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+/* VARARGS */
+int
+just_varargs(char x)
+{
+	/*
+	 * No warning here, even though having a VARARGS annotation on a
+	 * function that is incompatible to varargs is dubious.
+	 */
+	return x;
+}
+
+/* VARARGS */
+/* PRINTFLIKE */
+int
+example(int x)
+/* expect+1: warning: dubious use of ** VARARGS ** with ** PRINTFLIKE ** [288] */
+{
+	return x;
+}

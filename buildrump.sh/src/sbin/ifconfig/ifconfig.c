@@ -1,4 +1,4 @@
-/*	$NetBSD: ifconfig.c,v 1.248 2020/10/14 13:37:14 roy Exp $	*/
+/*	$NetBSD: ifconfig.c,v 1.251 2024/08/20 08:18:24 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 2000 The NetBSD Foundation, Inc.
@@ -63,7 +63,7 @@
 #ifndef lint
 __COPYRIGHT("@(#) Copyright (c) 1983, 1993\
  The Regents of the University of California.  All rights reserved.");
-__RCSID("$NetBSD: ifconfig.c,v 1.248 2020/10/14 13:37:14 roy Exp $");
+__RCSID("$NetBSD: ifconfig.c,v 1.251 2024/08/20 08:18:24 ozaki-r Exp $");
 #endif /* not lint */
 
 #include <sys/param.h>
@@ -111,6 +111,8 @@ static long wflag_secs, Wflag_secs;
 static char gflags[10 + 26 * 2 + 1] = "AabCdhlNsuvW:w:z";
 bool gflagset[10 + 26 * 2];
 
+static int link_state(prop_dictionary_t);
+static const char *link_state_str(int);
 static int carrier(prop_dictionary_t);
 static int clone_command(prop_dictionary_t, prop_dictionary_t);
 static void do_setifpreference(prop_dictionary_t);
@@ -141,6 +143,7 @@ __dead static void usage(void);
 static const struct kwinst ifflagskw[] = {
 	  IFKW("arp", -IFF_NOARP)
 	, IFKW("debug", IFF_DEBUG)
+	, IFKW("unnumbered", IFF_UNNUMBERED)
 	, IFKW("link0", IFF_LINK0)
 	, IFKW("link1", IFF_LINK1)
 	, IFKW("link2", IFF_LINK2)
@@ -750,8 +753,8 @@ main(int argc, char **argv)
 	 *
 	 * -a means "print status of all interfaces".
 	 *
-	 * -w means "spin until DAD completes for all addreseses", and is
-	 * mutually exclusivewith all other flags/commands.
+	 * -w means "spin until DAD completes for all addresses", and is
+	 * mutually exclusive with all other flags/commands.
 	 */
 	if ((lflag || Cflag || wflag) &&
 	    (aflag || get_flag('m') || vflag || zflag))
@@ -883,7 +886,7 @@ printall(const char *ifname, prop_dictionary_t env0)
 		if (uflag && (ifa->ifa_flags & IFF_UP) == 0)
 			continue;
 
-		if (sflag && carrier(env) == LINK_STATE_DOWN)
+		if (sflag && link_state(env) == LINK_STATE_DOWN)
 			continue;
 		idx++;
 		/*
@@ -1198,17 +1201,43 @@ setifmtu(prop_dictionary_t env, prop_dictionary_t oenv)
 }
 
 static int
-carrier(prop_dictionary_t env)
+link_state(prop_dictionary_t env)
 {
 	struct ifdatareq ifdr = { .ifdr_data.ifi_link_state = 0 };
 
 	if (direct_ioctl(env, SIOCGIFDATA, &ifdr) == -1)
-		return EXIT_FAILURE;
+		return -1;
 
-	if (ifdr.ifdr_data.ifi_link_state == LINK_STATE_DOWN)
+	return ifdr.ifdr_data.ifi_link_state;
+}
+
+static const char *
+link_state_str(int state)
+{
+
+	switch (state) {
+	case LINK_STATE_UNKNOWN:
+		return "unknown";
+	case LINK_STATE_DOWN:
+		return "down";
+	case LINK_STATE_UP:
+		return "up";
+	default: /* Assume -1 */
+		return "error";
+	}
+}
+
+static int
+carrier(prop_dictionary_t env)
+{
+	switch (link_state(env)) {
+	case -1:
+	case LINK_STATE_DOWN:
 		return EXIT_FAILURE;
-	else /* Assume UP if UNKNOWN */
+	default:
+		/* Assume UP if UNKNOWN */
 		return EXIT_SUCCESS;
+	}
 }
 
 static void
@@ -1331,6 +1360,9 @@ status(prop_dictionary_t env, prop_dictionary_t oenv)
 		printf("\tlinkstr: %s\n", (char *)ifdrv.ifd_data);
 		free(p);
 	}
+
+	if (vflag)
+		printf("\tlinkstate: %s\n", link_state_str(link_state(env)));
 
 	media_status(env, oenv);
 
@@ -1524,6 +1556,7 @@ usage(void)
 		"\t[ preference n ]\n"
 		"\t[ link0 | -link0 ] [ link1 | -link1 ] [ link2 | -link2 ]\n"
 		"\t[ linkstr str | -linkstr ]\n"
+		"\t[ unnumbered | -unnumbered ]\n"
 		"\t[ description str | descr str | -description | -descr ]\n"
 		"       %s -a [-b] [-d] [-h] %s[-u] [-v] [-z] [ af ]\n"
 		"       %s -l [-b] [-d] [-s] [-u]\n"

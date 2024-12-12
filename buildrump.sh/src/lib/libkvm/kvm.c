@@ -1,4 +1,4 @@
-/*	$NetBSD: kvm.c,v 1.109 2020/05/02 14:31:13 christos Exp $	*/
+/*	$NetBSD: kvm.c,v 1.111 2023/08/23 14:00:11 rin Exp $	*/
 
 /*-
  * Copyright (c) 1989, 1992, 1993
@@ -38,7 +38,7 @@
 #if 0
 static char sccsid[] = "@(#)kvm.c	8.2 (Berkeley) 2/13/94";
 #else
-__RCSID("$NetBSD: kvm.c,v 1.109 2020/05/02 14:31:13 christos Exp $");
+__RCSID("$NetBSD: kvm.c,v 1.111 2023/08/23 14:00:11 rin Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -187,9 +187,9 @@ _kvm_pread(kvm_t *kd, int fd, void *buf, size_t size, off_t off)
 	}
 
 	/* If aligned nothing to do. */
- 	if (((off % kd->fdalign) | (size % kd->fdalign)) == 0) {
+	if (((off % kd->fdalign) | (size % kd->fdalign)) == 0) {
 		return pread(fd, buf, size, off);
- 	}
+	}
 
 	/*
 	 * Otherwise must buffer.  We can't tolerate short reads in this
@@ -289,7 +289,7 @@ _kvm_open(kvm_t *kd, const char *uf, const char *mf, const char *sf, int flag,
 
 	/*
 	 * Call the MD open hook.  This sets:
-	 *	usrstack, min_uva, max_uva
+	 *	min_uva, max_uva
 	 */
 	if (_kvm_mdopen(kd)) {
 		_kvm_err(kd, kd->program, "md init failed");
@@ -397,7 +397,7 @@ _kvm_open(kvm_t *kd, const char *uf, const char *mf, const char *sf, int flag,
 				goto failed;
 		}
 		kd->dump_size = (size_t)st.st_size;
-		kd->dump_mem = mmap(NULL, kd->dump_size, PROT_READ|PROT_WRITE, 
+		kd->dump_mem = mmap(NULL, kd->dump_size, PROT_READ|PROT_WRITE,
 		    MAP_FILE|MAP_PRIVATE, kd->pmfd, 0);
 	}
 	return (kd);
@@ -635,7 +635,7 @@ clear_gap(kvm_t *kd, bool (*write_buf)(void *, const void *, size_t),
 			return -1;
 		}
 		size -= len;
-	} 
+	}
 
 	return 0;
 }

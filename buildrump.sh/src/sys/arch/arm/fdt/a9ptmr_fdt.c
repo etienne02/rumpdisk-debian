@@ -1,4 +1,4 @@
-/* $NetBSD: a9ptmr_fdt.c,v 1.5 2021/08/07 16:18:43 thorpej Exp $ */
+/* $NetBSD: a9ptmr_fdt.c,v 1.7 2022/11/05 17:30:06 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2019 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: a9ptmr_fdt.c,v 1.5 2021/08/07 16:18:43 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: a9ptmr_fdt.c,v 1.7 2022/11/05 17:30:06 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -41,6 +41,8 @@ __KERNEL_RCSID(0, "$NetBSD: a9ptmr_fdt.c,v 1.5 2021/08/07 16:18:43 thorpej Exp $
 #include <arm/cortex/mpcore_var.h>
 #include <arm/cortex/a9ptmr_var.h>
 
+#include <arm/armreg.h>
+
 #include <dev/fdt/fdtvar.h>
 #include <arm/fdt/arm_fdtvar.h>
 
@@ -48,6 +50,7 @@ static int	a9ptmr_fdt_match(device_t, cfdata_t, void *);
 static void	a9ptmr_fdt_attach(device_t, device_t, void *);
 
 static void	a9ptmr_fdt_cpu_hatch(void *, struct cpu_info *);
+static void	a9ptmr_fdt_speed_changed(device_t);
 
 struct a9ptmr_fdt_softc {
 	device_t	sc_dev;
@@ -78,6 +81,8 @@ a9ptmr_fdt_attach(device_t parent, device_t self, void *aux)
 	struct fdt_attach_args * const faa = aux;
 	const int phandle = faa->faa_phandle;
 	bus_space_handle_t bsh;
+	uint32_t mpidr;
+	bool is_hardclock;
 
 	sc->sc_dev = self;
 	sc->sc_clk = fdtbus_clock_get_index(phandle, 0);
@@ -103,13 +108,18 @@ a9ptmr_fdt_attach(device_t parent, device_t self, void *aux)
 	aprint_naive("\n");
 	aprint_normal("\n");
 
-	void *ih = fdtbus_intr_establish_xname(phandle, 0, IPL_CLOCK,
-	    FDT_INTR_MPSAFE, a9ptmr_intr, NULL, device_xname(self));
-	if (ih == NULL) {
-		aprint_error_dev(self, "couldn't install interrupt handler\n");
-		return;
+	mpidr = armreg_mpidr_read();
+	is_hardclock = (mpidr & MPIDR_U) == 0;	/* Use private timer for SMP */
+
+	if (is_hardclock) {
+		void *ih = fdtbus_intr_establish_xname(phandle, 0, IPL_CLOCK,
+		    FDT_INTR_MPSAFE, a9ptmr_intr, NULL, device_xname(self));
+		if (ih == NULL) {
+			aprint_error_dev(self, "couldn't install interrupt handler\n");
+			return;
+		}
+		aprint_normal_dev(self, "interrupting on %s\n", intrstr);
 	}
-	aprint_normal_dev(self, "interrupting on %s\n", intrstr);
 
 	bus_addr_t addr;
 	bus_size_t size;
@@ -131,12 +141,29 @@ a9ptmr_fdt_attach(device_t parent, device_t self, void *aux)
 
 	config_found(self, &mpcaa, NULL, CFARGS_NONE);
 
-	arm_fdt_cpu_hatch_register(self, a9ptmr_fdt_cpu_hatch);
-	arm_fdt_timer_register(a9ptmr_cpu_initclocks);
+	if (is_hardclock) {
+		arm_fdt_cpu_hatch_register(self, a9ptmr_fdt_cpu_hatch);
+		arm_fdt_timer_register(a9ptmr_cpu_initclocks);
+	}
+
+	pmf_event_register(self, PMFE_SPEED_CHANGED, a9ptmr_fdt_speed_changed, true);
 }
 
 static void
 a9ptmr_fdt_cpu_hatch(void *priv, struct cpu_info *ci)
 {
 	a9ptmr_init_cpu_clock(ci);
+}
+
+static void
+a9ptmr_fdt_speed_changed(device_t dev)
+{
+	struct a9ptmr_fdt_softc * const sc = device_private(dev);
+	prop_dictionary_t dict = device_properties(dev);
+	uint32_t rate;
+
+	rate = clk_get_rate(sc->sc_clk);
+	prop_dictionary_set_uint32(dict, "frequency", rate);
+
+	a9ptmr_update_freq(rate);
 }

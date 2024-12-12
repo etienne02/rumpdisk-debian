@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_fork.c,v 1.226 2020/05/23 23:42:43 ad Exp $	*/
+/*	$NetBSD: kern_fork.c,v 1.231 2024/05/14 19:00:44 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2001, 2004, 2006, 2007, 2008, 2019
@@ -68,7 +68,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_fork.c,v 1.226 2020/05/23 23:42:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_fork.c,v 1.231 2024/05/14 19:00:44 andvar Exp $");
 
 #include "opt_ktrace.h"
 #include "opt_dtrace.h"
@@ -109,7 +109,7 @@ u_int	nprocs __cacheline_aligned = 1;		/* process 0 */
 
 /*
  * Number of ticks to sleep if fork() would fail due to process hitting
- * limits. Exported in miliseconds to userland via sysctl.
+ * limits. Exported in milliseconds to userland via sysctl.
  */
 int	forkfsleep = 0;
 
@@ -309,6 +309,12 @@ fork1(struct lwp *l1, int flags, int exitsig, void *stack, size_t stacksize,
 	p2 = proc_alloc();
 	if (p2 == NULL) {
 		/* We were unable to allocate a process ID. */
+		uvm_uarea_free(uaddr);
+		mutex_enter(p1->p_lock);
+		uid = kauth_cred_getuid(p1->p_cred);
+		(void)chgproccnt(uid, -1);
+		mutex_exit(p1->p_lock);
+		atomic_dec_uint(&nprocs);
 		return EAGAIN;
 	}
 
@@ -547,7 +553,7 @@ fork1(struct lwp *l1, int flags, int exitsig, void *stack, size_t stacksize,
 	 */
 	if (!SLIST_EMPTY(&p1->p_klist)) {
 		mutex_exit(&proc_lock);
-		KNOTE(&p1->p_klist, NOTE_FORK | p2->p_pid);
+		knote_proc_fork(p1, p2);
 		mutex_enter(&proc_lock);
 	}
 
@@ -638,7 +644,7 @@ child_return(void *arg)
 
 	if ((p->p_slflag & (PSL_TRACED|PSL_TRACEDCHILD)) ==
 	    (PSL_TRACED|PSL_TRACEDCHILD)) {
-		eventswitchchild(p, TRAP_CHLD, 
+		eventswitchchild(p, TRAP_CHLD,
 		    ISSET(p->p_lflag, PL_PPWAIT) ? PTRACE_VFORK : PTRACE_FORK);
 	}
 

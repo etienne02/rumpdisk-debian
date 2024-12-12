@@ -1,4 +1,4 @@
-/* $NetBSD: if_ti.c,v 1.121 2021/06/05 14:28:28 thorpej Exp $ */
+/* $NetBSD: if_ti.c,v 1.125 2024/11/05 22:00:30 andvar Exp $ */
 
 /*
  * Copyright (c) 1997, 1998, 1999
@@ -48,14 +48,14 @@
  * The Alteon Networks Tigon chip contains an embedded R4000 CPU,
  * gigabit MAC, dual DMA channels and a PCI interface unit. NICs
  * using the Tigon may have anywhere from 512K to 2MB of SRAM. The
- * Tigon supports hardware IP, TCP and UCP checksumming, multicast
+ * Tigon supports hardware IP, TCP and UDP checksumming, multicast
  * filtering and jumbo (9014 byte) frames. The hardware is largely
  * controlled by firmware, which must be loaded into the NIC during
  * initialization.
  *
  * The Tigon 2 contains 2 R4000 CPUs and requires a newer firmware
  * revision, which supports new features such as extended commands,
- * extended jumbo receive ring desciptors and a mini receive ring.
+ * extended jumbo receive ring descriptors and a mini receive ring.
  *
  * Alteon Networks is to be commended for releasing such a vast amount
  * of development material for the Tigon NIC without requiring an NDA
@@ -81,7 +81,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ti.c,v 1.121 2021/06/05 14:28:28 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ti.c,v 1.125 2024/11/05 22:00:30 andvar Exp $");
 
 #include "opt_inet.h"
 
@@ -913,12 +913,12 @@ ti_free_rx_ring_std(struct ti_softc *sc)
 
 	for (i = 0; i < TI_STD_RX_RING_CNT; i++) {
 		if (sc->ti_cdata.ti_rx_std_chain[i] != NULL) {
-			m_freem(sc->ti_cdata.ti_rx_std_chain[i]);
-			sc->ti_cdata.ti_rx_std_chain[i] = NULL;
-
 			/* if (sc->std_dmamap[i] == 0) panic() */
 			bus_dmamap_destroy(sc->sc_dmat, sc->std_dmamap[i]);
 			sc->std_dmamap[i] = 0;
+
+			m_freem(sc->ti_cdata.ti_rx_std_chain[i]);
+			sc->ti_cdata.ti_rx_std_chain[i] = NULL;
 		}
 		memset((char *)&sc->ti_rdata->ti_rx_std_ring[i], 0,
 		    sizeof(struct ti_rx_desc));
@@ -950,10 +950,8 @@ ti_free_rx_ring_jumbo(struct ti_softc *sc)
 	int		i;
 
 	for (i = 0; i < TI_JUMBO_RX_RING_CNT; i++) {
-		if (sc->ti_cdata.ti_rx_jumbo_chain[i] != NULL) {
-			m_freem(sc->ti_cdata.ti_rx_jumbo_chain[i]);
-			sc->ti_cdata.ti_rx_jumbo_chain[i] = NULL;
-		}
+		m_freem(sc->ti_cdata.ti_rx_jumbo_chain[i]);
+		sc->ti_cdata.ti_rx_jumbo_chain[i] = NULL;
 		memset((char *)&sc->ti_rdata->ti_rx_jumbo_ring[i], 0,
 		    sizeof(struct ti_rx_desc));
 	}
@@ -984,12 +982,12 @@ ti_free_rx_ring_mini(struct ti_softc *sc)
 
 	for (i = 0; i < TI_MINI_RX_RING_CNT; i++) {
 		if (sc->ti_cdata.ti_rx_mini_chain[i] != NULL) {
-			m_freem(sc->ti_cdata.ti_rx_mini_chain[i]);
-			sc->ti_cdata.ti_rx_mini_chain[i] = NULL;
-
 			/* if (sc->mini_dmamap[i] == 0) panic() */
 			bus_dmamap_destroy(sc->sc_dmat, sc->mini_dmamap[i]);
 			sc->mini_dmamap[i] = 0;
+
+			m_freem(sc->ti_cdata.ti_rx_mini_chain[i]);
+			sc->ti_cdata.ti_rx_mini_chain[i] = NULL;
 		}
 		memset((char *)&sc->ti_rdata->ti_rx_mini_ring[i], 0,
 		    sizeof(struct ti_rx_desc));
@@ -1006,13 +1004,18 @@ ti_free_tx_ring(struct ti_softc *sc)
 
 	for (i = 0; i < TI_TX_RING_CNT; i++) {
 		if (sc->ti_cdata.ti_tx_chain[i] != NULL) {
-			m_freem(sc->ti_cdata.ti_tx_chain[i]);
-			sc->ti_cdata.ti_tx_chain[i] = NULL;
+			dma = sc->txdma[i];
+			KDASSERT(dma != NULL);
+			bus_dmamap_sync(sc->sc_dmat, dma->dmamap, 0,
+			    dma->dmamap->dm_mapsize, BUS_DMASYNC_POSTWRITE);
+			bus_dmamap_unload(sc->sc_dmat, dma->dmamap);
 
-			/* if (sc->txdma[i] == 0) panic() */
 			SIMPLEQ_INSERT_HEAD(&sc->txdma_list, sc->txdma[i],
 					    link);
-			sc->txdma[i] = 0;
+			sc->txdma[i] = NULL;
+
+			m_freem(sc->ti_cdata.ti_tx_chain[i]);
+			sc->ti_cdata.ti_tx_chain[i] = NULL;
 		}
 		memset((char *)&sc->ti_rdata->ti_tx_ring[i], 0,
 		    sizeof(struct ti_tx_desc));
@@ -2070,9 +2073,6 @@ ti_txeof_tigon1(struct ti_softc *sc)
 		if (cur_tx->ti_flags & TI_BDFLAG_END)
 			if_statinc(ifp, if_opackets);
 		if (sc->ti_cdata.ti_tx_chain[idx] != NULL) {
-			m_freem(sc->ti_cdata.ti_tx_chain[idx]);
-			sc->ti_cdata.ti_tx_chain[idx] = NULL;
-
 			dma = sc->txdma[idx];
 			KDASSERT(dma != NULL);
 			bus_dmamap_sync(sc->sc_dmat, dma->dmamap, 0,
@@ -2081,6 +2081,9 @@ ti_txeof_tigon1(struct ti_softc *sc)
 
 			SIMPLEQ_INSERT_HEAD(&sc->txdma_list, dma, link);
 			sc->txdma[idx] = NULL;
+
+			m_freem(sc->ti_cdata.ti_tx_chain[idx]);
+			sc->ti_cdata.ti_tx_chain[idx] = NULL;
 		}
 		sc->ti_txcnt--;
 		TI_INC(sc->ti_tx_saved_considx, TI_TX_RING_CNT);
@@ -2115,9 +2118,6 @@ ti_txeof_tigon2(struct ti_softc *sc)
 		if (cur_tx->ti_flags & TI_BDFLAG_END)
 			if_statinc(ifp, if_opackets);
 		if (sc->ti_cdata.ti_tx_chain[idx] != NULL) {
-			m_freem(sc->ti_cdata.ti_tx_chain[idx]);
-			sc->ti_cdata.ti_tx_chain[idx] = NULL;
-
 			dma = sc->txdma[idx];
 			KDASSERT(dma != NULL);
 			bus_dmamap_sync(sc->sc_dmat, dma->dmamap, 0,
@@ -2126,6 +2126,9 @@ ti_txeof_tigon2(struct ti_softc *sc)
 
 			SIMPLEQ_INSERT_HEAD(&sc->txdma_list, dma, link);
 			sc->txdma[idx] = NULL;
+
+			m_freem(sc->ti_cdata.ti_tx_chain[idx]);
+			sc->ti_cdata.ti_tx_chain[idx] = NULL;
 		}
 		cnt++;
 		sc->ti_txcnt--;

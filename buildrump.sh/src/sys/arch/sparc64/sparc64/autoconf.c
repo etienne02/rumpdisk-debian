@@ -1,4 +1,4 @@
-/*	$NetBSD: autoconf.c,v 1.235 2021/08/21 11:55:25 andvar Exp $ */
+/*	$NetBSD: autoconf.c,v 1.243 2024/11/19 20:38:24 palle Exp $ */
 
 /*
  * Copyright (c) 1996
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.235 2021/08/21 11:55:25 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.243 2024/11/19 20:38:24 palle Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -65,7 +65,6 @@ __KERNEL_RCSID(0, "$NetBSD: autoconf.c,v 1.235 2021/08/21 11:55:25 andvar Exp $"
 #include <sys/conf.h>
 #include <sys/reboot.h>
 #include <sys/socket.h>
-#include <sys/malloc.h>
 #include <sys/vnode.h>
 #include <sys/fcntl.h>
 #include <sys/queue.h>
@@ -165,19 +164,22 @@ int kernel_dtlb_slots;
 int kernel_itlb_slots;
 
 /* Global interrupt mappings for all device types.  Match against the OBP
- * 'device_type' property. 
+ * 'device_type' property.  Note, that the resulting PIL must be higher than
+ * the highest soft interrupt level (IPL_SOFTSERIAL).
  */
 struct intrmap intrmap[] = {
 	{ "block",	PIL_FD },	/* Floppy disk */
 	{ "serial",	PIL_SER },	/* zs */
-	{ "scsi",	PIL_SCSI },
-	{ "scsi-2",	PIL_SCSI },
+	{ "scsi",	PIL_BIO },
+	{ "scsi-2",	PIL_BIO },
 	{ "network",	PIL_NET },
 	{ "display",	PIL_VIDEO },
 	{ "audio",	PIL_AUD },
-	{ "ide",	PIL_SCSI },
+	{ "ide",	PIL_BIO },
+	{ "socal",	PIL_BIO },
 /* The following devices don't have device types: */
 	{ "SUNW,CS4231",	PIL_AUD },
+	{ "SUNW,bpp",	PIL_BIO },
 	{ NULL,		0 }
 };
 
@@ -701,6 +703,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		aprint_normal(": %s: hostid %lx\n", machine_model, hostid);
 	aprint_naive("\n");
 
+	devhandle_t selfh = device_handle(dev);
+
 	/*
 	 * Locate and configure the ``early'' devices.  These must be
 	 * configured before we can do the rest.  For instance, the
@@ -730,7 +734,7 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		ma.ma_node = node;
 		ma.ma_name = "cpu";
 		config_found(dev, &ma, mbprint,
-		    CFARGS(.devhandle = devhandle_from_of(ma.ma_node)));
+		    CFARGS(.devhandle = devhandle_from_of(selfh, ma.ma_node)));
 	}
 
 	node = findroot();	/* re-init root node */
@@ -814,7 +818,8 @@ extern struct sparc_bus_space_tag mainbus_space_tag;
 		}
 #endif
 		(void) config_found(dev, (void *)&ma, mbprint,
-		    CFARGS(.devhandle = prom_node_to_devhandle(ma.ma_node)));
+		    CFARGS(.devhandle = prom_node_to_devhandle(selfh,
+							       ma.ma_node)));
 		free(ma.ma_reg, M_DEVBUF);
 		if (ma.ma_ninterrupts)
 			free(ma.ma_interrupts, M_DEVBUF);
@@ -1166,7 +1171,7 @@ device_register(device_t dev, void *aux)
 		 * busdev now points to the direct descendent of the
 		 * controller ("atabus" or "scsibus").  Get the
 		 * controller's devhandle.  Hoist it up one more so
-		 * that busdev points at the the controller.
+		 * that busdev points at the controller.
 		 */
 		busdev = device_parent(busdev);
 		devhandle = device_handle(busdev);
@@ -1178,14 +1183,15 @@ device_register(device_t dev, void *aux)
 		 * secondary logical domain
 		 *
 		 * The bootpath looks something like this:
-		 *   /virtual-devices@100/channel-devices@200/disk@1:a
+		 *   /virtual-devices@100/channel-devices@200/disk@1:a (disk)
+		 *   /virtual-devices@100/channel-devices@200/disk@4:f (cdrom)
 		 *
 		 * The device hierarchy constructed during autoconfiguration
 		 * is:
-		 *   /mainbus/vbus/cbus/vdsk/scsibus/sd
+		 *   /mainbus/vbus/cbus/vdsk/scsibus/sd or
+		 *   /mainbus/vbus/cbus/vdsk/scsibus/cd
 		 */
-		if (CPU_ISSUN4V && device_is_a(dev, "sd") &&
-		    device_is_a(busdev, "vdsk")) {
+		if (CPU_ISSUN4V && device_is_a(busdev, "vdsk")) {
 			dev_path_exact_match(dev, ofnode);
 		} else {
 			dev_bi_unit_drive_match(dev, ofnode,
@@ -1457,7 +1463,7 @@ device_register_post_config(device_t dev, void *aux)
 
 		/*
 		 * If this is a FC-AL drive it will have
-		 * aquired its WWN device property by now,
+		 * acquired its WWN device property by now,
 		 * so we can properly match it.
 		 */
 		if (prop_dictionary_get_uint64(device_properties(dev),

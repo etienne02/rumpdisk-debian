@@ -1,4 +1,4 @@
-/*	$NetBSD: if_43.c,v 1.25 2020/06/12 11:04:45 roy Exp $	*/
+/*	$NetBSD: if_43.c,v 1.27 2023/03/30 17:48:10 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1990, 1993
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_43.c,v 1.25 2020/06/12 11:04:45 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_43.c,v 1.27 2023/03/30 17:48:10 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
@@ -69,6 +69,7 @@ __KERNEL_RCSID(0, "$NetBSD: if_43.c,v 1.25 2020/06/12 11:04:45 roy Exp $");
 #include <net80211/ieee80211_ioctl.h>
 #include <netinet6/in6_var.h>
 #include <netinet6/nd6.h>
+#include <compat/net/if.h>
 #include <compat/sys/socket.h>
 #include <compat/sys/sockio.h>
 
@@ -253,20 +254,29 @@ compat_ifioctl(struct socket *so, u_long ocmd, u_long cmd, void *data,
 	}
 
 	switch (ocmd) {
+		enum { maxlen = sizeof(oifr->ifr_ifru) };
+		CTASSERT(maxlen == 16);
+		socklen_t famlen;
 	case OSIOCSIFADDR:
 	case OSIOCSIFDSTADDR:
 	case OSIOCSIFBRDADDR:
 	case OSIOCSIFNETMASK:
 		sa = &ifr->ifr_addr;
 #if BYTE_ORDER != BIG_ENDIAN
-		if (sa->sa_family == 0 && sa->sa_len < 16) {
+		if (sa->sa_family == 0 && sa->sa_len < maxlen) {
 			sa->sa_family = sa->sa_len;
-			sa->sa_len = 16;
+			sa->sa_len = maxlen;
 		}
 #else
 		if (sa->sa_len == 0)
-			sa->sa_len = 16;
+			sa->sa_len = maxlen;
 #endif
+		famlen = sockaddr_getsize_by_family(sa->sa_family);
+		if (famlen > sa->sa_len) {
+			curlwp_bindx(bound);
+			return EAFNOSUPPORT;
+		}
+
 		break;
 	}
 

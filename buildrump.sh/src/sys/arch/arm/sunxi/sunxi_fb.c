@@ -1,4 +1,4 @@
-/* $NetBSD: sunxi_fb.c,v 1.3 2019/01/30 10:55:44 jmcneill Exp $ */
+/* $NetBSD: sunxi_fb.c,v 1.8 2022/09/25 07:50:23 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2015-2019 Jared McNeill <jmcneill@invisible.ca>
@@ -29,7 +29,7 @@
 #include "opt_wsdisplay_compat.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunxi_fb.c,v 1.3 2019/01/30 10:55:44 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunxi_fb.c,v 1.8 2022/09/25 07:50:23 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -37,13 +37,15 @@ __KERNEL_RCSID(0, "$NetBSD: sunxi_fb.c,v 1.3 2019/01/30 10:55:44 jmcneill Exp $"
 
 #include <dev/fdt/fdtvar.h>
 
-#include <drm/drmP.h>
-#include <drm/drmfb.h>
-
 #include <arm/sunxi/sunxi_drm.h>
+
+#include <drm/drm_drv.h>
+#include <drm/drmfb.h>
 
 static int	sunxi_fb_match(device_t, cfdata_t, void *);
 static void	sunxi_fb_attach(device_t, device_t, void *);
+
+static void	sunxi_fb_init(struct sunxi_drm_task *);
 
 static bool	sunxi_fb_shutdown(device_t, int);
 
@@ -53,6 +55,7 @@ struct sunxi_fb_softc {
 	struct sunxi_drm_softc	*sc_drm;
 	struct sunxi_drm_framebuffer *sc_fb;
 	struct sunxi_drmfb_attach_args sc_sfa;
+	struct sunxi_drm_task	sc_attach_task;
 };
 
 static paddr_t	sunxi_fb_mmapfb(struct drmfb_softc *, off_t, int);
@@ -80,7 +83,6 @@ sunxi_fb_attach(device_t parent, device_t self, void *aux)
 	struct sunxi_fb_softc * const sc = device_private(self);
 	struct sunxi_drm_softc * const drmsc = device_private(parent);
 	struct sunxi_drmfb_attach_args * const sfa = aux;
-	int error;
 
 	sc->sc_dev = self;
 	sc->sc_drm = drmsc;
@@ -90,14 +92,21 @@ sunxi_fb_attach(device_t parent, device_t self, void *aux)
 	aprint_naive("\n");
 	aprint_normal("\n");
 
-#ifdef WSDISPLAY_MULTICONS
-	prop_dictionary_t dict = device_properties(self);
-	const bool is_console = true;
-	prop_dictionary_set_bool(dict, "is_console", is_console);
-#endif
+	sunxi_task_init(&sc->sc_attach_task, &sunxi_fb_init);
+	sunxi_task_schedule(parent, &sc->sc_attach_task);
+}
+
+static void
+sunxi_fb_init(struct sunxi_drm_task *task)
+{
+	struct sunxi_fb_softc * const sc =
+	    container_of(task, struct sunxi_fb_softc, sc_attach_task);
+	device_t dev = sc->sc_dev;
+	struct sunxi_drmfb_attach_args * const sfa = &sc->sc_sfa;
+	int error;
 
 	const struct drmfb_attach_args da = {
-		.da_dev = self,
+		.da_dev = dev,
 		.da_fb_helper = sfa->sfa_fb_helper,
 		.da_fb_sizes = &sfa->sfa_fb_sizes,
 		.da_fb_vaddr = sc->sc_fb->obj->vaddr,
@@ -105,13 +114,14 @@ sunxi_fb_attach(device_t parent, device_t self, void *aux)
 		.da_params = &sunxifb_drmfb_params,
 	};
 
+
 	error = drmfb_attach(&sc->sc_drmfb, &da);
 	if (error) {
-		aprint_error_dev(self, "failed to attach drmfb: %d\n", error);
+		aprint_error_dev(dev, "failed to attach drmfb: %d\n", error);
 		return;
 	}
 
-	pmf_device_register1(self, NULL, NULL, sunxi_fb_shutdown);
+	pmf_device_register1(dev, NULL, NULL, sunxi_fb_shutdown);
 }
 
 static bool

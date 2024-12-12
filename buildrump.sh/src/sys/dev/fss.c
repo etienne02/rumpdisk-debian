@@ -1,4 +1,4 @@
-/*	$NetBSD: fss.c,v 1.111 2021/06/29 22:40:53 dholland Exp $	*/
+/*	$NetBSD: fss.c,v 1.114 2023/03/22 21:14:46 hannken Exp $	*/
 
 /*-
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -36,14 +36,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fss.c,v 1.111 2021/06/29 22:40:53 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fss.c,v 1.114 2023/03/22 21:14:46 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/namei.h>
 #include <sys/proc.h>
 #include <sys/errno.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 #include <sys/buf.h>
 #include <sys/ioctl.h>
 #include <sys/disklabel.h>
@@ -160,7 +160,7 @@ fss_attach(device_t parent, device_t self, void *aux)
 	cv_init(&sc->sc_work_cv, "fssbs");
 	cv_init(&sc->sc_cache_cv, "cowwait");
 	bufq_alloc(&sc->sc_bufq, "fcfs", 0);
-	sc->sc_dkdev = malloc(sizeof(*sc->sc_dkdev), M_DEVBUF, M_WAITOK);
+	sc->sc_dkdev = kmem_zalloc(sizeof(*sc->sc_dkdev), KM_SLEEP);
 	sc->sc_dkdev->dk_info = NULL;
 	disk_init(sc->sc_dkdev, device_xname(self), NULL);
 	if (!pmf_device_register(self, NULL, NULL))
@@ -192,7 +192,7 @@ fss_detach(device_t self, int flags)
 	bufq_drain(sc->sc_bufq);
 	bufq_free(sc->sc_bufq);
 	disk_destroy(sc->sc_dkdev);
-	free(sc->sc_dkdev, M_DEVBUF);
+	kmem_free(sc->sc_dkdev, sizeof(*sc->sc_dkdev));
 
 	return 0;
 }
@@ -210,7 +210,7 @@ fss_open(dev_t dev, int flags, int mode, struct lwp *l)
 
 	sc = device_lookup_private(&fss_cd, minor(dev));
 	if (sc == NULL) {
-		cf = malloc(sizeof(*cf), M_DEVBUF, M_WAITOK);
+		cf = kmem_zalloc(sizeof(*cf), KM_SLEEP);
 		cf->cf_name = fss_cd.cd_name;
 		cf->cf_atname = fss_cd.cd_name;
 		cf->cf_unit = minor(dev);
@@ -274,7 +274,7 @@ restart:
 	cf = device_cfdata(sc->sc_dev);
 	error = config_detach(sc->sc_dev, DETACH_QUIET);
 	if (! error)
-		free(cf, M_DEVBUF);
+		kmem_free(cf, sizeof(*cf));
 	mutex_exit(&fss_device_lock);
 
 	return error;
@@ -1285,7 +1285,7 @@ fss_bs_thread(void *arg)
 
 			/* Not on backing store, read from device. */
 			nbp = getiobuf(NULL, true);
-			nbp->b_flags = B_READ;
+			nbp->b_flags = B_READ | (bp->b_flags & B_PHYS);
 			nbp->b_resid = nbp->b_bcount = bp->b_bcount;
 			nbp->b_bufsize = bp->b_bcount;
 			nbp->b_data = bp->b_data;
@@ -1387,44 +1387,42 @@ fss_modcmd(modcmd_t cmd, void *arg)
 	case MODULE_CMD_INIT:
 		mutex_init(&fss_device_lock, MUTEX_DEFAULT, IPL_NONE);
 		cv_init(&fss_device_cv, "snapwait");
-		error = config_cfdriver_attach(&fss_cd);
+
+		error = devsw_attach(fss_cd.cd_name,
+		    &fss_bdevsw, &fss_bmajor, &fss_cdevsw, &fss_cmajor);
 		if (error) {
 			mutex_destroy(&fss_device_lock);
 			break;
 		}
+
+		error = config_cfdriver_attach(&fss_cd);
+		if (error) {
+			devsw_detach(&fss_bdevsw, &fss_cdevsw);
+			mutex_destroy(&fss_device_lock);
+			break;
+		}
+
 		error = config_cfattach_attach(fss_cd.cd_name, &fss_ca);
 		if (error) {
 			config_cfdriver_detach(&fss_cd);
+			devsw_detach(&fss_bdevsw, &fss_cdevsw);
 			mutex_destroy(&fss_device_lock);
 			break;
 		}
-		error = devsw_attach(fss_cd.cd_name,
-		    &fss_bdevsw, &fss_bmajor, &fss_cdevsw, &fss_cmajor);
 
-		if (error) {
-			config_cfattach_detach(fss_cd.cd_name, &fss_ca);
-			config_cfdriver_detach(&fss_cd);
-			mutex_destroy(&fss_device_lock);
-			break;
-		}
 		break;
 
 	case MODULE_CMD_FINI:
-		devsw_detach(&fss_bdevsw, &fss_cdevsw);
 		error = config_cfattach_detach(fss_cd.cd_name, &fss_ca);
 		if (error) {
-			devsw_attach(fss_cd.cd_name, &fss_bdevsw, &fss_bmajor,
-			    &fss_cdevsw, &fss_cmajor);
 			break;
 		}
 		error = config_cfdriver_detach(&fss_cd);
 		if (error) {
-			devsw_attach(fss_cd.cd_name,
-			    &fss_bdevsw, &fss_bmajor, &fss_cdevsw, &fss_cmajor);
-			devsw_attach(fss_cd.cd_name, &fss_bdevsw, &fss_bmajor,
-			    &fss_cdevsw, &fss_cmajor);
+			config_cfattach_attach(fss_cd.cd_name, &fss_ca);
 			break;
 		}
+		devsw_detach(&fss_bdevsw, &fss_cdevsw);
 		cv_destroy(&fss_device_cv);
 		mutex_destroy(&fss_device_lock);
 		break;

@@ -1,4 +1,4 @@
-/* $NetBSD: sunxi_gmac.c,v 1.9 2021/01/27 03:10:20 thorpej Exp $ */
+/* $NetBSD: sunxi_gmac.c,v 1.11 2024/08/10 12:16:47 skrll Exp $ */
 
 /*-
  * Copyright (c) 2017 Jared McNeill <jmcneill@invisible.ca>
@@ -28,7 +28,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: sunxi_gmac.c,v 1.9 2021/01/27 03:10:20 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunxi_gmac.c,v 1.11 2024/08/10 12:16:47 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -177,7 +177,7 @@ sunxi_gmac_attach(device_t parent, device_t self, void *aux)
 			aprint_error(": failed to set TX clock rate (MII)\n");
 			return;
 		}
-	} else if (strcmp(phy_mode, "rgmii") == 0) {
+	} else if (strncmp(phy_mode, "rgmii", 5) == 0) {
 		if (clk_set_rate(clk_gmac_tx, GMAC_TX_RATE_RGMII) != 0) {
 			aprint_error(": failed to set TX clock rate (RGMII)\n");
 			return;
@@ -201,7 +201,7 @@ sunxi_gmac_attach(device_t parent, device_t self, void *aux)
 	aprint_normal(": GMAC\n");
 
 	if (fdtbus_intr_establish_xname(phandle, 0, IPL_NET,
-	    DWCGMAC_FDT_INTR_MPSAFE, sunxi_gmac_intr, sc,
+	    FDT_INTR_MPSAFE, sunxi_gmac_intr, sc,
 	    device_xname(self)) == NULL) {
 		aprint_error_dev(self, "failed to establish interrupt on %s\n", intrstr);
 		return;

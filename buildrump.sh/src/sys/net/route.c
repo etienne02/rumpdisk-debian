@@ -1,4 +1,4 @@
-/*	$NetBSD: route.c,v 1.229 2020/04/08 03:37:14 knakahara Exp $	*/
+/*	$NetBSD: route.c,v 1.237 2023/06/05 03:51:45 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2008 The NetBSD Foundation, Inc.
@@ -97,7 +97,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: route.c,v 1.229 2020/04/08 03:37:14 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: route.c,v 1.237 2023/06/05 03:51:45 ozaki-r Exp $");
 
 #include <sys/param.h>
 #ifdef RTFLUSH_DEBUG
@@ -174,7 +174,7 @@ static void	rt_timer_timer(void *);
  *   - API: RT_RLOCK and friends
  * - rtcaches are NOT protected by the framework
  *   - Callers must guarantee a rtcache isn't accessed simultaneously
- *   - How the constraint is guranteed in the wild
+ *   - How the constraint is guaranteed in the wild
  *     - Protect a rtcache by a mutex (e.g., inp_route)
  *     - Make rtcache per-CPU and allow only accesses from softint
  *       (e.g., ipforward_rt_percpu)
@@ -229,12 +229,14 @@ static krwlock_t		rt_lock __cacheline_aligned;
 #define RT_UNLOCK()		rw_exit(&rt_lock)
 #define RT_WLOCKED()		rw_write_held(&rt_lock)
 #define	RT_ASSERT_WLOCK()	KASSERT(rw_write_held(&rt_lock))
+#define RT_WQ_FLAGS		WQ_MPSAFE
 #else
 #define RT_RLOCK()		do {} while (0)
 #define RT_WLOCK()		do {} while (0)
 #define RT_UNLOCK()		do {} while (0)
 #define RT_WLOCKED()		true
 #define	RT_ASSERT_WLOCK()	do {} while (0)
+#define RT_WQ_FLAGS		0
 #endif
 
 static uint64_t rtcache_generation;
@@ -477,7 +479,7 @@ rt_init(void)
 	rt_psref_class = psref_class_create("rtentry", IPL_SOFTNET);
 
 	error = workqueue_create(&rt_free_global.wq, "rt_free",
-	    rt_free_work, NULL, PRI_SOFTNET, IPL_SOFTNET, WQ_MPSAFE);
+	    rt_free_work, NULL, PRI_SOFTNET, IPL_SOFTNET, RT_WQ_FLAGS);
 	if (error)
 		panic("%s: workqueue_create failed (%d)\n", __func__, error);
 
@@ -642,8 +644,17 @@ static bool
 rt_wait_ok(void)
 {
 
+	/*
+	 * This originally returned !cpu_softintr_p(), but that doesn't
+	 * work: the caller may hold a lock (probably softnet lock)
+	 * that a softint is waiting for, in which case waiting here
+	 * would cause a deadlock.  See https://gnats.netbsd.org/56844
+	 * for details.  For now, until the locking paths are sorted
+	 * out, we just disable the waiting option altogether and
+	 * always defer to workqueue.
+	 */
 	KASSERT(!cpu_intr_p());
-	return !cpu_softintr_p();
+	return false;
 }
 
 void
@@ -884,6 +895,8 @@ rtredirect(const struct sockaddr *dst, const struct sockaddr *gateway,
 			error = rtrequest1(RTM_ADD, &info, &rt);
 			if (rt != NULL)
 				flags = rt->rt_flags;
+			if (error == 0)
+				rt_newmsg_dynamic(RTM_ADD, rt);
 			stat = &rtstat.rts_dynamic;
 		} else {
 			/*
@@ -1053,35 +1066,6 @@ rtrequest(int req, const struct sockaddr *dst, const struct sockaddr *gateway,
 	info.rti_info[RTAX_GATEWAY] = gateway;
 	info.rti_info[RTAX_NETMASK] = netmask;
 	return rtrequest1(req, &info, ret_nrt);
-}
-
-/*
- * It's a utility function to add/remove a route to/from the routing table
- * and tell user processes the addition/removal on success.
- */
-int
-rtrequest_newmsg(const int req, const struct sockaddr *dst,
-	const struct sockaddr *gateway, const struct sockaddr *netmask,
-	const int flags)
-{
-	int error;
-	struct rtentry *ret_nrt = NULL;
-
-	KASSERT(req == RTM_ADD || req == RTM_DELETE);
-
-	error = rtrequest(req, dst, gateway, netmask, flags, &ret_nrt);
-	if (error != 0)
-		return error;
-
-	KASSERT(ret_nrt != NULL);
-
-	rt_newmsg(req, ret_nrt); /* tell user process */
-	if (req == RTM_DELETE)
-		rt_free(ret_nrt);
-	else
-		rt_unref(ret_nrt);
-
-	return 0;
 }
 
 static struct ifnet *
@@ -1394,6 +1378,11 @@ rt_update_get_ifa(const struct rt_addrinfo *info, const struct rtentry *rt,
 		ifa = ifa_ifwithnet_psref(info->rti_info[RTAX_IFP], psref);
 		if (ifa == NULL)
 			goto next;
+		if (ifa->ifa_ifp->if_flags & IFF_UNNUMBERED) {
+			ifa_release(ifa, psref);
+			ifa = NULL;
+			goto next;
+		}
 		*ifp = ifa->ifa_ifp;
 		if_acquire(*ifp, psref_ifp);
 		if (info->rti_info[RTAX_IFA] == NULL &&
@@ -1565,6 +1554,51 @@ rt_newmsg(const int cmd, const struct rtentry *rt)
 	memset((void *)&info, 0, sizeof(info));
 	info.rti_info[RTAX_DST] = rt_getkey(rt);
 	info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
+	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
+	if (rt->rt_ifp) {
+		info.rti_info[RTAX_IFP] = rt->rt_ifp->if_dl->ifa_addr;
+		info.rti_info[RTAX_IFA] = rt->rt_ifa->ifa_addr;
+	}
+
+	rt_missmsg(cmd, &info, rt->rt_flags, 0);
+}
+
+/*
+ * Inform the routing socket of a route change for RTF_DYNAMIC.
+ */
+void
+rt_newmsg_dynamic(const int cmd, const struct rtentry *rt)
+{
+	struct rt_addrinfo info;
+	struct sockaddr *gateway = rt->rt_gateway;
+
+	if (gateway == NULL)
+		return;
+
+	switch(gateway->sa_family) {
+#ifdef INET
+	case AF_INET: {
+		extern bool icmp_dynamic_rt_msg;
+		if (!icmp_dynamic_rt_msg)
+			return;
+		break;
+	}
+#endif
+#ifdef INET6
+	case AF_INET6: {
+		extern bool icmp6_dynamic_rt_msg;
+		if (!icmp6_dynamic_rt_msg)
+			return;
+		break;
+	}
+#endif
+	default:
+		return;
+	}
+
+	memset((void *)&info, 0, sizeof(info));
+	info.rti_info[RTAX_DST] = rt_getkey(rt);
+	info.rti_info[RTAX_GATEWAY] = gateway;
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	if (rt->rt_ifp) {
 		info.rti_info[RTAX_IFP] = rt->rt_ifp->if_dl->ifa_addr;
@@ -1790,7 +1824,7 @@ rt_timer_init(void)
 	LIST_INIT(&rttimer_queue_head);
 	callout_init(&rt_timer_ch, CALLOUT_MPSAFE);
 	error = workqueue_create(&rt_timer_wq, "rt_timer",
-	    rt_timer_work, NULL, PRI_SOFTNET, IPL_SOFTNET, WQ_MPSAFE);
+	    rt_timer_work, NULL, PRI_SOFTNET, IPL_SOFTNET, RT_WQ_FLAGS);
 	if (error)
 		panic("%s: workqueue_create failed (%d)\n", __func__, error);
 	callout_reset(&rt_timer_ch, hz, rt_timer_timer, NULL);
@@ -2273,7 +2307,7 @@ rt_check_reject_route(const struct rtentry *rt, const struct ifnet *ifp)
 
 void
 rt_delete_matched_entries(sa_family_t family, int (*f)(struct rtentry *, void *),
-    void *v)
+    void *v, bool notify)
 {
 
 	for (;;) {
@@ -2290,6 +2324,7 @@ rt_delete_matched_entries(sa_family_t family, int (*f)(struct rtentry *, void *)
 			return;
 		}
 		rt_ref(rt);
+		RT_REFCNT_TRACE(rt);
 		splx(s);
 		RT_UNLOCK();
 
@@ -2298,12 +2333,16 @@ rt_delete_matched_entries(sa_family_t family, int (*f)(struct rtentry *, void *)
 		if (error == 0) {
 			KASSERT(retrt == rt);
 			KASSERT((retrt->rt_flags & RTF_UP) == 0);
+			if (notify)
+				rt_newmsg(RTM_DELETE, retrt);
 			retrt->rt_ifp = NULL;
 			rt_unref(rt);
+			RT_REFCNT_TRACE(rt);
 			rt_free(retrt);
 		} else if (error == ESRCH) {
 			/* Someone deleted the entry already. */
 			rt_unref(rt);
+			RT_REFCNT_TRACE(rt);
 		} else {
 			log(LOG_ERR, "%s: unable to delete rtentry @ %p, "
 			    "error = %d\n", rt->rt_ifp->if_xname, rt, error);
@@ -2318,6 +2357,53 @@ rt_walktree_locked(sa_family_t family, int (*f)(struct rtentry *, void *),
 {
 
 	return rtbl_walktree(family, f, v);
+}
+
+void
+rt_replace_ifa_matched_entries(sa_family_t family,
+    int (*f)(struct rtentry *, void *), void *v, struct ifaddr *ifa)
+{
+
+	for (;;) {
+		int s;
+#ifdef NET_MPSAFE
+		int error;
+#endif
+		struct rtentry *rt;
+
+		RT_RLOCK();
+		s = splsoftnet();
+		rt = rtbl_search_matched_entry(family, f, v);
+		if (rt == NULL) {
+			splx(s);
+			RT_UNLOCK();
+			return;
+		}
+		rt_ref(rt);
+		RT_REFCNT_TRACE(rt);
+		splx(s);
+		RT_UNLOCK();
+
+#ifdef NET_MPSAFE
+		error = rt_update_prepare(rt);
+		if (error == 0) {
+			rt_replace_ifa(rt, ifa);
+			rt_update_finish(rt);
+			rt_newmsg(RTM_CHANGE, rt);
+		} else {
+			/*
+			 * If error != 0, the rtentry is being
+			 * destroyed, so doing nothing doesn't
+			 * matter.
+			 */
+		}
+#else
+		rt_replace_ifa(rt, ifa);
+		rt_newmsg(RTM_CHANGE, rt);
+#endif
+		rt_unref(rt);
+		RT_REFCNT_TRACE(rt);
+	}
 }
 
 int

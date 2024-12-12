@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.186 2021/08/13 20:26:07 andvar Exp $	*/
+/*	$NetBSD: locore.S,v 1.198 2024/07/31 20:05:28 andvar Exp $	*/
 
 /*
  * Copyright-o-rama!
@@ -128,7 +128,7 @@
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: locore.S,v 1.186 2021/08/13 20:26:07 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: locore.S,v 1.198 2024/07/31 20:05:28 andvar Exp $");
 
 #include "opt_copy_symtab.h"
 #include "opt_ddb.h"
@@ -279,7 +279,7 @@ __KERNEL_RCSID(0, "$NetBSD: locore.S,v 1.186 2021/08/13 20:26:07 andvar Exp $");
 	ELFNOTE(Xen, XEN_ELFNOTE_FEATURES,       .asciz, "writable_descriptor_tables|auto_translated_physmap|supervisor_mode_kernel|hvm_callback_vector")
 	ELFNOTE(Xen, XEN_ELFNOTE_PAE_MODE,       .asciz, "yes")
 	ELFNOTE(Xen, XEN_ELFNOTE_L1_MFN_VALID,   .quad,  PTE_P, PTE_P)\
-	ELFNOTE(Xen, XEN_ELFNOTE_LOADER,         .asciz, "generic")     
+	ELFNOTE(Xen, XEN_ELFNOTE_LOADER,         .asciz, "generic")
 	ELFNOTE(Xen, XEN_ELFNOTE_SUSPEND_CANCEL, .long,  0)
 #if NKSYMS > 0 || defined(DDB) || defined(MODULAR)
 	ELFNOTE(Xen, XEN_ELFNOTE_BSD_SYMTAB,     .asciz, "yes")
@@ -326,6 +326,7 @@ LABEL(PDPpaddr)		.long	0	/* paddr of PDP, for libkvm */
 END(PDPpaddr)
 
 	/* Space for the temporary stack */
+	.globl	_C_LABEL(tmpstk)
 	.size	tmpstk, tmpstk - .
 	.space	512
 tmpstk:
@@ -377,8 +378,8 @@ _C_LABEL(Multiboot2_Header):
 	.long	efi_multiboot2_loader - KERNBASE
 	.long   0	/* pad for 8 bytes alignment */
 
-#if notyet 
-	/* 
+#if notyet
+	/*
 	 * Could be used to get an early console for debug,
 	 * but this is broken.
 	 */
@@ -414,18 +415,18 @@ multiboot1_loader:
 	pushl	%ebx		/* Address of Multiboot information */
 	call	_C_LABEL(multiboot1_pre_reloc)
 	addl	$4,%esp
-	jmp	2f
+	jmp	.Lstart_common
 
 efi_multiboot2_loader:
 	/*
 	 * EFI32 multiboot2 entry point. We are left here without
 	 * stack and with no idea of where we were loaded in memory.
-	 * The only inputs are 
+	 * The only inputs are
 	 * %eax MULTIBOOT2_BOOTLOADER_MAGIC
 	 * %ebx pointer to multiboot_info
 	 *
 	 * Here we will copy the kernel to 0x100000 (KERNTEXTOFF - KERNBASE)
-	 * as almost all the code in locore.S assume it is there. Once done, 
+	 * as almost all the code in locore.S assume it is there. Once done,
 	 * we join the main start code .This is derived from
 	 * src/sys/arch/i386/stand/efiboot/bootia32/startprog32.S
 	 */
@@ -446,7 +447,7 @@ next:	popl	%edx
 	 * overwrite it.
 	 */
 	movl	%ebx, (multiboot2_info_ptr - efi_multiboot2_loader)(%edx)
- 
+
 	/*
 	 * Get relocated multiboot2_loader entry point in %ebx
 	 */
@@ -454,13 +455,13 @@ next:	popl	%edx
 	addl	$(multiboot2_loader - start), %ebx
 
         /* Copy kernel */
-        movl    $(KERNTEXTOFF - KERNBASE), %edi		/* dest */ 
+        movl    $(KERNTEXTOFF - KERNBASE), %edi		/* dest */
         movl    %edx, %esi
 	subl	$(efi_multiboot2_loader - start), %esi	/* src */
 	movl	$(__kernel_end - kernel_text), %ecx	/* size */
 #if defined(NO_OVERLAP)
         movl    %ecx, %eax
-#else 
+#else
         movl    %edi, %eax
         subl    %esi, %eax
         cmpl    %ecx, %eax      /* overlapping? */
@@ -844,7 +845,7 @@ no_NOX:
 	movl	$RELOC(__kernel_end),%edi
 
 #if (NKSYMS || defined(DDB) || defined(MODULAR)) && !defined(makeoptions_COPY_SYMTAB)
-	/* Save the symbols (if loaded); brinds us on (2). */
+	/* Save the symbols (if loaded); brings us on (2). */
 	movl	RELOC(esym),%eax
 	testl	%eax,%eax
 	jz	1f
@@ -1063,13 +1064,38 @@ begin:
 	 * we saved before from C code.  Note that we cannot delay its
 	 * parsing any more because initgdt (called below) needs to make
 	 * use of this information.
-	 * We call both multiboot 1 and 2 flavors, they now if they 
+	 * We call both multiboot 1 and 2 flavors, they now if they
 	 * have something to do on their own.
 	 */
 	call	_C_LABEL(multiboot1_post_reloc)
 	call 	_C_LABEL(multiboot2_post_reloc)
 #endif
 
+	/*
+	 * Initialize a temporary GDT (Global Descriptor Table) on the
+	 * stack and make the segment registers to use it.
+	 *
+	 * This creates a segment descriptor for the CPU-local segment
+	 * and loads %fs with its segment selector to set up addressing
+	 * for %fs.  Thus, after this point, CPUVAR(...), curcpu(), and
+	 * curlwp will work.
+	 *
+	 * Later, we will replace this temporary GDT on the stack by a
+	 * permanent GDT allocated with uvm_km in gdt_init.
+	 *
+	 * XXX Intel recommends ensuring the GDT address is aligned on
+	 * an 8-byte boundary for performance.  Perhaps not an issue
+	 * early at boot, but maybe worth doing?
+	 *
+	 *	Intel 64 and IA-32 Architectures, Software Developer's
+	 *	Manual, Volume 3: System Programming Guide, Order
+	 *	Number 325383, April 2022, Sec. 3.5.1 `Segment
+	 *	Descriptor Tables', p. 3-15:
+	 *
+	 *		The base address of the GDT should be aligned
+	 *		on an eight-byte boundary to yield the best
+	 *		processor performance.
+	 */
 	subl	$NGDT*8, %esp		/* space for temporary gdt */
 	pushl	%esp
 	call	_C_LABEL(initgdt)
@@ -1116,7 +1142,7 @@ begin:
 	/* Copy the necessary stuff from start_info structure. */
 	/* We need to copy shared_info early, so that sti/cli work */
 	movl	$RELOC(start_info_union),%edi
-	movl	$128,%ecx
+	movl	$(PAGE_SIZE / 4),%ecx
 	rep
 	movsl
 
@@ -1174,10 +1200,10 @@ ENTRY(start_xenpvh)
 	jmp     $GSEL(GCODE_SEL, SEL_KPL), $RELOC(.Lreload_cs)
 
 .Lreload_cs:
-	movw    $GSEL(GDATA_SEL, SEL_KPL), %ax          
+	movw    $GSEL(GDATA_SEL, SEL_KPL), %ax
 	movw    %ax, %ds
 	movw    %ax, %es
-	movw    %ax, %ss   
+	movw    %ax, %ss
 
 	/* we need a valid stack */
 	movl	$RELOC(tmpstk),%esp
@@ -1212,7 +1238,7 @@ ENTRY(start_xenpvh)
 	addl	$KERNBASE,%ebx
 	movl	$RELOC(eblob),%ebp
 	movl	%ebx,(%ebp)
-	/* annouce ourself */
+	/* announce ourself */
 	movl	$VM_GUEST_XENPVH, RELOC(vm_guest)
 	jmp	.Lstart_common
 END(start_xenpvh)
@@ -1400,11 +1426,44 @@ ENTRY(cpu_switchto)
 	movl	PCB_ESP(%ebx),%esp
 
 	/*
-	 * Set curlwp.  This must be globally visible in order to permit
-	 * non-interlocked mutex release.
+	 * Issue XCHG, rather than MOV, to set ci_curlwp := newlwp in
+	 * order to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 *    (This is always guaranteed by the x86 memory model, TSO,
+	 *    but other architectures require a explicit barrier before
+	 *    the store to ci->ci_curlwp.)
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 *    (This is the only ordering x86 TSO ever requires any kind
+	 *    of barrier for -- in this case, we take advantage of the
+	 *    sequential consistency implied by XCHG to obviate the
+	 *    need for MFENCE or something.)
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
 	 */
 	movl	%edi,%ecx
 	xchgl	%ecx,CPUVAR(CURLWP)
+
+#ifdef XENPV
+	/* if we are there, we're obviously not in user context.
+	 * reset ci_xen_clockf_* in case the splx() at the end of mi_switch()
+	 * triggers a deffered call do xen_timer_handler()
+	 */
+	movb	$0, CPUVAR(XEN_CLOCKF_USERMODE)
+	movl	$_C_LABEL(cpu_switchto), CPUVAR(XEN_CLOCKF_PC)
+#endif
 
 	/* Skip the rest if returning to a pinned LWP. */
 	testl	%edx,%edx
@@ -1533,7 +1592,7 @@ IDTVEC(syscall)
 	STI(%eax)
 
 #ifdef DIAGNOSTIC
-	movl	CPUVAR(ILEVEL),%ebx
+	movzbl	CPUVAR(ILEVEL),%ebx
 	testl	%ebx,%ebx
 	jz	1f
 	pushl	$5f
@@ -1570,7 +1629,7 @@ IDTVEC(syscall)
 	jz	14f
 	/* process pending interrupts */
 	CLI(%eax)
-	movl	CPUVAR(ILEVEL), %ebx
+	movzbl	CPUVAR(ILEVEL), %ebx
 	movl	$.Lsyscall_resume, %esi /* address to resume loop at */
 .Lsyscall_resume:
 	movl	%ebx,%eax		/* get cpl */
@@ -1581,13 +1640,13 @@ IDTVEC(syscall)
 	btrl	%eax,CPUVAR(IPENDING)
 	movl	CPUVAR(ISOURCES)(,%eax,4),%eax
 	jmp	*IS_RESUME(%eax)
-17:	movl	%ebx, CPUVAR(ILEVEL)	/* restore cpl  */
+17:	movb	%bl, CPUVAR(ILEVEL)	/* restore cpl  */
 	jmp	.Lsyscall_checkast
 14:
 #endif /* XENPV */
 
 #ifdef DIAGNOSTIC
-	cmpl	$IPL_NONE,CPUVAR(ILEVEL)
+	cmpb	$IPL_NONE,CPUVAR(ILEVEL)
 	jne	3f
 #endif
 

@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_sig.c,v 1.397 2021/04/03 11:19:11 simonb Exp $	*/
+/*	$NetBSD: kern_sig.c,v 1.409 2024/02/10 09:24:18 andvar Exp $	*/
 
 /*-
- * Copyright (c) 2006, 2007, 2008, 2019 The NetBSD Foundation, Inc.
+ * Copyright (c) 2006, 2007, 2008, 2019, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_sig.c,v 1.397 2021/04/03 11:19:11 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_sig.c,v 1.409 2024/02/10 09:24:18 andvar Exp $");
 
 #include "opt_execfmt.h"
 #include "opt_ptrace.h"
@@ -311,7 +311,9 @@ void
 sigactsfree(struct sigacts *ps)
 {
 
+	membar_release();
 	if (atomic_dec_uint_nv(&ps->sa_refcnt) == 0) {
+		membar_acquire();
 		mutex_destroy(&ps->sa_mutex);
 		pool_cache_put(sigacts_cache, ps);
 	}
@@ -1314,7 +1316,8 @@ kpsignal2(struct proc *p, ksiginfo_t *ksi)
 	KASSERT(mutex_owned(&proc_lock));
 	KASSERT(mutex_owned(p->p_lock));
 	KASSERT((ksi->ksi_flags & KSI_QUEUED) == 0);
-	KASSERT(signo > 0 && signo < NSIG);
+	KASSERT(signo > 0);
+	KASSERT(signo < NSIG);
 
 	/*
 	 * If the process is being created by fork, is a zombie or is
@@ -1569,7 +1572,8 @@ proc_stop_done(struct proc *p, int ppmask)
 	KASSERT(mutex_owned(&proc_lock));
 	KASSERT(mutex_owned(p->p_lock));
 	KASSERT((p->p_sflag & PS_STOPPING) != 0);
-	KASSERT(p->p_nrlwps == 0 || (p->p_nrlwps == 1 && p == curproc));
+	KASSERT(p->p_nrlwps == 0 || p->p_nrlwps == 1);
+	KASSERT(p->p_nrlwps == 0 || p == curproc);
 
 	p->p_sflag &= ~PS_STOPPING;
 	p->p_stat = SSTOP;
@@ -1772,7 +1776,6 @@ static void
 sigswitch_unlock_and_switch_away(struct lwp *l)
 {
 	struct proc *p;
-	int biglocks;
 
 	p = l->l_proc;
 
@@ -1781,8 +1784,8 @@ sigswitch_unlock_and_switch_away(struct lwp *l)
 
 	KASSERT(l->l_stat == LSONPROC);
 	KASSERT(p->p_nrlwps > 0);
+	KASSERT(l->l_blcnt == 0);
 
-	KERNEL_UNLOCK_ALL(l, &biglocks);
 	if (p->p_stat == SSTOP || (p->p_sflag & PS_STOPPING) != 0) {
 		p->p_nrlwps--;
 		lwp_lock(l);
@@ -1795,7 +1798,6 @@ sigswitch_unlock_and_switch_away(struct lwp *l)
 	lwp_lock(l);
 	spc_lock(l->l_cpu);
 	mi_switch(l);
-	KERNEL_LOCK(biglocks, l);
 }
 
 /*
@@ -2169,14 +2171,17 @@ sendsig(const struct ksiginfo *ksi, const sigset_t *mask)
 	sa = curproc->p_sigacts;
 
 	switch (sa->sa_sigdesc[sig].sd_vers)  {
-	case 0:
-	case 1:
+	case __SIGTRAMP_SIGCODE_VERSION:
+#ifdef __HAVE_STRUCT_SIGCONTEXT
+	case __SIGTRAMP_SIGCONTEXT_VERSION_MIN ...
+	     __SIGTRAMP_SIGCONTEXT_VERSION_MAX:
 		/* Compat for 1.6 and earlier. */
 		MODULE_HOOK_CALL_VOID(sendsig_sigcontext_16_hook, (ksi, mask),
 		    break);
 		return;
-	case 2:
-	case 3:
+#endif /* __HAVE_STRUCT_SIGCONTEXT */
+	case __SIGTRAMP_SIGINFO_VERSION_MIN ...
+	     __SIGTRAMP_SIGINFO_VERSION_MAX:
 		sendsig_siginfo(ksi, mask);
 		return;
 	default:
@@ -2247,7 +2252,7 @@ sigexit(struct lwp *l, int signo)
 	p = l->l_proc;
 
 	KASSERT(mutex_owned(p->p_lock));
-	KERNEL_UNLOCK_ALL(l, NULL);
+	KASSERT(l->l_blcnt == 0);
 
 	/*
 	 * Don't permit coredump() multiple times in the same process.
@@ -2258,6 +2263,7 @@ sigexit(struct lwp *l, int signo)
 	if ((p->p_sflag & PS_WCORE) != 0) {
 		lwp_lock(l);
 		l->l_flag |= (LW_WCORE | LW_WEXIT | LW_WSUSPEND);
+		lwp_need_userret(l);
 		lwp_unlock(l);
 		mutex_exit(p->p_lock);
 		lwp_userret(l);
@@ -2289,6 +2295,7 @@ sigexit(struct lwp *l, int signo)
 					continue;
 				}
 				t->l_flag |= (LW_WCORE | LW_WEXIT);
+				lwp_need_userret(t);
 				lwp_suspend(l, t);
 			}
 
@@ -2402,7 +2409,7 @@ proc_stop(struct proc *p, int signo)
 
 	/*
 	 * First off, set the stopping indicator and bring all sleeping
-	 * LWPs to a halt so they are included in p->p_nrlwps.  We musn't
+	 * LWPs to a halt so they are included in p->p_nrlwps.  We mustn't
 	 * unlock between here and the p->p_nrlwps check below.
 	 */
 	p->p_sflag |= PS_STOPPING;
@@ -2431,7 +2438,7 @@ proc_stop(struct proc *p, int signo)
 }
 
 /*
- * When stopping a process, we do not immediatly set sleeping LWPs stopped,
+ * When stopping a process, we do not immediately set sleeping LWPs stopped,
  * but wait for them to come to a halt at the kernel-user boundary.  This is
  * to allow LWPs to release any locks that they may hold before stopping.
  *
@@ -2657,7 +2664,7 @@ filt_sigattach(struct knote *kn)
 	kn->kn_flags |= EV_CLEAR;	/* automatically set */
 
 	mutex_enter(p->p_lock);
-	SLIST_INSERT_HEAD(&p->p_klist, kn, kn_selnext);
+	klist_insert(&p->p_klist, kn);
 	mutex_exit(p->p_lock);
 
 	return 0;
@@ -2669,7 +2676,7 @@ filt_sigdetach(struct knote *kn)
 	struct proc *p = kn->kn_obj;
 
 	mutex_enter(p->p_lock);
-	SLIST_REMOVE(&p->p_klist, kn, knote, kn_selnext);
+	klist_remove(&p->p_klist, kn);
 	mutex_exit(p->p_lock);
 }
 
@@ -2693,7 +2700,7 @@ filt_signal(struct knote *kn, long hint)
 }
 
 const struct filterops sig_filtops = {
-	.f_isfd = 0,
+	.f_flags = FILTEROP_MPSAFE,
 	.f_attach = filt_sigattach,
 	.f_detach = filt_sigdetach,
 	.f_event = filt_signal,

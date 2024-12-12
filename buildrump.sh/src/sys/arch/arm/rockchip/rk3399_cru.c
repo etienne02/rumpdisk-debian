@@ -1,4 +1,4 @@
-/* $NetBSD: rk3399_cru.c,v 1.22 2021/05/20 01:07:24 msaitoh Exp $ */
+/* $NetBSD: rk3399_cru.c,v 1.25 2022/08/23 05:33:39 ryo Exp $ */
 
 /*-
  * Copyright (c) 2018 Jared McNeill <jmcneill@invisible.ca>
@@ -28,7 +28,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: rk3399_cru.c,v 1.22 2021/05/20 01:07:24 msaitoh Exp $");
+__KERNEL_RCSID(1, "$NetBSD: rk3399_cru.c,v 1.25 2022/08/23 05:33:39 ryo Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -143,15 +143,22 @@ static const struct rk_cru_pll_rate pll_norates[] = {
 #define	RK3399_ATCLK_MASK	__BITS(4,0)
 #define	RK3399_PDBG_MASK	__BITS(12,8)
 
+#define RK3399_CPU_RATE(_rate, _reg0, _reg0_mask, _reg0_val, _reg1, _reg1_mask, _reg1_val)\
+	{										\
+		.rate = (_rate),							\
+		.divs[0] = { .reg = (_reg0), .mask = (_reg0_mask), .val = (_reg0_val) },\
+		.divs[1] = { .reg = (_reg1), .mask = (_reg1_mask), .val = (_reg1_val) },\
+	}
+
 #define	RK3399_CPUL_RATE(_rate, _aclkm, _atclk, _pdbg)			\
-	RK_CPU_RATE(_rate,						\
+	RK3399_CPU_RATE(_rate,						\
 		    CLKSEL_CON(0), RK3399_ACLKM_MASK,			\
 		    __SHIFTIN((_aclkm), RK3399_ACLKM_MASK),		\
 		    CLKSEL_CON(1), RK3399_ATCLK_MASK|RK3399_PDBG_MASK,	\
 		    __SHIFTIN((_atclk), RK3399_ATCLK_MASK)|__SHIFTIN((_pdbg), RK3399_PDBG_MASK))
 
 #define	RK3399_CPUB_RATE(_rate, _aclkm, _atclk, _pdbg)			\
-	RK_CPU_RATE(_rate,						\
+	RK3399_CPU_RATE(_rate,						\
 		    CLKSEL_CON(2), RK3399_ACLKM_MASK,			\
 		    __SHIFTIN((_aclkm), RK3399_ACLKM_MASK),		\
 		    CLKSEL_CON(3), RK3399_ATCLK_MASK|RK3399_PDBG_MASK,	\
@@ -433,8 +440,9 @@ static struct rk_cru_clk rk3399_cru_clks[] = {
 	RK_GATE(0, "clk_core_l_gpll_src", "gpll", CLKGATE_CON(0), 3),
 
 	RK_CPU(RK3399_ARMCLKL, "armclkl", armclkl_parents,
-	       CLKSEL_CON(0),		/* reg */
+	       CLKSEL_CON(0),		/* mux_reg */
 	       __BITS(7,6), 0, 3,	/* mux_mask, mux_main, mux_alt */
+	       CLKSEL_CON(0),		/* div_reg */
 	       __BITS(4,0),		/* div_mask */
 	       armclkl_rates),
 
@@ -444,8 +452,9 @@ static struct rk_cru_clk rk3399_cru_clks[] = {
 	RK_GATE(0, "clk_core_b_gpll_src", "gpll", CLKGATE_CON(1), 3),
 
 	RK_CPU(RK3399_ARMCLKB, "armclkb", armclkb_parents,
-	       CLKSEL_CON(2),		/* reg */
+	       CLKSEL_CON(2),		/* mux_reg */
 	       __BITS(7,6), 1, 3,	/* mux_mask, mux_main, mux_alt */
+	       CLKSEL_CON(2),		/* div_reg */
 	       __BITS(4,0),		/* div_mask */
 	       armclkb_rates),
 
@@ -1126,6 +1135,7 @@ rk3399_cru_attach(device_t parent, device_t self, void *aux)
 	sc->sc_clks = rk3399_cru_clks;
 	sc->sc_nclks = __arraycount(rk3399_cru_clks);
 
+	sc->sc_grf_soc_status = 0x0480;
 	sc->sc_softrst_base = SOFTRST_CON(0);
 
 	if (rk_cru_attach(sc) != 0)

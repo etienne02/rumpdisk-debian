@@ -1,4 +1,4 @@
-/*	$NetBSD: radixtree.c,v 1.27 2020/05/14 08:34:19 msaitoh Exp $	*/
+/*	$NetBSD: radixtree.c,v 1.34 2024/05/04 17:58:24 chs Exp $	*/
 
 /*-
  * Copyright (c)2011,2012,2013 YAMAMOTO Takashi,
@@ -43,7 +43,7 @@
  *
  * Intermediate nodes are automatically allocated and freed internally and
  * basically users don't need to care about them.  The allocation is done via
- * pool_cache_get(9) for _KERNEL, malloc(3) for userland, and alloc() for
+ * kmem_zalloc(9) for _KERNEL, malloc(3) for userland, and alloc() for
  * _STANDALONE environment.  Only radix_tree_insert_node function can allocate
  * memory for intermediate nodes and thus can fail for ENOMEM.
  *
@@ -104,7 +104,7 @@
  * intermediate nodes and quickly skips uninterested parts of a tree.
  *
  * A tree has RADIX_TREE_TAG_ID_MAX independent tag spaces, each of which are
- * identified by an zero-origin numbers, tagid.  For the current implementation,
+ * identified by a zero-origin numbers, tagid.  For the current implementation,
  * RADIX_TREE_TAG_ID_MAX is 2.  A set of tags is described as a bitmask tagmask,
  * which is a bitwise OR of (1 << tagid).
  */
@@ -112,17 +112,17 @@
 #include <sys/cdefs.h>
 
 #if defined(_KERNEL) || defined(_STANDALONE)
-__KERNEL_RCSID(0, "$NetBSD: radixtree.c,v 1.27 2020/05/14 08:34:19 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: radixtree.c,v 1.34 2024/05/04 17:58:24 chs Exp $");
 #include <sys/param.h>
 #include <sys/errno.h>
-#include <sys/pool.h>
+#include <sys/kmem.h>
 #include <sys/radixtree.h>
 #include <lib/libkern/libkern.h>
 #if defined(_STANDALONE)
 #include <lib/libsa/stand.h>
 #endif /* defined(_STANDALONE) */
 #else /* defined(_KERNEL) || defined(_STANDALONE) */
-__RCSID("$NetBSD: radixtree.c,v 1.27 2020/05/14 08:34:19 msaitoh Exp $");
+__RCSID("$NetBSD: radixtree.c,v 1.34 2024/05/04 17:58:24 chs Exp $");
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -303,18 +303,6 @@ radix_tree_node_init(struct radix_tree_node *n)
 }
 
 #if defined(_KERNEL)
-pool_cache_t radix_tree_node_cache __read_mostly;
-
-static int
-radix_tree_node_ctor(void *dummy, void *item, int flags)
-{
-	struct radix_tree_node *n = item;
-
-	KASSERT(dummy == NULL);
-	radix_tree_node_init(n);
-	return 0;
-}
-
 /*
  * radix_tree_init:
  *
@@ -325,10 +313,7 @@ void
 radix_tree_init(void)
 {
 
-	radix_tree_node_cache = pool_cache_init(sizeof(struct radix_tree_node),
-	    coherency_unit, 0, PR_LARGECACHE, "radixnode", NULL, IPL_NONE,
-	    radix_tree_node_ctor, NULL, NULL);
-	KASSERT(radix_tree_node_cache != NULL);
+	/* nothing right now */
 }
 
 /*
@@ -346,10 +331,11 @@ radix_tree_await_memory(void)
 	int i;
 
 	for (i = 0; i < __arraycount(nodes); i++) {
-		nodes[i] = pool_cache_get(radix_tree_node_cache, PR_WAITOK);
+		nodes[i] = kmem_intr_alloc(sizeof(struct radix_tree_node),
+		    KM_SLEEP);
 	}
 	while (--i >= 0) {
-		pool_cache_put(radix_tree_node_cache, nodes[i]);
+		kmem_intr_free(nodes[i], sizeof(struct radix_tree_node));
 	}
 }
 
@@ -424,11 +410,11 @@ radix_tree_alloc_node(void)
 
 #if defined(_KERNEL)
 	/*
-	 * note that pool_cache_get can block.
+	 * We must not block waiting for memory because this function
+	 * can be called in contexts where waiting for memory is illegal.
 	 */
-	n = pool_cache_get(radix_tree_node_cache, PR_NOWAIT);
-#else /* defined(_KERNEL) */
-#if defined(_STANDALONE)
+	n = kmem_intr_alloc(sizeof(struct radix_tree_node), KM_NOSLEEP);
+#elif defined(_STANDALONE)
 	n = alloc(sizeof(*n));
 #else /* defined(_STANDALONE) */
 	n = malloc(sizeof(*n));
@@ -436,7 +422,6 @@ radix_tree_alloc_node(void)
 	if (n != NULL) {
 		radix_tree_node_init(n);
 	}
-#endif /* defined(_KERNEL) */
 	KASSERT(n == NULL || radix_tree_sum_node(n) == 0);
 	return n;
 }
@@ -447,7 +432,7 @@ radix_tree_free_node(struct radix_tree_node *n)
 
 	KASSERT(radix_tree_sum_node(n) == 0);
 #if defined(_KERNEL)
-	pool_cache_put(radix_tree_node_cache, n);
+	kmem_intr_free(n, sizeof(struct radix_tree_node));
 #elif defined(_STANDALONE)
 	dealloc(n, sizeof(*n));
 #else
@@ -911,8 +896,8 @@ scan_siblings:
 descend:
 		/*
 		 * following the left-most (or right-most in the case of
-		 * reverse scan) child node, decend until reaching the leaf or
-		 * an non-matching entry.
+		 * reverse scan) child node, descend until reaching the leaf or
+		 * a non-matching entry.
 		 */
 		while (entry_match_p(*vpp, tagmask) && lastidx < t->t_height) {
 			/*
@@ -952,7 +937,7 @@ descend:
  * Note that this function doesn't return index values of found nodes.
  * Thus, in the case of dense == false, if index values are important for
  * a caller, it's the caller's responsibility to check them, typically
- * by examinining the returned nodes using some caller-specific knowledge
+ * by examining the returned nodes using some caller-specific knowledge
  * about them.
  * In the case of dense == true, a node returned via results[N] is always for
  * the index (idx + N).

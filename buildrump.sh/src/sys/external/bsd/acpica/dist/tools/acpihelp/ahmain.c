@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,7 +52,7 @@ AhDisplayUsage (
     void);
 
 #define AH_UTILITY_NAME             "ACPI Help Utility"
-#define AH_SUPPORTED_OPTIONS        "adeghikmopstuvx^"
+#define AH_SUPPORTED_OPTIONS        "adeghikmopstuv^x"
 
 
 #if defined ACPI_OPTION

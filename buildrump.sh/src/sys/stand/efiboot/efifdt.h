@@ -1,4 +1,4 @@
-/* $NetBSD: efifdt.h,v 1.10 2020/10/10 19:17:39 jmcneill Exp $ */
+/* $NetBSD: efifdt.h,v 1.14 2024/08/15 15:57:36 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2018 Jared McNeill <jmcneill@invisible.ca>
@@ -26,6 +26,10 @@
  * SUCH DAMAGE.
  */
 
+#if !defined(EFIBOOT_FDT)
+#error FDT support not enabled
+#endif
+
 int efi_fdt_probe(void);
 void efi_fdt_memory_map(void);
 void efi_fdt_gop(void);
@@ -40,6 +44,13 @@ void efi_fdt_initrd(u_long, u_long);
 void efi_fdt_rndseed(u_long, u_long);
 void efi_fdt_efirng(u_long, u_long);
 void efi_fdt_module(const char *, u_long, u_long);
+void efi_fdt_userconf(void);
 void efi_fdt_init(u_long, u_long);
 void efi_fdt_fini(void);
 void efi_fdt_system_table(void);
+
+int efi_fdt_prepare_boot(const char *, const char *, u_long *);
+void efi_fdt_cleanup_boot(void);
+size_t efi_fdt_alloc_size(void);
+void efi_fdt_set_virtual_address_map(EFI_MEMORY_DESCRIPTOR *, UINTN, UINTN,
+    UINTN, UINT32);

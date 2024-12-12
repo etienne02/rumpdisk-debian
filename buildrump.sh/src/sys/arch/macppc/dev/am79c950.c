@@ -1,4 +1,4 @@
-/*	$NetBSD: am79c950.c,v 1.50 2020/10/20 18:17:58 roy Exp $	*/
+/*	$NetBSD: am79c950.c,v 1.52 2024/06/29 12:11:10 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997 David Huang <khym@bga.com>
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: am79c950.c,v 1.50 2020/10/20 18:17:58 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: am79c950.c,v 1.52 2024/06/29 12:11:10 riastradh Exp $");
 
 #include "opt_inet.h"
 
@@ -250,13 +250,10 @@ mcstart(struct ifnet *ifp)
 	struct mc_softc	*sc = ifp->if_softc;
 	struct mbuf	*m;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
-	while (1) {
-		if (ifp->if_flags & IFF_OACTIVE)
-			return;
-
+	while (!sc->sc_txbusy) {
 		IF_DEQUEUE(&ifp->if_snd, m);
 		if (m == 0)
 			return;
@@ -268,7 +265,7 @@ mcstart(struct ifnet *ifp)
 		bpf_mtap(ifp, m, BPF_D_OUT);
 
 		/* Copy the mbuf chain into the transmit buffer. */
-		ifp->if_flags |= IFF_OACTIVE;
+		sc->sc_txbusy = true;
 		maceput(sc, m);
 
 		if_statinc(ifp, if_opackets);		/* # of pkts */
@@ -348,7 +345,7 @@ mcinit(struct mc_softc *sc)
 
 	/* Flag interface as "running" */
 	sc->sc_if.if_flags |= IFF_RUNNING;
-	sc->sc_if.if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 
 	splx(s);
 	return 0;
@@ -494,28 +491,28 @@ mc_tint(struct mc_softc *sc)
 	net_stat_ref_t nsr = IF_STAT_GETREF(&sc->sc_if);
 	if (xmtfs & LCOL) {
 		printf("%s: late collision\n", device_xname(sc->sc_dev));
-		if_statinc_ref(nsr, if_oerrors);
-		if_statinc_ref(nsr, if_collisions);
+		if_statinc_ref(&sc->sc_if, nsr, if_oerrors);
+		if_statinc_ref(&sc->sc_if, nsr, if_collisions);
 	}
 
 	if (xmtfs & MORE)
 		/* Real number is unknown. */
-		if_statadd_ref(nsr, if_collisions, 2);
+		if_statadd_ref(&sc->sc_if, nsr, if_collisions, 2);
 	else if (xmtfs & ONE)
-		if_statinc_ref(nsr, if_collisions);
+		if_statinc_ref(&sc->sc_if, nsr, if_collisions);
 	else if (xmtfs & RTRY) {
-		if_statadd_ref(nsr, if_collisions, 16);
-		if_statinc_ref(nsr, if_oerrors);
+		if_statadd_ref(&sc->sc_if, nsr, if_collisions, 16);
+		if_statinc_ref(&sc->sc_if, nsr, if_oerrors);
 	}
 
 	if (xmtfs & LCAR) {
 		sc->sc_havecarrier = 0;
 		printf("%s: lost carrier\n", device_xname(sc->sc_dev));
-		if_statinc_ref(nsr, if_oerrors);
+		if_statinc_ref(&sc->sc_if, nsr, if_oerrors);
 	}
 	IF_STAT_PUTREF(&sc->sc_if);
 
-	sc->sc_if.if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 	sc->sc_if.if_timer = 0;
 	if_schedule_deferred_start(&sc->sc_if);
 }

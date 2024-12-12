@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.35 2021/03/12 04:57:42 thorpej Exp $	*/
+/*	$NetBSD: pmap.h,v 1.39 2023/12/15 09:42:33 rin Exp $	*/
 
 /*-
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -34,7 +34,7 @@
 #ifndef	_POWERPC_OEA_PMAP_H_
 #define	_POWERPC_OEA_PMAP_H_
 
-#ifdef _LOCORE          
+#ifdef _LOCORE
 #error use assym.h instead
 #endif
 
@@ -47,6 +47,9 @@
 #include "opt_modular.h"
 #endif
 #include <powerpc/oea/pte.h>
+
+#define	__HAVE_PMAP_PV_TRACK
+#include <uvm/pmap/pmap_pvt.h>
 
 /*
  * Pmap stuff
@@ -90,6 +93,7 @@ struct pmap_ops {
 	void (*pmapop_protect)(pmap_t, vaddr_t, vaddr_t, vm_prot_t);
 	void (*pmapop_unwire)(pmap_t, vaddr_t);
 	void (*pmapop_page_protect)(struct vm_page *, vm_prot_t);
+	void (*pmapop_pv_protect)(paddr_t, vm_prot_t);
 	bool (*pmapop_query_bit)(struct vm_page *, int);
 	bool (*pmapop_clear_bit)(struct vm_page *, int);
 
@@ -116,6 +120,16 @@ struct pmap_ops {
 __BEGIN_DECLS
 #include <sys/param.h>
 #include <sys/systm.h>
+
+/*
+ * For OEA and OEA64_BRIDGE, we guarantee that pa below USER_ADDR
+ * (== 3GB < VM_MIN_KERNEL_ADDRESS) is direct-mapped.
+ */
+#if defined(PPC_OEA) || defined(PPC_OEA64_BRIDGE)
+#define	PMAP_DIRECT_MAPPED_SR	(USER_SR - 1)
+#define	PMAP_DIRECT_MAPPED_LEN \
+    ((vaddr_t)SEGMENT_LENGTH * (PMAP_DIRECT_MAPPED_SR + 1))
+#endif
 
 #if defined (PPC_OEA) || defined (PPC_OEA64_BRIDGE)
 extern register_t iosrtable[];
@@ -182,10 +196,13 @@ static __inline paddr_t vtophys (vaddr_t);
  * VA==PA all at once.  But pmap_copy_page() and pmap_zero_page() will have
  * this problem, too.
  */
-#if !defined(PPC_OEA64) && !defined (PPC_OEA64_BRIDGE)
+#if !defined(PPC_OEA64)
 #define	PMAP_MAP_POOLPAGE(pa)	(pa)
 #define	PMAP_UNMAP_POOLPAGE(pa)	(pa)
 #define POOL_VTOPHYS(va)	vtophys((vaddr_t) va)
+
+#define	PMAP_ALLOC_POOLPAGE(flags)	pmap_alloc_poolpage(flags)
+struct vm_page *pmap_alloc_poolpage(int);
 #endif
 
 static __inline paddr_t
@@ -247,11 +264,20 @@ LIST_HEAD(pvo_head, pvo_entry);
 
 #define	__HAVE_VM_PAGE_MD
 
-struct vm_page_md {
-	unsigned int mdpg_attrs; 
-	struct pvo_head mdpg_pvoh;
+struct pmap_page {
+	unsigned int pp_attrs;
+	struct pvo_head pp_pvoh;
 #ifdef MODULAR
-	uintptr_t mdpg_dummy[3];
+	uintptr_t pp_dummy[3];
+#endif
+};
+
+struct vm_page_md {
+	struct pmap_page mdpg_pp;
+#define	mdpg_attrs	mdpg_pp.pp_attrs
+#define	mdpg_pvoh	mdpg_pp.pp_pvoh
+#ifdef MODULAR
+#define	mdpg_dummy	mdpg_pp.pp_dummy
 #endif
 };
 

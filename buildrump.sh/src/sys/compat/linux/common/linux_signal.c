@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_signal.c,v 1.83 2020/05/23 23:42:41 ad Exp $	*/
+/*	$NetBSD: linux_signal.c,v 1.90 2024/10/01 16:41:29 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998 The NetBSD Foundation, Inc.
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_signal.c,v 1.83 2020/05/23 23:42:41 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_signal.c,v 1.90 2024/10/01 16:41:29 riastradh Exp $");
 
 #define COMPAT_LINUX 1
 
@@ -268,12 +268,15 @@ linux_to_native_sigflags(const unsigned long lsf)
 	return bsf;
 }
 
+#if !defined(__aarch64__)
 /*
  * Convert between Linux and BSD sigaction structures.
  */
 void
 linux_old_to_native_sigaction(struct sigaction *bsa, const struct linux_old_sigaction *lsa)
 {
+
+	memset(bsa, 0, sizeof(*bsa));
 	bsa->sa_handler = lsa->linux_sa_handler;
 	linux_old_to_native_sigset(&bsa->sa_mask, &lsa->linux_sa_mask);
 	bsa->sa_flags = linux_to_native_sigflags(lsa->linux_sa_flags);
@@ -282,6 +285,8 @@ linux_old_to_native_sigaction(struct sigaction *bsa, const struct linux_old_siga
 void
 native_to_linux_old_sigaction(struct linux_old_sigaction *lsa, const struct sigaction *bsa)
 {
+
+	memset(lsa, 0, sizeof(*lsa));
 	lsa->linux_sa_handler = bsa->sa_handler;
 	native_to_linux_old_sigset(&lsa->linux_sa_mask, &bsa->sa_mask);
 	lsa->linux_sa_flags = native_to_linux_sigflags(bsa->sa_flags);
@@ -289,11 +294,14 @@ native_to_linux_old_sigaction(struct linux_old_sigaction *lsa, const struct siga
 	lsa->linux_sa_restorer = NULL;
 #endif
 }
+#endif
 
 /* ...and the new sigaction conversion funcs. */
 void
 linux_to_native_sigaction(struct sigaction *bsa, const struct linux_sigaction *lsa)
 {
+
+	memset(bsa, 0, sizeof(*bsa));
 	bsa->sa_handler = lsa->linux_sa_handler;
 	linux_to_native_sigset(&bsa->sa_mask, &lsa->linux_sa_mask);
 	bsa->sa_flags = linux_to_native_sigflags(lsa->linux_sa_flags);
@@ -302,6 +310,8 @@ linux_to_native_sigaction(struct sigaction *bsa, const struct linux_sigaction *l
 void
 native_to_linux_sigaction(struct linux_sigaction *lsa, const struct sigaction *bsa)
 {
+
+	memset(lsa, 0, sizeof(*lsa));
 	lsa->linux_sa_handler = bsa->sa_handler;
 	native_to_linux_sigset(&lsa->linux_sa_mask, &bsa->sa_mask);
 	lsa->linux_sa_flags = native_to_linux_sigflags(bsa->sa_flags);
@@ -381,7 +391,7 @@ linux_sys_rt_sigaction(struct lwp *l, const struct linux_sys_rt_sigaction_args *
 		native_to_linux_sigaction(&olsa, &obsa);
 
 #ifdef LINUX_SA_RESTORER
-		if (ps->sa_sigdesc[sig].sd_vers != 0) {
+		if (ps->sa_sigdesc[sig].sd_vers != __SIGTRAMP_SIGCODE_VERSION) {
 			olsa.linux_sa_restorer = ps->sa_sigdesc[sig].sd_tramp;
 			olsa.linux_sa_flags |= LINUX_SA_RESTORER;
 		}
@@ -394,6 +404,7 @@ linux_sys_rt_sigaction(struct lwp *l, const struct linux_sys_rt_sigaction_args *
 	return 0;
 }
 
+#if !defined(__aarch64__)
 int
 linux_sigprocmask1(struct lwp *l, int how, const linux_old_sigset_t *set, linux_old_sigset_t *oset)
 {
@@ -436,6 +447,7 @@ linux_sigprocmask1(struct lwp *l, int how, const linux_old_sigset_t *set, linux_
 	}
 	return error;
 }
+#endif
 
 int
 linux_sys_rt_sigprocmask(struct lwp *l, const struct linux_sys_rt_sigprocmask_args *uap, register_t *retval)
@@ -507,7 +519,7 @@ linux_sys_rt_sigpending(struct lwp *l, const struct linux_sys_rt_sigpending_args
 	return copyout(&lss, SCARG(uap, set), sizeof(lss));
 }
 
-#ifndef __amd64__
+#if !defined(__aarch64__) && !defined(__amd64__)
 int
 linux_sys_sigpending(struct lwp *l, const struct linux_sys_sigpending_args *uap, register_t *retval)
 {
@@ -537,7 +549,7 @@ linux_sys_sigsuspend(struct lwp *l, const struct linux_sys_sigsuspend_args *uap,
 	linux_old_to_native_sigset(&bss, &lss);
 	return sigsuspend1(l, &bss);
 }
-#endif /* __amd64__ */
+#endif /* !__aarch64__ && !__amd64__ */
 
 int
 linux_sys_rt_sigsuspend(struct lwp *l, const struct linux_sys_rt_sigsuspend_args *uap, register_t *retval)
@@ -567,7 +579,7 @@ fetchss(const void *u, void *s, size_t len)
 {
 	int error;
 	linux_sigset_t lss;
-	
+
 	if ((error = copyin(u, &lss, sizeof(lss))) != 0)
 		return error;
 
@@ -580,7 +592,7 @@ fetchts(const void *u, void *s, size_t len)
 {
 	int error;
 	struct linux_timespec lts;
-	
+
 	if ((error = copyin(u, &lts, sizeof(lts))) != 0)
 		return error;
 
@@ -618,6 +630,7 @@ linux_sys_rt_sigtimedwait(struct lwp *l,
 	    retval, fetchss, storeinfo, fetchts, fakestorets);
 }
 
+#if !defined(__aarch64__)
 /*
  * Once more: only a signal conversion is needed.
  * Note: also used as sys_rt_queueinfo.  The info field is ignored.
@@ -643,6 +656,7 @@ linux_sys_rt_queueinfo(struct lwp *l, const struct linux_sys_rt_queueinfo_args *
 	/* XXX keep a list of queued signals somewhere.	*/
 	return linux_sys_kill(l, (const void *)uap, retval);
 }
+#endif
 
 int
 linux_sys_kill(struct lwp *l, const struct linux_sys_kill_args *uap, register_t *retval)
@@ -664,11 +678,11 @@ linux_sys_kill(struct lwp *l, const struct linux_sys_kill_args *uap, register_t 
 }
 
 #ifdef LINUX_SS_ONSTACK
-static void linux_to_native_sigaltstack(struct sigaltstack *,
+static void linux_to_native_sigaltstack(stack_t *,
     const struct linux_sigaltstack *);
 
 static void
-linux_to_native_sigaltstack(struct sigaltstack *bss, const struct linux_sigaltstack *lss)
+linux_to_native_sigaltstack(stack_t *bss, const struct linux_sigaltstack *lss)
 {
 	bss->ss_sp = lss->ss_sp;
 	bss->ss_size = lss->ss_size;
@@ -681,7 +695,7 @@ linux_to_native_sigaltstack(struct sigaltstack *bss, const struct linux_sigaltst
 }
 
 void
-native_to_linux_sigaltstack(struct linux_sigaltstack *lss, const struct sigaltstack *bss)
+native_to_linux_sigaltstack(struct linux_sigaltstack *lss, const stack_t *bss)
 {
 	memset(lss, 0, sizeof(*lss));
 	lss->ss_sp = bss->ss_sp;
@@ -702,7 +716,7 @@ linux_sys_sigaltstack(struct lwp *l, const struct linux_sys_sigaltstack_args *ua
 		syscallarg(struct linux_sigaltstack *) oss;
 	} */
 	struct linux_sigaltstack ss;
-	struct sigaltstack nss;
+	stack_t nss;
 	struct proc *p = l->l_proc;
 	int error = 0;
 
@@ -831,7 +845,7 @@ native_to_linux_si_status(int code, int status)
 		sts = LINUX_SIGCONT;
 		break;
 	case CLD_EXITED:
-		sts = WEXITSTATUS(status);
+		sts = status;
 		break;
 	case CLD_STOPPED:
 	case CLD_TRAPPED:
@@ -843,4 +857,51 @@ native_to_linux_si_status(int code, int status)
 	}
 
 	return sts;
+}
+
+int
+linux_to_native_sigevent(struct sigevent *nsep,
+    const struct linux_sigevent *lsep)
+{
+	memset(nsep, 0, sizeof(*nsep));
+
+	switch (lsep->sigev_notify) {
+	case LINUX_SIGEV_SIGNAL:
+		nsep->sigev_notify = SIGEV_SIGNAL;
+		break;
+
+	case LINUX_SIGEV_NONE:
+		nsep->sigev_notify = SIGEV_NONE;
+		break;
+
+	case LINUX_SIGEV_THREAD:
+	case LINUX_SIGEV_THREAD_ID:
+	default:
+		return ENOTSUP;
+	}
+
+	nsep->sigev_value = lsep->sigev_value;
+	if (lsep->sigev_signo < 0 || lsep->sigev_signo >= LINUX__NSIG) {
+		return EINVAL;
+	}
+	nsep->sigev_signo = linux_to_native_signo[lsep->sigev_signo];
+
+	return 0;
+}
+
+int
+linux_sigevent_copyin(const void *src, void *dst, size_t size)
+{
+	struct linux_sigevent lse;
+	struct sigevent *sep = dst;
+	int error;
+
+	KASSERT(size == sizeof(*sep));
+
+	error = copyin(src, &lse, sizeof(lse));
+	if (error) {
+		return error;
+	}
+
+	return linux_to_native_sigevent(sep, &lse);
 }

@@ -1,4 +1,4 @@
--/* $NetBSD: isp_target.c,v 1.36 2021/08/21 11:55:25 andvar Exp $ */
+-/* $NetBSD: isp_target.c,v 1.38 2024/09/08 09:36:50 rillig Exp $ */
 /*-
  *  Copyright (c) 1997-2008 by Matthew Jacob
  *  All rights reserved.
@@ -65,7 +65,7 @@
 
 #ifdef	__NetBSD__
 #include <sys/cdefs.h> 
-__KERNEL_RCSID(0, "$NetBSD: isp_target.c,v 1.36 2021/08/21 11:55:25 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: isp_target.c,v 1.38 2024/09/08 09:36:50 rillig Exp $");
 #include <dev/ic/isp_netbsd.h>
 #endif
 #ifdef	__FreeBSD__
@@ -97,7 +97,7 @@ static void isp_handle_24xx_inotify(ispsoftc_t *, in_fcentry_24xx_t *);
 
 /*
  * The Qlogic driver gets an interrupt to look at response queue entries.
- * Some of these are status completions for initiatior mode commands, but
+ * Some of these are status completions for initiator mode commands, but
  * if target mode is enabled, we get a whole wad of response queue entries
  * to be handled here.
  *
@@ -123,7 +123,7 @@ static void isp_handle_24xx_inotify(ispsoftc_t *, in_fcentry_24xx_t *);
  * The third group that can show up in the response queue are Immediate
  * Notification events. These include things like notifications of SCSI bus
  * resets, or Bus Device Reset messages or other messages received. This
- * a classic oddbins area. It can get  a little weird because you then turn
+ * a classic oddbins area. It can get a little weird because you then turn
  * around and acknowledge the Immediate Notify by writing an entry onto the
  * request queue and then the f/w turns around and gives you an acknowledgement
  * to *your* acknowledgement on the response queue (the idea being to let
@@ -138,7 +138,7 @@ static void isp_handle_24xx_inotify(ispsoftc_t *, in_fcentry_24xx_t *);
  *
  * Because of the way this driver is designed, unfortunately most of the
  * actual synchronization work has to be done in the platform specific
- * code- we have no synchroniation primitives in the common code.
+ * code- we have no synchronization primitives in the common code.
  */
 
 int
@@ -1388,8 +1388,8 @@ isp_handle_atio2(ispsoftc_t *isp, at2_entry_t *aep)
 
 	case AT_RESET:
 		/*
-		 * A bus reset came along an blew away this command. Why
-		 * they do this in addition the async event code stuff,
+		 * A bus reset came along and blew away this command. Why
+		 * they do this in addition to the async event code stuff,
 		 * I dunno.
 		 *
 		 * Ignore it because the async event will clear things

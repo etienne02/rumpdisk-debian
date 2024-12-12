@@ -1,4 +1,4 @@
-/* $NetBSD: emit2.c,v 1.23 2021/08/29 10:13:02 rillig Exp $ */
+/* $NetBSD: emit2.c,v 1.40 2024/08/29 20:35:19 rillig Exp $ */
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All Rights Reserved.
@@ -15,7 +15,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -33,77 +33,46 @@
  */
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: emit2.c,v 1.23 2021/08/29 10:13:02 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: emit2.c,v 1.40 2024/08/29 20:35:19 rillig Exp $");
 #endif
 
 #include "lint2.h"
 
-static	void	outtype(type_t *);
-static	void	outdef(hte_t *, sym_t *);
-static	void	dumpname(hte_t *);
-static	void	outfiles(void);
+static void outtype(type_t *);
+static void outdef(hte_t *, sym_t *);
+static void dumpname(hte_t *);
+static void outfiles(void);
 
-/*
- * Write type into the output buffer.
- */
+/* Write type into the output file. */
 static void
 outtype(type_t *tp)
 {
-	int	t, s, na;
-	tspec_t	ts;
-	type_t	**ap;
+#ifdef INT128_SIZE
+	static const char tt[NTSPEC] = "???BCCCSSIILLQQJJDDD?XXXV?TTTPAF";
+	static const char ss[NTSPEC] = "???  su u u u u us l?s l ?sue   ";
+#else
+	static const char tt[NTSPEC] = "???BCCCSSIILLQQDDD?XXXV?TTTPAF";
+	static const char ss[NTSPEC] = "???  su u u u us l?s l ?sue   ";
+#endif
 
 	while (tp != NULL) {
-		if ((ts = tp->t_tspec) == INT && tp->t_is_enum)
+		tspec_t ts = tp->t_tspec;
+		if (ts == INT && tp->t_is_enum)
 			ts = ENUM;
-		switch (ts) {
-		case BOOL:	t = 'B';	s = '\0';	break;
-		case CHAR:	t = 'C';	s = '\0';	break;
-		case SCHAR:	t = 'C';	s = 's';	break;
-		case UCHAR:	t = 'C';	s = 'u';	break;
-		case SHORT:	t = 'S';	s = '\0';	break;
-		case USHORT:	t = 'S';	s = 'u';	break;
-		case INT:	t = 'I';	s = '\0';	break;
-		case UINT:	t = 'I';	s = 'u';	break;
-		case LONG:	t = 'L';	s = '\0';	break;
-		case ULONG:	t = 'L';	s = 'u';	break;
-		case QUAD:	t = 'Q';	s = '\0';	break;
-		case UQUAD:	t = 'Q';	s = 'u';	break;
-#ifdef INT128_SIZE
-		case INT128:	t = 'J';	s = '\0';	break;
-		case UINT128:	t = 'J';	s = 'u';	break;
-#endif
-		case FLOAT:	t = 'D';	s = 's';	break;
-		case DOUBLE:	t = 'D';	s = '\0';	break;
-		case LDOUBLE:	t = 'D';	s = 'l';	break;
-		case VOID:	t = 'V';	s = '\0';	break;
-		case PTR:	t = 'P';	s = '\0';	break;
-		case ARRAY:	t = 'A';	s = '\0';	break;
-		case ENUM:	t = 'T';	s = 'e';	break;
-		case STRUCT:	t = 'T';	s = 's';	break;
-		case UNION:	t = 'T';	s = 'u';	break;
-		case FCOMPLEX:	t = 'X';	s = 's';	break;
-		case DCOMPLEX:	t = 'X';	s = '\0';	break;
-		case LCOMPLEX:	t = 'X';	s = 'l';	break;
-		case FUNC:
-			if (tp->t_args != NULL && !tp->t_proto) {
-				t = 'f';
-			} else {
-				t = 'F';
-			}
-			s = '\0';
-			break;
-		default:
-			errx(1, "internal error: outtype() 1");
-		}
+		if (!ch_isupper(tt[ts]))
+			errx(1, "internal error: outtype(%d)", ts);
 		if (tp->t_const)
 			outchar('c');
 		if (tp->t_volatile)
 			outchar('v');
-		if (s != '\0')
-			outchar(s);
-		outchar(t);
+		if (ss[ts] != ' ')
+			outchar(ss[ts]);
+		if (ts == FUNC && tp->t_args != NULL && !tp->t_proto)
+			outchar('f');
+		else
+			outchar(tt[ts]);
+
 		if (ts == ARRAY) {
 			outint(tp->t_dim);
 		} else if (ts == ENUM || ts == STRUCT || ts == UNION) {
@@ -121,15 +90,15 @@ outtype(type_t *tp)
 				outchar('.');
 				outint(tp->t_uniqpos.p_uniq);
 			} else
-				errx(1, "internal error: outtype() 2");
+				errx(1, "internal error: outtype");
 		} else if (ts == FUNC && tp->t_args != NULL) {
-			na = 0;
-			for (ap = tp->t_args; *ap != NULL; ap++)
+			int na = 0;
+			for (type_t **ap = tp->t_args; *ap != NULL; ap++)
 				na++;
 			if (tp->t_vararg)
 				na++;
 			outint(na);
-			for (ap = tp->t_args; *ap != NULL; ap++)
+			for (type_t **ap = tp->t_args; *ap != NULL; ap++)
 				outtype(*ap);
 			if (tp->t_vararg)
 				outchar('E');
@@ -138,26 +107,16 @@ outtype(type_t *tp)
 	}
 }
 
-/*
- * Write a definition.
- */
+/* Write a definition. */
 static void
 outdef(hte_t *hte, sym_t *sym)
 {
 
-	/* reset output buffer */
-	outclr();
-
-	/* line number in C source file */
-	outint(0);
-
-	/* this is a definition */
-	outchar('d');
-
-	/* index of file where symbol was defined and line number of def. */
-	outint(0);
+	outint(0);		/* line number in C source file */
+	outchar('d');		/* definition */
+	outint(0);		/* index of file where symbol was defined */
 	outchar('.');
-	outint(0);
+	outint(0);		/* line number of definition */
 
 	/* flags */
 	if (sym->s_check_only_first_args) {
@@ -180,29 +139,24 @@ outdef(hte_t *hte, sym_t *sym)
 		if (sym->s_old_style_function)
 			outchar('o');
 	}
-	outchar('u');			/* used (no warning if not used) */
-
-	/* name */
+	outchar('u');		/* used (no warning if not used) */
 	outname(hte->h_name);
-
-	/* type */
 	outtype(TP(sym->s_type));
+	outchar('\n');
 }
 
-/*
- * Write the first definition of a name into the lint library.
- */
+/* Write the first definition of a name into the lint library. */
 static void
 dumpname(hte_t *hte)
 {
-	sym_t	*sym, *def;
+	sym_t *sym, *def;
 
 	/* static and undefined symbols are not written */
 	if (hte->h_static || !hte->h_def)
 		return;
 
 	/*
-	 * If there is a definition, write it. Otherwise write a tentative
+	 * If there is a definition, write it. Otherwise, write a tentative
 	 * definition. This is necessary because more than one tentative
 	 * definition is allowed (except with sflag).
 	 */
@@ -216,45 +170,35 @@ dumpname(hte_t *hte)
 			def = sym;
 	}
 	if (def == NULL)
-		errx(1, "internal error: dumpname() %s", hte->h_name);
+		errx(1, "internal error: dumpname %s", hte->h_name);
 
 	outdef(hte, def);
 }
 
-/*
- * Write a new lint library.
- */
+/* Write a new lint library. */
 void
 outlib(const char *name)
 {
-	/* Open of output file and initialization of the output buffer */
+
 	outopen(name);
 
-	/* write name of lint library */
-	outsrc(name);
+	outsrc(name);		/* name of the lint library */
 
-	/* name of lint lib has index 0 */
-	outclr();
-	outint(0);
+	outint(0);		/* filename index of the lint library */
 	outchar('s');
 	outstrg(name);
+	outchar('\n');
 
-	/*
-	 * print the names of all files references by unnamed
-	 * struct/union/enum declarations.
-	 */
+	/* All files referenced by unnamed struct/union/enum declarations. */
 	outfiles();
 
-	/* write all definitions with external linkage */
+	/* Write all definitions with external linkage. */
 	symtab_forall_sorted(dumpname);
 
-	/* close the output */
 	outclose();
 }
 
-/*
- * Write out the name of a file referenced by a type.
- */
+/* Write out the name of a file referenced by a type. */
 struct outflist {
 	short		ofl_num;
 	struct outflist *ofl_next;
@@ -295,11 +239,9 @@ outfiles(void)
 	int i;
 
 	for (ofl = outflist, i = 1; ofl != NULL; ofl = ofl->ofl_next, i++) {
-		/* reset output buffer */
-		outclr();
-
 		outint(i);
 		outchar('s');
 		outstrg(fnames[ofl->ofl_num]);
+		outchar('\n');
 	}
 }

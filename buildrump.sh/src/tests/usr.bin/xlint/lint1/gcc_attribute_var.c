@@ -1,4 +1,4 @@
-/*	$NetBSD: gcc_attribute_var.c,v 1.5 2021/08/11 05:19:33 rillig Exp $	*/
+/*	$NetBSD: gcc_attribute_var.c,v 1.13 2024/09/28 15:51:40 rillig Exp $	*/
 # 3 "gcc_attribute_var.c"
 
 /*
@@ -6,6 +6,8 @@
  *
  * https://gcc.gnu.org/onlinedocs/gcc/Variable-Attributes.html
  */
+
+/* lint1-extra-flags: -X 351 */
 
 void
 write_to_page(unsigned index, char ch)
@@ -26,26 +28,9 @@ placement(
 void println(void);
 
 /*
- * Since cgram.y 1.294 from 2021-07-10, lint did not accept declarations that
- * started with __attribute__, due to a newly and accidentally introduced
- * shift/reduce conflict in the grammar.
- *
  * A GCC extension allows statement of the form __attribute__((fallthrough)),
- * thus starting with __attribute__.  This is the 'shift' in the conflict.
- * The 'reduce' in the conflict was begin_type.
- *
- * Before cgram 1.294, the gcc_attribute was placed outside the pair of
- * begin_type/end_type, exactly to resolve this conflict.
- *
- * Conceptually, it made sense to put the __attribute__((unused)) between
- * begin_type and end_type, to make it part of the declaration-specifiers.
- * This change introduced the hidden conflict though.
- *
- * Interestingly, the number of shift/reduce conflicts did not change in
- * cgram 1.294, the conflicts were just resolved differently than before.
- *
- * To prevent this from happening again, make sure that declarations as well
- * as statements can start with gcc_attribute.
+ * therefore, to avoid shift/reduce conflicts in the grammar, the attributes
+ * cannot be part of the declaration specifiers between begin_type/end_type.
  */
 void
 ambiguity_for_attribute(void)
@@ -55,7 +40,6 @@ ambiguity_for_attribute(void)
 	switch (1) {
 	case 1:
 		println();
-		/* expect+1: warning: 'var2' unused in function 'ambiguity_for_attribute' [192] */
 		__attribute__((unused)) _Bool var2;
 		__attribute__((fallthrough));
 		case 2:
@@ -70,6 +54,30 @@ attribute_after_array_brackets(
 {
 }
 
-/* just to trigger _some_ error, to keep the .exp file */
-/* expect+1: error: syntax error 'syntax_error' [249] */
-__attribute__((syntax_error));
+struct attribute_in_member_declaration {
+	int __attribute__(())
+	    x __attribute__(()),
+	    y __attribute__(());
+
+	unsigned int __attribute__(())
+	    bit1:1 __attribute__(()),
+	    bit2:2 __attribute__(()),
+	    bit3:3 __attribute__(());
+};
+
+
+void
+anonymous_members(void)
+{
+	struct single_attribute_outer {
+		struct single_attribute_inner {
+			int member;
+		} __attribute__(());
+	} __attribute__(());
+
+	struct multiple_attributes_outer {
+		struct multiple_attributes_inner {
+			int member;
+		} __attribute__(()) __attribute__(());
+	} __attribute__(()) __attribute__(());
+}

@@ -1,4 +1,4 @@
-/*	$NetBSD: altq_afmap.c,v 1.20 2014/03/20 20:51:54 christos Exp $	*/
+/*	$NetBSD: altq_afmap.c,v 1.23 2021/12/31 14:25:47 riastradh Exp $	*/
 /*	$KAME: altq_afmap.c,v 1.12 2005/04/13 03:44:24 suz Exp $	*/
 
 /*
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: altq_afmap.c,v 1.20 2014/03/20 20:51:54 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: altq_afmap.c,v 1.23 2021/12/31 14:25:47 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altq.h"
@@ -357,12 +357,9 @@ afmioctl(dev_t dev, ioctlcmd_t cmd, void *addr, int flag,
 	case AFM_GETFMAP:
 		break;
 	default:
-#if (__FreeBSD_version > 400000)
-		error = suser(p);
-#else
-		error = kauth_authorize_network(l->l_cred, KAUTH_NETWORK_ALTQ,
-		    KAUTH_REQ_NETWORK_ALTQ_AFMAP, NULL, NULL, NULL);
-#endif
+		error = kauth_authorize_network(l->l_cred,
+		    KAUTH_NETWORK_ALTQ, KAUTH_REQ_NETWORK_ALTQ_AFMAP, NULL,
+		    NULL, NULL);
 		if (error)
 			return (error);
 		break;
@@ -372,10 +369,15 @@ afmioctl(dev_t dev, ioctlcmd_t cmd, void *addr, int flag,
 	flowmap = (struct atm_flowmap *)addr;
 	flowmap->af_ifname[IFNAMSIZ-1] = '\0';
 	ifp = ifunit(flowmap->af_ifname);
-	if (ifp == NULL || (ifp->if_flags & IFF_RUNNING) == 0)
+	if (ifp == NULL)
+		return ENXIO;
+
+	IFNET_LOCK(ifp);
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		error = ENXIO;
 	else
-		error = ifp->if_ioctl(ifp, cmd, addr);
+		error = if_ioctl(ifp, cmd, addr);
+	IFNET_UNLOCK(ifp);
 
 	return error;
 }

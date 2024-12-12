@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.589 2021/05/17 04:07:42 yamaguchi Exp $
+# $NetBSD: GENERIC,v 1.614 2024/08/27 00:56:16 riastradh Exp $
 #
 # GENERIC machine description file
 #
@@ -22,7 +22,7 @@ include 	"arch/amd64/conf/std.amd64"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident		"GENERIC-$Revision: 1.589 $"
+#ident		"GENERIC-$Revision: 1.614 $"
 
 maxusers	64		# estimated number of users
 
@@ -89,9 +89,10 @@ est0		at cpu0		# Intel Enhanced SpeedStep (non-ACPI)
 hyperv0 	at cpu0		# Microsoft Hyper-V
 #odcm0		at cpu0		# On-demand clock modulation
 powernow0	at cpu0		# AMD PowerNow! and Cool'n'Quiet (non-ACPI)
+viac7temp*	at cpu?		# VIA C7, Nano and Zhaoxin temperature sensor
 vmt0		at cpu0		# VMware Tools
 
-#Xen PV support for HVM guests
+#Xen PV support for PVH and HVM guests
 options 	XENPVHVM
 options 	XEN
 hypervisor*	at mainbus?		# Xen hypervisor
@@ -99,6 +100,12 @@ xenbus*	 	at hypervisor?		# Xen virtual bus
 xencons*	at hypervisor?		# Xen virtual console
 xennet*  	at xenbus?		# Xen virtual network interface
 xbd*		at xenbus?		# Xen virtual block device
+# experimental: PVH dom0 support
+#options 	DOM0OPS
+#pseudo-device  xenevt
+#pseudo-device  xvif
+#pseudo-device  xbdback
+
 
 # Alternate buffer queue strategies for better responsiveness under high
 # disk I/O load.
@@ -138,7 +145,7 @@ options 	KDTRACE_HOOKS	# kernel DTrace hooks
 # Use KASAN_PANIC if you want panics instead of warnings.
 #makeoptions 	KASAN=1		# mandatory
 #options 	KASAN		# mandatory
-#no options	SVS		# mandatory
+#no options 	SVS		# mandatory
 #options 	POOL_QUARANTINE	# optional
 #options 	KASAN_PANIC	# optional
 
@@ -152,7 +159,7 @@ options 	KDTRACE_HOOKS	# kernel DTrace hooks
 # memory in pool caches. Note that KMSAN requires at least 4GB of RAM.
 #makeoptions 	KMSAN=1		# mandatory
 #options 	KMSAN		# mandatory
-#no options	SVS		# mandatory
+#no options 	SVS		# mandatory
 #no options 	MODULAR		# mandatory
 #no options 	MODULAR_DEFAULT_AUTOLOAD	# mandatory
 #options 	POOL_NOCACHE	# optional
@@ -164,6 +171,10 @@ options 	KDTRACE_HOOKS	# kernel DTrace hooks
 
 # Fault Injection Driver.
 #options 	FAULT
+
+# Heartbeat checks
+options 	HEARTBEAT
+options 	HEARTBEAT_MAX_PERIOD_DEFAULT=15
 
 # Compatibility options
 # x86_64 never shipped with a.out binaries; the two options below are
@@ -188,25 +199,24 @@ options 	DKWEDGE_METHOD_GPT	# Supports GPT partitions as wedges
 #options 	DKWEDGE_METHOD_MBR	# Support MBR partitions as wedges
 options 	DKWEDGE_METHOD_APPLE	# Support Apple partitions as wedges
 #options 	DKWEDGE_METHOD_RDB	# Support RDB partitions as wedges
+#options 	DKWEDGE_METHOD_TOS	# Support Atari "TOS" partitions as wedges
 
 # File systems
 include "conf/filesystems.config"
 
 # File system options
 # ffs
+options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-# Note that UFS_DIRHASH is suspected of causing kernel memory corruption.
-# It is not recommended for general use.
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options		UFS_ACL		# UFS Access Control Lists
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	UFS_ACL		# UFS Access Control Lists
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+# lfs
+options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH
 # ext2fs
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
 # other
 options 	DISKLABEL_EI	# disklabel Endian Independent support
 options 	NFSSERVER	# Network File System server
@@ -250,7 +260,7 @@ options 	PCIVERBOSE	# verbose PCI device autoconfig messages
 #options 	PCMCIAVERBOSE	# verbose PCMCIA configuration messages
 options 	SCSIVERBOSE	# human readable SCSI error messages
 #options 	USBVERBOSE	# verbose USB device autoconfig messages
-#options 	HDAUDIOVERBOSE	# verbose HDAUDIO driver messages
+options 	HDAUDIOVERBOSE	# human readable HDAUDIO device names
 
 options 	NFS_BOOT_DHCP,NFS_BOOT_BOOTPARAM
 
@@ -262,8 +272,11 @@ options 	WSEMUL_VT100		# VT100 / VT220 emulation
 #options 	WSEMUL_SUN		# sun terminal emulation
 #options 	WSEMUL_DEFAULT="\"vt100\""  # NB: default is "sun" if enabled
 # different kernel output - see dev/wscons/wsdisplayvar.h
+options 	WSDISPLAY_CUSTOM_OUTPUT	# color customization from wsconsctl(8)
 options 	WS_KERNEL_FG=WSCOL_GREEN
 #options 	WS_KERNEL_BG=WSCOL_BLACK
+# customization of console border color
+options 	WSDISPLAY_CUSTOM_BORDER	# custom border colors via wsconsctl(8)
 # compatibility to other console drivers
 options 	WSDISPLAY_COMPAT_PCVT		# emulate some ioctls
 options 	WSDISPLAY_COMPAT_SYSCONS	# emulate some ioctls
@@ -321,21 +334,27 @@ acpidalb*	at acpi?		# ACPI Direct Application Launch Button
 acpiec* 	at acpi?		# ACPI Embedded Controller (late)
 acpiecdt*	at acpi?		# ACPI Embedded Controller (early)
 acpifan*	at acpi?		# ACPI Fan
+acpihed*	at acpi?		# ACPI Hardware Error Device
 acpilid*	at acpi?		# ACPI Lid Switch
 #acpipmtr*	at acpi?		# ACPI Power Meter (experimental)
 #acpismbus*	at acpi?		# ACPI SMBus CMI (experimental)
 acpitz* 	at acpi?		# ACPI Thermal Zone
 acpivga*	at acpi?		# ACPI Display Adapter
 acpiout*	at acpivga?		# ACPI Display Output Device
+acpivmgenid*	at acpi?		# ACPI Virtual Machine Generation ID
 acpiwdrt*	at acpi?		# ACPI Watchdog Resource Table
 acpiwmi*	at acpi?		# ACPI WMI Mapper
+apei*		at apeibus?		# ACPI Platform Error Interfaces
 
 # Mainboard devices
 aibs*		at acpi?		# ASUSTeK AI Booster hardware monitor
 asus*		at acpi?		# ASUS hotkeys
 attimer*	at acpi?		# AT Timer
-#com*		at acpi?		# Serial communications interface
-#fdc*		at acpi?		# Floppy disk controller
+com0		at acpi?		# Serial communications interface
+com1		at acpi?		# Serial communications interface
+com*		at acpi?		# Serial communications interface
+fdc*		at acpi?		# Floppy disk controller
+fd*		at fdc? drive ?		# the drives themselves
 fujbp*		at acpi?		# Fujitsu Brightness & Pointer
 fujhk*		at acpi?		# Fujitsu Hotkeys
 #hpacel* 	at acpi?		# HP 3D DriveGuard accelerometer
@@ -343,7 +362,9 @@ fujhk*		at acpi?		# Fujitsu Hotkeys
 hpet*		at acpihpetbus?		# High Precision Event Timer (table)
 hpet*		at acpinodebus?		# High Precision Event Timer (device)
 joy*		at acpi?		# Joystick/Game port
-#lpt*		at acpi?		# Parallel port
+lpt0		at acpi?		# Parallel port
+lpt1		at acpi?		# Parallel port
+lpt*		at acpi?		# Parallel port
 mpu*		at acpi?		# Roland MPU-401 MIDI UART
 pckbc*		at acpi?		# PC keyboard controller
 pcppi*		at acpi?		# AT-style speaker sound
@@ -387,7 +408,7 @@ ichlpcib* at pci? dev ? function ?	# Intel ICH PCI-LPC w/ timecounter,
 					# watchdog, gpio, Speedstep and HPET
 fwhrng* at ichlpcib?		# Intel 82802 FWH Random Number Generator
 #hpet*	at ichlpcib?
-tco*	at ichlpcib?		# TCO watch dog timer
+tco*	at tcoichbus?		# TCO watch dog timer
 
 aapic*	at pci? dev ? function ?	# AMD 8131 IO apic
 
@@ -453,7 +474,8 @@ radeondrmkmsfb* at radeonfbbus?
 nouveau*	at pci? dev ? function ?
 nouveaufb*	at nouveaufbbus?
 
-# DRMUMS drivers
+# DRMUMS drivers -- make them loadable, but not statically linked in
+options 	DRM_LEGACY
 #viadrmums*	at drm?
 
 #options 	DRM_MAX_RESOLUTION_HORIZONTAL=1920	# Limit DRM size in horizontal dimension
@@ -587,6 +609,9 @@ iic*		at dwiic?
 #sdtemp* at iic? addr 0x1d
 #sdtemp* at iic? addr 0x1e
 #sdtemp* at iic? addr 0x1f
+
+# Intel GPIO
+igpio*         at acpi? 
 
 # I2C HID devices
 ihidev* at iic?
@@ -781,11 +806,8 @@ ld*	at nvme? nsid ?
 # Miscellaneous mass storage devices
 
 # ISA floppy
-fdc0	at isa? port 0x3f0 irq 6 drq 2	# standard PC floppy controllers
+#fdc0	at isa? port 0x3f0 irq 6 drq 2	# standard PC floppy controllers
 #fdc1	at isa? port 0x370 irq ? drq ?
-fd*	at fdc? drive ?			# the drives themselves
-# some machines need you to do this instead of fd*
-#fd0	at fdc0 drive 0
 
 # Network Interfaces
 
@@ -808,6 +830,7 @@ dge*	at pci? dev ? function ?	# Intel 82597 10GbE LR
 ena*	at pci? dev ? function ?	# Amazon.com Elastic Network Adapter
 ep*	at pci? dev ? function ?	# 3Com 3c59x
 epic*	at pci? dev ? function ?	# SMC EPIC/100 Ethernet
+#eqos*	at pci? dev ? function ?	# DesignWare Ethernet QoS
 et*	at pci? dev ? function ?	# Agere/LSI ET1310/ET1301 Gigabit
 ex*	at pci? dev ? function ?	# 3Com 90x[BC]
 fxp*	at pci? dev ? function ?	# Intel EtherExpress PRO 10+/100B
@@ -815,6 +838,7 @@ gem*	at pci? dev ? function ?	# Apple GMAC and Sun ERI gigabit enet
 gsip*	at pci? dev ? function ?	# NS83820 Gigabit Ethernet
 hme*	at pci? dev ? function ?	# Sun Microelectronics STP2002-STQ
 iavf*	at pci? dev ? function ?	# Intel Adaptive Virtual Function
+igc*	at pci? dev ? function ?	# Intel I225 2.5 gigabit
 ipw*	at pci? dev ? function ?	# Intel PRO/Wireless 2100
 iwi*	at pci? dev ? function ?	# Intel PRO/Wireless 2200BG
 iwm*	at pci? dev ? function ?	# Intel Centrino 7260
@@ -1105,6 +1129,7 @@ weasel* at pci?
 virtio* at pci? dev ? function ?	# Virtio PCI device
 viomb*	at virtio?			# Virtio memory balloon device
 ld*	at virtio?			# Virtio disk device
+viocon* at virtio?			# Virtio serial device
 vioif*	at virtio?			# Virtio network device
 viornd* at virtio?			# Virtio entropy device
 vioscsi* at virtio?			# Virtio SCSI device
@@ -1121,10 +1146,6 @@ hvheartbeat*	at vmbus?		# Hyper-V Heartbeat Service
 hvshutdown*	at vmbus?		# Hyper-V Guest Shutdown Service
 hvtimesync*	at vmbus?		# Hyper-V Time Synchronization Service
 #hvkvp*		at vmbus?		# Hyper-V Data Exchange Service
-
-# Pull in optional local configuration
-cinclude "arch/amd64/conf/GENERIC.local"
-
 
 # Pseudo-Devices
 
@@ -1148,7 +1169,7 @@ options 	RAID_AUTOCONFIG		# auto-configuration of RAID components
 pseudo-device	fss			# file system snapshot device
 
 pseudo-device	md			# memory disk device (ramdisk)
-options		MEMORY_DISK_HOOKS	# enable md specific hooks
+options 	MEMORY_DISK_HOOKS	# enable md specific hooks
 options 	MEMORY_DISK_DYNAMIC	# enable dynamic resizing
 
 pseudo-device	vnd			# disk-like interface to files
@@ -1197,6 +1218,7 @@ pseudo-device	lockstat		# lock profiling
 pseudo-device	bcsp			# BlueCore Serial Protocol
 pseudo-device	btuart			# Bluetooth HCI UART (H4)
 #pseudo-device	nvmm			# NetBSD Virtual Machine Monitor
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 # wscons pseudo-devices
 pseudo-device	wsmux			# mouse & keyboard multiplexor
@@ -1211,6 +1233,10 @@ pseudo-device	pad
 # userland interface to drivers, including autoconf and properties retrieval
 pseudo-device	drvctl
 
+# EFI runtime support
+options 	EFI_RUNTIME
+pseudo-device 	efi			# /dev/efi
+
 include "dev/veriexec.config"
 
 options 	PAX_SEGVGUARD=0		# PaX Segmentation fault guard
@@ -1218,3 +1244,6 @@ options 	PAX_MPROTECT=1		# PaX mprotect(2) restrictions
 options 	PAX_MPROTECT_DEBUG=1	# PaX mprotect debug
 options 	PAX_ASLR=1		# PaX Address Space Layout Randomization
 options 	PAX_ASLR_DEBUG=1	# PaX ASLR debug
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/amd64/conf/GENERIC.local"

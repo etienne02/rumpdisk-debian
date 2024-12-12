@@ -1,4 +1,4 @@
-/*	$NetBSD: frameasm.h,v 1.53 2021/04/17 20:12:55 rillig Exp $	*/
+/*	$NetBSD: frameasm.h,v 1.55 2022/07/30 14:11:00 riastradh Exp $	*/
 
 #ifndef _AMD64_MACHINE_FRAMEASM_H
 #define _AMD64_MACHINE_FRAMEASM_H
@@ -63,8 +63,6 @@
 #define HP_NAME_SVS_ENTER_NMI	11
 #define HP_NAME_SVS_LEAVE_NMI	12
 #define HP_NAME_MDS_LEAVE	13
-#define HP_NAME_SSE2_LFENCE	14
-#define HP_NAME_SSE2_MFENCE	15
 
 #define HOTPATCH(name, size) \
 123:						; \

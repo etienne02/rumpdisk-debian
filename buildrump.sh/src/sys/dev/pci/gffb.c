@@ -1,4 +1,4 @@
-/*	$NetBSD: gffb.c,v 1.17 2021/08/07 16:19:14 thorpej Exp $	*/
+/*	$NetBSD: gffb.c,v 1.22 2022/09/25 17:52:25 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2013 Michael Lorenz
@@ -35,13 +35,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gffb.c,v 1.17 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gffb.c,v 1.22 2022/09/25 17:52:25 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/lwp.h>
 #include <sys/kauth.h>
 #include <sys/atomic.h>
@@ -684,10 +683,12 @@ gffb_dma_kickoff(struct gffb_softc *sc)
 
 	if (sc->sc_current != sc->sc_put) {
 		sc->sc_put = sc->sc_current;
-		membar_sync();
+		bus_space_barrier(sc->sc_memt, sc->sc_fbh, 0, 0x1000000,
+		    BUS_SPACE_BARRIER_WRITE);
 		(void)*sc->sc_fbaddr;
 		GFFB_WRITE_4(GFFB_FIFO_PUT, sc->sc_put);
-		membar_sync();
+		bus_space_barrier(sc->sc_memt, sc->sc_regh, GFFB_FIFO_PUT, 4,
+		    BUS_SPACE_BARRIER_WRITE);
 	}
 }
 
@@ -809,11 +810,6 @@ gffb_init(struct gffb_softc *sc)
 	GFFB_WRITE_4(GFFB_PTIMER + 0x840, 3);
 	GFFB_WRITE_4(GFFB_PTIMER + 0x500, 0);
 	GFFB_WRITE_4(GFFB_PTIMER + 0x400, 0xffffffff);
-	for (i = 0; i < 8; i++) {
-		GFFB_WRITE_4(GFFB_PMC + 0x240 + (i * 0x10), 0);
-		GFFB_WRITE_4(GFFB_PMC + 0x244 + (i * 0x10),
-		    sc->sc_vramsize - 1);
-	}
 
 	for (i = 0; i < 8; i++) {
 		GFFB_WRITE_4(GFFB_PFB + 0x0240 + (i * 0x10), 0);
@@ -1131,12 +1127,23 @@ gffb_putchar(void *cookie, int row, int col, u_int c, long attr)
 	if (rv == GC_OK)
 		return;
 
+	/*
+	 * Use gffb_sync to wait for the engine to become idle before
+	 * we start scribbling into VRAM -- we wouldn't want to stomp on
+	 * a scroll in progress or a prior glyphcache_add that hasn't
+	 * completed yet on the GPU.
+	 */
 	mutex_enter(&sc->sc_lock);
 	gffb_sync(sc);
 	sc->sc_putchar(cookie, row, col, c, attr);
-	membar_sync();
 	mutex_exit(&sc->sc_lock);
 
+	/*
+	 * If glyphcache_try asked us to, cache the newly written
+	 * character.  This will issue a gffb_bitblt which will wait
+	 * for our CPU writes to the framebuffer in VRAM to complete
+	 * before triggering GPU reads from the framebuffer in VRAM.
+	 */
 	if (rv == GC_ADD) {
 		glyphcache_add(&sc->sc_gc, c, x, y);
 	}

@@ -1,4 +1,4 @@
-/*	$NetBSD: cr_put.c,v 1.35 2021/06/27 23:57:08 blymn Exp $	*/
+/*	$NetBSD: cr_put.c,v 1.40 2022/10/19 06:09:27 blymn Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -30,11 +30,13 @@
  */
 
 #include <sys/cdefs.h>
+#include <limits.h>
+#include <stdlib.h>
 #ifndef lint
 #if 0
 static char sccsid[] = "@(#)cr_put.c	8.3 (Berkeley) 5/4/94";
 #else
-__RCSID("$NetBSD: cr_put.c,v 1.35 2021/06/27 23:57:08 blymn Exp $");
+__RCSID("$NetBSD: cr_put.c,v 1.40 2022/10/19 06:09:27 blymn Exp $");
 #endif
 #endif				/* not lint */
 
@@ -73,10 +75,9 @@ static int outcol, outline, destcol, destline;
 int
 __mvcur(int ly, int lx, int y, int x, int in_refresh)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_OUTPUT,
-	    "mvcur: moving cursor from (%d, %d) to (%d, %d) in refresh %d\n", ly, lx, y, x, in_refresh);
-#endif
+	    "mvcur: moving cursor from (%d, %d) to (%d, %d) in refresh %d\n",
+	    ly, lx, y, x, in_refresh);
 	destcol = x;
 	destline = y;
 	outcol = lx;
@@ -91,11 +92,10 @@ fgoto(int in_refresh)
 	int	 c, l;
 	char	*cgp;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_OUTPUT, "fgoto: in_refresh=%d\n", in_refresh);
-	__CTRACE(__CTRACE_OUTPUT, "fgoto: outcol=%d, outline=%d, destcol=%d, destline=%d\n",
-		outcol, outline, destcol, destline);
-#endif /* DEBUG */
+	__CTRACE(__CTRACE_OUTPUT,
+	    "fgoto: outcol=%d, outline=%d, destcol=%d, destline=%d\n",
+	    outcol, outline, destcol, destline);
 	if (destcol >= COLS) {
 		destline += destcol / COLS;
 		destcol %= COLS;
@@ -151,7 +151,7 @@ fgoto(int in_refresh)
 			 * essential in some SB's because CRLF mode puts
 			 * garbage in at end of memory), but you must use
 			 * linefeed to scroll since down arrow won't go past
-			 * memory end. I turned this off after recieving Paul
+			 * memory end. I turned this off after receiving Paul
 			 * Eggert's Superbee description which wins better. */
 			if (cursor_down /* && !__tc_xb */ && __pfast)
 				tputs(cursor_down, 0, __cputchar);
@@ -172,9 +172,7 @@ fgoto(int in_refresh)
 		 * Need this condition due to inconsistent behavior
 		 * of backspace on the last column.
 		 */
-#ifdef DEBUG
 		__CTRACE(__CTRACE_OUTPUT, "fgoto: cgp=%s\n", cgp);
-#endif /* DEBUG */
 		if (outcol != COLS - 1 &&
 		    plod((int) strlen(cgp), in_refresh) > 0)
 			plod(0, in_refresh);
@@ -192,18 +190,29 @@ fgoto(int in_refresh)
  * Otherwise just use cursor motions, hacking use of tabs and overtabbing
  * and backspace.
  *
- * XXX this needs to be revisited for wide characters since we may output
- * XXX more than one byte for a character.
  */
 
 static int plodcnt, plodflg;
+#ifdef HAVE_WCHAR
+static char s[MB_LEN_MAX];
+#endif
 
 static int
 plodput(int c)
 {
-	if (plodflg)
-		--plodcnt;
-	else
+	if (plodflg) {
+		int cw;
+
+#ifdef HAVE_WCHAR
+		cw = wctomb(s, c);
+		if (cw < 0)
+			cw = 1;
+#else
+		cw = 1;
+#endif /* HAVE_WCHAR */
+
+		plodcnt -= cw;
+	} else
 		__cputchar(c);
 	return 0;
 }
@@ -212,13 +221,13 @@ static int
 plod(int cnt, int in_refresh)
 {
 	int	 i, j, k, soutcol, soutline;
+	__LDATA  *csp;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_OUTPUT, "plod: cnt=%d, in_refresh=%d\n",
 	    cnt, in_refresh);
-	__CTRACE(__CTRACE_OUTPUT, "plod: plodding from col %d, row %d to col %d, row %d\n",
+	__CTRACE(__CTRACE_OUTPUT,
+	    "plod: plodding from col %d, row %d to col %d, row %d\n",
 	    outcol, outline, destcol, destline);
-#endif /* DEBUG */
 	plodcnt = plodflg = cnt;
 	soutcol = outcol;
 	soutline = outline;
@@ -409,7 +418,29 @@ dontcr:while (outline < destline) {
 			}
 		}
 	}
+
+#ifdef HAVE_WCHAR
+	/*
+	 * If destcol is halfway through a multicolumn
+	 * wide char, we have no chance of plodding.
+	 */
+	if (curscr->alines[outline]->line[outcol].cflags & CA_CONTINUATION) {
+		plodcnt = -1;
+		goto out;
+	}
+#endif /* HAVE_WCHAR */
+
 	while (outcol < destcol) {
+		int chw;
+
+		csp = &curscr->alines[outline]->line[outcol];
+#ifdef HAVE_WCHAR
+		chw = csp->wcols;
+#else
+		chw = 1;
+#endif /* HAVE_WCHAR */
+
+
 		/*
 		 * Move one char to the right.  We don't use nd space because
 		 * it's better to just print the char we are moving over.
@@ -419,46 +450,42 @@ dontcr:while (outline < destline) {
 				plodcnt--;
 			else {
 #ifndef HAVE_WCHAR
-				i = curscr->alines[outline]->line[outcol].ch
-				    & __CHARTEXT;
-				if (curscr->alines[outline]->line[outcol].attr
-				    == curscr->wattr)
+				i = csp->ch & __CHARTEXT;
+				if (csp->attr == curscr->wattr)
 					__cputchar(i);
 #else
-				if ((curscr->alines[outline]->line[outcol].attr
-				    & WA_ATTRIBUTES)
+				if ((csp->attr & WA_ATTRIBUTES)
 				    == curscr->wattr) {
-					switch (WCOL(curscr->alines[outline]->line[outcol])) {
-					case 1:
-						__cputwchar(curscr->alines[outline]->line[outcol].ch);
-						__cursesi_putnsp(curscr->alines[outline]->line[outcol].nsp,
+					if (csp->cflags & CA_CONTINUATION)
+						goto nondes;
+
+					if (csp->wcols >= 1) {
+						__cputwchar(csp->ch);
+						__cursesi_putnsp(csp->nsp,
 								outline,
 								outcol);
-#ifdef DEBUG
 						__CTRACE(__CTRACE_OUTPUT,
-						    "plod: (%d,%d)WCOL(%d), "
+						    "plod: (%d,%d)wcols(%d), "
 						    "putwchar(%x)\n",
 						    outline, outcol,
-						    WCOL(curscr->alines[outline]->line[outcol]),
-						    curscr->alines[outline]->line[outcol].ch);
-#endif /* DEBUG */
-					/*FALLTHROUGH*/
-					case 0:
-						break;
-					default:
-						goto nondes;
+						    csp->wcols, csp->ch);
 					}
+
+					if (csp->wcols == 0)
+						break;
 				}
 #endif /* HAVE_WCHAR */
 				else
 					goto nondes;
 			}
-		else
-	nondes:	if (cursor_right)
-			tputs(cursor_right, 0, plodput);
-		else
-			plodput(' ');
-		outcol++;
+		else {
+		nondes:	if (cursor_right)
+				tputs(cursor_right, 0, plodput);
+			else
+				plodput(' ');
+		}
+
+		outcol += chw;
 		if (plodcnt < 0)
 			goto out;
 	}
@@ -467,9 +494,7 @@ out:	if (plodflg) {
 		outcol = soutcol;
 		outline = soutline;
 	}
-#ifdef DEBUG
 	__CTRACE(__CTRACE_OUTPUT, "plod: returns %d\n", plodcnt);
-#endif /* DEBUG */
 	return plodcnt;
 }
 

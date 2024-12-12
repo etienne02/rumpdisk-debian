@@ -1,4 +1,4 @@
-# $NetBSD: t_intr.sh,v 1.2 2021/07/09 15:26:59 christos Exp $
+# $NetBSD: t_intr.sh,v 1.7 2024/05/01 11:40:25 gson Exp $
 #
 # Copyright (c) 2021 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -36,11 +36,20 @@ SSIZE=256000
 TMOUT=20
 
 h_test() {
+	local avail=$( df -m . | awk '{if (int($4) > 0) print $4}' )
+	# The test data are stored in triplicate: numbers.in, numbers.out,
+	# and a temporary "stdout" file created by ATF.  Each line consists
+	# of up to 7 digits and a newline for a total of 8 bytes.
+	local need=$(( 3 * $MAX * 8 / 1000000 ))
+	if [ $avail -lt $need ]; then
+		atf_skip "not enough free space in working directory"
+	fi
+
 	"${DIR}/h_makenumbers" "$1" > numbers.in
 	"${DIR}/h_intr" \
 	    -p "$2" -a ${SSIZE} -b ${BSIZE} -t ${TMOUT} \
 	    -c "dd of=numbers.out msgfmt=quiet" numbers.in
-	"${DIR}/h_testnumbers" < numbers.out
+	atf_check -o "file:numbers.in" cat numbers.out
 }
 
 atf_test_case stdio_intr_ionbf
@@ -70,12 +79,13 @@ stdio_intr_iofbf_head()
 }
 stdio_intr_iofbf_body()
 {
-	h_test ${MAX} IOFBF
+	h_test ${LMAX} IOFBF
 }
 
 atf_init_test_cases()
 {
 	atf_add_test_case stdio_intr_ionbf
 	atf_add_test_case stdio_intr_iolbf
-	atf_add_test_case stdio_intr_iofbf
+	# flappy test; see fflush.c 1.19 to 1.24
+	#atf_add_test_case stdio_intr_iofbf
 }

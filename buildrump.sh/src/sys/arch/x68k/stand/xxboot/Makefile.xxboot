@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.xxboot,v 1.18 2020/08/16 06:43:43 isaki Exp $
+#	$NetBSD: Makefile.xxboot,v 1.21 2024/01/07 07:58:34 isaki Exp $
 
 NOMAN=		# defined
 
@@ -25,7 +25,7 @@ BINMODE=	444
 S=		${.CURDIR}/../../../../..
 M=		$S/arch/x68k
 .PATH:		${.CURDIR}/..
-SRCS=	boot.S bootmain.c conf.c xx.c
+SRCS=	boot.S bootmain.c xx.c
 SRCS+=	ashrdi3.S
 SRCS+=	ashldi3.S
 SRCS+=	memcpy.S
@@ -35,6 +35,7 @@ SRCS+=	memcmp.S
 .include "${S}/conf/newvers_stand.mk"
 
 CFLAGS=	-Os -fomit-frame-pointer -fno-unwind-tables -Wno-attributes
+CFLAGS+= -m68020-60
 #CFLAGS+= -Wall
 CPPFLAGS+= -D_STANDALONE
 CPPFLAGS+= -DTEXTADDR="$(TEXT)" -DBOOT_TEXTADDR="$(BOOT_TEXT)"
@@ -64,8 +65,8 @@ CPPFLAGS+= -DLIBSA_NO_RAW_ACCESS
 CPPFLAGS+= -DLIBSA_NO_TWIDDLE
 CPPFLAGS+= -DUSTAR_SECT_PER_CYL=30
 SRCS+=	open.c close.c read.c lseek.c loadfile.c loadfile_aout.c alloc.c
-SRCS+=	errno.c globals.c
-SRCS+=  $(FS).c
+SRCS+=	errno.c globals.c files.c
+SRCS+=	$(FS).c
 SRCS+=	${BOOTSRCS}
 
 .PATH: $M/stand/common

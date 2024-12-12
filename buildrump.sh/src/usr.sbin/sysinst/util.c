@@ -1,4 +1,4 @@
-/*	$NetBSD: util.c,v 1.59 2021/08/03 13:40:33 martin Exp $	*/
+/*	$NetBSD: util.c,v 1.77 2024/04/25 11:25:08 hannken Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -122,13 +122,21 @@ distinfo dist_list[] = {
 	{"modules",		SET_MODULES,		false, MSG_set_modules, NULL},
 #endif
 	{"base",		SET_BASE,		false, MSG_set_base, NULL},
+#ifdef HAVE_BASE32
+	{"base32",		SET_BASE32,		false, MSG_set_base32, NULL},
+#endif
+#ifdef HAVE_BASE64
+	{"base64",		SET_BASE64,		false, MSG_set_base64, NULL},
+#endif
 #ifdef HAVE_DTB
 	{"dtb",			SET_DTB,		false, MSG_set_dtb, NULL},
 #endif
 	{"etc",			SET_ETC,		false, MSG_set_system, NULL},
 	{"comp",		SET_COMPILER,		false, MSG_set_compiler, NULL},
 	{"games",		SET_GAMES,		false, MSG_set_games, NULL},
+	{"gpufw",		SET_GPUFW,		false, MSG_set_gpufw, NULL},
 	{"man",			SET_MAN_PAGES,		false, MSG_set_man_pages, NULL},
+	{"manhtml",		SET_MAN_PAGES_HTML,	false, MSG_set_man_pages_html, NULL},
 	{"misc",		SET_MISC,		false, MSG_set_misc, NULL},
 	{"rescue",		SET_RESCUE,		false, MSG_set_rescue, NULL},
 	{"tests",		SET_TESTS,		false, MSG_set_tests, NULL},
@@ -162,6 +170,12 @@ distinfo dist_list[] = {
 	{"gnusrc",		SET_GNUSRC,		true, MSG_set_gnusrc, NULL},
 	{"xsrc",		SET_XSRC,		true, MSG_set_xsrc, NULL},
 	{"debug",		SET_DEBUG,		false, MSG_set_debug, NULL},
+#ifdef HAVE_DEBUG32
+	{"debug32",		SET_DEBUG32,		false, MSG_set_debug32, NULL},
+#endif
+#ifdef HAVE_DEBUG64
+	{"debug64",		SET_DEBUG64,		false, MSG_set_debug64, NULL},
+#endif
 	{"xdebug",		SET_X11_DEBUG,		false, MSG_set_xdebug, NULL},
 	{NULL,			SET_GROUP_END,		false, NULL, NULL},
 
@@ -232,7 +246,7 @@ init_set_status(int flags)
 	i = strlen(msg_all); if (i > len) {len = i; longest = msg_all; }
 	i = strlen(msg_some); if (i > len) {len = i; longest = msg_some; }
 	i = strlen(msg_none); if (i > len) {len = i; longest = msg_none; }
-	select_menu_width = snprintf(NULL, 0, "%-30s %s", "", longest);
+	select_menu_width = snprintf(NULL, 0, "%-40s %s", "", longest);
 
 	/* Give the md code a chance to choose the right kernel, etc. */
 	md_init_set_status(flags);
@@ -397,7 +411,7 @@ static int
 get_iso9660_volname(int dev, int sess, char *volname, size_t volnamelen)
 {
 	int blkno, error, last;
-	char buf[ISO_BLKSIZE];
+	static char buf[ISO_BLKSIZE] __aligned(8);
 	struct iso_volume_descriptor *vd = NULL;
 	struct iso_primary_descriptor *pd = NULL;
 
@@ -856,7 +870,7 @@ set_label(menudesc *menu, int opt, void *arg)
 		}
 	}
 
-	wprintw(menu->mw, "%-30s %s", msg_string(desc), selected);
+	wprintw(menu->mw, "%-40s %s", msg_string(desc), selected);
 }
 
 static int set_sublist(menudesc *menu, void *arg);
@@ -1121,7 +1135,7 @@ char entropy_file[PATH_MAX];
 /*
  * Are we short of entropy?
  */
-static size_t
+size_t
 entropy_needed(void)
 {
 	int needed;
@@ -1153,34 +1167,36 @@ static void
 entropy_add_manual(void)
 {
 	SHA256_CTX ctx;
-	char buf[256], line[25];
-	size_t line_no, l;
+	char buf[256];
 	uint8_t digest[SHA256_DIGEST_LENGTH];
-	bool ok = false;
+	static const char prompt[] = "> ";
+	size_t l;
+	int txt_y;
 
 	msg_display(MSG_entropy_enter_manual1);
 	msg_printf("\n\n");
 	msg_display_add(MSG_entropy_enter_manual2);
-	msg_printf("\n\n   dd if=/dev/random bs=32 count=16 | openssl base64\n\n");
+	msg_printf("\n\n   dd if=/dev/random bs=32 count=1 | openssl base64\n\n");
 	msg_display_add(MSG_entropy_enter_manual3);
 	msg_printf("\n\n");
 	SHA256_Init(&ctx);
-	line_no = 1;
-	do {
-		sprintf(line, "%zu", line_no);
-		msg_prompt_win(line, -1, 15, 0, 0, "", buf, sizeof(buf));
-		l = strlen(buf);
-		if (l > 0)
-			SHA256_Update(&ctx, (const uint8_t*)buf, l);
-		line_no++;
-	} while(buf[0] != 0);
-	ok = ctx.bitcount >= 256;
+	txt_y = getcury(mainwin)+1;
+
+	echo();
+	wmove(mainwin, txt_y, 0);
+	msg_fmt_table_add(prompt, prompt);
+	mvwgetnstr(mainwin, txt_y, 2, buf, sizeof buf);
+	l = strlen(buf);
+	if (l > 0)
+		SHA256_Update(&ctx, (const uint8_t*)buf, l);
+	noecho();
 	SHA256_Final(digest, &ctx);
 
-	if (ok)
-		entropy_write_to_kernel(digest, sizeof digest);
-	else
-		hit_enter_to_continue(NULL, MSG_entropy_manual_not_enough);
+	wmove(mainwin, txt_y-1, 0);
+	wclrtobot(mainwin);
+	wrefresh(mainwin);
+
+	entropy_write_to_kernel(digest, sizeof digest);
 }
 
 /*
@@ -1222,7 +1238,7 @@ entropy_get_file(bool use_netbsd_seed, char *path)
 	case 2:
 #ifndef DEBUG
 		if (!network_up)
-			config_network();
+			config_network(0);
 #endif
 		server.xfer = rv == 1 ? XFER_HTTP : XFER_FTP;
 		arg.arg = &server;
@@ -1248,7 +1264,7 @@ entropy_get_file(bool use_netbsd_seed, char *path)
 	case 3:
 #ifndef DEBUG
 		if (!network_up)
-			config_network();
+			config_network(0);
 #endif
 		rv = -1;
 		msg_display_add_subst(MSG_entropy_via_nfs, 1, file_desc);
@@ -1331,7 +1347,7 @@ entropy_add_seed(void)
  * return true if we have enough entropy
  */
 bool
-do_check_entropy(void)
+do_add_entropy(void)
 {
 	int rv;
 
@@ -1340,7 +1356,7 @@ do_check_entropy(void)
 
 	for (;;) {
 		if (entropy_needed() == 0)
-			return true;
+			break;
 
 		msg_clear();
 		rv = 0;
@@ -1372,6 +1388,15 @@ do_check_entropy(void)
 			}
 		}
 	}
+
+	/*
+	 * Save entropy (maybe again) to give the seed file a good
+	 * entropy estimate.
+	 */
+	run_program(RUN_SILENT | RUN_CHROOT | RUN_ERROR_OK,
+	    "/etc/rc.d/random_seed stop");
+
+	return true;
 }
 #endif
 
@@ -1512,17 +1537,15 @@ get_and_unpack_sets(int update, msg setupdone_msg, msg success_msg, msg failure_
 	}
 
 	/* Configure the system */
-	if (set_status[SET_BASE] & SET_INSTALLED)
+	if (set_status[SET_BASE] & SET_INSTALLED) {
 		run_makedev();
-
-	if (update) {
-#ifdef CHECK_ENTROPY
-		if (!do_check_entropy()) {
-			hit_enter_to_continue(NULL, MSG_abortupgr);
-			return 1;
+		if (!update) {
+			run_program(RUN_CHROOT|RUN_DISPLAY,
+			    "/usr/sbin/certctl rehash");
 		}
-#endif
-	} else {
+	}
+
+	if (!update) {
 		struct stat sb1, sb2;
 
 		if (stat(target_expand("/"), &sb1) == 0
@@ -2125,7 +2148,7 @@ set_menu_select(menudesc *m, void *arg)
 }
 
 /*
- * check wether a binary is available somewhere in PATH,
+ * check whether a binary is available somewhere in PATH,
  * return 1 if found, 0 if not.
  */
 static int
@@ -2370,7 +2393,7 @@ msg_display_add_subst(const char *master, size_t argc, ...)
 
 /* initialize have_* variables */
 void
-check_available_binaries()
+check_available_binaries(void)
 {
 	static int did_test = false;
 
@@ -2454,6 +2477,14 @@ usage_info_list_from_parts(struct part_usage_info **list, size_t *count,
 }
 
 bool
+empty_usage_set_from_parts(struct partition_usage_set *wanted,
+    struct disk_partitions *parts)
+{
+	usage_set_from_parts(wanted, parts);
+	return true;
+}
+
+bool
 usage_set_from_parts(struct partition_usage_set *wanted,
     struct disk_partitions *parts)
 {
@@ -2461,6 +2492,47 @@ usage_set_from_parts(struct partition_usage_set *wanted,
 	wanted->parts = parts;
 
 	return usage_info_list_from_parts(&wanted->infos, &wanted->num, parts);
+}
+
+bool
+usage_set_from_install_desc(struct partition_usage_set *pset,
+    const struct install_partition_desc *install,
+    struct disk_partitions *parts)
+{
+	size_t cnt, i;
+
+	memset(pset, 0, sizeof(*pset));
+	pset->parts = parts;
+
+	if (!install->infos || !install->num)
+		return false;
+
+	for (cnt = 0, i = 0; i < install->num; i++) {
+		if (install->infos[i].parts != parts)
+			continue;
+		cnt++;
+	}
+	if (!cnt)
+		return false;
+	pset->num = cnt;
+	pset->infos = calloc(cnt, sizeof(*pset->infos));
+	if (!pset->infos)
+		return false;
+	for (cnt = 0, i = 0; i < install->num; i++) {
+		if (install->infos[i].parts != parts)
+			continue;
+		pset->infos[cnt] = install->infos[i];
+		cnt++;
+	}
+	return true;
+}
+
+bool
+merge_usage_set_into_install_desc(struct install_partition_desc *install,
+    const struct partition_usage_set *pset)
+{
+	// XXX
+	return false;
 }
 
 struct disk_partitions *
@@ -2521,9 +2593,9 @@ free_usage_set(struct partition_usage_set *wanted)
 void
 free_install_desc(struct install_partition_desc *install)
 {
-#ifndef NO_CLONES
 	size_t i, j;
 
+#ifndef NO_CLONES
 	for (i = 0; i < install->num; i++) {
 		struct selected_partitions *src = install->infos[i].clone_src;
 		if (!(install->infos[i].flags & PUIFLG_CLONE_PARTS) ||
@@ -2535,6 +2607,22 @@ free_install_desc(struct install_partition_desc *install)
 				install->infos[j].clone_src = NULL;
 	}
 #endif
+
+	for (i = 0; i < install->num; i++) {
+		struct disk_partitions * parts = install->infos[i].parts;
+
+		if (parts == NULL)
+			continue;
+
+		if (parts->pscheme->free)
+			parts->pscheme->free(parts);
+
+		/* NULL all other references to this parts */
+		for (j = i+1; j < install->num; j++)
+			if (install->infos[j].parts == parts)
+				install->infos[j].parts = NULL;
+	}
+
 	free(install->write_back);
 	free(install->infos);
 }

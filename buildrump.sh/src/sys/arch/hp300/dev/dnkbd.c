@@ -1,4 +1,4 @@
-/*	$NetBSD: dnkbd.c,v 1.13 2021/08/07 16:18:53 thorpej Exp $	*/
+/*	$NetBSD: dnkbd.c,v 1.15 2024/01/16 05:48:28 thorpej Exp $	*/
 /*	$OpenBSD: dnkbd.c,v 1.17 2009/07/23 21:05:56 blambert Exp $	*/
 
 /*
@@ -51,7 +51,7 @@
  *
  *   0x00	go to cooked mode.
  *   0x01	go to 'raw' (scancode) mode.
- *   0x12,0x21	status report as <id1>\r<id2>\r<model>\r followed by 0xff 
+ *   0x12,0x21	status report as <id1>\r<id2>\r<model>\r followed by 0xff
  *		and then the cooked/raw status.
  *   0x21,0x81	beep on
  *   0x21,0x82	beep off
@@ -301,7 +301,7 @@ dnkbd_attach(device_t parent, device_t self, void *aux)
 	/* reset the port */
 	dnkbd_init(sc, 1200, LCR_8BITS | LCR_PEVEN | LCR_PENAB);
 
-	frodo_intr_establish(parent, dnkbd_intr, sc, fa->fa_line, IPL_VM);
+	frodo_intr_establish(parent, dnkbd_intr, sc, fa->fa_line, ISRPRI_TTY);
 
 	/* send break to reset keyboard state */
 	dnkbd_break(sc, 1);

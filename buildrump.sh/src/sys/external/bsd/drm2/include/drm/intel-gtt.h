@@ -1,4 +1,4 @@
-/*	$NetBSD: intel-gtt.h,v 1.7 2018/08/27 16:15:09 riastradh Exp $	*/
+/*	$NetBSD: intel-gtt.h,v 1.10 2021/12/19 12:37:36 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -35,24 +35,28 @@
 #include <sys/types.h>
 #include <sys/bus.h>
 
-struct pci_dev;
+#include <linux/ioport.h>
+
 struct agp_bridge_data;
+struct pci_dev;
+struct sg_table;
 
 void	intel_gtt_get(uint64_t * /* GPU VA size in bytes */,
-	    size_t * /* graphics stolen memory in bytes */,
 	    bus_addr_t * /* aperture base */,
-	    uint64_t * /* aperture size in bytes */);
+	    resource_size_t * /* aperture size in bytes */);
 int	intel_gmch_probe(struct pci_dev *, struct pci_dev *,
 	    struct agp_bridge_data *);
 void	intel_gmch_remove(void);
 bool	intel_enable_gtt(void);
 void	intel_gtt_chipset_flush(void);
-void	intel_gtt_insert_sg_entries(bus_dmamap_t, unsigned, unsigned);
+void	intel_gtt_insert_page(bus_addr_t, unsigned, unsigned);
+void	intel_gtt_insert_sg_entries(struct sg_table *, unsigned, unsigned);
 void	intel_gtt_clear_range(unsigned, unsigned);
 
 #define	AGP_USER_MEMORY		1
 #define	AGP_USER_CACHED_MEMORY	2
 
-extern int	intel_iommu_gfx_mapped;
+extern int		intel_iommu_gfx_mapped;
+extern struct resource	intel_graphics_stolen_res;
 
 #endif  /* _DRM_INTEL_GTT_H_ */

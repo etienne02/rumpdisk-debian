@@ -1,4 +1,4 @@
-/*	$NetBSD: btpand.c,v 1.7 2014/06/21 17:50:01 christos Exp $	*/
+/*	$NetBSD: btpand.c,v 1.9 2024/06/04 06:24:58 plunky Exp $	*/
 
 /*-
  * Copyright (c) 2008-2009 Iain Hibbert
@@ -27,7 +27,7 @@
 
 #include <sys/cdefs.h>
 __COPYRIGHT("@(#) Copyright (c) 2008-2009 Iain Hibbert. All rights reserved.");
-__RCSID("$NetBSD: btpand.c,v 1.7 2014/06/21 17:50:01 christos Exp $");
+__RCSID("$NetBSD: btpand.c,v 1.9 2024/06/04 06:24:58 plunky Exp $");
 
 #include <sys/wait.h>
 
@@ -69,7 +69,7 @@ static const struct {
 	  "Personal Ad-hoc User Service"
 	},
 	{ "NAP",  SDP_SERVICE_CLASS_NAP,
-	  "Network Acess Point",
+	  "Network Access Point",
 	  "Personal Ad-hoc Network Service"
 	},
 	{ "GN",	  SDP_SERVICE_CLASS_GN,
@@ -155,10 +155,13 @@ main(int argc, char *argv[])
 
 		case 's': /* service */
 		case 'S': /* service (no SDP) */
-			for (ul = 0; strcasecmp(optarg, services[ul].type); ul++) {
-				if (ul == __arraycount(services))
-					errx(EXIT_FAILURE, "%s: unknown service", optarg);
+			for (ul = 0; ul < __arraycount(services); ul++) {
+				if (strcasecmp(optarg, services[ul].type) == 0)
+					break;
 			}
+
+			if (ul == __arraycount(services))
+				errx(EXIT_FAILURE, "%s: unknown service", optarg);
 
 			if (ch == 's') {
 				service_type = services[ul].type;

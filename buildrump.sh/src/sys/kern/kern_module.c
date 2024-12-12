@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_module.c,v 1.152 2021/06/11 23:41:47 pgoyette Exp $	*/
+/*	$NetBSD: kern_module.c,v 1.162 2024/05/13 00:32:09 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_module.c,v 1.152 2021/06/11 23:41:47 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_module.c,v 1.162 2024/05/13 00:32:09 msaitoh Exp $");
 
 #define _MODULE_INTERNAL
 
@@ -84,12 +84,17 @@ static const modinfo_t module_netbsd_modinfo = {
 };
 
 static module_t	*module_active;
-bool		module_verbose_on;
+#ifdef MODULAR_DEFAULT_VERBOSE
+bool		module_verbose_on = true;
+#else
+bool		module_verbose_on = false;
+#endif
 #ifdef MODULAR_DEFAULT_AUTOLOAD
 bool		module_autoload_on = true;
 #else
 bool		module_autoload_on = false;
 #endif
+bool		module_autounload_unsafe = 0;
 u_int		module_count;
 u_int		module_builtinlist;
 u_int		module_autotime = 10;
@@ -406,7 +411,6 @@ void
 module_init(void)
 {
 	__link_set_decl(modules, modinfo_t);
-	extern struct vm_map *module_map;
 	modinfo_t *const *mip;
 	int rv;
 
@@ -542,6 +546,12 @@ sysctl_module_setup(void)
 		CTL_CREATE, CTL_EOL);
 	sysctl_createv(&module_sysctllog, 0, &node, NULL,
 		CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+		CTLTYPE_BOOL, "autounload_unsafe",
+		SYSCTL_DESCR("Enable automatic unload of unaudited modules"),
+		NULL, 0, &module_autounload_unsafe, 0,
+		CTL_CREATE, CTL_EOL);
+	sysctl_createv(&module_sysctllog, 0, &node, NULL,
+		CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
 		CTLTYPE_BOOL, "verbose",
 		SYSCTL_DESCR("Enable verbose output"),
 		NULL, 0, &module_verbose_on, 0,
@@ -631,7 +641,7 @@ module_init_class(modclass_t modclass)
  *
  *	Return true if the two supplied kernel versions are said to
  *	have the same binary interface for kernel code.  The entire
- *	version is signficant for the development tree (-current),
+ *	version is significant for the development tree (-current),
  *	major and minor versions are significant for official
  *	releases of the system.
  */
@@ -897,7 +907,7 @@ module_do_builtin(const module_t *pmod, const char *name, module_t **modp,
 		/*
 		 * XXX: We'd like to panic here, but currently in some
 		 * cases (such as nfsserver + nfs), the dependee can be
-		 * succesfully linked without the dependencies.
+		 * successfully linked without the dependencies.
 		 */
 		module_error("built-in module %s can't find builtin "
 		    "dependency `%s'", pmod->mod_info->mi_name, name);
@@ -1360,6 +1370,17 @@ module_do_load(const char *name, bool isdep, int flags,
 
 	prev_active = module_active;
 	module_active = mod;
+
+	/*
+	 * Note that we handle sysctl and evcnt setup _before_ we
+	 * initialize the module itself.  This maintains a consistent
+	 * order between built-in and run-time-loaded modules.  If
+	 * initialization then fails, we'll need to undo these, too.
+	 */
+	module_load_sysctl(mod);	/* Set-up module's sysctl if any */
+	module_load_evcnt(mod);		/* Attach any static evcnt needed */
+
+
 	error = (*mi->mi_modcmd)(MODULE_CMD_INIT, filedict ? filedict : props);
 	module_active = prev_active;
 	if (filedict) {
@@ -1369,7 +1390,7 @@ module_do_load(const char *name, bool isdep, int flags,
 	if (error != 0) {
 		module_error("modcmd(CMD_INIT) failed for `%s', error %d",
 		    mi->mi_name, error);
-		goto fail;
+		goto fail3;
 	}
 
 	/*
@@ -1383,9 +1404,6 @@ module_do_load(const char *name, bool isdep, int flags,
 		error = EEXIST;
 		goto fail1;
 	}
-
-	module_load_sysctl(mod);	/* Set-up module's sysctl if any */
-	module_load_evcnt(mod);		/* Attach any static evcnt needed */
 
 	/*
 	 * Good, the module loaded successfully.  Put it onto the
@@ -1412,6 +1430,16 @@ module_do_load(const char *name, bool isdep, int flags,
 
  fail1:
 	(*mi->mi_modcmd)(MODULE_CMD_FINI, NULL);
+ fail3:
+	/*
+	 * If there were any registered SYSCTL_SETUP funcs, make sure
+	 * we release the sysctl entries
+	 */
+	if (mod->mod_sysctllog) {
+		sysctl_teardown(&mod->mod_sysctllog);
+	}
+	/* Also detach any static evcnt's */
+	module_unload_evcnt(mod);
  fail:
 	kobj_unload(mod->mod_kobj);
  fail2:
@@ -1467,20 +1495,22 @@ module_do_unload(const char *name, bool load_requires_force)
 	module_active = mod;
 	module_callback_unload(mod);
 
+	/* let the module clean up after itself */
+	error = (*mod->mod_info->mi_modcmd)(MODULE_CMD_FINI, NULL);
+
 	/*
 	 * If there were any registered SYSCTL_SETUP funcs, make sure
-	 * we release the sysctl entries
+	 * we release the sysctl entries.  Same for static evcnt.
 	 */
-	if (mod->mod_sysctllog) {
-		sysctl_teardown(&mod->mod_sysctllog);
+	if (error == 0) {
+		if (mod->mod_sysctllog) {
+			sysctl_teardown(&mod->mod_sysctllog);
+		}
+		module_unload_evcnt(mod);
 	}
-	module_unload_evcnt(mod);
-	error = (*mod->mod_info->mi_modcmd)(MODULE_CMD_FINI, NULL);
 	module_active = prev_active;
 	if (error != 0) {
-		module_load_sysctl(mod);	/* re-enable sysctl stuff */
-		module_load_evcnt(mod);		/* and reenable evcnts */
-		module_print("cannot unload module `%s' error=%d", name,
+		module_print("could not unload module `%s' error=%d", name,
 		    error);
 		return error;
 	}
@@ -1602,8 +1632,16 @@ module_fetch_info(module_t *mod)
 		return error;
 	}
 	if (size != sizeof(modinfo_t **)) {
-		module_error("`link_set_modules' section wrong size "
-		    "(got %zu, wanted %zu)", size, sizeof(modinfo_t **));
+		if (size > sizeof(modinfo_t **) &&
+		    (size % sizeof(modinfo_t **)) == 0) {
+			module_error("`link_set_modules' section wrong size "
+			    "(%zu different MODULE declarations?)",
+			    size / sizeof(modinfo_t **));
+		} else {
+			module_error("`link_set_modules' section wrong size "
+			    "(got %zu, wanted %zu)",
+			    size, sizeof(modinfo_t **));
+		}
 		return ENOEXEC;
 	}
 	mod->mod_info = *(modinfo_t **)addr;
@@ -1668,14 +1706,28 @@ module_thread(void *cookie)
 			}
 
 			/*
-			 * If this module wants to avoid autounload then
-			 * skip it.  Some modules can ping-pong in and out
-			 * because their use is transient but often. 
-			 * Example: exec_script.
+			 * Ask the module if it can be safely unloaded.
+			 *
+			 * - Modules which have been audited to be OK
+			 *   with that will return 0.
+			 *
+			 * - Modules which have not been audited for
+			 *   safe autounload will return ENOTTY.
+			 *
+			 *   => With kern.module.autounload_unsafe=1,
+			 *      we treat ENOTTY as acceptance.
+			 *
+			 * - Some modules would ping-ping in and out
+			 *   because their use is transient but often.
+			 *   Example: exec_script.  Other modules may
+			 *   still be in use.  These modules can
+			 *   prevent autounload in all cases by
+			 *   returning EBUSY or some other error code.
 			 */
 			mi = mod->mod_info;
 			error = (*mi->mi_modcmd)(MODULE_CMD_AUTOUNLOAD, NULL);
-			if (error == 0 || error == ENOTTY) {
+			if (error == 0 ||
+			    (error == ENOTTY && module_autounload_unsafe)) {
 				(void)module_do_unload(mi->mi_name, false);
 			} else
 				module_print("module `%s' declined to be "
@@ -1885,7 +1937,7 @@ module_register_callbacks(void (*load)(struct module *),
 
 	kernconfig_lock();
 	TAILQ_INSERT_TAIL(&modcblist, modcb, modcb_list);
-	TAILQ_FOREACH(mod, &module_list, mod_chain)
+	TAILQ_FOREACH_REVERSE(mod, &module_list, modlist, mod_chain)
 		load(mod);
 	kernconfig_unlock();
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: mcontext.h,v 1.12 2019/12/27 00:32:17 kamil Exp $	*/
+/*	$NetBSD: mcontext.h,v 1.16 2024/11/30 01:04:14 christos Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -91,26 +91,8 @@ typedef struct {
 /*
  * Machine dependent uc_flags
  */
-#define	_UC_SETSTACK		0x10000
-#define	_UC_CLRSTACK		0x20000
-#define	_UC_TLSBASE		0x80000
-
-#if defined(_RTLD_SOURCE) || defined(_LIBC_SOURCE) || \
-    defined(__LIBPTHREAD_SOURCE__)
-#include <sys/tls.h>
-
-__BEGIN_DECLS
-static __inline void *
-__lwp_getprivate_fast(void)
-{
-	register void *__gbr;
-
-	__asm volatile("stc gbr, %0" : "=r" (__gbr));
-
-	return __gbr;
-}
-__END_DECLS
-
-#endif
+#define	_UC_SETSTACK		_UC_MD_BIT16
+#define	_UC_CLRSTACK		_UC_MD_BIT17
+#define	_UC_TLSBASE		_UC_MD_BIT19
 
 #endif /* !_SH3_MCONTEXT_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_smap.c,v 1.33 2020/11/21 17:46:08 thorpej Exp $	*/
+/*	$NetBSD: if_smap.c,v 1.36 2023/11/05 21:50:27 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_smap.c,v 1.33 2020/11/21 17:46:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_smap.c,v 1.36 2023/11/05 21:50:27 andvar Exp $");
 
 #include "debug_playstation2.h"
 
@@ -108,7 +108,7 @@ struct smap_softc {
 	krndsource_t rnd_source;
 };
 
-#define DEVNAME		(sc->emac3.dev.dv_xname)
+#define DEVNAME		(device_xname(sc->emac3.dev))
 #define ROUND4(x)	(((x) + 3) & ~3)
 #define ROUND16(x)	(((x) + 15) & ~15)
 
@@ -147,7 +147,7 @@ void
 smap_attach(struct device *parent, struct device *self, void *aux)
 {
 	struct spd_attach_args *spa = aux;
-	struct smap_softc *sc = (void *)self;
+	struct smap_softc *sc = device_private(self);
 	struct emac3_softc *emac3 = &sc->emac3;
 	struct ifnet *ifp = &sc->ethercom.ec_if;
 	struct mii_data *mii = &emac3->mii;
@@ -157,6 +157,8 @@ smap_attach(struct device *parent, struct device *self, void *aux)
 #ifdef SMAP_DEBUG
 	__sc = sc;
 #endif
+
+	sc->emac3.dev = self;
 
 	printf(": %s\n", spa->spa_product_name);
 
@@ -219,7 +221,7 @@ smap_attach(struct device *parent, struct device *self, void *aux)
 	mii->mii_statchg	= emac3_phy_statchg;
 	sc->ethercom.ec_mii = mii;
 	ifmedia_init(&mii->mii_media, 0, ether_mediachange, ether_mediastatus);
-	mii_attach(&emac3->dev, mii, 0xffffffff, MII_PHY_ANY,
+	mii_attach(emac3->dev, mii, 0xffffffff, MII_PHY_ANY,
 	    MII_OFFSET_ANY, 0);
 
 	/* Choose a default media. */
@@ -446,9 +448,6 @@ smap_txeof(void *arg)
 	}
 	sc->tx_done_index = i;
 
-	/* OK to start transmit */
-	ifp->if_flags &= ~IFF_OACTIVE;
-
 	FUNC_EXIT();
 }
 
@@ -479,7 +478,6 @@ smap_start(struct ifnet *ifp)
 		if (sz > sc->tx_buf_freesize ||
 		    sc->tx_desc_cnt >= SMAP_DESC_MAX ||
 		    emac3_tx_done() != 0) {
-			ifp->if_flags |= IFF_OACTIVE;
 			goto end;
 		}
 
@@ -597,7 +595,7 @@ smap_stop(struct ifnet *ifp, int disable)
 
 	mii_down(&sc->emac3.mii);
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 
 	if (disable)
 		emac3_disable();
@@ -714,7 +712,7 @@ void
 __smap_status(int msg)
 {
 	static int cnt;
-	__gsfb_print(1, "%d: tx=%d rx=%d txcnt=%d free=%d cnt=%d\n", msg,
+	DPRINTF("%d: tx=%d rx=%d txcnt=%d free=%d cnt=%d\n", msg,
 	    _reg_read_1(SMAP_TXFIFO_FRAME_REG8),
 	    _reg_read_1(SMAP_RXFIFO_FRAME_REG8), __sc->tx_desc_cnt,
 	    __sc->tx_buf_freesize, cnt++);

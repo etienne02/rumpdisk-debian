@@ -1,4 +1,4 @@
-/*	$NetBSD: netbsd32_machdep.c,v 1.137 2020/11/20 17:44:56 thorpej Exp $	*/
+/*	$NetBSD: netbsd32_machdep.c,v 1.141 2022/08/20 23:49:31 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_machdep.c,v 1.137 2020/11/20 17:44:56 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_machdep.c,v 1.141 2022/08/20 23:49:31 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_compat_netbsd.h"
@@ -75,6 +75,7 @@ __KERNEL_RCSID(0, "$NetBSD: netbsd32_machdep.c,v 1.137 2020/11/20 17:44:56 thorp
 #include <machine/sysarch.h>
 #include <machine/userret.h>
 #include <machine/gdt.h>
+#include <machine/pmap_private.h>
 
 #include <compat/netbsd32/netbsd32.h>
 #include <compat/netbsd32/netbsd32_exec.h>
@@ -109,7 +110,6 @@ static int x86_64_set_mtrr32(struct lwp *, void *, register_t *);
 int check_sigcontext32(struct lwp *, const struct netbsd32_sigcontext *);
 void netbsd32_buildcontext(struct lwp *, struct trapframe *, void *,
     sig_t, int);
-int netbsd32_sendsig_siginfo(const ksiginfo_t *, const sigset_t *);
 
 #ifdef EXEC_AOUT
 /*
@@ -206,7 +206,7 @@ netbsd32_buildcontext(struct lwp *l, struct trapframe *tf, void *fp,
 	}
 }
 
-int
+void
 netbsd32_sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 {
 	struct lwp *l = curlwp;
@@ -218,7 +218,7 @@ netbsd32_sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 	const struct sigaction *sa = &SIGACTION(p, sig);
 	sig_t catcher = sa->sa_handler;
 	struct trapframe *tf = l->l_md.md_regs;
-	struct sigaltstack * const ss = &l->l_sigstk;
+	stack_t * const ss = &l->l_sigstk;
 
 	/* Do we need to jump onto the signal stack? */
 	onstack =
@@ -236,13 +236,13 @@ netbsd32_sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 
 	/* Build stack frame for signal trampoline. */
 	switch (ps->sa_sigdesc[sig].sd_vers) {
-	case 0:		/* handled by sendsig_sigcontext */
-	case 1:		/* handled by sendsig_sigcontext */
+	case __SIGTRAMP_SIGCODE_VERSION:     /* handled by sendsig_sigcontext */
+	case __SIGTRAMP_SIGCONTEXT_VERSION: /* handled by sendsig_sigcontext */
 	default:	/* unknown version */
 		printf("nsendsig: bad version %d\n",
 		    ps->sa_sigdesc[sig].sd_vers);
 		sigexit(l, SIGILL);
-	case 2:
+	case __SIGTRAMP_SIGINFO_VERSION:
 		break;
 	}
 
@@ -274,18 +274,6 @@ netbsd32_sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 	}
 
 	netbsd32_buildcontext(l, tf, fp, catcher, onstack);
-
-	return 0;
-}
-
-struct netbsd32_sendsig_hook_t netbsd32_sendsig_hook;
-
-void
-netbsd32_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
-{
-
-	MODULE_HOOK_CALL_VOID(netbsd32_sendsig_hook, (ksi, mask),
-	    netbsd32_sendsig_siginfo(ksi, mask));
 }
 
 /*

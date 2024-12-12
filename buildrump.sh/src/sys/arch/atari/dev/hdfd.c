@@ -1,4 +1,4 @@
-/*	$NetBSD: hdfd.c,v 1.89 2021/08/07 16:18:46 thorpej Exp $	*/
+/*	$NetBSD: hdfd.c,v 1.92 2023/01/06 10:28:28 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 1996 Leo Weppelman
@@ -91,7 +91,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hdfd.c,v 1.89 2021/08/07 16:18:46 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hdfd.c,v 1.92 2023/01/06 10:28:28 tsutsui Exp $");
 
 #include "opt_ddb.h"
 
@@ -131,12 +131,12 @@ __KERNEL_RCSID(0, "$NetBSD: hdfd.c,v 1.89 2021/08/07 16:18:46 thorpej Exp $");
 /*
  * {b,c}devsw[] function prototypes
  */
-dev_type_open(fdopen);
-dev_type_close(fdclose);
-dev_type_read(fdread);
-dev_type_write(fdwrite);
-dev_type_ioctl(fdioctl);
-dev_type_strategy(fdstrategy);
+static dev_type_open(fdopen);
+static dev_type_close(fdclose);
+static dev_type_read(fdread);
+static dev_type_write(fdwrite);
+static dev_type_ioctl(fdioctl);
+static dev_type_strategy(fdstrategy);
 
 volatile u_char	*fdio_addr;
 
@@ -236,12 +236,12 @@ struct fd_type {
  * The order of the types is the same as for the TT/Falcon....
  */
 struct fd_type fd_types[] = {
-        /* 360kB in 720kB drive */
-        {  9,2,18,2,0xff,0xdf,0x2a,0x50,40, 720,2,FDC_125KBPS,0xf6,1,"360KB"  },
-        /* 3.5" 720kB diskette */
-        {  9,2,18,2,0xff,0xdf,0x2a,0x50,80,1440,1,FDC_125KBPS,0xf6,1,"720KB"  },
-        /* 1.44MB diskette */
-        { 18,2,36,2,0xff,0xcf,0x1b,0x6c,80,2880,1,FDC_250KBPS,0xf6,1,"1.44MB" },
+	/* 360kB in 720kB drive */
+	{  9,2,18,2,0xff,0xdf,0x2a,0x50,40, 720,2,FDC_125KBPS,0xf6,1,"360KB"  },
+	/* 3.5" 720kB diskette */
+	{  9,2,18,2,0xff,0xdf,0x2a,0x50,80,1440,1,FDC_125KBPS,0xf6,1,"720KB"  },
+	/* 1.44MB diskette */
+	{ 18,2,36,2,0xff,0xcf,0x1b,0x6c,80,2880,1,FDC_250KBPS,0xf6,1,"1.44MB" },
 };
 
 /* software state, per disk (with up to 4 disks per ctlr) */
@@ -257,7 +257,7 @@ struct fd_softc {
 
 	daddr_t		sc_blkno;	/* starting block number */
 	int		sc_bcount;	/* byte count left */
- 	int		sc_opts;	/* user-set options */
+	int		sc_opts;	/* user-set options */
 	int		sc_skip;	/* bytes already transferred */
 	int		sc_nblks;	/* #blocks currently transferring */
 	int		sc_nbytes;	/* #bytes currently transferring */
@@ -436,10 +436,10 @@ fdcattach(device_t parent, device_t self, void *aux)
 		has_fifo = 1;
 	} else {
 		(void)rd_fdc_reg(fddata);
-		printf(": no fifo");
+		aprint_normal(": no fifo");
 	}
 
-	printf("\n");
+	aprint_normal("\n");
 
 	callout_init(&fdc->sc_timo_ch, 0);
 	callout_init(&fdc->sc_intr_ch, 0);
@@ -447,7 +447,7 @@ fdcattach(device_t parent, device_t self, void *aux)
 	if (intr_establish(22, USER_VEC|FAST_VEC, 0,
 			   (hw_ifun_t)(has_fifo ? mfp_hdfd_fifo : mfp_hdfd_nf),
 			   NULL) == NULL) {
-		printf("fdcattach: Can't establish interrupt\n");
+		aprint_error_dev(self, "Can't establish interrupt\n");
 		return;
 	}
 
@@ -537,10 +537,10 @@ fdattach(device_t parent, device_t self, void *aux)
 	/* XXX Allow `flags' to override device type? */
 
 	if (type)
-		printf(": %s %d cyl, %d head, %d sec\n", type->name,
+		aprint_normal(": %s %d cyl, %d head, %d sec\n", type->name,
 		    type->tracks, type->heads, type->sectrac);
 	else
-		printf(": density unknown\n");
+		aprint_normal(": density unknown\n");
 
 	bufq_alloc(&fd->sc_q, "disksort", BUFQ_SORT_CYLINDER);
 	fd->sc_cylin      = -1;
@@ -602,12 +602,12 @@ fd_dev_to_type(struct fd_softc *fd, dev_t dev)
 	return type ? &fd_types[type - 1] : fd->sc_deftype;
 }
 
-void
+static void
 fdstrategy(struct buf *bp)
 {
 	struct fd_softc *fd = device_lookup_private(&hdfd_cd, FDUNIT(bp->b_dev));
 	int sz;
- 	int s;
+	int s;
 
 	/* Valid unit, controller, and request? */
 	if (bp->b_blkno < 0 ||
@@ -639,7 +639,7 @@ fdstrategy(struct buf *bp)
 	}
 
 	bp->b_rawblkno = bp->b_blkno;
- 	bp->b_cylinder = bp->b_blkno / (FDC_BSIZE/DEV_BSIZE) / fd->sc_type->seccyl;
+	bp->b_cylinder = bp->b_blkno / (FDC_BSIZE/DEV_BSIZE) / fd->sc_type->seccyl;
 
 #ifdef FD_DEBUG
 	printf("fdstrategy: b_blkno %d b_bcount %ld blkno %qd cylin %ld sz"
@@ -717,14 +717,14 @@ fdfinish(struct fd_softc *fd, struct buf *bp)
 	fdc->sc_state = DEVIDLE;
 }
 
-int
+static int
 fdread(dev_t dev, struct uio *uio, int flags)
 {
 
 	return physio(fdstrategy, NULL, dev, B_READ, minphys, uio);
 }
 
-int
+static int
 fdwrite(dev_t dev, struct uio *uio, int flags)
 {
 
@@ -815,7 +815,7 @@ out_fdc(u_char x)
 	return 0;
 }
 
-int
+static int
 fdopen(dev_t dev, int flags, int mode, struct lwp *l)
 {
 	struct fd_softc *fd;
@@ -840,7 +840,7 @@ fdopen(dev_t dev, int flags, int mode, struct lwp *l)
 	return 0;
 }
 
-int
+static int
 fdclose(dev_t dev, int flags, int mode, struct lwp *l)
 {
 	struct fd_softc *fd = device_lookup_private(&hdfd_cd, FDUNIT(dev));
@@ -962,7 +962,7 @@ loop:
 	fd = fdc->sc_drives.tqh_first;
 	if (fd == NULL) {
 		fdc->sc_state = DEVIDLE;
- 		return 1;
+		return 1;
 	}
 
 	/* Is there a transfer to this drive?  If not, deactivate drive. */
@@ -1289,7 +1289,7 @@ fdcretry(struct fdc_softc *fdc)
 	fdc->sc_errors++;
 }
 
-int
+static int
 fdioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 {
 	struct fd_softc		*fd;
@@ -1448,7 +1448,7 @@ fdioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 			fd_formb->fd_formb_secno(i) = il[i+1];
 			fd_formb->fd_formb_secsize(i) = fd->sc_type->secsize;
 		}
-		
+
 		error = fdformat(dev, fd_formb, l->l_proc);
 		kmem_free(fd_formb, sizeof(*fd_formb));
 		return error;
@@ -1514,7 +1514,7 @@ fdformat(dev_t dev, struct ne7_fd_formb *finfo, struct proc *p)
 			break;
 	}
 	mutex_exit(bp->b_objlock);
-       
+
 	if (rv == EWOULDBLOCK) {
 		/* timed out */
 		rv = EIO;
@@ -1588,12 +1588,12 @@ fdgetdefaultlabel(struct fd_softc *fd, struct disklabel *lp, int part)
 	lp->d_secperunit  = fd->sc_type->size;
 
 	lp->d_type        = DKTYPE_FLOPPY;
-	lp->d_rpm         = 300; 	/* good guess I suppose.	*/
+	lp->d_rpm         = 300;	/* good guess I suppose.	*/
 	lp->d_interleave  = 1;		/* FIXME: is this OK?		*/
 	lp->d_bbsize      = 0;
 	lp->d_sbsize      = 0;
 	lp->d_npartitions = part + 1;
-	lp->d_trkseek     = 6000; 	/* Who cares...			*/
+	lp->d_trkseek     = 6000;	/* Who cares...			*/
 	lp->d_magic       = DISKMAGIC;
 	lp->d_magic2      = DISKMAGIC;
 	lp->d_checksum    = dkcksum(lp);

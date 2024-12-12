@@ -1,4 +1,4 @@
-/*	$NetBSD: if_iwn.c,v 1.96 2021/06/16 00:21:18 riastradh Exp $	*/
+/*	$NetBSD: if_iwn.c,v 1.101 2024/11/10 11:45:09 mlelstv Exp $	*/
 /*	$OpenBSD: if_iwn.c,v 1.135 2014/09/10 07:22:09 dcoppa Exp $	*/
 
 /*-
@@ -22,7 +22,7 @@
  * adapters.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_iwn.c,v 1.96 2021/06/16 00:21:18 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_iwn.c,v 1.101 2024/11/10 11:45:09 mlelstv Exp $");
 
 #define IWN_USE_RBUF	/* Use local storage for RX */
 #undef IWN_HWCRYPTO	/* XXX does not even compile yet */
@@ -225,6 +225,7 @@ static void	iwn_free_ict(struct iwn_softc *);
 static int	iwn_alloc_fwmem(struct iwn_softc *);
 static void	iwn_free_fwmem(struct iwn_softc *);
 static int	iwn_alloc_rx_ring(struct iwn_softc *, struct iwn_rx_ring *);
+static void	iwn_claim_rx_ring(struct iwn_softc *, struct iwn_rx_ring *);
 static void	iwn_reset_rx_ring(struct iwn_softc *, struct iwn_rx_ring *);
 static void	iwn_free_rx_ring(struct iwn_softc *, struct iwn_rx_ring *);
 static int	iwn_alloc_tx_ring(struct iwn_softc *, struct iwn_tx_ring *,
@@ -661,6 +662,10 @@ iwn_attach(device_t parent __unused, device_t self, void *aux)
 
 	if_initialize(ifp);
 	ieee80211_ifattach(ic);
+
+	/* MBUFTRACE */
+	iwn_claim_rx_ring(sc, &sc->rxq);
+
 	/* Use common softint-based if_input */
 	ifp->if_percpuq = if_percpuq_create(ifp);
 	if_register(ifp);
@@ -846,6 +851,8 @@ iwn5000_attach(struct iwn_softc *sc, pci_product_id_t pid)
 		/* Type 6030 cards return IWN_HW_REV_TYPE_6005 */
 		if (pid == PCI_PRODUCT_INTEL_WIFI_LINK_1030_1 ||
 		    pid == PCI_PRODUCT_INTEL_WIFI_LINK_1030_2 ||
+		    pid == PCI_PRODUCT_INTEL_WIFI_LINK_130_1  ||
+		    pid == PCI_PRODUCT_INTEL_WIFI_LINK_130_2  ||
 		    pid == PCI_PRODUCT_INTEL_WIFI_LINK_6230_1 ||
 		    pid == PCI_PRODUCT_INTEL_WIFI_LINK_6230_2 ||
 		    pid == PCI_PRODUCT_INTEL_WIFI_LINK_6235   ||
@@ -859,7 +866,7 @@ iwn5000_attach(struct iwn_softc *sc, pci_product_id_t pid)
 		 * PCI_PRODUCT_INTEL_WIFI_LINK_6005_2X2_2
 		 */
 		else
-			sc->fwname = "iwlwifi-6000g2a-5.ucode";
+			sc->fwname = "iwlwifi-6000g2a-6.ucode";
 		break;
 	case IWN_HW_REV_TYPE_2030:
 		sc->limits = &iwn2030_sensitivity_limits;
@@ -973,7 +980,7 @@ iwn_power(int why, void *arg)
 	s = splnet();
 	ifp = &sc->sc_ic.ic_if;
 	if (ifp->if_flags & IFF_UP) {
-		ifp->if_init(ifp);
+		if_init(ifp);
 		if (ifp->if_flags & IFF_RUNNING)
 			ifp->if_start(ifp);
 	}
@@ -1406,6 +1413,20 @@ iwn_alloc_rx_ring(struct iwn_softc *sc, struct iwn_rx_ring *ring)
 
 fail:	iwn_free_rx_ring(sc, ring);
 	return error;
+}
+
+static void
+iwn_claim_rx_ring(struct iwn_softc *sc, struct iwn_rx_ring *ring)
+{
+	int i;
+
+	for (i = 0; i < IWN_RX_RING_COUNT; i++) {
+		struct iwn_rx_data *data = &ring->data[i];
+	
+		if (data->m != NULL) {
+			MCLAIM(data->m, &sc->sc_ec.ec_rx_mowner);
+		}
+	}
 }
 
 static void
@@ -2163,6 +2184,7 @@ iwn_rx_done(struct iwn_softc *sc, struct iwn_rx_desc *desc,
 		if_statinc(ifp, if_ierrors);
 		return;
 	}
+	MCLAIM(m1, &sc->sc_ec.ec_rx_mowner);
 	bus_dmamap_unload(sc->sc_dmat, data->map);
 
 	error = bus_dmamap_load(sc->sc_dmat, data->map, mtod(m1, void *),
@@ -3175,6 +3197,7 @@ iwn_tx(struct iwn_softc *sc, struct mbuf *m, struct ieee80211_node *ni, int ac)
 			m_freem(m);
 			return ENOBUFS;
 		}
+		MCLAIM(m1, &sc->sc_ec.ec_tx_mowner);
 		if (m->m_pkthdr.len > MHLEN) {
 			MCLGET(m1, M_DONTWAIT);
 			if (!(m1->m_flags & M_EXT)) {
@@ -3435,6 +3458,7 @@ iwn_cmd(struct iwn_softc *sc, int code, const void *buf, int size, int async)
 		MGETHDR(m, M_DONTWAIT, MT_DATA);
 		if (m == NULL)
 			return ENOMEM;
+		MCLAIM(m, &sc->sc_ec.ec_tx_mowner);
 		if (totlen > MHLEN) {
 			MCLGET(m, M_DONTWAIT);
 			if (!(m->m_flags & M_EXT)) {
@@ -4477,14 +4501,14 @@ iwn_config_bt_coex_adv_config(struct iwn_softc *sc, struct iwn_bt_basic *basic,
 	btprot.type = 1;
 	error = iwn_cmd(sc, IWN_CMD_BT_COEX_PROT, &btprot, sizeof btprot, 1);
 	if (error != 0) {
-		aprint_error_dev(sc->sc_dev, "could not open BT protcol\n");
+		aprint_error_dev(sc->sc_dev, "could not open BT protocol\n");
 		return error;
 	}
 
 	btprot.open = 0;
 	error = iwn_cmd(sc, IWN_CMD_BT_COEX_PROT, &btprot, sizeof btprot, 1);
 	if (error != 0) {
-		aprint_error_dev(sc->sc_dev, "could not close BT protcol\n");
+		aprint_error_dev(sc->sc_dev, "could not close BT protocol\n");
 		return error;
 	}
 	return 0;

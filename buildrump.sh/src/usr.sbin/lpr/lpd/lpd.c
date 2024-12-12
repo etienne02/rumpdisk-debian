@@ -1,4 +1,4 @@
-/*	$NetBSD: lpd.c,v 1.58 2017/05/04 16:26:09 sevan Exp $	*/
+/*	$NetBSD: lpd.c,v 1.60 2023/04/26 18:25:02 kre Exp $	*/
 
 /*
  * Copyright (c) 1983, 1993, 1994
@@ -41,7 +41,7 @@ __COPYRIGHT("@(#) Copyright (c) 1983, 1993, 1994\
 #if 0
 static char sccsid[] = "@(#)lpd.c	8.7 (Berkeley) 5/10/95";
 #else
-__RCSID("$NetBSD: lpd.c,v 1.58 2017/05/04 16:26:09 sevan Exp $");
+__RCSID("$NetBSD: lpd.c,v 1.60 2023/04/26 18:25:02 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -194,7 +194,7 @@ main(int argc, char **argv)
 		case 'w':
 			wait_time = atoi(optarg);
 			if (wait_time < 0)
-				errx(1, "wait time must be postive: %s",
+				errx(1, "wait time must be positive: %s",
 				    optarg);
 			if (wait_time < 30)
 			    warnx("warning: wait time less than 30 seconds");
@@ -394,9 +394,9 @@ chkplushost(int good, FILE *fhost, char *hst)
 static void
 reapchild(int signo)
 {
-	union wait status;
+	int status;
 
-	while (wait3((int *)&status, WNOHANG, 0) > 0)
+	while (wait3(&status, WNOHANG, 0) > 0)
 		child_count--;
 }
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: slk.c,v 1.14 2021/08/15 12:39:39 christos Exp $	*/
+/*	$NetBSD: slk.c,v 1.21 2022/12/20 04:57:01 blymn Exp $	*/
 
 /*-
  * Copyright (c) 2017 The NetBSD Foundation, Inc.
@@ -30,10 +30,12 @@
  */
 
 #include <sys/cdefs.h>
+#include <limits.h>
 #ifndef lint
-__RCSID("$NetBSD: slk.c,v 1.14 2021/08/15 12:39:39 christos Exp $");
+__RCSID("$NetBSD: slk.c,v 1.21 2022/12/20 04:57:01 blymn Exp $");
 #endif				/* not lint */
 
+#include <limits.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -555,21 +557,16 @@ __slk_wset(SCREEN *screen, int labnum, const wchar_t *label, int justify)
 
 	if (screen == NULL)
 		return ERR;
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INPUT, "__slk_wset: entry\n");
-#endif
 	olabel = label;
 	if ((len = wcsrtombs(NULL, &olabel, 0, &screen->sp)) == -1) {
-#ifdef DEBUG
-	__CTRACE(__CTRACE_INPUT, "__slk_wset: conversion failed on char 0x%x\n",
-	    (uint16_t) *olabel);
-#endif
+	__CTRACE(__CTRACE_INPUT,
+	    "__slk_wset: conversion failed on char 0x%hx\n",
+	    (uint16_t)*olabel);
 		return ERR;
 	}
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INPUT, "__slk_wset: wcsrtombs %zu\n", len);
-#endif
 	len++; /* We need to store the NULL character. */
 	if ((str = malloc(len)) == NULL)
 		return ERR;
@@ -579,10 +576,8 @@ __slk_wset(SCREEN *screen, int labnum, const wchar_t *label, int justify)
 	result = __slk_set(screen, labnum, str, justify);
 out:
 	free(str);
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INPUT, "__slk_wset: return %s\n",
-	    (result == OK)?"OK":"ERR");
-#endif
+	    result == OK ? "OK" : "ERR");
 	return result;
 }
 #endif	/* HAVE_WCHAR */
@@ -824,6 +819,9 @@ __slk_draw(SCREEN *screen, int labnum)
 	wchar_t wc[2];
 #endif
 
+	__CTRACE(__CTRACE_INPUT, "__slk_draw: screen %p, label %d\n", screen,
+	    labnum);
+
 	if (screen->slk_hidden)
 		return OK;
 
@@ -839,7 +837,7 @@ __slk_draw(SCREEN *screen, int labnum)
 		    (screen->slk_window->flags & __SCROLLOK) ||
 		    ((l->x + screen->slk_label_len) < screen->slk_window->maxx)) {
 			retval = mvwaddnstr(screen->slk_window, 0, l->x,
-			    l->label, screen->slk_label_len);
+			    l->label, strlen(l->label));
 		} else {
 			lcnt = 0;
 			tx = 0;
@@ -851,12 +849,11 @@ __slk_draw(SCREEN *screen, int labnum)
 					continue;
 				}
 
-#ifdef DEBUG
-	__CTRACE(__CTRACE_INPUT, "__slk_draw: last label, (%d,%d) char[%d] 0x%x\n",
+	__CTRACE(__CTRACE_INPUT,
+	    "__slk_draw: last label, (%d,%d) char[%d] 0x%x\n",
 	    l->x + tx, 0, lcnt, l->label[lcnt]);
 	__CTRACE(__CTRACE_INPUT, "__slk_draw: label len %d, wcwidth %d\n",
 	    screen->slk_label_len, wcwidth(l->label[lcnt]));
-#endif
 #ifdef HAVE_WCHAR
 				wc[0] = l->label[lcnt];
 				wc[1] = L'\0';

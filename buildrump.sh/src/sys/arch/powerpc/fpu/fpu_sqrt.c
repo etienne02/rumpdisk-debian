@@ -1,4 +1,4 @@
-/*	$NetBSD: fpu_sqrt.c,v 1.9 2020/06/27 04:29:27 rin Exp $ */
+/*	$NetBSD: fpu_sqrt.c,v 1.14 2022/09/06 23:14:28 rin Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fpu_sqrt.c,v 1.9 2020/06/27 04:29:27 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fpu_sqrt.c,v 1.14 2022/09/06 23:14:28 rin Exp $");
 
 #include <sys/types.h>
 #if defined(DIAGNOSTIC)||defined(DEBUG)
@@ -130,7 +130,7 @@ __KERNEL_RCSID(0, "$NetBSD: fpu_sqrt.c,v 1.9 2020/06/27 04:29:27 rin Exp $");
  * zero bit at the top of x.  Doing so means that q is not going to acquire
  * a 1 bit in the first trip around the loop (since x0 < 2^NBITS).  If the
  * final value in x is not needed, or can be off by a factor of 2, this is
- * equivalant to moving the `x *= 2' step to the bottom of the loop:
+ * equivalent to moving the `x *= 2' step to the bottom of the loop:
  *
  *	for k = NBITS-1 to 0 step -1 do if ... fi; x *= 2; done
  *
@@ -215,13 +215,12 @@ fpu_sqrt(struct fpemu *fe)
 	DUMPFPN(FPE_REG, x);
 	DPRINTF(FPE_REG, ("=>\n"));
 	if (ISNAN(x)) {
-		fe->fe_cx |= FPSCR_VXSNAN;
+		if (ISSNAN(x))
+			fe->fe_cx |= FPSCR_VXSNAN;
 		DUMPFPN(FPE_REG, x);
 		return (x);
 	}
 	if (ISZERO(x)) {
-		fe->fe_cx |= FPSCR_ZX;
-		x->fp_class = FPC_INF;
 		DUMPFPN(FPE_REG, x);
 		return (x);
 	}
@@ -353,7 +352,7 @@ fpu_sqrt(struct fpemu *fe)
 	FPU_SUBC(d0, x0, t0);
 	if ((int)d0 >= 0) {
 		x0 = d0, x1 = d1, x2 = d2;
-		q |= bit;
+		q = bit;
 		y1 |= 1;		/* now t1, y1 are set in concrete */
 	}
 	ODD_DOUBLE;
@@ -381,16 +380,16 @@ fpu_sqrt(struct fpemu *fe)
 	bit = 1 << 31;
 	EVEN_DOUBLE;
 	t3 = bit;
-	FPU_SUBS(d3, x3, t3); __USE(d3);
+	FPU_SUBS(d3, x3, t3);
 	FPU_SUBCS(d2, x2, t2);
 	FPU_SUBCS(d1, x1, t1);
 	FPU_SUBC(d0, x0, t0);
-	ODD_DOUBLE;
 	if ((int)d0 >= 0) {
-		x0 = d0, x1 = d1, x2 = d2;
-		q |= bit;
+		x0 = d0, x1 = d1, x2 = d2; x3 = d3;
+		q = bit;
 		y2 |= 1;
 	}
+	ODD_DOUBLE;
 	while ((bit >>= 1) != 0) {
 		EVEN_DOUBLE;
 		t3 = y3 | bit;
@@ -399,7 +398,7 @@ fpu_sqrt(struct fpemu *fe)
 		FPU_SUBCS(d1, x1, t1);
 		FPU_SUBC(d0, x0, t0);
 		if ((int)d0 >= 0) {
-			x0 = d0, x1 = d1, x2 = d2;
+			x0 = d0, x1 = d1, x2 = d2; x3 = d3;
 			q |= bit;
 			y3 |= bit << 1;
 		}

@@ -1,4 +1,4 @@
-/*	$NetBSD: idr.h,v 1.7 2018/08/27 14:14:42 riastradh Exp $	*/
+/*	$NetBSD: idr.h,v 1.11 2023/07/11 10:42:36 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -33,6 +33,7 @@
 #define _LINUX_IDR_H_
 
 #include <sys/types.h>
+#include <sys/mutex.h>
 #include <sys/rbtree.h>
 
 #include <linux/gfp.h>
@@ -42,6 +43,7 @@
 struct idr {
 	kmutex_t	idr_lock;
 	rb_tree_t	idr_tree;
+	int		idr_base;
 };
 
 /* XXX Make the nm output a little more greppable...  */
@@ -51,6 +53,7 @@ struct idr {
 #define	idr_for_each		linux_idr_for_each
 #define	idr_get_next		linux_idr_get_next
 #define	idr_init		linux_idr_init
+#define	idr_init_base		linux_idr_init_base
 #define	idr_is_empty		linux_idr_is_empty
 #define	idr_preload		linux_idr_preload
 #define	idr_preload_end		linux_idr_preload_end
@@ -61,12 +64,13 @@ int	linux_idr_module_init(void);
 void	linux_idr_module_fini(void);
 
 void	idr_init(struct idr *);
+void	idr_init_base(struct idr *, int);
 void	idr_destroy(struct idr *);
 bool	idr_is_empty(struct idr *);
 void	*idr_find(struct idr *, int);
 void	*idr_get_next(struct idr *, int *);
 void	*idr_replace(struct idr *, void *, int);
-void	idr_remove(struct idr *, int);
+void	*idr_remove(struct idr *, int);
 void	idr_preload(gfp_t);
 int	idr_alloc(struct idr *, void *, int, int, gfp_t);
 void	idr_preload_end(void);
@@ -94,7 +98,7 @@ ida_destroy(struct ida *ida)
 }
 
 static inline void
-ida_remove(struct ida *ida, int id)
+ida_free(struct ida *ida, int id)
 {
 
 	idr_remove(&ida->ida_idr, id);
@@ -115,12 +119,19 @@ ida_simple_get(struct ida *ida, unsigned start, unsigned end, gfp_t gfp)
 	return id;
 }
 
+static inline int
+ida_alloc_max(struct ida *ida, unsigned max, gfp_t gfp)
+{
+
+	return ida_simple_get(ida, 0, max + 1, gfp);
+}
+
 static inline void
 ida_simple_remove(struct ida *ida, unsigned int id)
 {
 
 	KASSERT((int)id >= 0);
-	ida_remove(ida, id);
+	ida_free(ida, id);
 }
 
 #endif  /* _LINUX_IDR_H_ */

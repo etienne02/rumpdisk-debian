@@ -1,4 +1,4 @@
-/*	$NetBSD: setjmp.S,v 1.10 2013/09/12 15:36:16 joerg Exp $	*/
+/*	$NetBSD: setjmp.S,v 1.12 2023/10/11 09:12:21 skrll Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -42,7 +42,7 @@
 #if 0
 	.asciz "@(#)setjmp.s	8.1 (Berkeley) 6/4/93"
 #else
-	RCSID("$NetBSD: setjmp.S,v 1.10 2013/09/12 15:36:16 joerg Exp $")
+	RCSID("$NetBSD: setjmp.S,v 1.12 2023/10/11 09:12:21 skrll Exp $")
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -81,8 +81,8 @@ ENTRY(__setjmp14)
 
 	/* now get sigmask and onstack flag */
 	add	%i0, 0x38, %o2		/* build sigcontext in [%o2]->sc.sc_mask */
-	mov	1, %o0			/* SIG_BLOCK */
-					/* sigprocmask(SIG_BLOCK, (sigset_t *)NULL, (sigset_t *)a) */
+	mov	0, %o0			/* 0 - is ignored. */
+					/* sigprocmask(0, (sigset_t *)NULL, (sigset_t *)a) */
 #if __PIC__ - 0 >= 2
 	set	_C_LABEL(__sigprocmask14), %o4
 	ldx	[%i1 + %o4], %g2
@@ -107,7 +107,7 @@ ENTRY(__setjmp14)
 	call	_C_LABEL(__sigaltstack14)
 #endif
 	 add	%i0, 8, %o1		/* (foo being part of the sigcontext we're overwriting) */
-	
+
 	lduw	[%i0 + 8 + 0x10], %o0	/* foo.ss_flags */
 	and	%o0, 1, %o1		/* onstack = foo.ss_flags & SS_ONSTACK; */
 	st	%o1, [%i0 + 0x00]	/* sc.sc_onstack = current onstack; */

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_gre.c,v 1.180 2021/02/14 19:33:29 roy Exp $ */
+/*	$NetBSD: if_gre.c,v 1.186 2024/07/05 04:31:53 rin Exp $ */
 
 /*
  * Copyright (c) 1998, 2008 The NetBSD Foundation, Inc.
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.180 2021/02/14 19:33:29 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.186 2024/07/05 04:31:53 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_atalk.h"
@@ -84,7 +84,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_gre.c,v 1.180 2021/02/14 19:33:29 roy Exp $");
 #include <net/ethertypes.h>
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <sys/device.h>
 #include <sys/module.h>
@@ -436,6 +435,7 @@ static int
 gre_socreate(struct gre_softc *sc, const struct gre_soparm *sp, int *fdout)
 {
 	int fd, rc;
+	file_t *fp;
 	struct socket *so;
 	struct sockaddr_big sbig;
 	sa_family_t af;
@@ -444,14 +444,11 @@ gre_socreate(struct gre_softc *sc, const struct gre_soparm *sp, int *fdout)
 	GRE_DPRINTF(sc, "enter\n");
 
 	af = sp->sp_src.ss_family;
-	rc = fsocreate(af, NULL, sp->sp_type, sp->sp_proto, &fd);
+	rc = fsocreate(af, &so, sp->sp_type, sp->sp_proto, &fd, &fp, NULL);
 	if (rc != 0) {
 		GRE_DPRINTF(sc, "fsocreate failed\n");
 		return rc;
 	}
-
-	if ((rc = fd_getsock(fd, &so)) != 0)
-		return rc;
 
 	memcpy(&sbig, &sp->sp_src, sizeof(sp->sp_src));
 	if ((rc = sobind(so, (struct sockaddr *)&sbig, curlwp)) != 0) {
@@ -485,10 +482,11 @@ gre_socreate(struct gre_softc *sc, const struct gre_soparm *sp, int *fdout)
 		rc = 0;
 	}
 out:
-	if (rc != 0)
-		fd_close(fd);
-	else  {
-		fd_putfile(fd);
+	if (rc != 0) {
+		soclose(so);
+		fd_abort(curproc, fp, fd);
+	} else  {
+		fd_affix(curproc, fp, fd);
 		*fdout = fd;
 	}
 
@@ -544,8 +542,7 @@ gre_sosend(struct socket *so, struct mbuf *top)
 	sbunlock(&so->so_snd);
  out:
  	sounlock(so);
-	if (top != NULL)
-		m_freem(top);
+	m_freem(top);
 	return error;
 }
 
@@ -790,10 +787,8 @@ static int
 gre_input(struct gre_softc *sc, struct mbuf *m, const struct gre_h *gh)
 {
 	pktqueue_t *pktq = NULL;
-	struct ifqueue *ifq = NULL;
 	uint16_t flags;
 	uint32_t af;		/* af passed to BPF tap */
-	int isr = 0, s;
 	int hlen;
 
 	if_statadd2(&sc->sc_if, if_ipackets, 1, if_ibytes, m->m_pkthdr.len);
@@ -825,8 +820,7 @@ gre_input(struct gre_softc *sc, struct mbuf *m, const struct gre_h *gh)
 #endif
 #ifdef NETATALK
 	case ETHERTYPE_ATALK:
-		ifq = &atintrq1;
-		isr = NETISR_ATALK;
+		pktq = at_pktq1;
 		af = AF_APPLETALK;
 		break;
 #endif
@@ -838,8 +832,7 @@ gre_input(struct gre_softc *sc, struct mbuf *m, const struct gre_h *gh)
 #endif
 #ifdef MPLS
 	case ETHERTYPE_MPLS:
-		ifq = &mplsintrq;
-		isr = NETISR_MPLS;
+		pktq = mpls_pktq;
 		af = AF_MPLS;
 		break;
 #endif
@@ -861,24 +854,10 @@ gre_input(struct gre_softc *sc, struct mbuf *m, const struct gre_h *gh)
 
 	m_set_rcvif(m, &sc->sc_if);
 
-	if (__predict_true(pktq)) {
-		if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
-			m_freem(m);
-		}
-		return 1;
-	}
-
-	s = splnet();
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);
+	KASSERT(pktq != NULL);
+	if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
 		m_freem(m);
-	} else {
-		IF_ENQUEUE(ifq, m);
 	}
-	/* we need schednetisr since the address family may change */
-	schednetisr(isr);
-	splx(s);
-
 	return 1;	/* packet is done, no further processing needed */
 }
 
@@ -1195,7 +1174,7 @@ gre_ioctl(struct ifnet *ifp, const u_long cmd, void *data)
 	case GRESADDRS:
 	case GRESSOCK:
 	case GREDSOCK:
-		if (kauth_authorize_network(curlwp->l_cred,
+		if (kauth_authorize_network(kauth_cred_get(),
 		    KAUTH_NETWORK_INTERFACE,
 		    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp, (void *)cmd,
 		    NULL) != 0)

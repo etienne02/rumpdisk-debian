@@ -1,4 +1,4 @@
-/* $NetBSD: meson_dwmac.c,v 1.11 2021/01/27 03:10:18 thorpej Exp $ */
+/* $NetBSD: meson_dwmac.c,v 1.16 2024/10/13 08:55:24 skrll Exp $ */
 
 /*-
  * Copyright (c) 2017 Jared McNeill <jmcneill@invisible.ca>
@@ -28,7 +28,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: meson_dwmac.c,v 1.11 2021/01/27 03:10:18 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: meson_dwmac.c,v 1.16 2024/10/13 08:55:24 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -66,16 +66,17 @@ static const struct device_compatible_entry compat_data[] = {
 };
 
 static int
-meson_dwmac_reset(const int phandle)
+meson_dwmac_reset_eth(const int phandle)
 {
 	struct fdtbus_gpio_pin *pin_reset;
 	const u_int *reset_delay_us;
 	bool reset_active_low;
 	int len, val;
 
-	pin_reset = fdtbus_gpio_acquire(phandle, "snps,reset-gpio", GPIO_PIN_OUTPUT);
+	pin_reset = fdtbus_gpio_acquire(phandle, "snps,reset-gpio",
+	    GPIO_PIN_OUTPUT);
 	if (pin_reset == NULL)
-		return 0;
+		return ENXIO;
 
 	reset_delay_us = fdtbus_get_prop(phandle, "snps,reset-delays-us", &len);
 	if (reset_delay_us == NULL || len != 12)
@@ -91,6 +92,41 @@ meson_dwmac_reset(const int phandle)
 	delay(be32toh(reset_delay_us[1]));
 	fdtbus_gpio_write(pin_reset, val);
 	delay(be32toh(reset_delay_us[2]));
+
+	return 0;
+}
+
+static int
+meson_dwmac_reset_phy(const int phandle)
+{
+	struct fdtbus_gpio_pin *pin_reset;
+	const u_int *reset_assert_us, *reset_deassert_us, *reset_gpios;
+	bool reset_active_low;
+	int len, val;
+
+	pin_reset = fdtbus_gpio_acquire(phandle, "reset-gpios",
+	    GPIO_PIN_OUTPUT);
+	if (pin_reset == NULL)
+		return ENXIO;
+
+	reset_assert_us = fdtbus_get_prop(phandle, "reset-assert-us", &len);
+	if (reset_assert_us == NULL || len != 4)
+		return ENXIO;
+	reset_deassert_us = fdtbus_get_prop(phandle, "reset-deassert-us", &len);
+	if (reset_deassert_us == NULL || len != 4)
+		return ENXIO;
+	reset_gpios = fdtbus_get_prop(phandle, "reset-gpios", &len);
+	if (reset_gpios == NULL || len != 12)
+		return ENXIO;
+
+	reset_active_low = be32toh(reset_gpios[2]);
+
+	val = reset_active_low ? 1 : 0;
+
+	fdtbus_gpio_write(pin_reset, val);
+	delay(be32toh(reset_assert_us[0]));
+	fdtbus_gpio_write(pin_reset, !val);
+	delay(be32toh(reset_deassert_us[0]));
 
 	return 0;
 }
@@ -207,7 +243,7 @@ meson_dwmac_attach(device_t parent, device_t self, void *aux)
 		phandle_phy = phandle;
 	}
 
-	if (strcmp(phy_mode, "rgmii") == 0) {
+	if (strncmp(phy_mode, "rgmii", 5) == 0) {
 		meson_dwmac_set_mode_rgmii(phandle, sc->sc_bst, prgeth_bsh, clk_in[0]);
 	} else if (strcmp(phy_mode, "rmii") == 0) {
 		meson_dwmac_set_mode_rmii(phandle, sc->sc_bst, prgeth_bsh);
@@ -230,15 +266,26 @@ meson_dwmac_attach(device_t parent, device_t self, void *aux)
 	aprint_normal(": Gigabit Ethernet Controller\n");
 
 	if (fdtbus_intr_establish_xname(phandle, 0, IPL_NET,
-	    DWCGMAC_FDT_INTR_MPSAFE, meson_dwmac_intr, sc,
+	    FDT_INTR_MPSAFE, meson_dwmac_intr, sc,
 	    device_xname(sc->sc_dev)) == NULL) {
 		aprint_error_dev(self, "failed to establish interrupt on %s\n", intrstr);
 		return;
 	}
 	aprint_normal_dev(self, "interrupting on %s\n", intrstr);
 
-	if (meson_dwmac_reset(phandle_phy) != 0)
-		aprint_error_dev(self, "PHY reset failed\n");
+	/*
+	 * Depending on the DTS, we need to check either the "snps,...",
+	 * properties on the ethernet node, or the "reset-..."
+	 * properties on the phy node for the MAC reset information.
+	 */
+
+	if (of_hasprop(phandle, "snps,reset-gpio")) {
+		if (meson_dwmac_reset_eth(phandle) != 0)
+			aprint_error_dev(self, "reset failed\n");
+	} else {
+		if (meson_dwmac_reset_phy(phandle_phy) != 0)
+			aprint_error_dev(self, "PHY reset failed\n");
+	}
 
 	miiclk_rate = clk_get_rate(clk_gmac);
 	if (miiclk_rate > 250 * 1000 * 1000)

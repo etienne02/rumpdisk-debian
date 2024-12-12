@@ -1,4 +1,4 @@
-/* $NetBSD: zs_ioasic.c,v 1.43 2021/08/07 16:19:16 thorpej Exp $ */
+/* $NetBSD: zs_ioasic.c,v 1.46 2022/07/20 14:19:38 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1996, 1998 The NetBSD Foundation, Inc.
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zs_ioasic.c,v 1.43 2021/08/07 16:19:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zs_ioasic.c,v 1.46 2022/07/20 14:19:38 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -73,7 +73,7 @@ __KERNEL_RCSID(0, "$NetBSD: zs_ioasic.c,v 1.43 2021/08/07 16:19:16 thorpej Exp $
 
 #include <dev/tc/zs_ioasicvar.h>
 
-#if defined(__alpha__) || defined(alpha)
+#if defined(__alpha__)
 #include <machine/rpb.h>
 #endif
 #if defined(pmax)
@@ -107,13 +107,13 @@ static void	zs_putc(struct zs_chanstate *, int);
 int zs_def_cflag = (TTYDEF_CFLAG & ~(CSIZE | PARENB)) | CS8;
 
 /*
- * ZS chips are feeded a 7.372 MHz clock.
+ * ZS chips are fed a 7.372 MHz clock.
  */
 #define	PCLK	(9600 * 768)	/* PCLK pin input clock rate */
 
 /* The layout of this is hardware-dependent (padding, order). */
 struct zshan {
-#if defined(__alpha__) || defined(alpha)
+#if defined(__alpha__)
 	volatile u_int	zc_csr;		/* ctrl,status, and indirect access */
 	u_int		zc_pad0;
 	volatile u_int	zc_data;	/* data */
@@ -158,7 +158,7 @@ zs_ioasic_get_chan_addr(tc_addr_t zsaddr, int channel)
 	struct zsdevice *addr;
 	struct zshan *zc;
 
-#if defined(__alpha__) || defined(alpha)
+#if defined(__alpha__)
 	addr = (struct zsdevice *)TC_DENSE_TO_SPARSE(zsaddr);
 #endif
 #if defined(pmax)
@@ -343,7 +343,7 @@ zs_ioasic_attach(device_t parent, device_t self, void *aux)
 	/* master interrupt control (enable) */
 	zs_write_reg(zs->zsc_cs[0], 9, zs_ioasic_init_reg[9]);
 	zs_write_reg(zs->zsc_cs[1], 9, zs_ioasic_init_reg[9]);
-#if defined(__alpha__) || defined(alpha)
+#if defined(__alpha__)
 	/* ioasic interrupt enable */
 	*(volatile u_int *)(ioasic_base + IOASIC_IMSK) |=
 		    IOASIC_INTR_SCC_1 | IOASIC_INTR_SCC_0;
@@ -394,7 +394,7 @@ zs_ioasic_submatch(device_t parent, cfdata_t cf, const int *locs, void *aux)
 		else if (systype == DS_MAXINE)
 			return (0);
 #endif
-#if defined(__alpha__) || defined(alpha)
+#if defined(__alpha__)
 		else if (cputype == ST_DEC_3000_300)
 			return (0);
 #endif
@@ -487,7 +487,7 @@ zs_set_modes(struct zs_chanstate *cs, int cflag)
 	/*
 	 * Output hardware flow control on the chip is horrendous:
 	 * if carrier detect drops, the receiver is disabled, and if
-	 * CTS drops, the transmitter is stoped IN MID CHARACTER!
+	 * CTS drops, the transmitter is stopped IN MID CHARACTER!
 	 * Therefore, NEVER set the HFC bit, and instead use the
 	 * status interrupt to detect CTS changes.
 	 */
@@ -719,7 +719,7 @@ zs_ioasic_cninit(tc_addr_t ioasic_addr, tc_offset_t zs_offset, int channel)
 	 * Compute the physical address of the chip, "map" it via
 	 * K0SEG, and then get the address of the actual channel.
 	 */
-#if defined(__alpha__) || defined(alpha)
+#if defined(__alpha__)
 	zs_addr = ALPHA_PHYS_TO_K0SEG(ioasic_addr + zs_offset);
 #endif
 #if defined(pmax)

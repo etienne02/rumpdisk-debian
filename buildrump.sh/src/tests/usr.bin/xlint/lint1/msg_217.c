@@ -1,14 +1,17 @@
-/*	$NetBSD: msg_217.c,v 1.9 2021/03/21 15:24:56 rillig Exp $	*/
+/*	$NetBSD: msg_217.c,v 1.16 2024/11/30 11:27:20 rillig Exp $	*/
 # 3 "msg_217.c"
 
-// Test for message: function %s falls off bottom without returning value [217]
+// Test for message: function '%s' falls off bottom without returning value [217]
+
+/* lint1-extra-flags: -X 351 */
 
 int
 random(int n)
 {
 	if (n < 0)
 		return -3;
-}				/* expect: 217 */
+}
+/* expect-1: warning: function 'random' falls off bottom without returning value [217] */
 
 /*
  * The pattern 'do { } while (0)' is often used in statement macros.
@@ -62,7 +65,56 @@ unreachable_continue_falls_through(void)
 {
 	for (;;) {
 		if (0)
-			continue; /* expect: statement not reached */
+			/* expect+1: warning: 'continue' statement not reached [193] */
+			continue;
 		break;
 	}
-}				/* expect: 217 */
+}
+/* expect-1: warning: function 'unreachable_continue_falls_through' falls off bottom without returning value [217] */
+
+
+_Noreturn void noreturn_c11(void);
+[[noreturn]] void noreturn_c23(void);
+__attribute__((__noreturn__)) void noreturn_gnu_prefix(void);
+void __attribute__((__noreturn__)) noreturn_gnu_infix(void);
+void noreturn_gnu_suffix(void) __attribute__((__noreturn__));
+
+int
+call_noreturn_c11(void)
+{
+	noreturn_c11();
+}
+
+inline int
+call_noreturn_c23(void)
+{
+	noreturn_c23();
+}
+
+int
+call_noreturn_gnu_prefix(void)
+{
+	noreturn_gnu_prefix();
+}
+
+int
+call_noreturn_gnu_infix(void)
+{
+	noreturn_gnu_infix();
+}
+
+int
+call_noreturn_gnu_suffix(void)
+{
+	noreturn_gnu_suffix();
+}
+
+
+double *force_function_attributes_in_diagnostic[] = {
+	// Force the word 'noreturn' to occur in a diagnostic.
+	/* expect+1: warning: illegal combination of 'pointer to double' and 'pointer to noreturn function(void) returning void', op 'init' [124] */
+	noreturn_c23,
+	// The 'inline' does affect the type of the function.
+	/* expect+1: warning: illegal combination of 'pointer to double' and 'pointer to function(void) returning int', op 'init' [124] */
+	call_noreturn_c23,
+};

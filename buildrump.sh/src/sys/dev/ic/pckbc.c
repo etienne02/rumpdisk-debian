@@ -1,4 +1,4 @@
-/* $NetBSD: pckbc.c,v 1.62 2020/05/01 01:34:57 riastradh Exp $ */
+/* $NetBSD: pckbc.c,v 1.65 2022/11/17 23:57:20 riastradh Exp $ */
 
 /*
  * Copyright (c) 2004 Ben Harris.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pckbc.c,v 1.62 2020/05/01 01:34:57 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pckbc.c,v 1.65 2022/11/17 23:57:20 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -85,13 +85,13 @@ void pckbc_start(struct pckbc_internal *, pckbc_slot_t);
 
 const char * const pckbc_slot_names[] = { "kbd", "aux" };
 
-static struct pckbport_accessops const pckbc_ops = {
-	pckbc_xt_translation,
-	pckbc_send_devcmd,
-	pckbc_poll_data1,
-	pckbc_slot_enable,
-	pckbc_intr_establish,
-	pckbc_set_poll
+static const struct pckbport_accessops pckbc_ops = {
+	.t_xt_translation = pckbc_xt_translation,
+	.t_send_devcmd = pckbc_send_devcmd,
+	.t_poll_data1 = pckbc_poll_data1,
+	.t_slot_enable = pckbc_slot_enable,
+	.t_intr_establish = pckbc_intr_establish,
+	.t_set_poll = pckbc_set_poll,
 };
 
 #define	KBD_DELAY	DELAY(8)
@@ -146,7 +146,6 @@ pckbc_poll_data1(void *pt, pckbc_slot_t slot)
 	for (; i; i--, delay(1000)) {
 		stat = bus_space_read_1(t->t_iot, t->t_ioh_c, 0);
 		if (stat & KBS_DIB) {
-			KBD_DELAY;
 			c = bus_space_read_1(t->t_iot, t->t_ioh_d, 0);
 
 		    process:
@@ -311,27 +310,23 @@ pckbc_attach(struct pckbc_softc *sc)
 	 */
 	if (!pckbc_send_cmd(iot, ioh_c, KBC_KBDTEST))
 		return;
-	res = pckbc_poll_data1(t, PCKBC_KBD_SLOT, 0);
+	res = pckbc_poll_data1(t, PCKBC_KBD_SLOT);
 
 	/*
 	 * Normally, we should get a "0" here.
 	 * But there are keyboard controllers behaving differently.
 	 */
-	if (res == 0 || res == 0xfa || res == 0x01 || res == 0xab) {
-#ifdef PCKBCDEBUG
-		if (res != 0)
-			printf("pckbc: returned %x on kbd slot test\n", res);
-#endif
-		if (pckbc_attach_slot(sc, PCKBC_KBD_SLOT))
-			cmdbits |= KC8_KENABLE;
-	} else {
+	if (!(res == 0 || res == 0xfa || res == 0x01 || res == 0xab)) {
 		printf("pckbc: kbd port test: %x\n", res);
 		return;
 	}
-#else
+#ifdef PCKBCDEBUG
+	if (res != 0)
+		printf("pckbc: returned %x on kbd slot test\n", res);
+#endif
+#endif /* 0 */
 	if (pckbc_attach_slot(sc, PCKBC_KBD_SLOT))
 		cmdbits |= KC8_KENABLE;
-#endif /* 0 */
 
 	/*
 	 * Check aux port ok.
@@ -516,12 +511,10 @@ pckbcintr_hard(void *vsc)
 		if (!q) {
 			/* XXX do something for live insertion? */
 			printf("pckbc: no dev for slot %d\n", slot);
-			KBD_DELAY;
 			(void) bus_space_read_1(t->t_iot, t->t_ioh_d, 0);
 			continue;
 		}
 
-		KBD_DELAY;
 		data = bus_space_read_1(t->t_iot, t->t_ioh_d, 0);
 
 		rnd_add_uint32(&q->rnd_source, (stat<<8)|data);
@@ -604,7 +597,6 @@ pckbcintr(void *vsc)
 			return 0;
 
 		served = 1;
-		KBD_DELAY;
 		data = bus_space_read_1(t->t_iot, t->t_ioh_d, 0);
 
 		if (q != NULL)

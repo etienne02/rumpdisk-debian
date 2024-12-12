@@ -1,10 +1,10 @@
-/*	$NetBSD: font_8x16.c,v 1.4 2005/12/11 12:16:54 christos Exp $	*/
+/*	$NetBSD: font_8x16.c,v 1.7 2023/09/21 09:31:49 msaitoh Exp $	*/
 
 /*
  *  Copyright (c) 1992, 1993, 1994 Hellmuth Michaelis and Joerg Wunsch
- *  
+ *
  *  All rights reserved.
- * 
+ *
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions
  *  are met:
@@ -15,11 +15,11 @@
  *     documentation and/or other materials provided with the distribution.
  *  3. All advertising materials mentioning features or use of this software
  *     must display the following acknowledgement:
- * 	This product includes software developed by
+ *	This product includes software developed by
  *	Hellmuth Michaelis and Joerg Wunsch
  *  4. The name authors may not be used to endorse or promote products
  *     derived from this software without specific prior written permission.
- * 
+ *
  *  THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
  *  IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
  *  OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -33,15 +33,15 @@
  */
 
 /*
- * Translated into compiler and human readable for for the Atari-TT port of
+ * Translated into compiler and human readable for the Atari-TT port of
  * NetBSD by Leo Weppelman.
  *
- * Reorganized and edited some chars to fit the iso-8859-1 fontset by 
+ * Reorganized and edited some chars to fit the iso-8859-1 fontset by
  * Thomas Gerner
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: font_8x16.c,v 1.4 2005/12/11 12:16:54 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: font_8x16.c,v 1.7 2023/09/21 09:31:49 msaitoh Exp $");
 
 #include <atari/dev/font.h>
 
@@ -72,7 +72,7 @@ unsigned char fontdata_8x16[] = {
            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 /* 0x08 */ 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x7e, 0x18,
            0x18, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00,
-/* 0x09 */ 0x00, 0x00, 0x88, 0x98, 0xa8, 0xc8, 0x88, 0x00,
+/* 0x09 */ 0x00, 0x00, 0x88, 0xc8, 0xa8, 0x98, 0x88, 0x00,
            0x10, 0x10, 0x10, 0x10, 0x1e, 0x00, 0x00, 0x00,
 /* 0x0a */ 0x00, 0x00, 0x88, 0x88, 0x50, 0x50, 0x20, 0x00,
            0x3e, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x00,

@@ -1,4 +1,4 @@
-/* $NetBSD: arm_platform.c,v 1.5 2021/04/24 23:36:26 thorpej Exp $ */
+/* $NetBSD: arm_platform.c,v 1.7 2023/04/07 08:55:30 skrll Exp $ */
 
 /*-
  * Copyright (c) 2020 Jared McNeill <jmcneill@invisible.ca>
@@ -35,8 +35,10 @@
  *  - Console UART is pre-configured by firmware
  */
 
+#include "opt_console.h"
+
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm_platform.c,v 1.5 2021/04/24 23:36:26 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm_platform.c,v 1.7 2023/04/07 08:55:30 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -45,7 +47,6 @@ __KERNEL_RCSID(0, "$NetBSD: arm_platform.c,v 1.5 2021/04/24 23:36:26 thorpej Exp
 #include <sys/termios.h>
 
 #include <dev/fdt/fdtvar.h>
-#include <arm/fdt/arm_fdtvar.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -56,7 +57,12 @@ __KERNEL_RCSID(0, "$NetBSD: arm_platform.c,v 1.5 2021/04/24 23:36:26 thorpej Exp
 #include <arm/cortex/gtmr_var.h>
 
 #include <arm/arm/psci.h>
+
+#include <arm/fdt/arm_fdtvar.h>
 #include <arm/fdt/psci_fdtvar.h>
+
+#include <evbarm/dev/plcomreg.h>
+#include <evbarm/dev/plcomvar.h>
 
 #include <libfdt.h>
 
@@ -64,6 +70,31 @@ __KERNEL_RCSID(0, "$NetBSD: arm_platform.c,v 1.5 2021/04/24 23:36:26 thorpej Exp
 
 extern struct arm32_bus_dma_tag arm_generic_dma_tag;
 extern struct bus_space arm_generic_bs_tag;
+
+void plcom_platform_early_putchar(char);
+
+#define	ARM_PTOV(p)       (((p) - DEVMAP_ALIGN(uart_base)) + KERNEL_IO_VBASE)
+
+void __noasan
+plcom_platform_early_putchar(char c)
+{
+#ifdef CONSADDR
+	bus_addr_t uart_base = CONSADDR;
+
+	volatile uint32_t *uartaddr = cpu_earlydevice_va_p() ?
+		(volatile uint32_t *)ARM_PTOV(uart_base):
+		(volatile uint32_t *)uart_base;
+
+	while ((le32toh(uartaddr[PL01XCOM_FR / 4]) & PL01X_FR_TXFF) != 0)
+		continue;
+
+	uartaddr[PL01XCOM_DR / 4] = htole32(c);
+	dsb(sy);
+
+	while ((le32toh(uartaddr[PL01XCOM_FR / 4]) & PL01X_FR_TXFE) == 0)
+		continue;
+#endif
+}
 
 static void
 arm_platform_init_attach_args(struct fdt_attach_args *faa)
@@ -87,12 +118,12 @@ arm_platform_devmap(void)
 		DEVMAP_ENTRY(KERNEL_IO_VBASE, 0, PAGE_SIZE),
 		DEVMAP_ENTRY_END
 	};
-	bus_addr_t uart_base;
 
 	const int phandle = fdtbus_get_stdout_phandle();
 	if (phandle <= 0)
 		return devmap_empty;
 
+	bus_addr_t uart_base;
 	if (fdtbus_get_reg(phandle, 0, &uart_base, NULL) != 0)
 		return devmap_empty;
 
@@ -107,15 +138,15 @@ arm_platform_uart_freq(void)
 	return 0;
 }
 
-static const struct arm_platform arm_platform = {
-	.ap_devmap = arm_platform_devmap,
-	.ap_bootstrap = arm_fdt_cpu_bootstrap,
-	.ap_init_attach_args = arm_platform_init_attach_args,
-	.ap_device_register = arm_platform_device_register,
-	.ap_reset = psci_fdt_reset,
-	.ap_delay = gtmr_delay,
-	.ap_uart_freq = arm_platform_uart_freq,
-	.ap_mpstart = arm_fdt_cpu_mpstart,
+static const struct fdt_platform arm_platform = {
+	.fp_devmap = arm_platform_devmap,
+	.fp_bootstrap = arm_fdt_cpu_bootstrap,
+	.fp_init_attach_args = arm_platform_init_attach_args,
+	.fp_device_register = arm_platform_device_register,
+	.fp_reset = psci_fdt_reset,
+	.fp_delay = gtmr_delay,
+	.fp_uart_freq = arm_platform_uart_freq,
+	.fp_mpstart = arm_fdt_cpu_mpstart,
 };
 
-ARM_PLATFORM(arm, ARM_PLATFORM_DEFAULT, &arm_platform);
+FDT_PLATFORM(arm, FDT_PLATFORM_DEFAULT, &arm_platform);

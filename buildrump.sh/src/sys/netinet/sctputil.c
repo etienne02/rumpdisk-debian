@@ -1,5 +1,5 @@
 /*	$KAME: sctputil.c,v 1.39 2005/06/16 20:54:06 jinmei Exp $	*/
-/*	$NetBSD: sctputil.c,v 1.17 2021/07/24 21:31:39 andvar Exp $	*/
+/*	$NetBSD: sctputil.c,v 1.20 2024/07/05 04:31:54 rin Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Cisco Systems, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctputil.c,v 1.17 2021/07/24 21:31:39 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctputil.c,v 1.20 2024/07/05 04:31:54 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -1719,7 +1719,7 @@ sctp_calculate_rto(struct sctp_tcb *stcb,
 			net->lastsv = SCTP_CLOCK_GRANULARITY;
 		}
 	} else {
-		/* First RTO measurment */
+		/* First RTO measurement */
 		net->lastsa = calc_time;
 		net->lastsv = calc_time >> 1;
 		first_measure = 1;
@@ -2584,10 +2584,8 @@ sctp_report_all_outbound(struct sctp_tcb *stcb)
 			TAILQ_REMOVE(&outs->outqueue, chk, sctp_next);
 			sctp_ulp_notify(SCTP_NOTIFY_DG_FAIL, stcb,
 			    SCTP_NOTIFY_DATAGRAM_UNSENT, chk);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			if (chk->whoTo)
 				sctp_free_remote_addr(chk->whoTo);
 			chk->whoTo = NULL;
@@ -2608,10 +2606,8 @@ sctp_report_all_outbound(struct sctp_tcb *stcb)
 		while (chk) {
 			TAILQ_REMOVE(&asoc->send_queue, chk, sctp_next);
 			sctp_ulp_notify(SCTP_NOTIFY_DG_FAIL, stcb, SCTP_NOTIFY_DATAGRAM_UNSENT, chk);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			if (chk->whoTo)
 				sctp_free_remote_addr(chk->whoTo);
 			chk->whoTo = NULL;
@@ -2631,10 +2627,8 @@ sctp_report_all_outbound(struct sctp_tcb *stcb)
 			TAILQ_REMOVE(&asoc->sent_queue, chk, sctp_next);
 			sctp_ulp_notify(SCTP_NOTIFY_DG_FAIL, stcb,
 			    SCTP_NOTIFY_DATAGRAM_SENT, chk);
-			if (chk->data) {
-				sctp_m_freem(chk->data);
-				chk->data = NULL;
-			}
+			sctp_m_freem(chk->data);
+			chk->data = NULL;
 			if (chk->whoTo)
 				sctp_free_remote_addr(chk->whoTo);
 			chk->whoTo = NULL;
@@ -3301,7 +3295,7 @@ sctp_grub_through_socket_buffer(struct sctp_inpcb *inp, struct socket *old,
 	next = old_sb->sb_mb;
 	while (next) {
 		this = next;
-		/* postion for next one */
+		/* position for next one */
 		next = this->m_nextpkt;
 		/* check the tag of this packet */
 		if (sctp_should_be_moved(this, asoc)) {
@@ -3328,7 +3322,7 @@ sctp_grub_through_socket_buffer(struct sctp_inpcb *inp, struct socket *old,
 	}
 	if (moved_top) {
 		/*
-		 * Ok so now we must re-postion vtag_first to
+		 * Ok so now we must re-position vtag_first to
 		 * match the new first one since we moved the
 		 * mbuf at the top.
 		 */

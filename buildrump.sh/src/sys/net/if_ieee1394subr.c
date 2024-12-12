@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ieee1394subr.c,v 1.66 2020/08/28 06:23:42 ozaki-r Exp $	*/
+/*	$NetBSD: if_ieee1394subr.c,v 1.69 2022/09/03 02:47:59 thorpej Exp $	*/
 
 /*
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ieee1394subr.c,v 1.66 2020/08/28 06:23:42 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ieee1394subr.c,v 1.69 2022/09/03 02:47:59 thorpej Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -52,7 +52,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_ieee1394subr.c,v 1.66 2020/08/28 06:23:42 ozaki-r
 #include <net/if_types.h>
 #include <net/if_media.h>
 #include <net/ethertypes.h>
-#include <net/netisr.h>
 #include <net/route.h>
 
 #include <net/bpf.h>
@@ -326,10 +325,8 @@ void
 ieee1394_input(struct ifnet *ifp, struct mbuf *m, uint16_t src)
 {
 	pktqueue_t *pktq = NULL;
-	struct ifqueue *inq;
 	uint16_t etype;
 	struct ieee1394_unfraghdr *iuh;
-	int isr = 0;
 
 	if ((ifp->if_flags & IFF_UP) == 0) {
 		m_freem(m);
@@ -381,8 +378,7 @@ ieee1394_input(struct ifnet *ifp, struct mbuf *m, uint16_t src)
 		break;
 
 	case ETHERTYPE_ARP:
-		isr = NETISR_ARP;
-		inq = &arpintrq;
+		pktq = arp_pktq;
 		break;
 #endif /* INET */
 
@@ -397,14 +393,10 @@ ieee1394_input(struct ifnet *ifp, struct mbuf *m, uint16_t src)
 		return;
 	}
 
-	if (__predict_true(pktq)) {
-		if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
-			m_freem(m);
-		}
-		return;
+	KASSERT(pktq != NULL);
+	if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
+		m_freem(m);
 	}
-
-	IFQ_ENQUEUE_ISR(inq, m, isr);
 }
 
 static struct mbuf *
@@ -681,13 +673,13 @@ ieee1394_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		switch (ifa->ifa_addr->sa_family) {
 #ifdef INET
 		case AF_INET:
-			if ((error = (*ifp->if_init)(ifp)) != 0)
+			if ((error = if_init(ifp)) != 0)
 				break;
 			arp_ifinit(ifp, ifa);
 			break;
 #endif /* INET */
 		default:
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 			break;
 		}
 		break;

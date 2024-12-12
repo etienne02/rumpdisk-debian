@@ -1,4 +1,4 @@
-/*	$NetBSD: kgdb.h,v 1.2 2014/03/18 18:20:43 riastradh Exp $	*/
+/*	$NetBSD: kgdb.h,v 1.4 2022/10/26 23:38:09 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -32,26 +32,14 @@
 #ifndef _LINUX_KGDB_H_
 #define _LINUX_KGDB_H_
 
-#ifdef _KERNEL_OPT		/* XXX */
-#include "opt_ddb.h"
-#else
-#define	DDB
-#endif
+#include <sys/stdbool.h>
 
-#ifdef DDB
-extern int	db_active;
+#include <ddb/db_active.h>
 
 static inline bool
 in_dbg_master(void)
 {
 	return db_active;
 }
-#else
-static inline bool
-in_dbg_master(void)
-{
-	return false;
-}
-#endif
 
 #endif  /* _LINUX_KGDB_H_ */

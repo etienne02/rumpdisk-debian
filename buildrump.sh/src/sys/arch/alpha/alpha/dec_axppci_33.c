@@ -1,4 +1,4 @@
-/* $NetBSD: dec_axppci_33.c,v 1.68 2021/07/16 18:50:19 thorpej Exp $ */
+/* $NetBSD: dec_axppci_33.c,v 1.70 2024/03/31 19:06:30 thorpej Exp $ */
 
 /*
  * Copyright (c) 1995, 1996, 1997 Carnegie-Mellon University.
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: dec_axppci_33.c,v 1.68 2021/07/16 18:50:19 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dec_axppci_33.c,v 1.70 2024/03/31 19:06:30 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -97,7 +97,7 @@ lca_preinit(void)
 {
 	extern struct lca_config lca_configuration;
 
-	lca_init(&lca_configuration, 0);
+	lca_init(&lca_configuration);
 	return &lca_configuration;
 }
 
@@ -227,7 +227,7 @@ dec_axppci_33_device_register(device_t dev, void *aux)
 	struct bootdev_data *b = bootdev_data;
 	device_t parent = device_parent(dev);
 
-	if (found)
+	if (b == NULL || found)
 		return;
 
 	if (!initted) {

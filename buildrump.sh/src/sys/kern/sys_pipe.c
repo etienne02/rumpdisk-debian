@@ -1,7 +1,7 @@
-/*	$NetBSD: sys_pipe.c,v 1.152 2021/01/25 19:21:11 dholland Exp $	*/
+/*	$NetBSD: sys_pipe.c,v 1.167 2024/02/10 09:21:54 andvar Exp $	*/
 
 /*-
- * Copyright (c) 2003, 2007, 2008, 2009 The NetBSD Foundation, Inc.
+ * Copyright (c) 2003, 2007, 2008, 2009, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -52,23 +52,10 @@
  * This file contains a high-performance replacement for the socket-based
  * pipes scheme originally used.  It does not support all features of
  * sockets, but does do everything that pipes normally do.
- *
- * This code has two modes of operation, a small write mode and a large
- * write mode.  The small write mode acts like conventional pipes with
- * a kernel buffer.  If the buffer is less than PIPE_MINDIRECT, then the
- * "normal" pipe buffering is done.  If the buffer is between PIPE_MINDIRECT
- * and PIPE_SIZE in size it is mapped read-only into the kernel address space
- * using the UVM page loan facility from where the receiving process can copy
- * the data directly from the pages in the sending process.
- *
- * The constant PIPE_MINDIRECT is chosen to make sure that buffering will
- * happen for small transfers so that the system will not spend all of
- * its time context switching.  PIPE_SIZE is constrained by the
- * amount of kernel virtual memory.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_pipe.c,v 1.152 2021/01/25 19:21:11 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_pipe.c,v 1.167 2024/02/10 09:21:54 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -100,6 +87,8 @@ static int	pipe_kqfilter(file_t *, struct knote *);
 static int	pipe_stat(file_t *, struct stat *);
 static int	pipe_ioctl(file_t *, u_long, void *);
 static void	pipe_restart(file_t *);
+static int	pipe_fpathconf(file_t *, int, register_t *);
+static int	pipe_posix_fadvise(file_t *, off_t, off_t, int);
 
 static const struct fileops pipeops = {
 	.fo_name = "pipe",
@@ -112,6 +101,8 @@ static const struct fileops pipeops = {
 	.fo_close = pipe_close,
 	.fo_kqfilter = pipe_kqfilter,
 	.fo_restart = pipe_restart,
+	.fo_fpathconf = pipe_fpathconf,
+	.fo_posix_fadvise = pipe_posix_fadvise,
 };
 
 /*
@@ -127,7 +118,7 @@ static const struct fileops pipeops = {
  * Limit the number of "big" pipes
  */
 #define	LIMITBIGPIPES	32
-static u_int	maxbigpipes = LIMITBIGPIPES;
+static u_int	maxbigpipes __read_mostly = LIMITBIGPIPES;
 static u_int	nbigpipe = 0;
 
 /*
@@ -137,7 +128,7 @@ static u_int	amountpipekva = 0;
 
 static void	pipeclose(struct pipe *);
 static void	pipe_free_kmem(struct pipe *);
-static int	pipe_create(struct pipe **, pool_cache_t);
+static int	pipe_create(struct pipe **, pool_cache_t, struct timespec *);
 static int	pipelock(struct pipe *, bool);
 static inline void pipeunlock(struct pipe *);
 static void	pipeselwakeup(struct pipe *, struct pipe *, int);
@@ -216,6 +207,7 @@ int
 pipe1(struct lwp *l, int *fildes, int flags)
 {
 	struct pipe *rpipe, *wpipe;
+	struct timespec nt;
 	file_t *rf, *wf;
 	int fd, error;
 	proc_t *p;
@@ -224,8 +216,9 @@ pipe1(struct lwp *l, int *fildes, int flags)
 		return EINVAL;
 	p = curproc;
 	rpipe = wpipe = NULL;
-	if ((error = pipe_create(&rpipe, pipe_rd_cache)) ||
-	    (error = pipe_create(&wpipe, pipe_wr_cache))) {
+	getnanotime(&nt);
+	if ((error = pipe_create(&rpipe, pipe_rd_cache, &nt)) ||
+	    (error = pipe_create(&wpipe, pipe_wr_cache, &nt))) {
 		goto free2;
 	}
 	rpipe->pipe_lock = mutex_obj_alloc(MUTEX_DEFAULT, IPL_NONE);
@@ -308,7 +301,7 @@ pipespace(struct pipe *pipe, int size)
  * Initialize and allocate VM and memory for pipe.
  */
 static int
-pipe_create(struct pipe **pipep, pool_cache_t cache)
+pipe_create(struct pipe **pipep, pool_cache_t cache, struct timespec *nt)
 {
 	struct pipe *pipe;
 	int error;
@@ -317,8 +310,7 @@ pipe_create(struct pipe **pipep, pool_cache_t cache)
 	KASSERT(pipe != NULL);
 	*pipep = pipe;
 	error = 0;
-	getnanotime(&pipe->pipe_btime);
-	pipe->pipe_atime = pipe->pipe_mtime = pipe->pipe_btime;
+	pipe->pipe_atime = pipe->pipe_mtime = pipe->pipe_btime = *nt;
 	pipe->pipe_lock = NULL;
 	if (cache == pipe_rd_cache) {
 		error = pipespace(pipe, PIPE_SIZE);
@@ -344,19 +336,13 @@ pipelock(struct pipe *pipe, bool catch_p)
 	KASSERT(mutex_owned(pipe->pipe_lock));
 
 	while (pipe->pipe_state & PIPE_LOCKFL) {
-		pipe->pipe_waiters++;
-		KASSERT(pipe->pipe_waiters != 0); /* just in case */
 		if (catch_p) {
 			error = cv_wait_sig(&pipe->pipe_lkcv, pipe->pipe_lock);
 			if (error != 0) {
-				KASSERT(pipe->pipe_waiters > 0);
-				pipe->pipe_waiters--;
 				return error;
 			}
 		} else
 			cv_wait(&pipe->pipe_lkcv, pipe->pipe_lock);
-		KASSERT(pipe->pipe_waiters > 0);
-		pipe->pipe_waiters--;
 	}
 
 	pipe->pipe_state |= PIPE_LOCKFL;
@@ -374,13 +360,11 @@ pipeunlock(struct pipe *pipe)
 	KASSERT(pipe->pipe_state & PIPE_LOCKFL);
 
 	pipe->pipe_state &= ~PIPE_LOCKFL;
-	if (pipe->pipe_waiters > 0) {
-		cv_signal(&pipe->pipe_lkcv);
-	}
+	cv_signal(&pipe->pipe_lkcv);
 }
 
 /*
- * Select/poll wakup. This also sends SIGIO to peer connected to
+ * Select/poll wakeup. This also sends SIGIO to peer connected to
  * 'sigpipe' side of pipe.
  */
 static void
@@ -429,6 +413,23 @@ pipe_read(file_t *fp, off_t *offset, struct uio *uio, kauth_cred_t cred,
 	size_t size;
 	size_t ocnt;
 	unsigned int wakeup_state = 0;
+
+	/*
+	 * Try to avoid locking the pipe if we have nothing to do.
+	 *
+	 * There are programs which share one pipe amongst multiple processes
+	 * and perform non-blocking reads in parallel, even if the pipe is
+	 * empty.  This in particular is the case with BSD make, which when
+	 * spawned with a high -j number can find itself with over half of the
+	 * calls failing to find anything.
+	 */
+	if ((fp->f_flag & FNONBLOCK) != 0) {
+		if (__predict_false(uio->uio_resid == 0))
+			return (0);
+		if (atomic_load_relaxed(&bp->cnt) == 0 &&
+		    (atomic_load_relaxed(&rpipe->pipe_state) & PIPE_EOF) == 0)
+			return (EAGAIN);
+	}
 
 	mutex_enter(lock);
 	++rpipe->pipe_busy;
@@ -584,7 +585,7 @@ pipe_write(file_t *fp, off_t *offset, struct uio *uio, kauth_cred_t cred,
 	}
 	++wpipe->pipe_busy;
 
-	/* Aquire the long-term pipe lock */
+	/* Acquire the long-term pipe lock */
 	if ((error = pipelock(wpipe, true)) != 0) {
 		--wpipe->pipe_busy;
 		if (wpipe->pipe_busy == 0) {
@@ -694,11 +695,6 @@ pipe_write(file_t *fp, off_t *offset, struct uio *uio, kauth_cred_t cred,
 				break;
 			}
 
-			pipeunlock(wpipe);
-			error = cv_wait_sig(&wpipe->pipe_wcv, lock);
-			(void)pipelock(wpipe, false);
-			if (error != 0)
-				break;
 			/*
 			 * If read side wants to go away, we just issue a signal
 			 * to ourselves.
@@ -707,6 +703,12 @@ pipe_write(file_t *fp, off_t *offset, struct uio *uio, kauth_cred_t cred,
 				error = EPIPE;
 				break;
 			}
+
+			pipeunlock(wpipe);
+			error = cv_wait_sig(&wpipe->pipe_wcv, lock);
+			(void)pipelock(wpipe, false);
+			if (error != 0)
+				break;
 			wakeup_state = wpipe->pipe_state;
 		}
 	}
@@ -731,8 +733,6 @@ pipe_write(file_t *fp, off_t *offset, struct uio *uio, kauth_cred_t cred,
 
 	/*
 	 * We have something to offer, wake up select/poll.
-	 * wmap->cnt is always 0 in this point (direct write
-	 * is only done synchronously), so check only wpipe->pipe_buffer.cnt
 	 */
 	if (bp->cnt)
 		pipeselwakeup(wpipe, wpipe, POLL_IN);
@@ -912,6 +912,26 @@ pipe_restart(file_t *fp)
 	mutex_exit(pipe->pipe_lock);
 }
 
+static int
+pipe_fpathconf(struct file *fp, int name, register_t *retval)
+{
+
+	switch (name) {
+	case _PC_PIPE_BUF:
+		*retval = PIPE_BUF;
+		return 0;
+	default:
+		return EINVAL;
+	}
+}
+
+static int
+pipe_posix_fadvise(struct file *fp, off_t offset, off_t len, int advice)
+{
+
+	return ESPIPE;
+}
+
 static void
 pipe_free_kmem(struct pipe *pipe)
 {
@@ -1045,6 +1065,7 @@ filt_piperead(struct knote *kn, long hint)
 {
 	struct pipe *rpipe = ((file_t *)kn->kn_obj)->f_pipe;
 	struct pipe *wpipe;
+	int rv;
 
 	if ((hint & NOTE_SUBMIT) == 0) {
 		mutex_enter(rpipe->pipe_lock);
@@ -1054,17 +1075,16 @@ filt_piperead(struct knote *kn, long hint)
 
 	if ((rpipe->pipe_state & PIPE_EOF) ||
 	    (wpipe == NULL) || (wpipe->pipe_state & PIPE_EOF)) {
-		kn->kn_flags |= EV_EOF;
-		if ((hint & NOTE_SUBMIT) == 0) {
-			mutex_exit(rpipe->pipe_lock);
-		}
-		return (1);
+		knote_set_eof(kn, 0);
+		rv = 1;
+	} else {
+		rv = kn->kn_data > 0;
 	}
 
 	if ((hint & NOTE_SUBMIT) == 0) {
 		mutex_exit(rpipe->pipe_lock);
 	}
-	return (kn->kn_data > 0);
+	return rv;
 }
 
 static int
@@ -1072,6 +1092,7 @@ filt_pipewrite(struct knote *kn, long hint)
 {
 	struct pipe *rpipe = ((file_t *)kn->kn_obj)->f_pipe;
 	struct pipe *wpipe;
+	int rv;
 
 	if ((hint & NOTE_SUBMIT) == 0) {
 		mutex_enter(rpipe->pipe_lock);
@@ -1080,29 +1101,28 @@ filt_pipewrite(struct knote *kn, long hint)
 
 	if ((wpipe == NULL) || (wpipe->pipe_state & PIPE_EOF)) {
 		kn->kn_data = 0;
-		kn->kn_flags |= EV_EOF;
-		if ((hint & NOTE_SUBMIT) == 0) {
-			mutex_exit(rpipe->pipe_lock);
-		}
-		return (1);
+		knote_set_eof(kn, 0);
+		rv = 1;
+	} else {
+		kn->kn_data = wpipe->pipe_buffer.size - wpipe->pipe_buffer.cnt;
+		rv = kn->kn_data >= PIPE_BUF;
 	}
-	kn->kn_data = wpipe->pipe_buffer.size - wpipe->pipe_buffer.cnt;
 
 	if ((hint & NOTE_SUBMIT) == 0) {
 		mutex_exit(rpipe->pipe_lock);
 	}
-	return (kn->kn_data >= PIPE_BUF);
+	return rv;
 }
 
 static const struct filterops pipe_rfiltops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD | FILTEROP_MPSAFE,
 	.f_attach = NULL,
 	.f_detach = filt_pipedetach,
 	.f_event = filt_piperead,
 };
 
 static const struct filterops pipe_wfiltops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD | FILTEROP_MPSAFE,
 	.f_attach = NULL,
 	.f_detach = filt_pipedetach,
 	.f_event = filt_pipewrite,

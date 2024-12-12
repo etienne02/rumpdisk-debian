@@ -1,4 +1,4 @@
-/*	$NetBSD: atari_init.c,v 1.102 2021/08/17 22:00:27 andvar Exp $	*/
+/*	$NetBSD: atari_init.c,v 1.113 2024/02/10 18:43:51 andvar Exp $	*/
 
 /*
  * Copyright (c) 1995 Leo Weppelman
@@ -33,12 +33,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: atari_init.c,v 1.102 2021/08/17 22:00:27 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: atari_init.c,v 1.113 2024/02/10 18:43:51 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_mbtype.h"
 #include "opt_m060sp.h"
 #include "opt_m68k_arch.h"
+#include "opt_st_pool_size.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -57,6 +58,7 @@ __KERNEL_RCSID(0, "$NetBSD: atari_init.c,v 1.102 2021/08/17 22:00:27 andvar Exp 
 #include <sys/exec_aout.h>
 #include <sys/core.h>
 #include <sys/kcore.h>
+#include <sys/bus.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -109,32 +111,17 @@ static u_int milan_probe_bank(paddr_t paddr);
 #endif
 
 /*
- * Extent maps to manage all memory space, including I/O ranges.  Allocate
- * storage for 16 regions in each, initially.  Later, iomem_malloc_safe
- * will indicate that it's safe to use malloc() to dynamically allocate
- * region descriptors.
- * This means that the fixed static storage is only used for registrating
- * the found memory regions and the bus-mapping of the console.
- *
- * The extent maps are not static!  They are used for bus address space
- * allocation.
- */
-static long iomem_ex_storage[EXTENT_FIXED_STORAGE_SIZE(16) / sizeof(long)];
-struct extent *iomem_ex;
-int iomem_malloc_safe;
-
-/*
  * All info needed to generate a panic dump. All fields are setup by
  * start_c().
  * XXX: Should sheck usage of phys_segs. There is some unwanted overlap
- *      here.... Also, the name is badly choosen. Phys_segs contains the
+ *      here.... Also, the name is badly chosen. Phys_segs contains the
  *      segment descriptions _after_ reservations are made.
  * XXX: 'lowram' is obsoleted by the new panicdump format
  */
 static cpu_kcore_hdr_t cpu_kcore_hdr;
 
-extern u_int 	lowram;
-int		machineid, mmutype, cputype, astpending;
+extern u_int	lowram;
+int		machineid, mmutype, cputype;
 
 extern char		*esym;
 extern struct pcb	*curpcb;
@@ -145,18 +132,29 @@ extern struct pcb	*curpcb;
 vaddr_t	page_zero;
 
 /*
- * Crude support for allocation in ST-ram. Currently only used to allocate
- * video ram.
+ * Simple support for allocation in ST-ram.
+ * Currently 16 bit ST-ram is required to allocate DMA buffers for SCSI and
+ * FDC transfers, and video memory for the XFree68 based Xservers.
  * The physical address is also returned because the video init needs it to
  * setup the controller at the time the vm-system is not yet operational so
  * 'kvtop()' cannot be used.
  */
+#define	ST_POOL_SIZE_MIN	24	/* for DMA bounce buffers */
 #ifndef ST_POOL_SIZE
-#define	ST_POOL_SIZE	40			/* XXX: enough? */
+#define	ST_POOL_SIZE		56	/* Xserver requires 320KB (40 pages) */
 #endif
 
-u_long	st_pool_size = ST_POOL_SIZE * PAGE_SIZE; /* Patchable	*/
-u_long	st_pool_virt, st_pool_phys;
+psize_t	st_pool_size = ST_POOL_SIZE * PAGE_SIZE; /* Patchable	*/
+vaddr_t	st_pool_virt;
+paddr_t	st_pool_phys;
+
+/*
+ * Thresholds to restrict size of reserved ST memory to make sure
+ * the kernel at least boot even on lower memory machines.
+ * Nowadays we could assume most users have 4MB ST-RAM and 16MB TT-RAM.
+ */
+#define	STRAM_MINTHRESH		(2 * 1024 * 1024)
+#define	TTRAM_MINTHRESH		(4 * 1024 * 1024)
 
 /* I/O address space variables */
 vaddr_t	stio_addr;		/* Where the st io-area is mapped	*/
@@ -182,16 +180,16 @@ int	reloc_kernel = RELOC_KERNEL;		/* Patchable	*/
  *	Interrupts are disabled
  *	PA == VA, we don't have to relocate addresses before enabling
  *		the MMU
- * 	Exec is no longer available (because we're loaded all over 
+ *	Exec is no longer available (because we're loaded all over
  *		low memory, no ExecBase is available anymore)
  *
  * It's purpose is:
- *	Do the things that are done in locore.s in the hp300 version, 
+ *	Do the things that are done in locore.s in the hp300 version,
  *		this includes allocation of kernel maps and enabling the MMU.
- * 
- * Some of the code in here is `stolen' from Amiga MACH, and was 
+ *
+ * Some of the code in here is `stolen' from Amiga MACH, and was
  * written by Bryan Ford and Niklas Hallqvist.
- * 
+ *
  * Very crude 68040 support by Michael L. Hitch.
  */
 int kernel_copyback = 1;
@@ -201,12 +199,11 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
     char *esym_addr)
 	/* id:			 Machine id			*/
 	/* ttphystart, ttphysize: Start address and size of TT-ram */
-	/* stphysize:		 Size of ST-ram 		*/
+	/* stphysize:		 Size of ST-ram			*/
 	/* esym_addr:		 Address of kernel '_esym' symbol */
 {
 	extern char	end[];
 	extern void	etext(void);
-	extern u_long	protorp[2];
 	paddr_t		pstart;		/* Next available physical address */
 	vaddr_t		vstart;		/* Next available virtual address */
 	vsize_t		avail;
@@ -214,7 +211,7 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 	psize_t		ptsize;
 	u_int		ptextra;
 	vaddr_t		kva;
-	u_int		tc, i;
+	u_int		i;
 	pt_entry_t	*pg, *epg;
 	pt_entry_t	pg_proto;
 	vaddr_t		end_loaded;
@@ -284,12 +281,20 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 #endif
 
 	/*
-	 * The following is a hack. We do not know how much ST memory we
-	 * really need until after configuration has finished. At this
-	 * time I have no idea how to grab ST memory at that time.
-	 * The round_page() call is ment to correct errors made by
+	 * We do not know how much ST memory we really need until after
+	 * configuration has finished, but typical users of ST memory
+	 * are bounce buffers DMA against TT-RAM for SCSI and FDC,
+	 * and video memory for the Xserver.
+	 * If we have enough RAMs reserve ST memory including for the Xserver.
+	 * Otherwise just allocate minimum one for SCSI and FDC.
+	 *
+	 * The round_page() call is meant to correct errors made by
 	 * binpatching!
 	 */
+	if (st_pool_size > ST_POOL_SIZE_MIN * PAGE_SIZE &&
+	    (stphysize <= STRAM_MINTHRESH || ttphysize <= TTRAM_MINTHRESH)) {
+		st_pool_size = ST_POOL_SIZE_MIN * PAGE_SIZE;
+	}
 	st_pool_size   = m68k_round_page(st_pool_size);
 	st_pool_phys   = stphysize - st_pool_size;
 	stphysize      = st_pool_phys;
@@ -298,7 +303,7 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 	machineid      = id;
 	esym           = esym_addr;
 
-	/* 
+	/*
 	 * the kernel ends at end() or esym.
 	 */
 	if (esym == NULL)
@@ -442,7 +447,7 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 		pg_proto += PAGE_SIZE;
 	}
 
-	/* 
+	/*
 	 * data, bss and dynamic tables are read/write
 	 */
 	pg_proto = (pg_proto & PG_FRAME) | PG_RW | PG_V;
@@ -594,16 +599,14 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 
 	/*
 	 * Prepare to enable the MMU.
-	 * Setup and load SRP nolimit, share global, 4 byte PTE's
+	 * Setup and load SRP (see pmap.h)
 	 */
-	protorp[0] = 0x80000202;
-	protorp[1] = Sysseg_pa;			/* + segtable address */
 
 	cpu_init_kcorehdr(kbase, Sysseg_pa);
 
 	/*
-	 * copy over the kernel (and all now initialized variables) 
-	 * to fastram.  DONT use bcopy(), this beast is much larger 
+	 * copy over the kernel (and all now initialized variables)
+	 * to fastram.  DONT use bcopy(), this beast is much larger
 	 * than 128k !
 	 */
 	if (kbase) {
@@ -626,8 +629,8 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 		 */
 		if (cputype == CPU_68060) {
 			/* XXX: Need the branch cache be cleared? */
-			__asm volatile (".word 0x4e7a,0x0002;" 
-				      "orl #0x400000,%%d0;" 
+			__asm volatile (".word 0x4e7a,0x0002;"
+				      "orl #0x400000,%%d0;"
 				      ".word 0x4e7b,0x0002" : : : "d0");
 		}
 		__asm volatile ("movel %0,%%a0;"
@@ -638,15 +641,18 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 	} else
 #endif
 	{
+#if defined(M68030)
+		protorp[1] = Sysseg_pa;		/* + segtable address */
 		__asm volatile ("pmove %0@,%%srp" : : "a" (&protorp[0]));
 		/*
 		 * setup and load TC register.
 		 * enable_cpr, enable_srp, pagesize=8k,
 		 * A = 8 bits, B = 11 bits
 		 */
-		tc = 0x82d08b00;
+		u_int tc = MMU51_TCR_BITS;
 		__asm volatile ("pflusha" : : );
 		__asm volatile ("pmove %0@,%%tc" : : "a" (&tc));
+#endif /* M68030 */
 	}
 
 	/*
@@ -665,25 +671,13 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 	init_stmem();
 
 	/*
-	 * Initialize the I/O mem extent map.
-	 * Note: we don't have to check the return value since
-	 * creation of a fixed extent map will never fail (since
-	 * descriptor storage has already been allocated).
-	 *
-	 * N.B. The iomem extent manages _all_ physical addresses
-	 * on the machine.  When the amount of RAM is found, all
-	 * extents of RAM are allocated from the map.
+	 * Initialize the iomem arena for bus_space(9) to manage address
+	 * spaces and allocate the physical RAM from the extent map.
 	 */
-	iomem_ex = extent_create("iomem", 0x0, 0xffffffff,
-	    (void *)iomem_ex_storage, sizeof(iomem_ex_storage),
-	    EX_NOCOALESCE|EX_NOWAIT);
-
-	/*
-	 * Allocate the physical RAM from the extent map
-	 */
+	atari_bus_space_arena_init(0x0, 0xffffffff);
 	for (i = 0; i < NMEM_SEGS && boot_segs[i].end != 0; i++) {
-		if (extent_alloc_region(iomem_ex, boot_segs[i].start,
-		    boot_segs[i].end - boot_segs[i].start, EX_NOWAIT)) {
+		if (atari_bus_space_alloc_physmem(boot_segs[i].start,
+		    boot_segs[i].end)) {
 			/* XXX: Ahum, should not happen ;-) */
 			printf("Warning: Cannot allocate boot memory from"
 			    " extent map!?\n");
@@ -698,7 +692,7 @@ start_c(int id, u_int ttphystart, u_int ttphysize, u_int stphysize,
 
 #if defined(_MILANHW_)
 /*
- * Probe and return available memory size in MB at specfied address.
+ * Probe and return available memory size in MB at specified address.
  * The first slot SIMM have at least 16MB, so check if it has 32 or 64 MB.
  *
  * Note it seems Milan does not generate bus errors on accesses against
@@ -762,7 +756,7 @@ milan_probe_bank_1(paddr_t start_paddr)
 }
 
 /*
- * Probe and return available memory size in MB at specfied address.
+ * Probe and return available memory size in MB at specified address.
  * The rest slot could be empty so check all possible size.
  */
 static u_int
@@ -953,7 +947,6 @@ map_io_areas(paddr_t ptpa, psize_t ptsize, u_int ptextra)
 	/* ptsize:	 Size of 'pt' in bytes		*/
 	/* ptextra:	 #of additional I/O pte's	*/
 {
-	extern void	bootm_init(vaddr_t, pt_entry_t *, u_long);
 	vaddr_t		ioaddr;
 	pt_entry_t	*pt, *pg, *epg;
 	pt_entry_t	pg_proto;
@@ -1108,7 +1101,7 @@ cpu_init_kcorehdr(paddr_t kbase, paddr_t sysseg_pa)
 	m->sg_v		= SG_V;
 	m->sg_frame	= SG_FRAME;
 	m->sg_ishift	= SG_ISHIFT;
-	m->sg_pmask	= SG_PMASK; 
+	m->sg_pmask	= SG_PMASK;
 	m->sg40_shift1	= SG4_SHIFT1;
 	m->sg40_mask2	= SG4_MASK2;
 	m->sg40_shift2	= SG4_SHIFT2;
@@ -1171,7 +1164,7 @@ mmu030_setup(paddr_t sysseg_pa, u_int kstsize, paddr_t ptpa, psize_t ptsize,
 		pg_proto += PAGE_SIZE;
 	}
 
-	/* 
+	/*
 	 * Invalidate the remainder of the tables.
 	 */
 	esg = (st_entry_t *)sysseg_pa;
@@ -1322,7 +1315,7 @@ initcpu(void)
 			extern trapfun illinst;
 #endif
 
-			__asm volatile ("movl %0,%%d0; .word 0x4e7b,0x0808" : : 
+			__asm volatile ("movl %0,%%d0; .word 0x4e7b,0x0808" : :
 					"d"(m68060_pcr_init):"d0" );
 
 			/* bus/addrerr vectors */
@@ -1403,8 +1396,8 @@ dump_segtable(u_int *stp)
 		shift = SG_ISHIFT;
 	}
 
-	/* 
-	 * XXX need changes for 68040 
+	/*
+	 * XXX need changes for 68040
 	 */
 	for (i = 0; s < es; s++, i++)
 		if (*s & SG_V)

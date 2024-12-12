@@ -1,4 +1,4 @@
-/*	$NetBSD: identcpu.c,v 1.121 2021/04/12 02:23:01 mrg Exp $	*/
+/*	$NetBSD: identcpu.c,v 1.131 2024/12/02 13:31:32 bouyer Exp $	*/
 
 /*-
  * Copyright (c) 1999, 2000, 2001, 2006, 2007, 2008 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: identcpu.c,v 1.121 2021/04/12 02:23:01 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: identcpu.c,v 1.131 2024/12/02 13:31:32 bouyer Exp $");
 
 #include "opt_xen.h"
 
@@ -101,79 +101,6 @@ static const char cpu_vendor_names[][10] = {
 	"Vortex86"
 };
 
-static const struct x86_cache_info *
-cache_info_lookup(const struct x86_cache_info *cai, uint8_t desc)
-{
-	int i;
-
-	for (i = 0; cai[i].cai_desc != 0; i++) {
-		if (cai[i].cai_desc == desc)
-			return (&cai[i]);
-	}
-
-	return (NULL);
-}
-
-/*
- * Get cache info from one of the following:
- *	Intel Deterministic Cache Parameter Leaf (0x04)
- *	AMD Cache Topology Information Leaf (0x8000001d)
- */
-static void
-cpu_dcp_cacheinfo(struct cpu_info *ci, uint32_t leaf)
-{
-	u_int descs[4];
-	int type, level, ways, partitions, linesize, sets, totalsize;
-	int caitype = -1;
-	int i;
-
-	for (i = 0; ; i++) {
-		x86_cpuid2(leaf, i, descs);
-		type = __SHIFTOUT(descs[0], CPUID_DCP_CACHETYPE);
-		if (type == CPUID_DCP_CACHETYPE_N)
-			break;
-		level = __SHIFTOUT(descs[0], CPUID_DCP_CACHELEVEL);
-		switch (level) {
-		case 1:
-			if (type == CPUID_DCP_CACHETYPE_I)
-				caitype = CAI_ICACHE;
-			else if (type == CPUID_DCP_CACHETYPE_D)
-				caitype = CAI_DCACHE;
-			else
-				caitype = -1;
-			break;
-		case 2:
-			if (type == CPUID_DCP_CACHETYPE_U)
-				caitype = CAI_L2CACHE;
-			else
-				caitype = -1;
-			break;
-		case 3:
-			if (type == CPUID_DCP_CACHETYPE_U)
-				caitype = CAI_L3CACHE;
-			else
-				caitype = -1;
-			break;
-		default:
-			caitype = -1;
-			break;
-		}
-		if (caitype == -1)
-			continue;
-
-		ways = __SHIFTOUT(descs[1], CPUID_DCP_WAYS) + 1;
-		partitions =__SHIFTOUT(descs[1], CPUID_DCP_PARTITIONS)
-		    + 1;
-		linesize = __SHIFTOUT(descs[1], CPUID_DCP_LINESIZE)
-		    + 1;
-		sets = descs[2] + 1;
-		totalsize = ways * partitions * linesize * sets;
-		ci->ci_cinfo[caitype].cai_totalsize = totalsize;
-		ci->ci_cinfo[caitype].cai_associativity = ways;
-		ci->ci_cinfo[caitype].cai_linesize = linesize;
-	}
-}
-
 static void
 cpu_probe_intel_cache(struct cpu_info *ci)
 {
@@ -196,7 +123,7 @@ cpu_probe_intel_cache(struct cpu_info *ci)
 					desc = (descs[i] >> (j * 8)) & 0xff;
 					if (desc == 0)
 						continue;
-					cai = cache_info_lookup(
+					cai = cpu_cacheinfo_lookup(
 					    intel_cpuid_cache_info, desc);
 					if (cai != NULL) {
 						ci->ci_cinfo[cai->cai_index] =
@@ -313,7 +240,7 @@ cpu_probe_amd_cache(struct cpu_info *ci)
 	cai->cai_associativity = AMD_L2_ECX_C_ASSOC(descs[2]);
 	cai->cai_linesize = AMD_L2_ECX_C_LS(descs[2]);
 
-	cp = cache_info_lookup(amd_cpuid_l2l3cache_assoc_info,
+	cp = cpu_cacheinfo_lookup(amd_cpuid_l2l3cache_assoc_info,
 	    cai->cai_associativity);
 	if (cp != NULL)
 		cai->cai_associativity = cp->cai_associativity;
@@ -329,7 +256,7 @@ cpu_probe_amd_cache(struct cpu_info *ci)
 	cai->cai_associativity = AMD_L3_EDX_C_ASSOC(descs[3]);
 	cai->cai_linesize = AMD_L3_EDX_C_LS(descs[3]);
 
-	cp = cache_info_lookup(amd_cpuid_l2l3cache_assoc_info,
+	cp = cpu_cacheinfo_lookup(amd_cpuid_l2l3cache_assoc_info,
 	    cai->cai_associativity);
 	if (cp != NULL)
 		cai->cai_associativity = cp->cai_associativity;
@@ -548,15 +475,11 @@ cpu_probe_c3(struct cpu_info *ci)
 
 	if (cpu_vendor != CPUVENDOR_IDT ||
 	    CPUID_TO_FAMILY(ci->ci_signature) < 6)
-	    	return;
+		return;
 
 	family = CPUID_TO_FAMILY(ci->ci_signature);
 	model = CPUID_TO_MODEL(ci->ci_signature);
 	stepping = CPUID_TO_STEPPING(ci->ci_signature);
-
-	/* Determine the largest extended function value. */
-	x86_cpuid(0x80000000, descs);
-	lfunc = descs[0];
 
 	if (family == 6) {
 		/*
@@ -572,11 +495,45 @@ cpu_probe_c3(struct cpu_info *ci)
 		 *    bit in the FCR MSR.
 		 */
 		ci->ci_feat_val[0] |= CPUID_CX8;
-		wrmsr(MSR_VIA_FCR, rdmsr(MSR_VIA_FCR) | VIA_ACE_ECX8);
+		wrmsr(MSR_VIA_FCR, rdmsr(MSR_VIA_FCR) | VIA_FCR_CX8_REPORT);
+
+		/*
+		 * For reference on VIA Alternate Instructions, see the VIA C3
+		 * Processor Alternate Instruction Set Application Note, 2002.
+		 * http://www.bitsavers.org/components/viaTechnologies/C3-ais-appnote.pdf
+		 *
+		 * Disable unsafe ALTINST mode for VIA C3 processors, if necessary.
+		 *
+		 * This is done for the security reasons, as some CPUs were
+		 * found with ALTINST enabled by default.  This functionality
+		 * has ability to bypass many x86 architecture memory
+		 * protections and privilege checks, exposing a possibility
+		 * for backdoors and should not be enabled unintentionally.
+		 */
+		if (model > 0x5 && model < 0xA) {
+			int disable_ais = 0;
+			x86_cpuid(0xc0000000, descs);
+			lfunc = descs[0];
+			/* Check AIS flags first if supported ("Nehemiah"). */
+			if (lfunc >= 0xc0000001) {
+				x86_cpuid(0xc0000001, descs);
+				lfunc = descs[3];
+				if ((lfunc & CPUID_VIA_HAS_AIS)
+				    && (lfunc & CPUID_VIA_DO_AIS)) {
+					disable_ais = 1;
+				}
+			} else	/* Explicitly disable AIS for pre-CX5L CPUs. */
+				disable_ais = 1;
+
+			if (disable_ais) {
+				msr = rdmsr(MSR_VIA_FCR);
+				wrmsr(MSR_VIA_FCR, msr & ~VIA_FCR_ALTINST_ENABLE);
+			}
+		}
 	}
 
 	if (family > 6 || model > 0x9 || (model == 0x9 && stepping >= 3)) {
-		/* VIA Nehemiah or Esther. */
+		/* VIA Nehemiah or later. */
 		x86_cpuid(0xc0000000, descs);
 		lfunc = descs[0];
 		if (lfunc >= 0xc0000001) {	/* has ACE, RNG */
@@ -586,7 +543,7 @@ cpu_probe_c3(struct cpu_info *ci)
 		    ci->ci_feat_val[4] = lfunc;
 		    /* Check for and enable RNG */
 		    if (lfunc & CPUID_VIA_HAS_RNG) {
-		    	if (!(lfunc & CPUID_VIA_DO_RNG)) {
+			if (!(lfunc & CPUID_VIA_DO_RNG)) {
 			    rng_enable++;
 			    ci->ci_feat_val[4] |= CPUID_VIA_DO_RNG;
 			}
@@ -644,17 +601,15 @@ cpu_probe_c3(struct cpu_info *ci)
 		    }
 
 		    if (ace_enable) {
-			msr = rdmsr(MSR_VIA_ACE);
-			wrmsr(MSR_VIA_ACE, msr | VIA_ACE_ENABLE);
+			msr = rdmsr(MSR_VIA_FCR);
+			wrmsr(MSR_VIA_FCR, msr | VIA_FCR_ACE_ENABLE);
 		    }
 		}
 	}
 
-	/* Explicitly disable unsafe ALTINST mode. */
-	if (ci->ci_feat_val[4] & CPUID_VIA_DO_ACE) {
-		msr = rdmsr(MSR_VIA_ACE);
-		wrmsr(MSR_VIA_ACE, msr & ~VIA_ACE_ALTINST);
-	}
+	/* Determine the largest extended function value. */
+	x86_cpuid(0x80000000, descs);
+	lfunc = descs[0];
 
 	/*
 	 * Determine L1 cache/TLB info.
@@ -1117,6 +1072,7 @@ static const struct vm_name_guest vm_bios_vendors[] = {
 	{ "BHYVE", VM_GUEST_VM },			/* bhyve */
 	{ "Seabios", VM_GUEST_VM },			/* KVM */
 	{ "innotek GmbH", VM_GUEST_VIRTUALBOX },	/* Oracle VirtualBox */
+	{ "Generic PVH", VM_GUEST_GENPVH},		/* Generic PVH */
 };
 
 static const struct vm_name_guest vm_system_products[] = {
@@ -1135,9 +1091,10 @@ identify_hypervisor(void)
 	const char *p;
 	int i;
 
-	switch(vm_guest) {
+	switch (vm_guest) {
 	case VM_GUEST_XENPV:
 	case VM_GUEST_XENPVH:
+	case VM_GUEST_GENPVH:
 		/* guest type already known, no bios info */
 		return;
 	default:

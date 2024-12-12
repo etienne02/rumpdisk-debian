@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.16 2020/09/14 16:11:32 skrll Exp $	*/
+/*	$NetBSD: machdep.c,v 1.21 2024/04/17 07:47:48 macallan Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002 The NetBSD Foundation, Inc.
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.16 2020/09/14 16:11:32 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.21 2024/04/17 07:47:48 macallan Exp $");
 
 #include "opt_cputype.h"
 #include "opt_ddb.h"
@@ -78,7 +78,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.16 2020/09/14 16:11:32 skrll Exp $");
 #include <sys/conf.h>
 #include <sys/file.h>
 #include <sys/callout.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <sys/ioctl.h>
@@ -1396,12 +1395,6 @@ cpu_reboot(int howto, char *user_boot_string)
 	if (!(howto & RB_NOSYNC) && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* XXX probably save howto into stable storage */
@@ -1421,6 +1414,8 @@ cpu_reboot(int howto, char *user_boot_string)
 	/* in case we came on powerfail interrupt */
 	if (cold_hook)
 		(*cold_hook)(HPPA_COLD_COLD);
+
+	hppa_led_ctl(0xf, 0, 0);
 
 	if (howto & RB_HALT) {
 		if ((howto & RB_POWERDOWN) == RB_POWERDOWN && cold_hook) {
@@ -1447,8 +1442,13 @@ cpu_reboot(int howto, char *user_boot_string)
 		    :: "r" (CMD_RESET), "r" (HPPA_LBCAST + iomod_command));
 	}
 
-	for (;;)
-		/* loop while bus reset is coming up */ ;
+	for (;;) {
+		/*
+		 * loop while bus reset is coming up.  This NOP instruction
+		 * is used by qemu to detect the 'death loop'.
+		 */
+		__asm volatile("or %%r31, %%r31, %%r31" ::: "memory");
+	}
 	/* NOTREACHED */
 }
 
@@ -1559,7 +1559,7 @@ hppa_pim_dump(int check_type, void *data, size_t size)
 		PIM_WORD("\n\n\tCheck Type", checks->pim_check_type,
 			PIM_CHECK_BITS);
 		PIM_WORD("\n\tCPU State", checks->pim_check_cpu_state,
-			PIM_CPU_BITS PIM_CPU_HPMC_BITS);
+			PIM_CPU_HPMC_BITS);
 		PIM_WORD("\n\tCache Check", checks->pim_check_cache,
 			PIM_CACHE_BITS);
 		PIM_WORD("\n\tTLB Check", checks->pim_check_tlb,

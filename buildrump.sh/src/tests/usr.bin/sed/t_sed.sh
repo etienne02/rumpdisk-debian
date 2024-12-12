@@ -1,4 +1,4 @@
-# $NetBSD: t_sed.sh,v 1.8 2021/02/23 21:09:14 christos Exp $
+# $NetBSD: t_sed.sh,v 1.11 2023/05/06 02:12:11 gutteridge Exp $
 #
 # Copyright (c) 2012 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -31,7 +31,7 @@
 atf_test_case c2048
 c2048_head() {
 	atf_set "descr" "Test that sed(1) does not fail when the " \
-			"2048'th character is a backslash (PR bin/25899)"
+			"2048th character is a backslash (PR bin/25899)"
 }
 
 c2048_body() {
@@ -81,7 +81,7 @@ rangeselection_body() {
 		-x "printf 'A\nB\nC\nD\n' | sed '1,3d'"
 	atf_check -o inline:"A\n" \
 		-x "printf 'A\nB\nC\nD\n' | sed '2,4d'"
-	# two nonoverlapping ranges
+	# two non-overlapping ranges
 	atf_check -o inline:"C\n" \
 		-x "printf 'A\nB\nC\nD\nE\n' | sed '1,2d;4,5d'"
 	# overlapping ranges; the first prevents the second from being entered
@@ -98,7 +98,7 @@ rangeselection_body() {
 		-x "printf 'A\nB\nC\nD\n' | sed '/A/,/C/d'"
 	atf_check -o inline:"A\n" \
 		-x "printf 'A\nB\nC\nD\n' | sed '/B/,/D/d'"
-	# two nonoverlapping ranges
+	# two non-overlapping ranges
 	atf_check -o inline:"C\n" \
 		-x "printf 'A\nB\nC\nD\nE\n' | sed '/A/,/B/d;/D/,/E/d'"
 	# two overlapping ranges; the first blocks the second as above
@@ -133,7 +133,7 @@ preserve_leading_ws_ia_body() {
 atf_test_case escapes_in_subst
 escapes_in_subst_head() {
 	atf_set "descr" "Test that sed(1) expands \x \d \o escapes " \
-		"in substition strings"
+		"in substitution strings"
 }
 
 escapes_in_subst_body() {
@@ -174,6 +174,17 @@ escapes_in_re_bracket_body() {
 	atf_check -o inline:"foo    bar\n" \
 		-x 'echo "foo\\d88bar" | sed -e "s/[\d88]/ /g"'
 }
+
+atf_test_case relative_addressing
+relative_addressing_head() {
+	atf_set "descr" "Test that sed(1) handles relative addressing " \
+		"properly (PR bin/49109)"
+}
+
+relative_addressing_body() {
+	atf_check -o match:"3" -x 'seq 1 4 | sed -n "1,+2p" | wc -l'
+}
+
 atf_init_test_cases() {
 	atf_add_test_case c2048
 	atf_add_test_case emptybackref
@@ -183,4 +194,5 @@ atf_init_test_cases() {
 	atf_add_test_case escapes_in_subst
 	atf_add_test_case escapes_in_re
 	atf_add_test_case escapes_in_re_bracket
+	atf_add_test_case relative_addressing
 }

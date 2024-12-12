@@ -1,4 +1,4 @@
-/*	$NetBSD: cardbus.c,v 1.112 2021/08/07 16:19:10 thorpej Exp $	*/
+/*	$NetBSD: cardbus.c,v 1.115 2022/08/24 11:19:24 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998, 1999 and 2000
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cardbus.c,v 1.112 2021/08/07 16:19:10 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cardbus.c,v 1.115 2022/08/24 11:19:24 riastradh Exp $");
 
 #include "opt_cardbus.h"
 
@@ -83,7 +83,7 @@ static int cardbus_read_tuples(struct cardbus_attach_args *,
 static void enable_function(struct cardbus_softc *, int, int);
 static void disable_function(struct cardbus_softc *, int);
 
-static bool cardbus_child_register(device_t);
+static void cardbus_child_register(device_t);
 
 CFATTACH_DECL3_NEW(cardbus, sizeof(struct cardbus_softc),
     cardbusmatch, cardbusattach, cardbusdetach, NULL,
@@ -163,6 +163,7 @@ cardbus_read_tuples(struct cardbus_attach_args *ca, pcireg_t cis_ptr,
 	pcireg_t reg;
 	int found = 0;
 	int cardbus_space = cis_ptr & CARDBUS_CIS_ASIMASK;
+	size_t mlen, n, tlen;
 	int i, j;
 
 	memset(tuples, 0, len);
@@ -262,10 +263,28 @@ cardbus_read_tuples(struct cardbus_attach_args *ca, pcireg_t cis_ptr,
 			cardbus_conf_write(cc, cf, tag,
 			    PCI_COMMAND_STATUS_REG,
 			    command | PCI_COMMAND_MEM_ENABLE);
-			/* XXX byte order? */
-			bus_space_read_region_1(bar_tag, bar_memh,
-			    cis_ptr, tuples,
-			    MIN(bar_size - MIN(bar_size, cis_ptr), len));
+
+			mlen = MIN(bar_size - MIN(bar_size, cis_ptr), len);
+			for (n = 0; n < mlen; ) {
+				tuples[n] = bus_space_read_1(bar_tag, bar_memh,
+				    cis_ptr+n);
+				if (tuples[n] == PCMCIA_CISTPL_END)
+					break;
+				if (tuples[n] == PCMCIA_CISTPL_NULL) {
+					n++;
+					continue;
+				}
+				n++;
+				tuples[n] = bus_space_read_1(bar_tag, bar_memh,
+				    cis_ptr+n);
+				tlen = tuples[n];
+				n++;
+				if (n+tlen >= mlen)
+					break;
+				bus_space_read_region_1(bar_tag, bar_memh,
+				    cis_ptr+n, tuples+n, tlen);
+				n += tlen;
+			}
 			found++;
 		}
 		command = cardbus_conf_read(cc, cf, tag,
@@ -448,7 +467,7 @@ cardbus_rescan(device_t self, const char *ifattr,
 	tag = cardbus_make_tag(cc, cf, sc->sc_bus, function);
 
 	/*
-	 * Wait until power comes up.  Maxmum 500 ms.
+	 * Wait until power comes up.  Maximum 500 ms.
 	 *
 	 * XXX What is this for?  The bridge driver ought to have waited
 	 * XXX already.
@@ -1199,7 +1218,7 @@ cardbus_child_deregister(device_t dv)
 	free(priv, M_DEVBUF);
 }
 
-static bool
+static void
 cardbus_child_register(device_t child)
 {
 	device_t self = device_parent(child);
@@ -1231,6 +1250,4 @@ cardbus_child_register(device_t child)
 
 	device_pmf_bus_register(child, priv, cardbus_child_suspend,
 	    cardbus_child_resume, 0, cardbus_child_deregister);
-
-	return true;
 }

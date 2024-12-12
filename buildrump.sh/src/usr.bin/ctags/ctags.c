@@ -1,4 +1,4 @@
-/*	$NetBSD: ctags.c,v 1.13 2019/02/03 03:19:29 mrg Exp $	*/
+/*	$NetBSD: ctags.c,v 1.18 2024/10/31 01:50:20 kre Exp $	*/
 
 /*
  * Copyright (c) 1987, 1993, 1994, 1995
@@ -43,7 +43,7 @@ __COPYRIGHT("@(#) Copyright (c) 1987, 1993, 1994, 1995\
 #if 0
 static char sccsid[] = "@(#)ctags.c	8.4 (Berkeley) 2/7/95";
 #endif
-__RCSID("$NetBSD: ctags.c,v 1.13 2019/02/03 03:19:29 mrg Exp $");
+__RCSID("$NetBSD: ctags.c,v 1.18 2024/10/31 01:50:20 kre Exp $");
 #endif /* not lint */
 
 #include <err.h>
@@ -92,7 +92,9 @@ main(int argc, char **argv)
 	int	exit_val;			/* exit value */
 	int	step;				/* step through args */
 	int	ch;				/* getopts char */
-	char	cmd[100];			/* too ugly to explain */
+	char	*cmd;				/* not nice */
+	char	tname[128];			/* disgusting */
+	size_t	sz;
 
 	aflag = uflag = NO;
 	while ((ch = getopt(argc, argv, "BFadf:tuwvx")) != -1)
@@ -134,17 +136,28 @@ main(int argc, char **argv)
 	argv += optind;
 	argc -= optind;
 	if (!argc) {
-usage:		(void)fprintf(stderr,
+ usage:;	(void)fprintf(stderr,
 			"usage: ctags [-BFadtuwvx] [-f tagsfile] file ...\n");
-		exit(1);
+		exit(EXIT_FAILURE);
+	}
+
+	if ((sz = shquote(outfile, tname, sizeof tname)) >= sizeof tname) {
+		/* nb: (size_t)-1 > sizeof tname */
+		if (sz == (size_t)-1)
+			err(EXIT_FAILURE, "Output file name '%s' too long",
+			    outfile);
+		else
+			errx(EXIT_FAILURE, "Output file name '%s' too long",
+			    outfile);
 	}
 
 	init();
 
-	for (exit_val = step = 0; step < argc; ++step)
+	exit_val = EXIT_SUCCESS;
+	for (step = 0; step < argc; ++step)
 		if (!(inf = fopen(argv[step], "r"))) {
 			warn("%s", argv[step]);
-			exit_val = 1;
+			exit_val = EXIT_FAILURE;
 		}
 		else {
 			curfile = argv[step];
@@ -158,31 +171,77 @@ usage:		(void)fprintf(stderr,
 		else {
 			if (uflag) {
 				for (step = 0; step < argc; step++) {
-					(void)snprintf(cmd, sizeof(cmd),
-						"mv %s OTAGS; fgrep -v '\t%s\t' OTAGS >%s; rm OTAGS",
-							outfile, argv[step],
-							outfile);
-					system(cmd);
+					char pattern[140];
+
+					if (asprintf(&cmd, "\t%s\t",
+					    argv[step]) == -1)
+						err(EXIT_FAILURE,
+						   "Cannot generate '\\t%s\\t'",
+						   argv[step]);
+
+					if ((sz = shquote(cmd, pattern,
+					    sizeof pattern)) >= sizeof pattern)
+					{
+						if (sz == (size_t)-1)
+						    err(EXIT_FAILURE, "'%s': "
+							"quoting pattern", cmd);
+						else
+						    errx(EXIT_FAILURE, "'%s': "
+							"failed to quote", cmd);
+					}
+					(void)free(cmd);
+
+					if (asprintf(&cmd,
+				    	 "OTAGS=$(mktemp -t tags.$$) || exit\n"
+					 "\ttest -n \"${OTAGS}\" || exit\n"
+					 "\ttrap 'rm -f \"${OTAGS}\"' EXIT\n"
+					 "\tmv %s \"${OTAGS}\" || exit\n"
+					 "\tfgrep -v %s \"${OTAGS}\" >%s\n"
+					 "\tX=$? ; "
+					 "test \"$X\" -le 1 || exit $X",
+					    tname, pattern, tname) == -1)
+						err(EXIT_FAILURE,
+						  "Command to update %s for -u"
+						     " %s",
+						  argv[step], outfile);
+
+					if (system(cmd) != 0)
+						errx(EXIT_FAILURE,
+						  "Update (-u) of %s failed.   "
+						  "Cmd:\n    %s", outfile, cmd);
+
+					(void)free(cmd);
 				}
 				++aflag;
 			}
 			if (!(outf = fopen(outfile, aflag ? "a" : "w")))
-				err(exit_val, "%s", outfile);
+				err(EXIT_FAILURE, "%s", outfile);
 			put_entries(head);
+			(void)fflush(outf);
+			if (ferror(outf))
+				err(EXIT_FAILURE, "output error (%s)", outfile);
 			(void)fclose(outf);
 			if (uflag) {
-				(void)snprintf(cmd, sizeof(cmd),
-				    "sort -o %s %s", outfile, outfile);
-				system(cmd);
+				if (asprintf(&cmd, "sort -o %s %s",
+				    tname, tname) == -1)
+					err(EXIT_FAILURE,
+					    "sort command (-u) for %s",
+					    outfile);
+				if (system(cmd) != 0)
+					errx(EXIT_FAILURE, "-u: sort %s failed"
+					    "\t[ %s ]", outfile, cmd);
+				(void)free(cmd);
 			}
 		}
 	}
+	if ((vflag || xflag) && (fflush(stdout) != 0 || ferror(stdout) != 0))
+		errx(EXIT_FAILURE, "write error (stdout)");
 	exit(exit_val);
 }
 
 /*
  * init --
- *	this routine sets up the boolean psuedo-functions which work by
+ *	this routine sets up the boolean pseudo-functions which work by
  *	setting boolean flags dependent upon the corresponding character.
  *	Every char which is NOT in that string is false with respect to
  *	the pseudo-function.  Therefore, all of the array "_wht" is NO
@@ -194,7 +253,7 @@ void
 init(void)
 {
 	int		i;
-	unsigned const char	*sp;
+	const char	*sp;
 
 	for (i = 0; i < 256; i++) {
 		_wht[i] = _etk[i] = _itk[i] = _btk[i] = NO;
@@ -202,19 +261,19 @@ init(void)
 	}
 #define	CWHITE	" \f\t\n"
 	for (sp = CWHITE; *sp; sp++)	/* white space chars */
-		_wht[*sp] = YES;
+		_wht[(unsigned)*sp] = YES;
 #define	CTOKEN	" \t\n\"'#()[]{}=-+%*/&|^~!<>;,.:?"
 	for (sp = CTOKEN; *sp; sp++)	/* token ending chars */
-		_etk[*sp] = YES;
+		_etk[(unsigned)*sp] = YES;
 #define	CINTOK	"ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz0123456789"
 	for (sp = CINTOK; *sp; sp++)	/* valid in-token chars */
-		_itk[*sp] = YES;
+		_itk[(unsigned)*sp] = YES;
 #define	CBEGIN	"ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
 	for (sp = CBEGIN; *sp; sp++)	/* token starting chars */
-		_btk[*sp] = YES;
+		_btk[(unsigned)*sp] = YES;
 #define	CNOTGD	",;"
 	for (sp = CNOTGD; *sp; sp++)	/* invalid after-function chars */
-		_gd[*sp] = NO;
+		_gd[(unsigned)*sp] = NO;
 }
 
 /*

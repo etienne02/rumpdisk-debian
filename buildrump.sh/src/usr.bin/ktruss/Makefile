@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.32 2021/08/22 22:24:12 rillig Exp $
+#	$NetBSD: Makefile,v 1.34 2024/04/20 13:24:49 rillig Exp $
 
 NOMAN=		# defined
 
@@ -7,7 +7,7 @@ NOMAN=		# defined
 PROG=		ktruss
 SRCS=		ktrace.c dump.c subr.c misc.c setemul.c
 CLEANFILES+=	misc.c misc.h
-LINT_SUPPORTED=	no	# ktruss-ioctl.c defines uio_t twice.
+NOLINT=		# ktruss-ioctl.c defines uio_t twice.
 
 .if (${MKDYNAMICROOT} == "no")
 LDSTATIC?=-static
@@ -33,7 +33,7 @@ misc.c misc.h: ${DESTDIR}/usr/include/sys/errno.h makeerrnos.sh \
 CPPFLAGS+=	-I. -I${NETBSDSRCDIR}/usr.bin/ktrace -I${NETBSDSRCDIR}/sys \
 		-I${NETBSDSRCDIR}/usr.bin/kdump -DKTRUSS -D_KERNTYPES
 
-CWARNFLAGS.gcc+=	${GCC_NO_ADDR_OF_PACKED_MEMBER}
+CWARNFLAGS.gcc+=	${CC_WNO_ADDRESS_OF_PACKED_MEMBER}
 
 .include <bsd.prog.mk>
 

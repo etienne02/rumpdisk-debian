@@ -1,4 +1,4 @@
-/*	$NetBSD: dumpfs.c,v 1.64 2018/03/06 07:45:38 mlelstv Exp $	*/
+/*	$NetBSD: dumpfs.c,v 1.69 2023/11/06 12:18:59 hannken Exp $	*/
 
 /*
  * Copyright (c) 1983, 1992, 1993
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1983, 1992, 1993\
 #if 0
 static char sccsid[] = "@(#)dumpfs.c	8.5 (Berkeley) 4/29/95";
 #else
-__RCSID("$NetBSD: dumpfs.c,v 1.64 2018/03/06 07:45:38 mlelstv Exp $");
+__RCSID("$NetBSD: dumpfs.c,v 1.69 2023/11/06 12:18:59 hannken Exp $");
 #endif
 #endif /* not lint */
 
@@ -192,11 +192,13 @@ dumpfs(const char *name)
 		if (read(fd, &afs, SBLOCKSIZE) != SBLOCKSIZE)
 			continue;
 		switch(afs.fs_magic) {
+		case FS_UFS2EA_MAGIC:
 		case FS_UFS2_MAGIC:
 			is_ufs2 = 1;
 			break;
 		case FS_UFS1_MAGIC:
 			break;
+		case FS_UFS2EA_MAGIC_SWAPPED:
 		case FS_UFS2_MAGIC_SWAPPED:
 			is_ufs2 = 1;
 			needswap = 1;
@@ -294,7 +296,8 @@ print_superblock(struct fs *fs, uint16_t *opostbl,
 	time_t t;
 	int32_t fsflags;
 
-	printf("format\tFFSv%d\n", is_ufs2+1);
+	printf("format\tFFSv%d%s\n", is_ufs2+1,
+	       fs->fs_magic == FS_UFS2EA_MAGIC ? "ea" : "");
 #if BYTE_ORDER == LITTLE_ENDIAN
 	if (needswap)
 #else
@@ -311,7 +314,7 @@ print_superblock(struct fs *fs, uint16_t *opostbl,
 	    fs->fs_magic, ctime(&t));
 
 	if (is_ufs2)
-		i = 5;
+		i = -1;
 	else {
 		i = 0;
 		if (fs->fs_old_postblformat != FS_42POSTBLFMT) {
@@ -335,10 +338,11 @@ print_superblock(struct fs *fs, uint16_t *opostbl,
 	    fs->fs_id[0] || fs->fs_id[1])
 		printf("superblock location\t%jd\tid\t[ %x %x ]\n",
 		    (intmax_t)fs->fs_sblockloc, fs->fs_id[0], fs->fs_id[1]);
-	printf("cylgrp\t%s\tinodes\t%s\tsblock\t%s\tfslevel %d\n",
-	    i < 1 ? "static" : "dynamic",
-	    i < 2 ? "4.2/4.3BSD" : i < 5 ? "4.4BSD" : "FFSv2",
-	    i < 4 ? "FFSv1" : "FFSv2", i);
+	if (!is_ufs2)
+		printf("cylgrp\t%s\tinodes\t%s\tsblock\t%s\tfslevel %d\n",
+		    i < 1 ? "static" : "dynamic",
+		    i < 2 ? "4.2/4.3BSD" : i < 5 ? "4.4BSD" : "FFSv2",
+		    i < 4 ? "FFSv1" : "FFSv2", i);
 	printf("nbfree\t%lld\tndir\t%lld\tnifree\t%lld\tnffree\t%lld\n",
 	    (long long)fs->fs_cstotal.cs_nbfree,
 	    (long long)fs->fs_cstotal.cs_ndir,
@@ -406,6 +410,11 @@ print_superblock(struct fs *fs, uint16_t *opostbl,
 	    fs->fs_journallocs[0], fs->fs_journallocs[1]);
 	printf("\tloc2 %" PRIu64 "\tloc3 %" PRIu64 "\n",
 	    fs->fs_journallocs[2], fs->fs_journallocs[3]);
+	printf("snapshot inodes");
+	for (int s = 0; s < FSMAXSNAP; s++) {
+		printf(" %u", fs->fs_snapinum[s]);
+	}
+	printf("\n");
 	printf("usrquota %" PRIu64 "\tgrpquota %" PRIu64 "\n",
 		fs->fs_quotafile[USRQUOTA], fs->fs_quotafile[GRPQUOTA]);
 	printf("flags\t");
@@ -419,8 +428,10 @@ print_superblock(struct fs *fs, uint16_t *opostbl,
 		printf("needs fsck run ");
 	if (fs->fs_flags & FS_SUJ)
 		printf("journaled soft-updates ");
-	if (fs->fs_flags & FS_ACLS)
-		printf("acls ");
+	if (fs->fs_flags & FS_POSIX1EACLS)
+		printf("posix1e acls ");
+	if (fs->fs_flags & FS_NFS4ACLS)
+		printf("nfs4 acls ");
 	if (fs->fs_flags & FS_MULTILABEL)
 		printf("multilabel ");
 	if (fs->fs_flags & FS_GJOURNAL)
@@ -434,8 +445,9 @@ print_superblock(struct fs *fs, uint16_t *opostbl,
 	if (fs->fs_flags & FS_TRIM)
 		printf("trim ");
 	fsflags = fs->fs_flags & ~(FS_UNCLEAN | FS_DOSOFTDEP | FS_NEEDSFSCK |
-			FS_SUJ | FS_ACLS | FS_MULTILABEL | FS_GJOURNAL |
-			FS_FLAGS_UPDATED | FS_DOWAPBL | FS_DOQUOTA2 | FS_TRIM);
+			FS_SUJ | FS_POSIX1EACLS | FS_MULTILABEL | FS_GJOURNAL |
+			FS_NFS4ACLS | FS_FLAGS_UPDATED | FS_DOWAPBL |
+			FS_DOQUOTA2 | FS_TRIM);
 #ifdef FS_INDEXDIRS
 	if (fs->fs_flags & FS_INDEXDIRS)
 		printf("indexed directories ");
@@ -444,35 +456,38 @@ print_superblock(struct fs *fs, uint16_t *opostbl,
 	if (fsflags != 0)
 		printf("unknown flags (%#x)", fsflags);
 	printf("\nfsmnt\t%s\n", fs->fs_fsmnt);
-	if (!printold)
+	if (!printold) {
 		printf("volname\t%s\tswuid\t%ju\n",
 		    fs->fs_volname, (uintmax_t)fs->fs_swuid);
-	if (printold) {
-		if (fs->fs_old_cpc != 0)
-			printf("blocks available in each of %d rotational "
-			       "positions\n", fs->fs_old_nrpos);
-		else
-			printf("(no rotational position table)\n\n");
-		if (ISOPT(opt_verbose)) {
-			int c, j, k;
-			for (c = 0; c < fs->fs_old_cpc; c++) {
-				printf("cylinder number %d:", c);
-				for (i = 0; i < fs->fs_old_nrpos; i++) {
-					if (old_fs_postbl(&afs, c, opostbl)[i] == -1)
-						continue;
-					printf("\n   position %d:\t", i);
-					for (j = old_fs_postbl(&afs, c, opostbl)[i], k = 1; ;
-							 j += old_fs_rotbl(&afs)[j], k++) {
-						printf("%5d", j);
-						if (k % 12 == 0)
-							printf("\n\t\t");
-						if (old_fs_rotbl(&afs)[j] == 0)
-							break;
-					}
-				}
-				printf("\n");
+		return 0;
+	}
+
+	if (fs->fs_old_cpc != 0)
+		printf("blocks available in each of %d rotational "
+		       "positions\n", fs->fs_old_nrpos);
+	else
+		printf("(no rotational position table)\n\n");
+
+	if (!ISOPT(opt_verbose)) {
+		return 0;
+	}
+
+	for (int c = 0; c < fs->fs_old_cpc; c++) {
+		printf("cylinder number %d:", c);
+		for (i = 0; i < fs->fs_old_nrpos; i++) {
+			if (old_fs_postbl(&afs, c, opostbl)[i] == -1)
+				continue;
+			printf("\n   position %d:\t", i);
+			for (int j = old_fs_postbl(&afs, c, opostbl)[i], k = 1;
+			    ; j += old_fs_rotbl(&afs)[j], k++) {
+				printf("%5d", j);
+				if (k % 12 == 0)
+					printf("\n\t\t");
+				if (old_fs_rotbl(&afs)[j] == 0)
+					break;
 			}
 		}
+		printf("\n");
 	}
 
 	return 0;
@@ -483,6 +498,7 @@ print_cgsum(const char *name, int fd)
 {
 	struct csum *ccsp;
 	int i, j, size;
+	uint32_t cgnum;
 
 	afs.fs_csp = calloc(1, afs.fs_cssize);
 	for (i = 0, j = 0; i < afs.fs_cssize; i += afs.fs_bsize, j++) {
@@ -500,8 +516,8 @@ print_cgsum(const char *name, int fd)
 	}
 
 	printf("cs[].cs_(nbfree,ndir,nifree,nffree):\n\t");
-	for (i = 0; i < afs.fs_ncg; i++) {
-		struct csum *cs = &afs.fs_cs(&afs, i);
+	for (cgnum = 0; cgnum < afs.fs_ncg; cgnum++) {
+		struct csum *cs = &afs.fs_cs(&afs, cgnum);
 		if (i && i % 4 == 0)
 			printf("\n\t");
 		printf("(%d,%d,%d,%d) ",
@@ -524,7 +540,7 @@ static int
 print_alt_super(const char *name, int fd)
 {
 	union fsun alt;
-	int i;
+	uint32_t i;
 	off_t loc;
 	uint16_t alt_opostblsave[32*8];
 	int save_printold;
@@ -550,7 +566,7 @@ print_alt_super(const char *name, int fd)
 static int
 print_cginfo(const char *name, int fd)
 {
-	int i;
+	uint32_t i;
 
 	printf("\n");
 	for (i = 0; i < afs.fs_ncg; i++) {
@@ -568,7 +584,8 @@ print_inodes(const char *name, int fd, int c, int n)
 {
 	void *ino_buf = malloc(afs.fs_bsize);
 	void (*print_inode)(int, int, void *);
-	int i, inum;
+	ino_t inum;
+	uint32_t i;
 
 	if (ino_buf == 0)
 		return 1;

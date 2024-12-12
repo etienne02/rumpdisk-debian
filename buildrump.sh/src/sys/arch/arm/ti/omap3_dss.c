@@ -1,4 +1,4 @@
-/*	$NetBSD: omap3_dss.c,v 1.5 2021/08/07 16:18:46 thorpej Exp $	*/
+/*	$NetBSD: omap3_dss.c,v 1.7 2022/09/27 06:36:43 skrll Exp $	*/
 
 /*
  * Copyright (c) 2010 Michael Lorenz
@@ -33,13 +33,12 @@
 #include "opt_wsdisplay_compat.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: omap3_dss.c,v 1.5 2021/08/07 16:18:46 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: omap3_dss.c,v 1.7 2022/09/27 06:36:43 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/lwp.h>
 #include <sys/kauth.h>
 #include <sys/bus.h>
@@ -993,9 +992,7 @@ omapfb_cursor(void *cookie, int on, int row, int col)
 	int pos;
 
 	pos = col + row * ri->ri_cols;
-#ifdef WSDISPLAY_SCROLLSUPPORT
-	pos += scr->scr_offset_to_zero;
-#endif
+	pos += vcons_offset_to_zero(scr);
 	if (sc->sc_mode == WSDISPLAYIO_MODE_EMUL) {
 		if (ri->ri_flg & RI_CURSOR) {
 			omapfb_putchar(cookie, row, col, scr->scr_chars[pos],

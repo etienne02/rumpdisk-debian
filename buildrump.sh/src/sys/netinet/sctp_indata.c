@@ -1,4 +1,4 @@
-/*	$NetBSD: sctp_indata.c,v 1.8 2018/12/22 13:11:38 maxv Exp $ */
+/*	$NetBSD: sctp_indata.c,v 1.17 2024/12/04 21:18:34 andvar Exp $ */
 /*	$KAME: sctp_indata.c,v 1.36 2005/03/06 16:04:17 itojun Exp $	*/
 
 /*
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sctp_indata.c,v 1.8 2018/12/22 13:11:38 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sctp_indata.c,v 1.17 2024/12/04 21:18:34 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ipsec.h"
@@ -300,8 +300,7 @@ sctp_deliver_data(struct sctp_tcb *stcb, struct sctp_association *asoc,
 		}
 #endif
 		if (chk != NULL) {
-			if (chk->data)
-				sctp_m_freem(chk->data);
+			sctp_m_freem(chk->data);
 			chk->data = NULL;
 			sctp_free_remote_addr(chk->whoTo);
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
@@ -317,8 +316,7 @@ sctp_deliver_data(struct sctp_tcb *stcb, struct sctp_association *asoc,
 			/*
 			 * Lose the data pointer, since its in the socket buffer
 			 */
-			if (chk->data)
-				sctp_m_freem(chk->data);
+			sctp_m_freem(chk->data);
 			chk->data = NULL;
 			/* Now free the address and data */
 			sctp_free_remote_addr(chk->whoTo);
@@ -539,8 +537,7 @@ sctp_service_reassembly(struct sctp_tcb *stcb, struct sctp_association *asoc, in
 			/*
 			 * Lose the data pointer, since its in the socket buffer
 			 */
-			if (chk->data)
-				sctp_m_freem(chk->data);
+			sctp_m_freem(chk->data);
 			chk->data = NULL;
 			/* Now free the address and data */
 			sctp_free_remote_addr(chk->whoTo);
@@ -954,8 +951,7 @@ sctp_queue_data_to_stream(struct sctp_tcb *stcb, struct sctp_association *asoc,
 					 * chunk!
 					 */
 
-					if (chk->data)
-						sctp_m_freem(chk->data);
+					sctp_m_freem(chk->data);
 					chk->data = NULL;
 					asoc->size_on_all_streams -= chk->send_size;
 					asoc->cnt_on_all_streams--;
@@ -1036,7 +1032,7 @@ sctp_is_all_msg_on_reasm(struct sctp_association *asoc, int *t_size)
 
 /*
  * Dump onto the re-assembly queue, in its proper place. After dumping on
- * the queue, see if anthing can be delivered. If so pull it off (or as much
+ * the queue, see if anything can be delivered. If so pull it off (or as much
  * as we can. If we run out of space then we must dump what we can and set
  * the appropriate flag to say we queued what we could.
  */
@@ -1217,8 +1213,7 @@ sctp_queue_data_for_reasm(struct sctp_tcb *stcb, struct sctp_association *asoc,
 			 * to TSN somehow... sigh for now just blow away the
 			 * chunk!
 			 */
-			if (chk->data)
-				sctp_m_freem(chk->data);
+			sctp_m_freem(chk->data);
 			chk->data = NULL;
 			sctp_free_remote_addr(chk->whoTo);
 			SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
@@ -2159,7 +2154,7 @@ sctp_process_a_data_chunk(struct sctp_tcb *stcb, struct sctp_association *asoc,
 			 * intervening (aka the TSN is after where our cum-ack needs
 			 * to be) off and put them on a pending_reply_queue. The
 			 * reassembly ones we do not have to worry about since
-			 * they are all sorted and proceessed by TSN order. It
+			 * they are all sorted and processed by TSN order. It
 			 * is only the singletons I must worry about.
 			 */
 			if ((asoc->pending_reply) &&
@@ -2263,7 +2258,7 @@ sctp_sack_check(struct sctp_tcb *stcb, int ok_to_sack, int was_a_gap, int *abort
 	if (all_ones ||
 	    (asoc->cumulative_tsn == asoc->highest_tsn_inside_map && at >= 8)) {
 		/* The complete array was completed by a single FR */
-		/* higest becomes the cum-ack */
+		/* highest becomes the cum-ack */
 		int clr;
 		asoc->cumulative_tsn = asoc->highest_tsn_inside_map;
 		/* clear the array */
@@ -2289,7 +2284,7 @@ sctp_sack_check(struct sctp_tcb *stcb, int ok_to_sack, int was_a_gap, int *abort
 #endif
 	} else if (at >= 8) {
 		/* we can slide the mapping array down */
-		/* Calculate the new byte postion we can move down */
+		/* Calculate the new byte position we can move down */
 		slide_from = at >> 3;
 		/* now calculate the ceiling of the move using our highest TSN value */
 		if (asoc->highest_tsn_inside_map >= asoc->mapping_array_base_tsn) {
@@ -2732,7 +2727,7 @@ sctp_handle_segments(struct sctp_tcb *stcb, struct sctp_association *asoc,
 	for (i = 0; i < num_seg; i++) {
 		frag_strt = ntohs(frag->start);
 		frag_end = ntohs(frag->end);
-		/* some sanity checks on the fargment offsets */
+		/* some sanity checks on the fragment offsets */
 		if (frag_strt > frag_end) {
 			/* this one is malformed, skip */
 			frag++;
@@ -2805,7 +2800,7 @@ sctp_handle_segments(struct sctp_tcb *stcb, struct sctp_association *asoc,
 							sctp_total_flight_decrease(stcb, tp1);
 
 							if (tp1->snd_count < 2) {
-								/* True non-retransmited chunk */
+								/* True non-retransmitted chunk */
 								tp1->whoTo->net_ack2 +=
 								    tp1->send_size;
 
@@ -3265,7 +3260,7 @@ sctp_try_advance_peer_ack_point(struct sctp_tcb *stcb,
 			/*
 			 * we don't want to de-queue it here. Just wait for the
 			 * next peer SACK to come with a new cumTSN and then
-			 * the chunk will be droped in the normal fashion.
+			 * the chunk will be dropped in the normal fashion.
 			 */
 			if (tp1->data) {
 				sctp_free_bufspace(stcb, asoc, tp1);
@@ -3687,7 +3682,7 @@ sctp_handle_sack(struct sctp_sack_chunk *ch, struct sctp_tcb *stcb,
 					sctp_total_flight_decrease(stcb, tp1);
 					tp1->whoTo->net_ack += tp1->send_size;
 					if (tp1->snd_count < 2) {
-						/* True non-retransmited chunk */
+						/* True non-retransmitted chunk */
 						tp1->whoTo->net_ack2 +=
 							tp1->send_size;
 						/* update RTO too? */
@@ -4503,7 +4498,7 @@ sctp_handle_forward_tsn(struct sctp_tcb *stcb,
 	if (cumack_set_flag) {
 		/*
 		 * fwd-tsn went outside my gap array - not a
-		 * common occurance. Do the same thing we
+		 * common occurrence. Do the same thing we
 		 * do when a cookie-echo arrives.
 		 */
 		asoc->highest_tsn_inside_map =  new_cum_tsn - 1;
@@ -4583,10 +4578,8 @@ sctp_handle_forward_tsn(struct sctp_tcb *stcb,
 					asoc->strmin[chk->rec.data.stream_number].last_sequence_delivered =
 					    chk->rec.data.stream_seq;
 				}
-				if (chk->data) {
-					sctp_m_freem(chk->data);
-					chk->data = NULL;
-				}
+				sctp_m_freem(chk->data);
+				chk->data = NULL;
 				sctp_free_remote_addr(chk->whoTo);
 				SCTP_ZONE_FREE(sctppcbinfo.ipi_zone_chunk, chk);
 				sctppcbinfo.ipi_count_chunk--;

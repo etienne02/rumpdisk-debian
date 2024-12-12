@@ -1,11 +1,11 @@
-/*	$NetBSD: msg_332.c,v 1.3 2021/04/05 01:35:34 rillig Exp $	*/
+/*	$NetBSD: msg_332.c,v 1.7 2023/08/02 18:51:25 rillig Exp $	*/
 # 3 "msg_332.c"
 
 // Test for message: right operand of '%s' must be bool, not '%s' [332]
 //
 // See d_c99_bool_strict.c for many more examples.
 
-/* lint1-extra-flags: -T */
+/* lint1-extra-flags: -T -X 351 */
 
 typedef _Bool bool;
 
@@ -16,8 +16,14 @@ void
 example(bool b, char c, int i)
 {
 	test(b && b);
-	test(b && c);		/* expect: 332 *//* expect: 334 */
-	test(b && i);		/* expect: 332 *//* expect: 334 */
+
+	/* expect+2: error: right operand of '&&' must be bool, not 'char' [332] */
+	/* expect+1: error: parameter 1 expects '_Bool', gets passed 'int' [334] */
+	test(b && c);
+
+	/* expect+2: error: right operand of '&&' must be bool, not 'int' [332] */
+	/* expect+1: error: parameter 1 expects '_Bool', gets passed 'int' [334] */
+	test(b && i);
 
 	test(c != '\0');
 	test(i != 0);

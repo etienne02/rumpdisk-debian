@@ -1,11 +1,11 @@
-/* $NetBSD: intr.h,v 1.15 2014/03/22 16:52:07 tsutsui Exp $ */
+/*	$NetBSD: intr.h,v 1.19 2024/01/19 03:09:04 thorpej Exp $	*/
 
 /*-
- * Copyright (c) 2000 The NetBSD Foundation, Inc.
+ * Copyright (c) 2024 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by Tohru Nishimura.
+ * by Jason R. Thorpe.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,64 +29,25 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _MACHINE_INTR_H
-#define _MACHINE_INTR_H
+#ifndef _LUNA68K_INTR_H_
+#define _LUNA68K_INTR_H_
 
 #ifdef _KERNEL
 
-/*
- * spl functions
- */
-#include <machine/psl.h>
+#include <m68k/psl.h>
 
-#define spl0()		_spl0()
-#define splnone()	spl0()
-#define splsoftclock()	splraise1()
-#define splsoftbio()	splraise1()
-#define splsoftnet()	splraise1()
-#define splsoftserial()	splraise1()
-#define splvm()		splraise4()
-#define splsched()	splraise5()
-#define splhigh()	spl7()
+#define	MACHINE_PSL_IPL_SOFTCLOCK	PSL_IPL1
+#define	MACHINE_PSL_IPL_SOFTBIO		PSL_IPL1
+#define	MACHINE_PSL_IPL_SOFTNET		PSL_IPL1
+#define	MACHINE_PSL_IPL_SOFTSERIAL	PSL_IPL1
+#define	MACHINE_PSL_IPL_VM		PSL_IPL4
+#define	MACHINE_PSL_IPL_SCHED		PSL_IPL5
 
-#define	IPL_NONE	0
-#define	IPL_SOFTCLOCK	1
-#define	IPL_SOFTBIO	2
-#define	IPL_SOFTNET	3
-#define	IPL_SOFTSERIAL	4
-#define	IPL_VM		5
-#define	IPL_SCHED	6
-#define	IPL_HIGH	7
-#define	NIPL		8
-
-extern const uint16_t ipl2psl_table[NIPL];
-
-typedef int ipl_t;
-typedef struct {
-	uint16_t _psl;
-} ipl_cookie_t;
-
-static inline ipl_cookie_t
-makeiplcookie(ipl_t ipl)
-{
-
-	return (ipl_cookie_t){._psl = ipl2psl_table[ipl]};
-}
-
-static inline int
-splraiseipl(ipl_cookie_t icookie)
-{
-
-	return _splraise(icookie._psl);
-}
-
-static inline void
-splx(int sr)
-{
-
-	__asm volatile("movew %0,%%sr" : : "di" (sr));
-}
+#define	MACHINE_INTREVCNT_NAMES						\
+	{ "spur", "lev1", "scsi", "network", "lev4", "clock", "serial", "nmi" }
 
 #endif /* _KERNEL */
 
-#endif	/* _MACHINE_INTR_H */
+#include <m68k/intr.h>
+
+#endif	/* _LUNA68K_INTR_H */

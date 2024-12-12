@@ -1,4 +1,4 @@
-	$NetBSD: syscalls.master,v 1.71 2020/04/26 18:53:33 thorpej Exp $
+	$NetBSD: syscalls.master,v 1.77 2021/12/02 04:29:48 ryo Exp $
 
 ; NetBSD i386 COMPAT_LINUX32 system call name/number "master" file.
 ; (See syscalls.conf to see what it is processed into.)
@@ -454,11 +454,15 @@
 256	UNIMPL	epoll_wait
 257	UNIMPL	remap_file_pages
 258	STD	{ int|linux32_sys||set_tid_address(linux32_intp_t tid); }
-259	UNIMPL	timer_create
-260	UNIMPL	timer_settime
-261	UNIMPL	timer_gettime
-262	UNIMPL	timer_getoverrun
-263	UNIMPL	timer_delete
+259	STD	{ int|linux32_sys||timer_create(clockid_t clockid, \
+		    struct linux32_sigevent *evp, timer_t *timerid); }
+260	STD	{ int|linux32_sys||timer_settime(timer_t timerid, \
+		    int flags, const struct linux32_itimerspec *tim, \
+		    struct linux32_itimerspec *otim); }
+261	STD	{ int|linux32_sys||timer_gettime(timer_t timerid, \
+		    struct linux32_itimerspec *tim); }
+262	NOARGS	{ int|sys||timer_getoverrun(timer_t timerid); }
+263	NOARGS	{ int|sys||timer_delete(timer_t timerid); }
 264	STD	{ int|linux32_sys||clock_settime(clockid_t which, \
 		    linux32_timespecp_t tp); }
 265	STD	{ int|linux32_sys||clock_gettime(clockid_t which, \
@@ -523,7 +527,12 @@
 		    linux_umode_t mode); }
 307	STD	{ int|linux32_sys||faccessat(int fd, netbsd32_charp path, \
 		    int amode); }
-308	UNIMPL	pselect6
+308	STD	{ int|linux32_sys||pselect6(int nfds, \
+		   netbsd32_fd_setp_t readfds, \
+		   netbsd32_fd_setp_t writefds, \
+		   netbsd32_fd_setp_t exceptfds, \
+		   linux32_timespecp_t timeout, \
+		   linux32_sized_sigsetp_t ss); }
 309	STD	{ int|linux32_sys||ppoll(netbsd32_pollfdp_t fds, u_int nfds, \
 		    linux32_timespecp_t timeout, linux32_sigsetp_t sigset); }
 310	UNIMPL	unshare
@@ -546,26 +555,36 @@
 320	STD	{ int|linux32_sys||utimensat(int fd, netbsd32_charp path, \
 			    linux32_timespecp_t times, int flag); }
 321	UNIMPL	signalfd
-322	UNIMPL	timerfd_create
-323	UNIMPL	eventfd
+322	NOARGS	{ int|linux_sys||timerfd_create(clockid_t clock_id, \
+		    int flags); }
+323	STD	{ int|linux32_sys||eventfd(unsigned int initval); }
 324	STD	{ int|linux32_sys||fallocate(int fd, int mode, \
 			    off_t offset, off_t len); }
-325	UNIMPL	timerfd_settime
-326	UNIMPL	timerfd_gettime
+325	STD	{ int|linux32_sys||timerfd_settime(int fd, int flags, \
+		    const struct linux32_itimerspec *tim, \
+		    struct linux32_itimerspec *otim); }
+326	STD	{ int|linux32_sys||timerfd_gettime(int fd, \
+		    struct linux32_itimerspec *tim); }
 327	UNIMPL	signalfd4
-328	UNIMPL	eventfd2
+328	STD	{ int|linux32_sys||eventfd2(unsigned int initval, \
+		    int flags); }
 329	UNIMPL	epoll_create1
 330	STD	{ int|linux32_sys||dup3(int from, int to, int flags); }
 331     STD	{ int|linux32_sys||pipe2(netbsd32_intp fd, int flags); }
 332	UNIMPL	inotify_init1
-333	UNIMPL	preadv
-334	UNIMPL	pwritev
+333	STD	{ int|linux32_sys||preadv(int fd, \
+		    const netbsd32_iovecp_t iovp, int iovcnt, \
+		    netbsd32_u_long off_lo, netbsd32_u_long off_hi); }
+334	STD	{ int|linux32_sys||pwritev(int fd, \
+		    const netbsd32_iovecp_t iovp, int iovcnt, \
+		    netbsd32_u_long off_lo, netbsd32_u_long off_hi); }
 335	UNIMPL	rt_tgsigqueueinfo
 336	UNIMPL	perf_counter_open
 337	UNIMPL	recvmmsg
 338	UNIMPL	fanotify_init
 339	UNIMPL	fanotify_mark
-340	UNIMPL	prlimit64
+340	STD	{ int|linux32_sys||prlimit64(pid_t pid, int which, \
+		    netbsd32_rlimitp_t new_rlp, netbsd32_rlimitp_t old_rlp); }
 341	UNIMPL	name_to_handle_at
 342	UNIMPL	open_by_handle_at
 343	UNIMPL	clock_adjtime

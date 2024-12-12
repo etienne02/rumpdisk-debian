@@ -1,4 +1,4 @@
-/*	$NetBSD: create.c,v 1.76 2018/11/18 23:03:36 sevan Exp $	*/
+/*	$NetBSD: create.c,v 1.79 2024/12/05 17:17:43 christos Exp $	*/
 
 /*-
  * Copyright (c) 1989, 1993
@@ -38,7 +38,7 @@
 #if 0
 static char sccsid[] = "@(#)create.c	8.1 (Berkeley) 6/6/93";
 #else
-__RCSID("$NetBSD: create.c,v 1.76 2018/11/18 23:03:36 sevan Exp $");
+__RCSID("$NetBSD: create.c,v 1.79 2024/12/05 17:17:43 christos Exp $");
 #endif
 #endif /* not lint */
 
@@ -84,13 +84,6 @@ static uid_t uid;
 static mode_t mode;
 static u_long flags;
 
-#ifdef __FreeBSD__
-#define	FTS_CONST const
-#else
-#define	FTS_CONST
-#endif
-
-static int	dcmp(const FTSENT *FTS_CONST *, const FTSENT *FTS_CONST *);
 static void	output(FILE *, int, int *, const char *, ...)
     __printflike(4, 5);
 static int	statd(FILE *, FTS *, FTSENT *, uid_t *, gid_t *, mode_t *,
@@ -173,6 +166,8 @@ cwalk(FILE *fp)
 
 		}
 	}
+	if (errno != 0)
+		mtree_err("fts_read: %s", strerror(errno));
 	fts_close(t);
 	if (sflag && keys & F_CKSUM)
 		mtree_err("%s checksum: %u", fullpath, crc_total);
@@ -440,27 +435,6 @@ statd(FILE *fp, FTS *t, FTSENT *parent, uid_t *puid, gid_t *pgid, mode_t *pmode,
 		*pflags = saveflags;
 	}
 	return (0);
-}
-
-/*
- * dcmp --
- *	used as a comparison function passed to fts_open() to control
- *	the order in which fts_read() returns results.	We make
- *	directories sort after non-directories, but otherwise sort in
- *	strcmp() order.
- *
- * Keep this in sync with nodecmp() in spec.c.
- */
-static int
-dcmp(const FTSENT *FTS_CONST *a, const FTSENT *FTS_CONST *b)
-{
-
-	if (S_ISDIR((*a)->fts_statp->st_mode)) {
-		if (!S_ISDIR((*b)->fts_statp->st_mode))
-			return (1);
-	} else if (S_ISDIR((*b)->fts_statp->st_mode))
-		return (-1);
-	return (strcmp((*a)->fts_name, (*b)->fts_name));
 }
 
 void

@@ -1,4 +1,4 @@
-/*	$NetBSD: grf_cl.c,v 1.52 2021/08/07 16:18:41 thorpej Exp $ */
+/*	$NetBSD: grf_cl.c,v 1.58 2023/12/20 00:40:42 thorpej Exp $ */
 
 /*
  * Copyright (c) 1997 Klaus Burkert
@@ -36,7 +36,7 @@
 #include "opt_amigacons.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: grf_cl.c,v 1.52 2021/08/07 16:18:41 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: grf_cl.c,v 1.58 2023/12/20 00:40:42 thorpej Exp $");
 
 #include "grfcl.h"
 #include "ite.h"
@@ -60,7 +60,7 @@ __KERNEL_RCSID(0, "$NetBSD: grf_cl.c,v 1.52 2021/08/07 16:18:41 thorpej Exp $");
  *
  * PicassoIV support bz Klaus "crest" Burkert.
  * Fixed interlace and doublescan, added clockdoubling and
- * HiColor&TrueColor suuport by crest 01/97
+ * HiColor&TrueColor support by crest 01/97
  *
  * Thanks to Village Tronic Marketing Gmbh for providing me with
  * a Picasso-II board.
@@ -78,7 +78,7 @@ __KERNEL_RCSID(0, "$NetBSD: grf_cl.c,v 1.52 2021/08/07 16:18:41 thorpej Exp $");
 #include <sys/errno.h>
 #include <sys/ioctl.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
+#include <sys/device_impl.h>	/* XXX autoconf abuse */
 
 #include <machine/cpu.h>
 #include <dev/cons.h>
@@ -907,6 +907,7 @@ cl_setmousepos(struct grf_softc *gp, struct grf_position *data)
 	volatile char *ba = gp->g_regkva;
         short rx, ry;
 #ifdef CL_SHIFTSPRITE
+	short prx, pry;
 	volatile char *fb = gp->g_fbkva;
         volatile char *sprite = fb + (cl_fbsize - 1024);
 #endif
@@ -925,6 +926,8 @@ cl_setmousepos(struct grf_softc *gp, struct grf_position *data)
          * and kind of buggy anyhow).
          */
 #ifdef CL_SHIFTSPRITE
+	prx = cl_cursprite.pos.x - cl_cursprite.hot.x;
+	pry = cl_cursprite.pos.y - cl_cursprite.hot.y;
         if (rx < 0 || ry < 0 || prx < 0 || pry < 0) {
                 writeshifted(sprite, rx < 0 ? -rx : 0, ry < 0 ? -ry : 0);
         }
@@ -1152,13 +1155,13 @@ cl_getcmap(struct grf_softc *gfp, struct grf_colormap *cmap)
 
 /*
  * Some sort 'o Magic. Spectrum has some changes on the board to speed
- * up 15 and 16Bit modes. They can access these modes with easy-to-programm
+ * up 15 and 16Bit modes. They can access these modes with easy-to-program
  * rgbrgbrgb instead of rrrgggbbb. Side effect: when in 8Bit mode, rgb
  * is swapped to bgr. I wonder if we need to check for 8Bit though, ill
  */
 
 /*
- * The source for the above comment is somewhat unknow to me.
+ * The source for the above comment is somewhat unknown to me.
  * The Spectrum, Piccolo and PiccoloSD64 have the analog Red and Blue
  * lines swapped. In 24BPP this provides RGB instead of BGR as it would
  * be native to the chipset. This requires special programming for the
@@ -2124,7 +2127,7 @@ cl_wsioctl(void *v, void *vs, u_long cmd, void *data, int flag, struct lwp *l)
 		return cl_get_fbinfo(gp, data);
 	}
 
-	/* handle this command hw-independant in grf(4) */
+	/* handle this command hw-independent in grf(4) */
 	return grf_wsioctl(v, vs, cmd, data, flag, l);
 }
 

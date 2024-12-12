@@ -1,4 +1,4 @@
-/*	$NetBSD: i82586.c,v 1.89 2020/03/19 14:10:56 thorpej Exp $	*/
+/*	$NetBSD: i82586.c,v 1.91 2024/02/09 22:08:34 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -96,7 +96,7 @@
  * sun-4/200's, and VME based suns.  The byte order is all wrong for a
  * SUN, making life difficult.  Programming this chip is mostly the same,
  * but certain details differ from system to system.  This driver is
- * written so that different "ie" interfaces can be controled by the same
+ * written so that different "ie" interfaces can be controlled by the same
  * driver.
  */
 
@@ -137,7 +137,7 @@ Mode of operation:
 */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i82586.c,v 1.89 2020/03/19 14:10:56 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i82586.c,v 1.91 2024/02/09 22:08:34 andvar Exp $");
 
 
 #include <sys/param.h>
@@ -1323,7 +1323,7 @@ ie_run_tdr(struct ie_softc *sc, int cmd)
  * i82586_setup_bufs: set up the buffers
  *
  * We have a block of KVA at sc->buf_area which is of size sc->buf_area_sz.
- * this is to be used for the buffers.  The chip indexs its control data
+ * this is to be used for the buffers.  The chip indexes its control data
  * structures with 16 bit offsets, and it indexes actual buffers with
  * 24 bit addresses.   So we should allocate control buffers first so that
  * we don't overflow the 16 bit offset field.   The number of transmit

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_url.c,v 1.77 2020/04/02 04:09:36 nisimura Exp $	*/
+/*	$NetBSD: if_url.c,v 1.98 2024/06/30 16:35:19 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002
@@ -44,7 +44,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_url.c,v 1.77 2020/04/02 04:09:36 nisimura Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_url.c,v 1.98 2024/06/30 16:35:19 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -77,11 +77,10 @@ static unsigned	url_uno_tx_prepare(struct usbnet *, struct mbuf *,
 static void url_uno_rx_loop(struct usbnet *, struct usbnet_chain *, uint32_t);
 static int url_uno_mii_read_reg(struct usbnet *, int, int, uint16_t *);
 static int url_uno_mii_write_reg(struct usbnet *, int, int, uint16_t);
-static int url_uno_ioctl(struct ifnet *, u_long, void *);
 static void url_uno_stop(struct ifnet *, int);
 static void url_uno_mii_statchg(struct ifnet *);
 static int url_uno_init(struct ifnet *);
-static void url_rcvfilt_locked(struct usbnet *);
+static void url_uno_mcast(struct ifnet *);
 static void url_reset(struct usbnet *);
 
 static int url_csr_read_1(struct usbnet *, int);
@@ -93,7 +92,7 @@ static int url_mem(struct usbnet *, int, int, void *, int);
 
 static const struct usbnet_ops url_ops = {
 	.uno_stop = url_uno_stop,
-	.uno_ioctl = url_uno_ioctl,
+	.uno_mcast = url_uno_mcast,
 	.uno_read_reg = url_uno_mii_read_reg,
 	.uno_write_reg = url_uno_mii_write_reg,
 	.uno_statchg = url_uno_mii_statchg,
@@ -241,10 +240,7 @@ url_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* Set these up now for url_mem().  */
-	usbnet_attach(un, "urldet");
-
-	usbnet_lock_core(un);
-	usbnet_busy(un);
+	usbnet_attach(un);
 
 	/* reset the adapter */
 	url_reset(un);
@@ -252,22 +248,14 @@ url_attach(device_t parent, device_t self, void *aux)
 	/* Get Ethernet Address */
 	err = url_mem(un, URL_CMD_READMEM, URL_IDR0, (void *)un->un_eaddr,
 		      ETHER_ADDR_LEN);
-	usbnet_unbusy(un);
-	usbnet_unlock_core(un);
 	if (err) {
 		aprint_error_dev(self, "read MAC address failed\n");
-		goto bad;
+		return;
 	}
 
 	/* initialize interface information */
 	usbnet_attach_ifp(un, IFF_SIMPLEX | IFF_BROADCAST | IFF_MULTICAST,
 	    0, &unm);
-
-	return;
-
- bad:
-	usbnet_set_dying(un, true);
-	return;
 }
 
 /* read/write memory */
@@ -277,13 +265,14 @@ url_mem(struct usbnet *un, int cmd, int offset, void *buf, int len)
 	usb_device_request_t req;
 	usbd_status err;
 
-	usbnet_isowned_core(un);
-
 	DPRINTFN(0x200,
 		("%s: %s: enter\n", device_xname(un->un_dev), __func__));
 
-	if (usbnet_isdying(un))
+	if (usbnet_isdying(un)) {
+		if (cmd == URL_CMD_READMEM)
+			memset(buf, 0, len);
 		return 0;
+	}
 
 	if (cmd == URL_CMD_READMEM)
 		req.bmRequestType = UT_READ_VENDOR_DEVICE;
@@ -300,6 +289,8 @@ url_mem(struct usbnet *un, int cmd, int offset, void *buf, int len)
 			 device_xname(un->un_dev),
 			 cmd == URL_CMD_READMEM ? "read" : "write",
 			 offset, err));
+		if (cmd == URL_CMD_READMEM)
+			memset(buf, 0, len);
 	}
 
 	return err;
@@ -371,7 +362,7 @@ url_csr_write_4(struct usbnet *un, int reg, int aval)
 }
 
 static int
-url_init_locked(struct ifnet *ifp)
+url_uno_init(struct ifnet *ifp)
 {
 	struct usbnet * const un = ifp->if_softc;
 	const u_char *eaddr;
@@ -379,13 +370,7 @@ url_init_locked(struct ifnet *ifp)
 
 	DPRINTF(("%s: %s: enter\n", device_xname(un->un_dev), __func__));
 
-	usbnet_isowned_core(un);
-
-	if (usbnet_isdying(un))
-		return EIO;
-
-	/* Cancel pending I/O and free all TX/RX buffers */
-	usbnet_stop(un, ifp, 1);
+	url_reset(un);
 
 	eaddr = CLLADDR(ifp->if_sadl);
 	for (i = 0; i < ETHER_ADDR_LEN; i++)
@@ -400,27 +385,10 @@ url_init_locked(struct ifnet *ifp)
 	/* Init receive control register */
 	URL_SETBIT2(un, URL_RCR, URL_RCR_TAIL | URL_RCR_AD | URL_RCR_AB);
 
-	/* Accept multicast frame or run promisc. mode */
-	url_rcvfilt_locked(un);
-
 	/* Enable RX and TX */
 	URL_SETBIT(un, URL_CR, URL_CR_TE | URL_CR_RE);
 
-	return usbnet_init_rx_tx(un);
-}
-
-static int
-url_uno_init(struct ifnet *ifp)
-{
-	struct usbnet * const un = ifp->if_softc;
-
-	usbnet_lock_core(un);
-	usbnet_busy(un);
-	int ret = url_init_locked(ifp);
-	usbnet_unbusy(un);
-	usbnet_unlock_core(un);
-
-	return ret;
+	return 0;
 }
 
 static void
@@ -436,6 +404,8 @@ url_reset(struct usbnet *un)
 	URL_SETBIT(un, URL_CR, URL_CR_SOFT_RST);
 
 	for (i = 0; i < URL_TX_TIMEOUT; i++) {
+		if (usbnet_isdying(un))
+			return;
 		if (!(url_csr_read_1(un, URL_CR) & URL_CR_SOFT_RST))
 			break;
 		delay(10);	/* XXX */
@@ -445,18 +415,16 @@ url_reset(struct usbnet *un)
 }
 
 static void
-url_rcvfilt_locked(struct usbnet *un)
+url_uno_mcast(struct ifnet *ifp)
 {
-	struct ifnet * const ifp = usbnet_ifp(un);
+	struct usbnet * const un = ifp->if_softc;
 	struct ethercom *ec = usbnet_ec(un);
 	struct ether_multi *enm;
 	struct ether_multistep step;
 	uint32_t mchash[2] = { 0, 0 };
-	int h = 0, rcr;
+	uint32_t h = 0, rcr;
 
 	DPRINTF(("%s: %s: enter\n", device_xname(un->un_dev), __func__));
-
-	usbnet_isowned_core(un);
 
 	if (usbnet_isdying(un))
 		return;
@@ -465,7 +433,7 @@ url_rcvfilt_locked(struct usbnet *un)
 	rcr &= ~(URL_RCR_AAP | URL_RCR_AAM | URL_RCR_AM);
 
 	ETHER_LOCK(ec);
-	if (ifp->if_flags & IFF_PROMISC) {
+	if (usbnet_ispromisc(un)) {
 		ec->ec_flags |= ETHER_F_ALLMULTI;
 		ETHER_UNLOCK(ec);
 		/* run promisc. mode */
@@ -565,29 +533,6 @@ static void url_intr(void)
 }
 #endif
 
-static int
-url_uno_ioctl(struct ifnet *ifp, u_long cmd, void *data)
-{
-	struct usbnet * const un = ifp->if_softc;
-
-	usbnet_lock_core(un);
-	usbnet_busy(un);
-
-	switch (cmd) {
-	case SIOCADDMULTI:
-	case SIOCDELMULTI:
-		url_rcvfilt_locked(un);
-		break;
-	default:
-		break;
-	}
-
-	usbnet_unbusy(un);
-	usbnet_unlock_core(un);
-
-	return 0;
-}
-
 /* Stop the adapter and free any mbufs allocated to the RX and TX lists. */
 static void
 url_uno_stop(struct ifnet *ifp, int disable)
@@ -612,6 +557,7 @@ url_uno_mii_read_reg(struct usbnet *un, int phy, int reg, uint16_t *val)
 	if (phy != 0) {
 		DPRINTFN(0xff, ("%s: %s: phy=%d is not supported\n",
 			 device_xname(un->un_dev), __func__, phy));
+		*val = 0;
 		return EINVAL;
 	}
 

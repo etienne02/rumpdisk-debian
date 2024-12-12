@@ -1,4 +1,4 @@
-/*	$NetBSD: if_sip.c,v 1.182 2020/03/16 01:54:23 thorpej Exp $	*/
+/*	$NetBSD: if_sip.c,v 1.193 2024/07/05 04:31:51 rin Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002 The NetBSD Foundation, Inc.
@@ -73,13 +73,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_sip.c,v 1.182 2020/03/16 01:54:23 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_sip.c,v 1.193 2024/07/05 04:31:51 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -259,7 +258,7 @@ struct sip_softc {
 	struct evcnt sc_ev_txpause;	/* PAUSE transmitted */
 	struct evcnt sc_ev_rxipsum;	/* IP checksums checked in-bound */
 	struct evcnt sc_ev_rxtcpsum;	/* TCP checksums checked in-bound */
-	struct evcnt sc_ev_rxudpsum;	/* UDP checksums checked in-boudn */
+	struct evcnt sc_ev_rxudpsum;	/* UDP checksums checked in-bound */
 	struct evcnt sc_ev_txipsum;	/* IP checksums comp. out-bound */
 	struct evcnt sc_ev_txtcpsum;	/* TCP checksums comp. out-bound */
 	struct evcnt sc_ev_txudpsum;	/* UDP checksums comp. out-bound */
@@ -569,7 +568,6 @@ sip_init_txdesc(struct sip_softc *sc, int x, bus_addr_t bufptr, uint32_t cmdsts)
 		sipd->sipd_words[sc->sc_bufptr_idx] = htole32(bufptr);
 	}
 	sipd->sipd_words[sc->sc_extsts_idx] = 0;
-	membar_producer();
 	sipd->sipd_words[sc->sc_cmdsts_idx] = htole32(cmdsts);
 	/* sip_cdtxsync() will be done later. */
 }
@@ -596,7 +594,7 @@ sip_init_rxdesc(struct sip_softc *sc, int x)
 		    htole32(rxs->rxs_dmamap->dm_segs[0].ds_addr);
 	}
 	sipd->sipd_words[sc->sc_extsts_idx] = 0;
-	membar_producer();
+	sip_cdrxsync(sc, x, BUS_DMASYNC_PREWRITE);
 	sipd->sipd_words[sc->sc_cmdsts_idx] =
 	    htole32(CMDSTS_INTR | (sc->sc_parm->p_rxbuf_len &
 	    			   sc->sc_bits.b_cmdsts_size_mask));
@@ -888,7 +886,7 @@ sipcom_dp83820_attach(struct sip_softc *sc, struct pci_attach_args *pa)
 		} else {
 			using64 = "disabled in EEPROM";
 		}
-		printf("%s: 64-bit slot detected, 64-bit tranfers %s\n",
+		printf("%s: 64-bit slot detected, 64-bit transfers %s\n",
 		    device_xname(sc->sc_dev), using64);
 	}
 	
@@ -1576,7 +1574,7 @@ sipcom_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we
+		 * didn't fit in the allotted number of segments, or we
 		 * were short on resources.
 		 */
 		error = bus_dmamap_load_mbuf(sc->sc_dmat, dmamap, m0,
@@ -1640,8 +1638,7 @@ sipcom_start(struct ifnet *ifp)
 			 * packet.
 			 */
 			bus_dmamap_unload(sc->sc_dmat, dmamap);
-			if (m != NULL)
-				m_freem(m);
+			m_freem(m);
 			SIP_EVCNT_INCR(&sc->sc_ev_txdstall);
 			break;
 		}
@@ -1702,7 +1699,7 @@ sipcom_start(struct ifnet *ifp)
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
 		/*
-		 * The entire packet is set up.  Give the first descrptor
+		 * The entire packet is set up.  Give the first descriptor
 		 * to the chip now.
 		 */
 		sc->sc_txdescs[sc->sc_txnext].sipd_words[sc->sc_cmdsts_idx] |=
@@ -1737,7 +1734,7 @@ sipcom_start(struct ifnet *ifp)
 		 * chip's internal queue (indicated by TXE being clear),
 		 * then the driver software must set the TXDP to the
 		 * first descriptor to be transmitted.  However, if we
-		 * do this, it causes serious performance degredation on
+		 * do this, it causes serious performance degradation on
 		 * the DP83820 under load, not setting TXDP doesn't seem
 		 * to adversely affect the SiS 900 or DP83815.
 		 *
@@ -1869,7 +1866,7 @@ sipcom_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		error = 0;
 
 		if (cmd == SIOCSIFCAP)
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		else if (cmd != SIOCADDMULTI && cmd != SIOCDELMULTI)
 			;
 		else if (ifp->if_flags & IFF_RUNNING) {
@@ -2073,9 +2070,9 @@ sipcom_txintr(struct sip_softc *sc)
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (cmdsts & (CMDSTS_Tx_TXA | CMDSTS_Tx_TFU | CMDSTS_Tx_ED |
 		    CMDSTS_Tx_EC)) {
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 			if (cmdsts & CMDSTS_Tx_EC)
-				if_statadd_ref(nsr, if_collisions, 16);
+				if_statadd_ref(ifp, nsr, if_collisions, 16);
 			if (ifp->if_flags & IFF_DEBUG) {
 				if (cmdsts & CMDSTS_Tx_ED)
 					printf("%s: excessive deferral\n",
@@ -2086,9 +2083,9 @@ sipcom_txintr(struct sip_softc *sc)
 			}
 		} else {
 			/* Packet was transmitted successfully. */
-			if_statinc_ref(nsr, if_opackets);
+			if_statinc_ref(ifp, nsr, if_opackets);
 			if (CMDSTS_COLLISIONS(cmdsts))
-				if_statadd_ref(nsr, if_collisions,
+				if_statadd_ref(ifp, nsr, if_collisions,
 				    CMDSTS_COLLISIONS(cmdsts));
 		}
 		IF_STAT_PUTREF(ifp);
@@ -2126,9 +2123,6 @@ gsip_rxintr(struct sip_softc *sc)
 
 		cmdsts =
 		    le32toh(sc->sc_rxdescs[i].sipd_words[sc->sc_cmdsts_idx]);
-		extsts =
-		    le32toh(sc->sc_rxdescs[i].sipd_words[sc->sc_extsts_idx]);
-		len = CMDSTS_SIZE(sc, cmdsts);
 
 		/*
 		 * NOTE: OWN is set if owned by _consumer_.  We're the
@@ -2141,6 +2135,12 @@ gsip_rxintr(struct sip_softc *sc)
 			 */
 			break;
 		}
+
+		sip_cdrxsync(sc, i, BUS_DMASYNC_POSTREAD);
+
+		extsts =
+		    le32toh(sc->sc_rxdescs[i].sipd_words[sc->sc_extsts_idx]);
+		len = CMDSTS_SIZE(sc, cmdsts);
 
 		if (__predict_false(sc->sc_rxdiscard)) {
 			sip_init_rxdesc(sc, i);
@@ -2170,8 +2170,7 @@ gsip_rxintr(struct sip_softc *sc)
 			sip_init_rxdesc(sc, i);
 			if (cmdsts & CMDSTS_MORE)
 				sc->sc_rxdiscard = 1;
-			if (sc->sc_rxhead != NULL)
-				m_freem(sc->sc_rxhead);
+			m_freem(sc->sc_rxhead);
 			sip_rxchain_reset(sc);
 			continue;
 		}
@@ -2202,7 +2201,7 @@ gsip_rxintr(struct sip_softc *sc)
 		sip_rxchain_reset(sc);
 
 		/* If an error occurred, update stats and drop the packet. */
-		if (cmdsts & (CMDSTS_Rx_RXA | CMDSTS_Rx_RUNT |
+		if (cmdsts & (CMDSTS_Rx_RXA | CMDSTS_Rx_LONG | CMDSTS_Rx_RUNT |
 		    CMDSTS_Rx_ISE | CMDSTS_Rx_CRCE | CMDSTS_Rx_FAE)) {
 			if_statinc(ifp, if_ierrors);
 			if ((cmdsts & CMDSTS_Rx_RXA) != 0 &&
@@ -2215,6 +2214,7 @@ gsip_rxintr(struct sip_softc *sc)
 			if ((ifp->if_flags & IFF_DEBUG) != 0 &&		\
 			    (cmdsts & (bit)) != 0)			\
 				printf("%s: %s\n", device_xname(sc->sc_dev), str)
+			PRINTERR(CMDSTS_Rx_LONG, "Too long packet");
 			PRINTERR(CMDSTS_Rx_RUNT, "runt packet");
 			PRINTERR(CMDSTS_Rx_ISE, "invalid symbol error");
 			PRINTERR(CMDSTS_Rx_CRCE, "CRC error");
@@ -2361,7 +2361,7 @@ sip_rxintr(struct sip_softc *sc)
 		 * word, and leave the packet buffer in place.  It will
 		 * simply be reused the next time the ring comes around.
 		 */
-		if (cmdsts & (CMDSTS_Rx_RXA | CMDSTS_Rx_RUNT |
+		if (cmdsts & (CMDSTS_Rx_RXA | CMDSTS_Rx_LONG | CMDSTS_Rx_RUNT |
 		    CMDSTS_Rx_ISE | CMDSTS_Rx_CRCE | CMDSTS_Rx_FAE)) {
 			if_statinc(ifp, if_ierrors);
 			if ((cmdsts & CMDSTS_Rx_RXA) != 0 &&
@@ -2374,6 +2374,7 @@ sip_rxintr(struct sip_softc *sc)
 			if ((ifp->if_flags & IFF_DEBUG) != 0 &&		\
 			    (cmdsts & (bit)) != 0)			\
 				printf("%s: %s\n", device_xname(sc->sc_dev), str)
+			PRINTERR(CMDSTS_Rx_LONG, "Too long packet");
 			PRINTERR(CMDSTS_Rx_RUNT, "runt packet");
 			PRINTERR(CMDSTS_Rx_ISE, "invalid symbol error");
 			PRINTERR(CMDSTS_Rx_CRCE, "CRC error");
@@ -2745,7 +2746,7 @@ sipcom_init(struct ifnet *ifp)
 
 	/*
 	 * Checksum offloading is disabled if the user selects an MTU
-	 * larger than 8109.  (FreeBSD says 8152, but there is emperical
+	 * larger than 8109.  (FreeBSD says 8152, but there is empirical
 	 * evidence that >8109 does not work on some boards, such as the
 	 * Planex GN-1000TE).
 	 */

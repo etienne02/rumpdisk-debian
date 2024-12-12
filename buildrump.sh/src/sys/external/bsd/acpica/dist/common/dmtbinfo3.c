@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -84,6 +84,23 @@
 
 /*******************************************************************************
  *
+ * CCEL - CC-Event Log Table
+ *
+ ******************************************************************************/
+
+ACPI_DMTABLE_INFO           AcpiDmTableInfoCcel[] =
+{
+    {ACPI_DMT_UINT8,    ACPI_CCEL_OFFSET (CCType),                  "CC Type", 0},
+    {ACPI_DMT_UINT8,    ACPI_CCEL_OFFSET (CCSubType),               "CC Sub Type", 0},
+    {ACPI_DMT_UINT32,   ACPI_CCEL_OFFSET (Reserved),                "Reserved", 0},
+    {ACPI_DMT_UINT64,   ACPI_CCEL_OFFSET (LogAreaMinimumLength),    "Log Area Minimum Length", 0},
+    {ACPI_DMT_UINT64,   ACPI_CCEL_OFFSET (LogAreaStartAddress),     "Log Area Start Address", 0},
+    ACPI_DMT_TERMINATOR
+};
+
+
+/*******************************************************************************
+ *
  * SLIC - Software Licensing Description Table. This table contains the standard
  * ACPI header followed by proprietary data structures
  *
@@ -130,7 +147,7 @@ ACPI_DMTABLE_INFO           AcpiDmTableInfoSpcr[] =
     {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (StopBits),                "Stop Bits", 0},
     {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (FlowControl),             "Flow Control", 0},
     {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (TerminalType),            "Terminal Type", 0},
-    {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (Reserved2),               "Reserved", 0},
+    {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (Language),                "Language", 0},
     {ACPI_DMT_UINT16,   ACPI_SPCR_OFFSET (PciDeviceId),             "PCI Device ID", 0},
     {ACPI_DMT_UINT16,   ACPI_SPCR_OFFSET (PciVendorId),             "PCI Vendor ID", 0},
     {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (PciBus),                  "PCI Bus", 0},
@@ -138,7 +155,11 @@ ACPI_DMTABLE_INFO           AcpiDmTableInfoSpcr[] =
     {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (PciFunction),             "PCI Function", 0},
     {ACPI_DMT_UINT32,   ACPI_SPCR_OFFSET (PciFlags),                "PCI Flags", 0},
     {ACPI_DMT_UINT8,    ACPI_SPCR_OFFSET (PciSegment),              "PCI Segment", 0},
-    {ACPI_DMT_UINT32,   ACPI_SPCR_OFFSET (Reserved2),               "Reserved", 0},
+    {ACPI_DMT_UINT32,   ACPI_SPCR_OFFSET (UartClkFreq),             "Uart Clock Freq", 0},
+    {ACPI_DMT_UINT32,   ACPI_SPCR_OFFSET (PreciseBaudrate),         "Precise Baud rate", 0},
+    {ACPI_DMT_UINT16,   ACPI_SPCR_OFFSET (NameSpaceStringLength),   "NameSpaceStringLength", 0},
+    {ACPI_DMT_UINT16,   ACPI_SPCR_OFFSET (NameSpaceStringOffset),   "NameSpaceStringOffset", 0},
+    {ACPI_DMT_STRING,   ACPI_SPCR_OFFSET (NameSpaceString),         "NamespaceString", 0},
     ACPI_DMT_TERMINATOR
 };
 
@@ -260,21 +281,46 @@ ACPI_DMTABLE_INFO           AcpiDmTableInfoSrat4[] =
     ACPI_DMT_TERMINATOR
 };
 
+/* Common SRAT structure for Generic Affinity Subtables */
+
+#define ACPI_DM_SRAT_GENERIC_AFFINITY \
+    {ACPI_DMT_UINT8,    ACPI_SRAT5_OFFSET (Reserved),               "Reserved1", 0}, \
+    {ACPI_DMT_UINT8,    ACPI_SRAT5_OFFSET (DeviceHandleType),       "Device Handle Type", 0}, \
+    {ACPI_DMT_UINT32,   ACPI_SRAT5_OFFSET (ProximityDomain),        "Proximity Domain", 0}, \
+    {ACPI_DMT_BUF16,    ACPI_SRAT5_OFFSET (DeviceHandle),           "Device Handle", 0}, \
+    {ACPI_DMT_UINT32,   ACPI_SRAT5_OFFSET (Flags),                  "Flags (decoded below)", DT_FLAG}, \
+    {ACPI_DMT_FLAG0,    ACPI_SRAT5_FLAG_OFFSET (Flags,0),           "Enabled", 0}, \
+    {ACPI_DMT_FLAG1,    ACPI_SRAT5_FLAG_OFFSET (Flags,0),           "Architectural Transactions", 0}, \
+    {ACPI_DMT_UINT32,   ACPI_SRAT5_OFFSET (Reserved1),              "Reserved2", 0}
+
 /* 5: Generic Initiator Affinity Structure (ACPI 6.3) */
 
 ACPI_DMTABLE_INFO           AcpiDmTableInfoSrat5[] =
 {
-    {ACPI_DMT_UINT8,    ACPI_SRAT5_OFFSET (Reserved),               "Reserved1", 0},
-    {ACPI_DMT_UINT8,    ACPI_SRAT5_OFFSET (DeviceHandleType),       "Device Handle Type", 0},
-    {ACPI_DMT_UINT32,   ACPI_SRAT5_OFFSET (ProximityDomain),        "Proximity Domain", 0},
-    {ACPI_DMT_BUF16,    ACPI_SRAT5_OFFSET (DeviceHandle),           "Device Handle", 0},
-    {ACPI_DMT_UINT32,   ACPI_SRAT5_OFFSET (Flags),                  "Flags (decoded below)", DT_FLAG},
-    {ACPI_DMT_FLAG0,    ACPI_SRAT5_FLAG_OFFSET (Flags,0),           "Enabled", 0},
-    {ACPI_DMT_FLAG1,    ACPI_SRAT5_FLAG_OFFSET (Flags,0),           "Architectural Transactions", 0},
-    {ACPI_DMT_UINT32,   ACPI_SRAT5_OFFSET (Reserved1),              "Reserved2", 0},
+    ACPI_DM_SRAT_GENERIC_AFFINITY,
     ACPI_DMT_TERMINATOR
 };
 
+/* 6: Generic Port Affinity Structure (ACPI 6.4) */
+
+ACPI_DMTABLE_INFO           AcpiDmTableInfoSrat6[] =
+{
+    ACPI_DM_SRAT_GENERIC_AFFINITY,
+    ACPI_DMT_TERMINATOR
+};
+
+/* 7: RINTC Affinity Structure (ACPI 6.6) */
+
+ACPI_DMTABLE_INFO           AcpiDmTableInfoSrat7[] =
+{
+    {ACPI_DMT_UINT16,   ACPI_SRAT7_OFFSET (Reserved),               "Reserved", 0},
+    {ACPI_DMT_UINT32,   ACPI_SRAT7_OFFSET (ProximityDomain),        "Proximity Domain", 0},
+    {ACPI_DMT_UINT32,   ACPI_SRAT7_OFFSET (AcpiProcessorUid),       "Acpi Processor UID", 0},
+    {ACPI_DMT_UINT32,   ACPI_SRAT7_OFFSET (Flags),                  "Flags (decoded below)", DT_FLAG},
+    {ACPI_DMT_FLAG0,    ACPI_SRAT7_FLAG_OFFSET (Flags,0),           "Enabled", 0},
+    {ACPI_DMT_UINT32,   ACPI_SRAT7_OFFSET (ClockDomain),            "Clock Domain", 0},
+    ACPI_DMT_TERMINATOR
+};
 
 /*******************************************************************************
  *
@@ -370,6 +416,20 @@ ACPI_DMTABLE_INFO           AcpiDmTableInfoTcpaServer[] =
     ACPI_DMT_TERMINATOR
 };
 
+
+/*******************************************************************************
+ *
+ * TDEL - TD-Event Log Table
+ *
+ ******************************************************************************/
+
+ACPI_DMTABLE_INFO           AcpiDmTableInfoTdel[] =
+{
+    {ACPI_DMT_UINT32,   ACPI_TDEL_OFFSET (Reserved),                "Reserved", 0},
+    {ACPI_DMT_UINT64,   ACPI_TDEL_OFFSET (LogAreaMinimumLength),    "Log Area Minimum Length", 0},
+    {ACPI_DMT_UINT64,   ACPI_TDEL_OFFSET (LogAreaStartAddress),     "Log Area Start Address", 0},
+    ACPI_DMT_TERMINATOR
+};
 
 /*******************************************************************************
  *
@@ -651,7 +711,7 @@ ACPI_DMTABLE_INFO           AcpiDmTableInfoWpbt[] =
 
 ACPI_DMTABLE_INFO           AcpiDmTableInfoWpbt0[] =
 {
-    {ACPI_DMT_UNICODE,     sizeof (ACPI_TABLE_WPBT),                "Command-line Arguments", 0},
+    {ACPI_DMT_WPBT_UNICODE, ACPI_WPBT2_OFFSET (UnicodeString),      "Command-line Arguments", DT_DESCRIBES_OPTIONAL},
     ACPI_DMT_TERMINATOR
 };
 
@@ -726,6 +786,7 @@ ACPI_DMTABLE_INFO           AcpiDmTableInfoGeneric[][2] =
     ACPI_DM_GENERIC_ENTRY (ACPI_DMT_STRING,     "String"),
     ACPI_DM_GENERIC_ENTRY (ACPI_DMT_UNICODE,    "Unicode"),
     ACPI_DM_GENERIC_ENTRY (ACPI_DMT_BUFFER,     "Buffer"),
+    ACPI_DM_GENERIC_ENTRY (ACPI_DMT_BUF16,      "BUF16"),
     ACPI_DM_GENERIC_ENTRY (ACPI_DMT_UUID,       "GUID"),
     ACPI_DM_GENERIC_ENTRY (ACPI_DMT_STRING,     "DevicePath"),
     ACPI_DM_GENERIC_ENTRY (ACPI_DMT_LABEL,      "Label"),

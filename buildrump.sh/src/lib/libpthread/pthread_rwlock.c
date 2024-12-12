@@ -1,4 +1,4 @@
-/*	$NetBSD: pthread_rwlock.c,v 1.42 2020/06/02 00:29:53 joerg Exp $ */
+/*	$NetBSD: pthread_rwlock.c,v 1.44 2022/02/12 14:59:32 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2002, 2006, 2007, 2008, 2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,10 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: pthread_rwlock.c,v 1.42 2020/06/02 00:29:53 joerg Exp $");
+__RCSID("$NetBSD: pthread_rwlock.c,v 1.44 2022/02/12 14:59:32 riastradh Exp $");
+
+/* Need to use libc-private names for atomic operations. */
+#include "../../common/lib/libc/atomic/atomic_op_namespace.h"
 
 #include <sys/types.h>
 #include <sys/lwpctl.h>
@@ -228,9 +231,7 @@ pthread__rwlock_rdlock(pthread_rwlock_t *ptr, const struct timespec *ts)
 
 		/* Did we get the lock? */
 		if (self->pt_rwlocked == _RW_LOCKED) {
-#ifndef PTHREAD__ATOMIC_IS_MEMBAR
 			membar_enter();
-#endif
 			return 0;
 		}
 		if (error != 0)
@@ -352,9 +353,7 @@ pthread__rwlock_wrlock(pthread_rwlock_t *ptr, const struct timespec *ts)
 
 		/* Did we get the lock? */
 		if (self->pt_rwlocked == _RW_LOCKED) {
-#ifndef PTHREAD__ATOMIC_IS_MEMBAR
 			membar_enter();
-#endif
 			return 0;
 		}
 		if (error != 0)
@@ -526,6 +525,9 @@ pthread_rwlock_unlock(pthread_rwlock_t *ptr)
 			 * by the writer that we are about to wake.
 			 */
 			(void)atomic_swap_ptr(&ptr->ptr_owner, (void *)new);
+#ifndef PTHREAD__ATOMIC_IS_MEMBAR
+			membar_exit();
+#endif
 
 			/* Wake the writer. */
 			thread->pt_rwlocked = _RW_LOCKED;
@@ -543,6 +545,7 @@ pthread_rwlock_unlock(pthread_rwlock_t *ptr)
 				if (thread->pt_sleepobj == NULL)
 					continue;
 				new += RW_READ_INCR;
+				membar_exit();
 				thread->pt_rwlocked = _RW_LOCKED;
 			}
 

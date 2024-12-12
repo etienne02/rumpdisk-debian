@@ -1,15 +1,16 @@
 #	from: @(#)Makefile	8.1 (Berkeley) 6/6/93
-#	$NetBSD: Makefile,v 1.28 2021/08/30 18:21:11 rillig Exp $
+#	$NetBSD: Makefile,v 1.32 2022/08/10 08:38:43 christos Exp $
 
 .include <bsd.own.mk>
 
 USE_FORT?= yes	# network server
 
 PROG=	inetd
-SRCS=	inetd.c parse_v2.c
+SRCS=	inetd.c parse.c parse_v2.c ratelimit.c
 MAN=	inetd.8
 MLINKS=	inetd.8 inetd.conf.5
 WARNS=	6
+#LINTFLAGS+=	-T
 
 # Enables debug printouts when in debug mode
 CPPFLAGS+=-DDEBUG_ENABLE

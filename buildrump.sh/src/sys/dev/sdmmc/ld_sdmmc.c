@@ -1,4 +1,4 @@
-/*	$NetBSD: ld_sdmmc.c,v 1.41 2020/08/02 01:17:56 riastradh Exp $	*/
+/*	$NetBSD: ld_sdmmc.c,v 1.44 2024/10/18 11:03:52 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 2008 KIYOHARA Takashi
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ld_sdmmc.c,v 1.41 2020/08/02 01:17:56 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ld_sdmmc.c,v 1.44 2024/10/18 11:03:52 jmcneill Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_sdmmc.h"
@@ -247,6 +247,7 @@ ld_sdmmc_attach(device_t parent, device_t self, void *aux)
 	struct ld_softc *ld = &sc->sc_ld;
 	struct ld_sdmmc_task *task;
 	struct lwp *lwp;
+	const char *cardtype;
 	int i;
 
 	ld->sc_dv = self;
@@ -256,8 +257,13 @@ ld_sdmmc_attach(device_t parent, device_t self, void *aux)
 	    sa->sf->cid.rev, sa->sf->cid.psn, sa->sf->cid.mdt);
 	aprint_naive("\n");
 
-	sc->sc_typename = kmem_asprintf("0x%02x:0x%04x:%s",
-	    sa->sf->cid.mid, sa->sf->cid.oid, sa->sf->cid.pnm);
+	if (ISSET(sa->sf->sc->sc_flags, SMF_SD_MODE)) {
+		cardtype = "SD card";
+	} else {
+		cardtype = "MMC";
+	}
+	sc->sc_typename = kmem_asprintf("%s 0x%02x:0x%04x:%s",
+	    cardtype, sa->sf->cid.mid, sa->sf->cid.oid, sa->sf->cid.pnm);
 
 	evcnt_attach_dynamic(&sc->sc_ev_discard, EVCNT_TYPE_MISC,
 	    NULL, device_xname(self), "sdmmc discard count");
@@ -316,16 +322,21 @@ ld_sdmmc_doattach(void *arg)
 	struct ld_sdmmc_softc *sc = (struct ld_sdmmc_softc *)arg;
 	struct ld_softc *ld = &sc->sc_ld;
 	struct sdmmc_softc *ssc = device_private(device_parent(ld->sc_dv));
-	const u_int cache_size = sc->sc_sf->ext_csd.cache_size;
+	const u_int emmc_cache_size = sc->sc_sf->ext_csd.cache_size;
+	const bool sd_cache = sc->sc_sf->ssr.cache;
 	char buf[sizeof("9999 KB")];
 
 	ldattach(ld, BUFQ_DISK_DEFAULT_STRAT);
 	aprint_normal_dev(ld->sc_dv, "%d-bit width,", sc->sc_sf->width);
 	if (ssc->sc_transfer_mode != NULL)
 		aprint_normal(" %s,", ssc->sc_transfer_mode);
-	if (cache_size > 0) {
-		format_bytes(buf, sizeof(buf), cache_size);
+	if (emmc_cache_size > 0) {
+		format_bytes(buf, sizeof(buf), emmc_cache_size);
 		aprint_normal(" %s cache%s,", buf,
+		    ISSET(sc->sc_sf->flags, SFF_CACHE_ENABLED) ? "" :
+		    " (disabled)");
+	} else if (sd_cache) {
+		aprint_normal(" Cache%s,",
 		    ISSET(sc->sc_sf->flags, SFF_CACHE_ENABLED) ? "" :
 		    " (disabled)");
 	}
@@ -593,8 +604,23 @@ static int
 ld_sdmmc_cachesync(struct ld_softc *ld, bool poll)
 {
 	struct ld_sdmmc_softc *sc = device_private(ld->sc_dv);
+	struct sdmmc_softc *sdmmc = device_private(device_parent(ld->sc_dv));
 	struct ld_sdmmc_task *task;
 	int error = -1;
+
+	/*
+	 * If we come here through the sdmmc discovery task, we can't
+	 * wait for a new task because the new task can't even begin
+	 * until the sdmmc discovery task has completed.
+	 *
+	 * XXX This is wrong, because there may already be queued I/O
+	 * tasks ahead of us.  Fixing this properly requires doing
+	 * discovery in a separate thread.  But this should avoid the
+	 * deadlock of PR kern/57870 (https://gnats.NetBSD.org/57870)
+	 * until we do split that up.
+	 */
+	if (curlwp == sdmmc->sc_tskq_lwp)
+		return sdmmc_mem_flush_cache(sc->sc_sf, poll);
 
 	mutex_enter(&sc->sc_lock);
 

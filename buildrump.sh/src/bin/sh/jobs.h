@@ -1,4 +1,4 @@
-/*	$NetBSD: jobs.h,v 1.24 2021/04/04 13:24:07 kre Exp $	*/
+/*	$NetBSD: jobs.h,v 1.27 2024/06/15 05:18:48 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -49,6 +49,7 @@
 #define	SHOW_SIGNALLED	0x10	/* only if stopped/exited on signal */
 #define	SHOW_ISSIG	0x20	/* job was signalled */
 #define	SHOW_NO_FREE	0x40	/* do not free job */
+#define	SHOW_PROCTITLE	0x80	/* set the process title */
 
 
 /*
@@ -76,7 +77,7 @@ struct job {
 #define	JOBSTOPPED	1	/* all procs are stopped */
 #define	JOBDONE		2	/* all procs are completed */
 	char	used;		/* true if this entry is in used */
-	char	flags;	
+	char	flags;
 #define	JOBCHANGED	1	/* set if status has changed */
 #define	JOBWANTED	2	/* set if this is a job being sought */
 #define	JPIPEFAIL	4	/* set if -o pipefail when job created */
@@ -100,6 +101,7 @@ int stoppedjobs(void);
 void commandtext(struct procstat *, union node *);
 int getjobpgrp(const char *);
 int anyjobs(void);
+void jobstarted(struct job *);
 
 #if ! JOBS
 #define setjobctl(on)	/* do nothing */

@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.51 2019/11/23 19:40:35 ad Exp $	*/
+/*	$NetBSD: cpu.h,v 1.57 2024/01/20 00:15:32 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -43,7 +43,6 @@
 
 #if defined(_KERNEL_OPT)
 #include "opt_lockdebug.h"
-#include "opt_m68k_arch.h"
 #endif
 
 /*
@@ -52,87 +51,9 @@
 #include <m68k/cpu.h>
 
 #if defined(_KERNEL)
-/*
- * Exported definitions unique to mvme68k/68k cpu support.
- */
-#define	M68K_MMU_MOTOROLA
 
-/*
- * Arguments to hardclock and gatherstats encapsulate the previous
- * machine state in an opaque clockframe.  On the mvme68k, we use
- * what the hardware pushes on an interrupt (frame format 0).
- */
-struct clockframe {
-	u_short	sr;		/* sr at time of interrupt */
-	u_long	pc;		/* pc at time of interrupt */
-	u_short	fmt:4,
-		vec:12;		/* vector offset (4-word frame) */
-} __attribute__((packed));
+#define	MVME68K		1	/* XXX */
 
-#define	CLKF_USERMODE(framep)	(((framep)->sr & PSL_S) == 0)
-#define	CLKF_PC(framep)		((framep)->pc)
-
-/*
- * The clock interrupt handler can determine if it's a nested
- * interrupt by checking for interrupt_depth > 1.
- * (Remember, the clock interrupt handler itself will cause the
- * depth counter to be incremented).
- */
-extern volatile unsigned int interrupt_depth;
-#define	CLKF_INTR(framep)	(interrupt_depth > 1)
-
-
-/*
- * Preempt the current process if in interrupt from user mode,
- * or after the current trap/syscall if in system mode.
- */
-#define	cpu_need_resched(ci,l,flags)	do {	\
-	__USE(flags); 				\
-	aston();				\
-} while (/*CONSTCOND*/0)
-
-/*
- * Give a profiling tick to the current process when the user profiling
- * buffer pages are invalid.  On the mvme68k, request an ast to send us
- * through trap, marking the proc as needing a profiling tick.
- */
-#define	cpu_need_proftick(l)	\
-	do { (l)->l_pflag |= LP_OWEUPC; aston(); } while (/* CONSTCOND */0)
-
-/*
- * Notify the current process (p) that it has a signal pending,
- * process as soon as possible.
- */
-#define	cpu_signotify(l)	aston()
-
-extern int astpending;		/* need to trap before returning to user mode */
-#define aston() (astpending++)
-
-/*
- * Associate MVME models with CPU types.
- */
-#define	MVME68K		1	
-
-/*
- * MVME-147; 68030 CPU
- */
-#if defined(MVME147) && !defined(M68030)
-#define M68030
-#endif
-
-/*
- * MVME-162/166/167; 68040 CPU
- */
-#if (defined(MVME162) || defined(MVME167)) && !defined(M68040)
-#define M68040
-#endif
-
-/*
- * MVME-172/177; 68060 CPU
- */
-#if (defined(MVME172) || defined(MVME177)) && !defined(M68060)
-#define M68060
-#endif
 #endif /* _KERNEL */
 
 /*
@@ -159,7 +80,6 @@ int	nmihand(void *);
 void	mvme68k_abort(const char *);
 void	*iomap(u_long, size_t);
 void	iounmap(void *, size_t);
-void	loadustp(paddr_t);
 
 /* physical memory addresses where mvme147's onboard devices live */
 #define	INTIOBASE147	(0xfffe0000u)

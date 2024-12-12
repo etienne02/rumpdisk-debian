@@ -1,4 +1,4 @@
-/*	$NetBSD: pw_gensalt.c,v 1.9 2020/05/14 08:34:19 msaitoh Exp $	*/
+/*	$NetBSD: pw_gensalt.c,v 1.14 2024/07/23 22:37:11 riastradh Exp $	*/
 
 /*
  * Copyright 1997 Niels Provos <provos@physnet.uni-hamburg.de>
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: pw_gensalt.c,v 1.9 2020/05/14 08:34:19 msaitoh Exp $");
+__RCSID("$NetBSD: pw_gensalt.c,v 1.14 2024/07/23 22:37:11 riastradh Exp $");
 #endif /* not lint */
 
 #include <sys/syslimits.h>
@@ -59,6 +59,9 @@ __RCSID("$NetBSD: pw_gensalt.c,v 1.9 2020/05/14 08:34:19 msaitoh Exp $");
 #define ARGON2_ARGON2I_STR      "argon2i"
 #define ARGON2_ARGON2D_STR      "argon2d"
 #define ARGON2_ARGON2ID_STR     "argon2id"
+
+crypt_private int
+estimate_argon2_params(argon2_type, uint32_t *, uint32_t *, uint32_t *);
 #endif /* HAVE_ARGON2 */
 
 static const struct pw_salt {
@@ -81,31 +84,7 @@ static const struct pw_salt {
 	{ NULL, NULL }
 };
 
-static int
-getnum(const char *str, size_t *num)
-{
-	char *ep;
-	unsigned long rv;
-
-	if (str == NULL) {
-		*num = 0;
-		return 0;
-	}
-
-	rv = strtoul(str, &ep, 0);
-
-	if (str == ep || *ep) {
-		errno = EINVAL;
-		return -1;
-	}
-
-	if (errno == ERANGE && rv == ULONG_MAX)
-		return -1;
-	*num = (size_t)rv;
-	return 0;
-}
-
-int
+crypt_private int
 /*ARGSUSED2*/
 __gensalt_old(char *salt, size_t saltsiz, const char *option)
 {
@@ -118,7 +97,7 @@ __gensalt_old(char *salt, size_t saltsiz, const char *option)
 	return 0;
 }
 
-int
+crypt_private int
 /*ARGSUSED2*/
 __gensalt_new(char *salt, size_t saltsiz, const char* option)
 {
@@ -144,7 +123,7 @@ __gensalt_new(char *salt, size_t saltsiz, const char* option)
 	return 0;
 }
 
-int
+crypt_private int
 /*ARGSUSED2*/
 __gensalt_md5(char *salt, size_t saltsiz, const char *option)
 {
@@ -162,7 +141,7 @@ __gensalt_md5(char *salt, size_t saltsiz, const char *option)
 	return 0;
 }
 
-int
+crypt_private int
 __gensalt_sha1(char *salt, size_t saltsiz, const char *option)
 {
 	int n;
@@ -186,15 +165,17 @@ __gensalt_sha1(char *salt, size_t saltsiz, const char *option)
 }
 
 #ifdef HAVE_ARGON2
-static int __gensalt_argon2_decode_option(char * dst, size_t dlen, const char * option)
+static int
+__gensalt_argon2_decode_option(char *dst, size_t dlen,
+    const char *option, argon2_type atype)
 {
-
-	char * in = 0;
-	char * a = 0;
+	char *in = 0;
+	char *a = 0;
 	size_t tmp = 0;
 	int error = 0;
-	/* ob buffer: m_cost, t_cost, threads */
-	uint32_t ob[3] = {4096, 3, 1}; 
+	uint32_t memory = 0;
+	uint32_t time = 0;
+	uint32_t threads = 0;
 
 	memset(dst, 0, dlen);
 
@@ -202,37 +183,33 @@ static int __gensalt_argon2_decode_option(char * dst, size_t dlen, const char * 
 		goto done;
 	}
 
-	in = (char *)strdup(option);
+	in = strdup(option);
 
 	while ((a = strsep(&in, ",")) != NULL) {
-		switch(*a) {
-
+		switch (*a) {
 			case 'm':
 				a += strlen("m=");
 				if ((getnum(a, &tmp)) == -1) {
 					--error;
 				} else {
-					ob[0] = tmp;
+					memory = tmp;
 				}
-
 				break;
 			case 't':
 				a += strlen("t=");
 				if ((getnum(a, &tmp)) == -1) {
 					--error;
 				} else {
-					ob[1] = tmp;
+					time = tmp;
 				}
-
 				break;
 			case 'p':
 				a += strlen("p=");
 				if ((getnum(a, &tmp)) == -1) {
 					--error;
 				} else {
-					ob[2] = tmp;
+					threads = tmp;
 				}
-
 				break;
 			default:
 				--error;
@@ -240,36 +217,49 @@ static int __gensalt_argon2_decode_option(char * dst, size_t dlen, const char * 
 	}
 
 	free(in);
+
 done:
-	snprintf(dst, dlen, "m=%d,t=%d,p=%d", ob[0], ob[1], ob[2]);
+	/*
+	 * If parameters are unspecified, calculate some reasonable
+	 * ones based on system time.
+	 */
+	if (memory < ARGON2_MIN_MEMORY ||
+	    time < ARGON2_MIN_TIME ||
+	    threads < ARGON2_MIN_THREADS) {
+		estimate_argon2_params(atype, &time, &memory, &threads);
+	}
+
+	snprintf(dst, dlen, "m=%d,t=%d,p=%d", memory, time, threads);
 
 	return error;
 }
 
 
 static int
-__gensalt_argon2(char *salt, size_t saltsiz, const char *option,argon2_type atype)
+__gensalt_argon2(char *salt, size_t saltsiz,
+    const char *option, argon2_type atype)
 {
 	int rc;
 	int n;
 	char buf[64];
 
 	/* get param, enforcing order and applying defaults */
-	if ((rc = __gensalt_argon2_decode_option(buf, sizeof(buf), option)) < 0) {
+	if ((rc = __gensalt_argon2_decode_option(buf,
+	    sizeof(buf), option, atype)) < 0) {
 		return 0;
 	}
 
-	n = snprintf(salt, saltsiz, "$%s$v=%d$%s$", 
+	n = snprintf(salt, saltsiz, "$%s$v=%d$%s$",
 		argon2_type2string(atype,0), ARGON2_VERSION_NUMBER, buf);
 
 	if ((size_t)n + 16 >= saltsiz) {
 		return 0;
 	}
 
-	__crypt_to64(&salt[n], arc4random(), 4);
-	__crypt_to64(&salt[n + 4], arc4random(), 4);
-	__crypt_to64(&salt[n + 8], arc4random(), 4);
-	__crypt_to64(&salt[n + 12], arc4random(), 4);
+	__crypt_tobase64(&salt[n], arc4random(), 4);
+	__crypt_tobase64(&salt[n + 4], arc4random(), 4);
+	__crypt_tobase64(&salt[n + 8], arc4random(), 4);
+	__crypt_tobase64(&salt[n + 12], arc4random(), 4);
 
 	salt[n + 16] = '$';
 	salt[n + 17] = '\0';
@@ -278,19 +268,19 @@ __gensalt_argon2(char *salt, size_t saltsiz, const char *option,argon2_type atyp
 }
 
 /* argon2 variant-specific hooks to generic */
-int
+crypt_private int
 __gensalt_argon2id(char *salt, size_t saltsiz, const char *option)
 {
 	return __gensalt_argon2(salt, saltsiz, option, Argon2_id);
 }
 
-int
+crypt_private int
 __gensalt_argon2i(char *salt, size_t saltsiz, const char *option)
 {
 	return __gensalt_argon2(salt, saltsiz, option, Argon2_i);
 }
 
-int
+crypt_private int
 __gensalt_argon2d(char *salt, size_t saltsiz, const char *option)
 {
 	return __gensalt_argon2(salt, saltsiz, option, Argon2_d);

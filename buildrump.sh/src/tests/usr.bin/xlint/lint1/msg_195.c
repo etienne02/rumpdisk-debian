@@ -1,7 +1,16 @@
-/*	$NetBSD: msg_195.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_195.c,v 1.4 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_195.c"
 
 // Test for message: case not in switch [195]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+int
+example(int x)
+{
+	/* expect+1: error: case not in switch [195] */
+case 1:
+	/* expect+1: error: case not in switch [195] */
+case 2:
+	return x;
+}

@@ -1,5 +1,5 @@
 /*	$KAME: dccp6_usrreq.c,v 1.13 2005/07/27 08:42:56 nishida Exp $	*/
-/*	$NetBSD: dccp6_usrreq.c,v 1.12 2018/09/15 13:33:15 rjs Exp $ */
+/*	$NetBSD: dccp6_usrreq.c,v 1.15 2022/11/04 09:01:53 ozaki-r Exp $ */
 
 /*
  * Copyright (C) 2003 WIDE Project.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dccp6_usrreq.c,v 1.12 2018/09/15 13:33:15 rjs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dccp6_usrreq.c,v 1.15 2022/11/04 09:01:53 ozaki-r Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -114,30 +114,30 @@ dccp6_ctlinput(int cmd, const struct sockaddr *sa, void *d)
 int
 dccp6_bind(struct socket *so, struct sockaddr *nam, struct lwp *td)
 {
-	struct in6pcb *in6p;
+	struct inpcb *inp;
 	int error;
-	struct sockaddr_in6 *sin6p = (struct sockaddr_in6 *)nam;
+	struct sockaddr_in6 *sinp = (struct sockaddr_in6 *)nam;
 
 	DCCP_DEBUG((LOG_INFO, "Entering dccp6_bind!\n"));
 	INP_INFO_WLOCK(&dccpbinfo);
-	in6p = sotoin6pcb(so);
-	if (in6p == 0) {
+	inp = sotoinpcb(so);
+	if (inp == 0) {
 		INP_INFO_WUNLOCK(&dccpbinfo);
-		DCCP_DEBUG((LOG_INFO, "dccp6_bind: in6p == 0!\n"));
+		DCCP_DEBUG((LOG_INFO, "dccp6_bind: inp == 0!\n"));
 		return EINVAL;
 	}
 	/* Do not bind to multicast addresses! */
-	if (sin6p->sin6_family == AF_INET6 &&
-	    IN6_IS_ADDR_MULTICAST(&sin6p->sin6_addr)) {
+	if (sinp->sin6_family == AF_INET6 &&
+	    IN6_IS_ADDR_MULTICAST(&sinp->sin6_addr)) {
 		INP_INFO_WUNLOCK(&dccpbinfo);
 		return EAFNOSUPPORT;
 	}
 	INP_LOCK(inp);
 
-	in6todccpcb(in6p)->inp_vflag &= ~INP_IPV4;
-	in6todccpcb(in6p)->inp_vflag |= INP_IPV6;
+	intodccpcb(inp)->inp_vflag &= ~INP_IPV4;
+	intodccpcb(inp)->inp_vflag |= INP_IPV6;
 	
-	error = in6_pcbbind(in6p, sin6p, td);
+	error = in6pcb_bind(inp, sinp, td);
 	INP_UNLOCK(inp);
 	INP_INFO_WUNLOCK(&dccpbinfo);
 	return error;
@@ -146,7 +146,7 @@ dccp6_bind(struct socket *so, struct sockaddr *nam, struct lwp *td)
 int
 dccp6_connect(struct socket *so, struct sockaddr *nam, struct lwp *l)
 {
-	struct in6pcb *in6p;
+	struct inpcb *inp;
 	struct dccpcb *dp;
 	int error;
 	struct sockaddr_in6 *sin6;
@@ -162,7 +162,7 @@ dccp6_connect(struct socket *so, struct sockaddr *nam, struct lwp *l)
 		return EINVAL;
 	}
 	INP_LOCK(inp);
-	if (inp->inp_faddr.s_addr != INADDR_ANY) {
+	if (in6p_faddr(inp).s_addr != INADDR_ANY) {
 		INP_UNLOCK(inp);
 		INP_INFO_WUNLOCK(&dccpbinfo);
 		return EISCONN;
@@ -170,15 +170,15 @@ dccp6_connect(struct socket *so, struct sockaddr *nam, struct lwp *l)
 
 	dp = (struct dccpcb *)inp->inp_ppcb;
 #else
-	in6p = sotoin6pcb(so);
-	if (in6p == 0) {
+	inp = sotoinpcb(so);
+	if (inp == 0) {
 		return EINVAL;
 	}
-	if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr)) {
+	if (!IN6_IS_ADDR_UNSPECIFIED(&in6p_faddr(inp))) {
 		return EISCONN;
 	}
 
-	dp = (struct dccpcb *)in6p->in6p_ppcb;
+	dp = (struct dccpcb *)inp->inp_ppcb;
 #endif
 	if (dp->state == DCCPS_ESTAB) {
 		DCCP_DEBUG((LOG_INFO, "Why are we in connect when we already have a established connection?\n"));
@@ -232,24 +232,24 @@ bad:
 int
 dccp6_listen(struct socket *so, struct lwp *l)
 {
-	struct in6pcb *in6p;
+	struct inpcb *inp;
 	struct dccpcb *dp;
 	int error = 0;
 
 	DCCP_DEBUG((LOG_INFO, "Entering dccp6_listen!\n"));
 
 	INP_INFO_RLOCK(&dccpbinfo);
-	in6p = sotoin6pcb(so);
-	if (in6p == 0) {
+	inp = sotoinpcb(so);
+	if (inp == 0) {
 		INP_INFO_RUNLOCK(&dccpbinfo);
 		return EINVAL;
 	}
 	INP_LOCK(inp);
 	INP_INFO_RUNLOCK(&dccpbinfo);
-	dp = in6todccpcb(in6p);
-	DCCP_DEBUG((LOG_INFO, "Checking in6p->in6p_lport!\n"));
-	if (in6p->in6p_lport == 0) {
-		error = in6_pcbbind(in6p, NULL, l);
+	dp = intodccpcb(inp);
+	DCCP_DEBUG((LOG_INFO, "Checking inp->inp_lport!\n"));
+	if (inp->inp_lport == 0) {
+		error = in6pcb_bind(inp, NULL, l);
 	}
 	if (error == 0) {
 		dp->state = DCCPS_LISTEN;
@@ -263,7 +263,7 @@ dccp6_listen(struct socket *so, struct lwp *l)
 int
 dccp6_accept(struct socket *so, struct sockaddr *nam)
 {
-	struct in6pcb *in6p = NULL;
+	struct inpcb *inp = NULL;
 	int error = 0;
 
 	DCCP_DEBUG((LOG_INFO, "Entering dccp6_accept!\n"));
@@ -276,14 +276,14 @@ dccp6_accept(struct socket *so, struct sockaddr *nam)
 	}
 
 	INP_INFO_RLOCK(&dccpbinfo);
-	in6p = sotoin6pcb(so);
-	if (in6p == 0) {
+	inp = sotoinpcb(so);
+	if (inp == 0) {
 		INP_INFO_RUNLOCK(&dccpbinfo);
 		return EINVAL;
 	}
 	INP_LOCK(inp);
 	INP_INFO_RUNLOCK(&dccpbinfo);
-	in6_setpeeraddr(in6p, (struct sockaddr_in6 *)nam);
+	in6pcb_fetch_peeraddr(inp, (struct sockaddr_in6 *)nam);
 
 	INP_UNLOCK(inp);
 	return error;
@@ -319,7 +319,7 @@ dccp6_purgeif(struct socket *so, struct ifnet *ifp)
 
 	s = splsoftnet();
 	mutex_enter(softnet_lock);
-	in6_pcbpurgeif0(&dccpbtable, ifp);
+	in6pcb_purgeif0(&dccpbtable, ifp);
 #ifdef NET_MPSAFE
 	mutex_exit(softnet_lock);
 #endif
@@ -327,7 +327,7 @@ dccp6_purgeif(struct socket *so, struct ifnet *ifp)
 #ifdef NET_MPSAFE
 	mutex_enter(softnet_lock);
 #endif
-	in6_pcbpurgeif(&dccpbtable, ifp);
+	in6pcb_purgeif(&dccpbtable, ifp);
 	mutex_exit(softnet_lock);
 	splx(s);
 
@@ -380,7 +380,7 @@ dccp6_peeraddr(struct socket *so, struct sockaddr *nam)
 	KASSERT(sotoinpcb(so) != NULL);
 	KASSERT(nam != NULL);
 
-	in6_setpeeraddr(sotoin6pcb(so), (struct sockaddr_in6 *)nam);
+	in6pcb_fetch_peeraddr(sotoinpcb(so), (struct sockaddr_in6 *)nam);
 	return 0;
 }
 
@@ -391,7 +391,7 @@ dccp6_sockaddr(struct socket *so, struct sockaddr *nam)
 	KASSERT(sotoinpcb(so) != NULL);
 	KASSERT(nam != NULL);
 
-	in6_setsockaddr(sotoin6pcb(so), (struct sockaddr_in6 *)nam);
+	in6pcb_fetch_sockaddr(sotoinpcb(so), (struct sockaddr_in6 *)nam);
 	return 0;
 }
 

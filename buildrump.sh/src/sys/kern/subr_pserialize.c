@@ -1,7 +1,7 @@
-/*	$NetBSD: subr_pserialize.c,v 1.17 2019/12/05 03:21:29 riastradh Exp $	*/
+/*	$NetBSD: subr_pserialize.c,v 1.24 2023/10/04 20:28:06 ad Exp $	*/
 
 /*-
- * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
+ * Copyright (c) 2010, 2011, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,19 +31,22 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_pserialize.c,v 1.17 2019/12/05 03:21:29 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_pserialize.c,v 1.24 2023/10/04 20:28:06 ad Exp $");
 
 #include <sys/param.h>
+
 #include <sys/atomic.h>
 #include <sys/cpu.h>
 #include <sys/evcnt.h>
+#include <sys/kernel.h>
 #include <sys/kmem.h>
+#include <sys/lwp.h>
 #include <sys/mutex.h>
 #include <sys/pserialize.h>
 #include <sys/xcall.h>
 
 struct pserialize {
-	lwp_t *			psz_owner;
+	char			psz_dummy;
 };
 
 static kmutex_t			psz_lock	__cacheline_aligned;
@@ -86,16 +89,13 @@ void
 pserialize_destroy(pserialize_t psz)
 {
 
-	KASSERT(psz->psz_owner == NULL);
 	kmem_free(psz, sizeof(*psz));
 }
 
 /*
  * pserialize_perform:
  *
- *	Perform the write side of passive serialization.  This operation
- *	MUST be serialized at a caller level (e.g. with a mutex or by a
- *	single-threaded use).
+ *	Perform the write side of passive serialization.
  */
 void
 pserialize_perform(pserialize_t psz)
@@ -107,22 +107,17 @@ pserialize_perform(pserialize_t psz)
 	if (__predict_false(panicstr != NULL)) {
 		return;
 	}
-	KASSERT(psz->psz_owner == NULL);
 
 	if (__predict_false(mp_online == false)) {
 		psz_ev_excl.ev_count++;
 		return;
 	}
 
-	psz->psz_owner = curlwp;
-
 	/*
 	 * Broadcast a NOP to all CPUs and wait until all of them complete.
 	 */
 	xc_barrier(XC_HIGHPRI);
 
-	KASSERT(psz->psz_owner == curlwp);
-	psz->psz_owner = NULL;
 	mutex_enter(&psz_lock);
 	psz_ev_excl.ev_count++;
 	mutex_exit(&psz_lock);
@@ -143,7 +138,7 @@ void
 pserialize_read_exit(int s)
 {
 
-	KASSERT(kpreempt_disabled());
+	KASSERT(__predict_false(cold) || kpreempt_disabled());
 
 	__insn_barrier();
 	if (__predict_false(curcpu()->ci_psz_read_depth-- == 0))
@@ -180,10 +175,18 @@ bool
 pserialize_not_in_read_section(void)
 {
 	bool notin;
+	long pctr;
 
-	kpreempt_disable();
-	notin = (curcpu()->ci_psz_read_depth == 0);
-	kpreempt_enable();
+	pctr = lwp_pctr();
+	notin = __predict_true(curcpu()->ci_psz_read_depth == 0);
+
+	/*
+	 * If we had a context switch, we're definitely not in a
+	 * pserialize read section because pserialize read sections
+	 * block preemption.
+	 */
+	if (__predict_false(pctr != lwp_pctr()))
+		notin = true;
 
 	return notin;
 }

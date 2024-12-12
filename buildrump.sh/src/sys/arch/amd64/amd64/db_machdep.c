@@ -1,4 +1,4 @@
-/*	$NetBSD: db_machdep.c,v 1.8 2020/06/06 07:03:21 maxv Exp $	*/
+/*	$NetBSD: db_machdep.c,v 1.15 2022/12/24 14:47:47 uwe Exp $	*/
 
 /*
  * Mach Operating System
@@ -26,11 +26,12 @@
  * rights to redistribute these changes.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_machdep.c,v 1.8 2020/06/06 07:03:21 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_machdep.c,v 1.15 2022/12/24 14:47:47 uwe Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
+#include <sys/syscall.h>
 
 #include <machine/frame.h>
 #include <machine/trap.h>
@@ -110,7 +111,8 @@ db_nextframe(long **nextframe, long **retaddr, long **arg0, db_addr_t *ip,
 	struct trapframe *tf;
 	struct x86_64_frame *fp;
 	struct intrframe *ifp;
-	int traptype, trapno, err, i;
+	int trapno, err, i;
+	db_expr_t syscallno;
 
 	switch (is_trap) {
 	    case NONE:
@@ -127,8 +129,16 @@ db_nextframe(long **nextframe, long **retaddr, long **arg0, db_addr_t *ip,
 
 	    case SYSCALL:
 		tf = (struct trapframe *)argp;
-		(*pr)("--- syscall (number %"DDB_EXPR_FMT"u) ---\n",
-		    db_get_value((long)&tf->tf_rax, 8, false));
+		syscallno = db_get_value((long)&tf->tf_rax, 8, false);
+		if (syscallno == SYS_syscall || syscallno == SYS___syscall) {
+			syscallno = db_get_value((long)&tf->tf_rdi, 8, false);
+			(*pr)("--- syscall (number %"DDB_EXPR_FMT"u"
+			    " via SYS_syscall) ---\n",
+			    syscallno);
+		} else {
+			(*pr)("--- syscall (number %"DDB_EXPR_FMT"u) ---\n",
+			    syscallno);
+		}
 		return 0;
 
 	    case TRAP:
@@ -165,9 +175,10 @@ db_nextframe(long **nextframe, long **retaddr, long **arg0, db_addr_t *ip,
 	 * a frame can be recognized by always having
 	 * err 0 or IREENT_MAGIC and trapno T_ASTFLT.
 	 */
-	if (db_frame_info(*nextframe, (db_addr_t)*ip, NULL, NULL, &traptype,
-	    NULL) != (db_sym_t)0
-	    && traptype == INTERRUPT) {
+	int traptype = NONE;
+	db_sym_t sym = db_frame_info(*nextframe, (db_addr_t)*ip,
+				     NULL, NULL, &traptype, NULL);
+	if (sym != DB_SYM_NULL && traptype == INTERRUPT) {
 		for (i = 0; i < 4; i++) {
 			ifp = (struct intrframe *)(argp + i);
 			err = db_get_value((long)&ifp->if_tf.tf_err,
@@ -200,9 +211,13 @@ db_frame_info(long *frame, db_addr_t callpc, const char **namep,
 	const char *name;
 
 	sym = db_search_symbol(callpc, DB_STGY_ANY, &offset);
+	if (sym != DB_SYM_NULL && offset == 0) {
+		sym = db_search_symbol(callpc - 1, DB_STGY_ANY, &offset);
+		offset++;
+	}
 	db_symbol_values(sym, &name, NULL);
-	if (sym == (db_sym_t)0)
-		return (db_sym_t)0;
+	if (sym == DB_SYM_NULL)
+		return DB_SYM_NULL;
 
 	*is_trap = NONE;
 	narg = 0;

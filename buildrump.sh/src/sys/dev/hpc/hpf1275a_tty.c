@@ -1,4 +1,4 @@
-/*	$NetBSD: hpf1275a_tty.c,v 1.31 2021/08/07 16:19:11 thorpej Exp $ */
+/*	$NetBSD: hpf1275a_tty.c,v 1.33 2023/05/10 00:09:54 riastradh Exp $ */
 
 /*
  * Copyright (c) 2004 Valeriy E. Ushakov
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hpf1275a_tty.c,v 1.31 2021/08/07 16:19:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hpf1275a_tty.c,v 1.33 2023/05/10 00:09:54 riastradh Exp $");
 
 #include "opt_wsdisplay_compat.h"
 
@@ -284,12 +284,11 @@ hpf1275a_detach(device_t self, int flags)
 	struct hpf1275a_softc *sc = device_private(self);
 	int error;
 
-	if (sc->sc_wskbd == NULL)
-		return (0);
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
-	error = config_detach(sc->sc_wskbd, 0);
-
-	return (error);
+	return 0;
 }
 
 
@@ -346,9 +345,9 @@ hpf1275a_close(struct tty *tp, int flag)
 	int s;
 
 	s = spltty();
-	mutex_spin_enter(&tty_lock);
+	ttylock(tp);
 	ttyflush(tp, FREAD | FWRITE);
-	mutex_spin_exit(&tty_lock);	 /* XXX */
+	ttyunlock(tp);	 /* XXX */
 	ttyldisc_release(tp->t_linesw);
 	tp->t_linesw = ttyldisc_default();
 	if (sc != NULL) {

@@ -1,4 +1,4 @@
-/*	$NetBSD: si70xx.c,v 1.8 2021/08/21 11:55:25 andvar Exp $	*/
+/*	$NetBSD: si70xx.c,v 1.11 2022/03/30 00:06:50 pgoyette Exp $	*/
 
 /*
  * Copyright (c) 2017 Brad Spencer <brad@anduin.eldar.org>
@@ -17,10 +17,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: si70xx.c,v 1.8 2021/08/21 11:55:25 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: si70xx.c,v 1.11 2022/03/30 00:06:50 pgoyette Exp $");
 
 /*
-  Driver for the Silicon Labs SI7013/SI7020/SI7021
+  Driver for the Silicon Labs SI7013/SI7020/SI7021, HTU21D and SHT21
 */
 
 #include <sys/param.h>
@@ -442,7 +442,10 @@ static int
 si70xx_update_status(struct si70xx_sc *sc)
 {
 	int error1 = si70xx_update_user(sc);
-	int error2 = si70xx_update_heater(sc);
+	int error2 = 0;
+	if (! sc->sc_noheater) {
+		error2 = si70xx_update_heater(sc);
+	}
 	return error1 ? error1 : error2;
 }
 
@@ -547,17 +550,22 @@ si70xx_sysctl_init(struct si70xx_sc *sc)
 	    CTL_HW, sysctlroot_num, CTL_CREATE, CTL_EOL)) != 0)
 		return error;
 
-	if ((error = sysctl_createv(&sc->sc_si70xxlog, 0, NULL, &cnode,
-	    CTLFLAG_READWRITE, CTLTYPE_BOOL, "heateron",
-	    SYSCTL_DESCR("Heater on"), si70xx_verify_sysctl_heateron, 0,
-	    (void *)sc, 0, CTL_HW, sysctlroot_num, CTL_CREATE, CTL_EOL)) != 0)
-		return error;
+	if (! sc->sc_noheater) {
+		if ((error = sysctl_createv(&sc->sc_si70xxlog, 0, NULL, &cnode,
+		    CTLFLAG_READWRITE, CTLTYPE_BOOL, "heateron",
+		    SYSCTL_DESCR("Heater on"), si70xx_verify_sysctl_heateron, 0,
+		    (void *)sc, 0, CTL_HW, sysctlroot_num, CTL_CREATE, CTL_EOL)) != 0)
+			return error;
 
-	return sysctl_createv(&sc->sc_si70xxlog, 0, NULL, &cnode,
-	    CTLFLAG_READWRITE, CTLTYPE_INT, "heaterstrength",
-	    SYSCTL_DESCR("Heater strength 1 to 6"),
-	    si70xx_verify_sysctl_heatervalue, 0, (void *)sc, 0, CTL_HW,
-	    sysctlroot_num, CTL_CREATE, CTL_EOL);
+		if ((error = sysctl_createv(&sc->sc_si70xxlog, 0, NULL, &cnode,
+		    CTLFLAG_READWRITE, CTLTYPE_INT, "heaterstrength",
+		    SYSCTL_DESCR("Heater strength 1 to 6"),
+		    si70xx_verify_sysctl_heatervalue, 0, (void *)sc, 0, CTL_HW,
+		    sysctlroot_num, CTL_CREATE, CTL_EOL)) != 0)
+			return error;
+	}
+
+	return 0;
 }
 
 static int
@@ -601,8 +609,9 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 	uint8_t testcrcpt1[4];
 	uint8_t testcrcpt2[4];
 	uint8_t crc1 = 0, crc2 = 0;
+	bool validcrcpt1, validcrcpt2;
 	uint8_t readcrc1 = 0, readcrc2 = 0;
-	uint8_t fwversion, model;
+	uint8_t fwversion = 0, model, heaterregister;
 
 	ia = aux;
 	sc = device_private(self);
@@ -614,9 +623,11 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 #ifdef HAVE_I2C_EXECV
 	sc->sc_clockstretch = 2048;
 #endif
-	sc->sc_readattempts = 25;
+	sc->sc_readattempts = 40;
 	sc->sc_ignorecrc = false;
 	sc->sc_sme = NULL;
+	sc->sc_noheater = false;
+	sc->sc_nofw = false;
 
 	aprint_normal("\n");
 
@@ -628,10 +639,6 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 		    "Unable to create sysmon structure\n");
 		sc->sc_sme = NULL;
 		return;
-	}
-	if ((error = si70xx_sysctl_init(sc)) != 0) {
-		aprint_error_dev(self, "Can't setup sysctl tree (%d)\n", error);
-		goto out;
 	}
 
 	error = iic_acquire_bus(sc->sc_tag, 0);
@@ -659,11 +666,24 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 	testcrcpt1[3] = buf[6];
 	readcrc1 = buf[7];
 	crc1 = si70xx_crc(testcrcpt1, 4);
+	/* A "real" SI70xx has the CRC cover the entire first part of the
+	 * serial number.  An HTU21D has the CRC broken out into each
+	 * part of the serial number.
+	 */
+	validcrcpt1 = (readcrc1 == crc1);
+	if (! validcrcpt1) {
+		validcrcpt1 = (si70xx_crc(&testcrcpt1[0],1) == buf[1] &&
+		    si70xx_crc(&testcrcpt1[1],1) == buf[3] &&
+		    si70xx_crc(&testcrcpt1[2],1) == buf[5] &&
+		    si70xx_crc(&testcrcpt1[3],1) == buf[7]);
+		DPRINTF(sc, 2, ("%s: Part 1 SN CRC was not valid for real type, "
+		    "check clone: %d\n", device_xname(sc->sc_dev), validcrcpt1));
+	}
 
 	DPRINTF(sc, 2, ("%s: read 1 values: %02x%02x%02x%02x%02x%02x%02x%02x "
-	    "- %02x\n", device_xname(sc->sc_dev), buf[0], buf[1],
+	    "- %02x -- %d\n", device_xname(sc->sc_dev), buf[0], buf[1],
 	    buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
-	    crc1));
+	    crc1, validcrcpt1));
 
 	error = si70xx_cmd2(sc, SI70XX_READ_ID_PT2A, SI70XX_READ_ID_PT2B,
 	    buf, 8);
@@ -678,25 +698,56 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 	testcrcpt2[3] = buf[4];
 	readcrc2 = buf[5];
 	crc2 = si70xx_crc(testcrcpt2, 4);
+	/* It is even stranger for this part of the serial number.  A "real"
+	 * SI70XX will have a single CRC for the entire second part, but
+	 * an HTU21D has a CRC for each word in this case.
+	 *
+	 * The datasheet actually agrees with the HTU21D case, and not the "real"
+	 * chip.
+	 */
+	validcrcpt2 = (readcrc2 == crc2);
+	if (! validcrcpt2) {
+		validcrcpt2 = (si70xx_crc(&testcrcpt2[0],2) == buf[2] &&
+		    si70xx_crc(&testcrcpt2[2],2) == buf[5]);
+		DPRINTF(sc, 2, ("%s: Part 2 SN CRC was not valid for real type, "
+		    "check clone: %d\n", device_xname(sc->sc_dev), validcrcpt2));
+	}
 
-	DPRINTF(sc, 2, ("%s: read 2 values: %02x%02x%02x%02x%02x%02x - %02x\n",
+	DPRINTF(sc, 2, ("%s: read 2 values: %02x%02x%02x%02x%02x%02x - %02x -- %d\n",
 	    device_xname(sc->sc_dev), buf[0], buf[1], buf[2],
-	    buf[3], buf[4], buf[5], crc2));
+	    buf[3], buf[4], buf[5], crc2, validcrcpt2));
 
 	error = si70xx_cmd2(sc, SI70XX_READ_FW_VERA, SI70XX_READ_FW_VERB,
 	    buf, 8);
 
 	if (error) {
-		aprint_error_dev(self, "Failed to read firmware version: %d\n",
+		aprint_error_dev(self, "Failed to read firmware version: Error %d\n",
 		    error);
-		ecount++;
+		sc->sc_nofw = true;
 	}
-	fwversion = buf[0];
-	DPRINTF(sc, 2, ("%s: read fw values: %#x\n", device_xname(sc->sc_dev),
-	    fwversion));
+	if (! sc->sc_nofw) {
+		fwversion = buf[0];
+		DPRINTF(sc, 2, ("%s: read fw values: %#x\n", device_xname(sc->sc_dev),
+		    fwversion));
+	}
+
+	error = si70xx_cmd1(sc, SI70XX_READ_HEATER_REG, &heaterregister, 1);
+
+	if (error) {
+		aprint_error_dev(self, "Failed to read heater register: Error %d\n",
+		    error);
+		sc->sc_noheater = true;
+	}
 
 	error = si70xx_update_status(sc);
+
 	iic_release_bus(sc->sc_tag, 0);
+
+	if ((error = si70xx_sysctl_init(sc)) != 0) {
+		aprint_error_dev(self, "Can't setup sysctl tree (%d)\n", error);
+		goto out;
+	}
+
 	if (error != 0) {
 		aprint_error_dev(self, "Failed to update status: %x\n", error);
 		aprint_error_dev(self, "Unable to setup device\n");
@@ -736,11 +787,6 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 		sc->sc_sme = NULL;
 		return;
 	}
-	if (ecount != 0) {
-		aprint_normal_dev(self, "Could not read model, "
-		    "probably an HTU21D\n");
-		return;
-	}
 
 	char modelstr[64];
 	switch (model) {
@@ -754,7 +800,7 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 		snprintf(modelstr, sizeof(modelstr), "SI70%d", model);
 		break;
 	default:
-		snprintf(modelstr, sizeof(modelstr), "Unknown SI70%d", model);
+		snprintf(modelstr, sizeof(modelstr), "Unknown model %d (maybe an HTU21D)", model);
 		break;
 	}
 
@@ -777,7 +823,7 @@ si70xx_attach(device_t parent, device_t self, void *aux)
 	    modelstr, fwversionstr, testcrcpt1[0], testcrcpt1[1],
 	    testcrcpt1[2], testcrcpt1[3], testcrcpt2[0], testcrcpt2[1],
 	    testcrcpt2[2], testcrcpt2[3],
-	    (crc1 == readcrc1 && crc2 == readcrc2) ? "\n" : " (bad crc)\n");
+	    (validcrcpt1 && validcrcpt2) ? "\n" : " (bad crc)\n");
 	return;
 out:
 	sysmon_envsys_destroy(sc->sc_sme);
@@ -981,7 +1027,7 @@ si70xx_detach(device_t self, int flags)
 	return 0;
 }
 
-MODULE(MODULE_CLASS_DRIVER, si70xxtemp, "i2cexec,sysmon_envsys");
+MODULE(MODULE_CLASS_DRIVER, si70xxtemp, "iic,sysmon_envsys");
 
 #ifdef _MODULE
 #include "ioconf.c"

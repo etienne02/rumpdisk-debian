@@ -1,4 +1,4 @@
-/*	$NetBSD: rumpuser_port.h,v 1.51 2021/04/03 07:38:11 simonb Exp $	*/
+/*	$NetBSD: rumpuser_port.h,v 1.54 2024/10/16 09:09:07 ozaki-r Exp $	*/
 
 #ifndef _LIB_LIBRUMPUSER_RUMPUSER_PORT_H_
 #define _LIB_LIBRUMPUSER_RUMPUSER_PORT_H_
@@ -28,7 +28,9 @@
 #define HAVE_MEMORY_H 1
 #define HAVE_PATHS_H 1
 #define HAVE_POSIX_MEMALIGN 1
+#define HAVE_PREADV 1
 #define HAVE_PTHREAD_SETNAME3 1
+#define HAVE_PWRITEV 1
 #define HAVE_SETPROGNAME 1
 #define HAVE_STDINT_H 1
 #define HAVE_STDLIB_H 1
@@ -48,7 +50,7 @@
 #define HAVE_UNISTD_H 1
 #define HAVE_UTIMENSAT 1
 #define HAVE___QUOTACTL 1
-#define PACKAGE_BUGREPORT "http://rumpkernel.org/"
+#define PACKAGE_BUGREPORT "https://github.com/rumpkernel/"
 #define PACKAGE_NAME "rumpuser-posix"
 #define PACKAGE_STRING "rumpuser-posix 999"
 #define PACKAGE_TARNAME "rumpuser-posix"
@@ -317,7 +319,7 @@ typedef RUMP_REGISTER_T register_t;
 do {						\
 	(ts)->tv_sec  = (tv)->tv_sec;		\
 	(ts)->tv_nsec = (tv)->tv_usec * 1000;	\
-} while (/*CONSTCOND*/0)
+} while (0)
 #endif
 
 #if !defined(HAVE_SETPROGNAME)

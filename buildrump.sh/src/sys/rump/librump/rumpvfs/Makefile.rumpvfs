@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.rumpvfs,v 1.50 2020/05/16 18:31:52 christos Exp $
+#	$NetBSD: Makefile.rumpvfs,v 1.52 2023/04/22 18:55:59 riastradh Exp $
 #
 
 .include "${RUMPTOP}/Makefile.rump"
@@ -12,6 +12,7 @@ MAN=	rump_etfs.3 rumpfs.4
 
 .PATH:	${RUMPTOP}/librump/rumpvfs ${RUMPTOP}/librump		\
 	${RUMPTOP}/../kern					\
+	${RUMPTOP}/../secmodel/extensions			\
 	${RUMPTOP}/../miscfs/genfs				\
 	${RUMPTOP}/../miscfs/specfs ${RUMPTOP}/../miscfs/deadfs	\
 	${RUMPTOP}/../compat/common ${RUMPTOP}/../uvm		\
@@ -30,6 +31,9 @@ SRCS+=	rumpvfs_syscalls.c
 # sys/kern I/O
 SRCS+=	kern_physio.c
 
+# VOP_*
+SRCS+=	vnode_if.c
+
 # sys/kern vfs
 SRCS+=	vfs_acl.c vfs_bio.c vfs_cache.c vfs_cwd.c vfs_dirhash.c 	\
 	vfs_getcwd.c vfs_hooks.c vfs_init.c vfs_lockf.c vfs_lookup.c	\
@@ -38,6 +42,9 @@ SRCS+=	vfs_acl.c vfs_bio.c vfs_cache.c vfs_cwd.c vfs_dirhash.c 	\
 
 # sys/kern module support
 SRCS+=	kern_module_vfs.c subr_kobj_vfs.c
+
+# sys/secmodel/extensions
+SRCS+=	secmodel_extensions_vfs.c
 
 # sys/uvm
 SRCS+=	uvm_vnode.c

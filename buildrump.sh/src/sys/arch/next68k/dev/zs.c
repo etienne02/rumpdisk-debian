@@ -1,4 +1,4 @@
-/*	$NetBSD: zs.c,v 1.36 2021/08/07 16:19:01 thorpej Exp $	*/
+/*	$NetBSD: zs.c,v 1.38 2023/02/04 14:38:09 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.36 2021/08/07 16:19:01 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.38 2023/02/04 14:38:09 tsutsui Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -389,7 +389,7 @@ zs_set_modes(struct zs_chanstate *cs, int cflag)
 	/*
 	 * Output hardware flow control on the chip is horrendous:
 	 * if carrier detect drops, the receiver is disabled, and if
-	 * CTS drops, the transmitter is stoped IN MID CHARACTER!
+	 * CTS drops, the transmitter is stopped IN MID CHARACTER!
 	 * Therefore, NEVER set the HFC bit, and instead use the
 	 * status interrupt to detect CTS changes.
 	 */
@@ -631,7 +631,7 @@ zscninit(struct consdev *cn)
 
 	/*
 	 * can't use zs_set_speed as we haven't set up the
-	 * signal sources, and it's not worth it for now 
+	 * signal sources, and it's not worth it for now
 	 */
 
 	cs->cs_preg[9] &= ~ZSWR9_MASTER_IE;

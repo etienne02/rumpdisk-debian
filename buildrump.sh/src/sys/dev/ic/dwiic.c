@@ -1,4 +1,4 @@
-/* $NetBSD: dwiic.c,v 1.7 2019/12/23 15:28:08 thorpej Exp $ */
+/* $NetBSD: dwiic.c,v 1.10 2024/02/09 16:56:23 skrll Exp $ */
 
 /* $OpenBSD: dwiic.c,v 1.4 2018/05/23 22:08:00 kettenis Exp $ */
 
@@ -49,9 +49,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dwiic.c,v 1.7 2019/12/23 15:28:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dwiic.c,v 1.10 2024/02/09 16:56:23 skrll Exp $");
 
 #include <sys/param.h>
+
+#include <sys/atomic.h>
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/kernel.h>
@@ -161,7 +163,7 @@ dwiic_attach(struct dwiic_softc *sc)
 	}
 
 	/* fetch timing parameters */
-	if (sc->ss_hcnt == 0) 
+	if (sc->ss_hcnt == 0)
 		sc->ss_hcnt = dwiic_read(sc, DW_IC_SS_SCL_HCNT);
 	if (sc->ss_lcnt == 0)
 		sc->ss_lcnt = dwiic_read(sc, DW_IC_SS_SCL_LCNT);
@@ -195,6 +197,8 @@ dwiic_attach(struct dwiic_softc *sc)
 	sc->sc_iba.iba_tag = &sc->sc_i2c_tag;
 
 	/* config_found_ia for "i2cbus" is done in the bus-attachment glue */
+
+	atomic_store_release(&sc->sc_attached, true);
 
 	return 1;
 }
@@ -445,7 +449,7 @@ dwiic_i2c_exec(void *cookie, i2c_op_t op, i2c_addr_t addr, const void *cmdbuf,
 		if (x == 0 && cmdlen > 0 && I2C_OP_READ_P(op))
 			cmd |= DW_IC_DATA_CMD_RESTART;
 		/*
-		 * Generate STOP conditon on the last byte of the
+		 * Generate STOP condition on the last byte of the
 		 * transfer.
 		 */
 		if (x == (len - 1) && I2C_OP_STOP_P(op))
@@ -586,6 +590,17 @@ dwiic_intr(void *arg)
 {
 	struct dwiic_softc *sc = arg;
 	uint32_t en, stat;
+
+	/*
+	 * Give up if attach hasn't succeeded.  If it failed, nothing
+	 * to do here.  If it is still ongoing and simply hasn't yet
+	 * succeeded, interrupts from the device are masked -- so this
+	 * interrupt must be shared with another driver -- and any
+	 * interrupts applicable to us will be delivered once
+	 * interrupts from the device are unmasked in dwiic_i2c_exec.
+	 */
+	if (!atomic_load_acquire(&sc->sc_attached))
+		return 0;
 
 	en = dwiic_read(sc, DW_IC_ENABLE);
 	/* probably for the other controller */

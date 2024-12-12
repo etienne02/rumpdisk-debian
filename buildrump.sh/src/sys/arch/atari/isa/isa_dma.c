@@ -1,4 +1,4 @@
-/*	$NetBSD: isa_dma.c,v 1.13 2021/01/04 18:23:10 thorpej Exp $	*/
+/*	$NetBSD: isa_dma.c,v 1.16 2022/01/22 15:10:30 skrll Exp $	*/
 
 #define ISA_DMA_STATS
 
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: isa_dma.c,v 1.13 2021/01/04 18:23:10 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: isa_dma.c,v 1.16 2022/01/22 15:10:30 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -163,7 +163,7 @@ isadma_bounce_cookieflags(bus_dma_tag_t const t, bus_dmamap_t const map,
 	 * in memory below the 16M boundary.  On DMA reads,
 	 * DMA happens to the bounce buffers, and is copied into
 	 * the caller's buffer.  On writes, data is copied into
-	 * but bounce buffer, and the DMA happens from those
+	 * the bounce buffer, and the DMA happens from those
 	 * pages.  To software using the DMA mapping interface,
 	 * this looks simply like a data cache.
 	 *
@@ -180,7 +180,7 @@ isadma_bounce_cookieflags(bus_dma_tag_t const t, bus_dmamap_t const map,
 	 */
 	if (avail_end <= t->_bounce_thresh ||
 	    (flags & ISABUS_DMA_32BIT) != 0) {
-		/* Bouncing not necessary due to memory size. */ 
+		/* Bouncing not necessary due to memory size. */
 		map->_dm_bounce_thresh = 0;
 	}
 	if (map->_dm_bounce_thresh != 0 ||
@@ -364,7 +364,7 @@ _isa_bus_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
  */
 int
 _isa_bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dmamap_t map, struct mbuf *m0,
-    int flags)  
+    int flags)
 {
 	struct atari_isa_dma_cookie *cookie = map->_dm_cookie;
 	int error;
@@ -614,9 +614,9 @@ _isa_bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t alignment, bu
 	paddr_t high;
 
 	if (avail_end > ISA_DMA_BOUNCE_THRESHOLD)
-		high = trunc_page(ISA_DMA_BOUNCE_THRESHOLD);
+		high = ISA_DMA_BOUNCE_THRESHOLD - 1;
 	else
-		high = trunc_page(avail_end);
+		high = avail_end - 1;
 
 	return (bus_dmamem_alloc_range(t, size, alignment, boundary,
 	    segs, nsegs, rsegs, flags, 0, high));

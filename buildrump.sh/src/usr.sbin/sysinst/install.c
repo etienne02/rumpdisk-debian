@@ -1,4 +1,4 @@
-/*	$NetBSD: install.c,v 1.20 2020/11/04 14:29:40 martin Exp $	*/
+/*	$NetBSD: install.c,v 1.25 2023/01/06 18:13:40 martin Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -168,19 +168,12 @@ do_install(void)
 		return;
 #endif
 
-#ifdef CHECK_ENTROPY
-	if (!do_check_entropy()) {
-		hit_enter_to_continue(MSG_abort_installation, NULL);
-		return;
-	}
-#endif
-
 	memset(&install, 0, sizeof install);
 
 	/* Create and mount partitions */
 	find_disks_ret = find_disks(msg_string(MSG_install), false);
 	if (partman_go == 1) {
-		if (partman() < 0) {
+		if (partman(&install) < 0) {
 			hit_enter_to_continue(MSG_abort_part, NULL);
 			return;
 		}
@@ -226,7 +219,7 @@ do_install(void)
 		    make_filesystems(&install) ||
 		    make_fstab(&install) != 0 ||
 		    md_post_newfs(&install) != 0)
-		goto error;
+			goto error;
 	}
 
 	/* Unpack the distribution. */
@@ -237,9 +230,13 @@ do_install(void)
 	    MSG_extractcomplete, MSG_abortinst) != 0)
 		goto error;
 
-	if (md_post_extract(&install) != 0)
+	if (md_post_extract(&install, false) != 0)
 		goto error;
 
+	root_pw_setup();
+#if CHECK_ENTROPY
+	do_add_entropy();
+#endif
 	do_configmenu(&install);
 
 	sanity_check();

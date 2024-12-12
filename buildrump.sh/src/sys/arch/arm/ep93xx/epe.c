@@ -1,4 +1,4 @@
-/*	$NetBSD: epe.c,v 1.48 2020/02/19 02:51:54 thorpej Exp $	*/
+/*	$NetBSD: epe.c,v 1.51 2024/07/05 04:31:49 rin Exp $	*/
 
 /*
  * Copyright (c) 2004 Jesse Off
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: epe.c,v 1.48 2020/02/19 02:51:54 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: epe.c,v 1.51 2024/07/05 04:31:49 rin Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -35,7 +35,6 @@ __KERNEL_RCSID(0, "$NetBSD: epe.c,v 1.48 2020/02/19 02:51:54 thorpej Exp $");
 #include <sys/ioctl.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
-#include <sys/malloc.h>
 #include <sys/time.h>
 #include <sys/device.h>
 #include <uvm/uvm_extern.h>
@@ -189,8 +188,8 @@ epe_gctx(struct epe_softc *sc)
 	} while (sc->TXStsQ_cur != cur);
 
 	sc->TXDQ_avail += ndq;
-	if (ifp->if_flags & IFF_OACTIVE) {
-		ifp->if_flags &= ~IFF_OACTIVE;
+	if (sc->tx_busy) {
+		sc->tx_busy = false;
 		/* Disable end-of-tx-chain interrupt */
 		EPE_WRITE(IntEn, IntEn_REOFIE);
 	}
@@ -239,8 +238,7 @@ begin:
 				/* Drop packets until we can get replacement
 				 * empty mbufs for the RXDQ.
 				 */
-				if (m != NULL)
-					m_freem(m);
+				m_freem(m);
 
 				if_statinc(ifp, if_ierrors);
 			}
@@ -544,7 +542,7 @@ start:
 		if (epe_gctx(sc) == 0) {
 			/* Enable End-Of-TX-Chain interrupt */
 			EPE_WRITE(IntEn, IntEn_REOFIE | IntEn_ECIE);
-			ifp->if_flags |= IFF_OACTIVE;
+			sc->tx_busy = true;
 			ifp->if_timer = 10;
 			splx(s);
 			return;
@@ -687,7 +685,7 @@ epe_ifstop(struct ifnet *ifp, int disable)
 	/* Down the MII. */
 	mii_down(&sc->sc_mii);
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 	sc->sc_mii.mii_media_status &= ~IFM_ACTIVE;
 }

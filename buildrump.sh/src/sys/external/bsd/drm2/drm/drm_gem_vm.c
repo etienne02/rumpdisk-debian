@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_gem_vm.c,v 1.9 2018/08/27 07:51:06 riastradh Exp $	*/
+/*	$NetBSD: drm_gem_vm.c,v 1.15 2022/07/06 01:12:45 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,13 +30,15 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_gem_vm.c,v 1.9 2018/08/27 07:51:06 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_gem_vm.c,v 1.15 2022/07/06 01:12:45 riastradh Exp $");
 
 #include <sys/types.h>
+#include <sys/file.h>
+#include <sys/mman.h>
 
 #include <uvm/uvm_extern.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_legacy.h>
 #include <drm/drm_vma_manager.h>
@@ -50,7 +52,7 @@ drm_gem_pager_reference(struct uvm_object *uobj)
 	struct drm_gem_object *const obj = container_of(uobj,
 	    struct drm_gem_object, gemo_uvmobj);
 
-	drm_gem_object_reference(obj);
+	drm_gem_object_get(obj);
 }
 
 void
@@ -59,7 +61,7 @@ drm_gem_pager_detach(struct uvm_object *uobj)
 	struct drm_gem_object *const obj = container_of(uobj,
 	    struct drm_gem_object, gemo_uvmobj);
 
-	drm_gem_object_unreference_unlocked(obj);
+	drm_gem_object_put_unlocked(obj);
 }
 
 int
@@ -68,6 +70,8 @@ drm_gem_or_legacy_mmap_object(struct drm_device *dev, off_t byte_offset,
     struct file *file)
 {
 	int ret;
+
+	KASSERT(nbytes > 0);
 
 	ret = drm_gem_mmap_object(dev, byte_offset, nbytes, prot, uobjp,
 	    uoffsetp, file);
@@ -86,6 +90,8 @@ drm_gem_mmap_object(struct drm_device *dev, off_t byte_offset, size_t nbytes,
 {
 	int ret;
 
+	KASSERT(nbytes > 0);
+
 	mutex_lock(&dev->struct_mutex);
 	ret = drm_gem_mmap_object_locked(dev, byte_offset, nbytes, prot,
 	    uobjp, uoffsetp, file);
@@ -97,8 +103,9 @@ drm_gem_mmap_object(struct drm_device *dev, off_t byte_offset, size_t nbytes,
 static int
 drm_gem_mmap_object_locked(struct drm_device *dev, off_t byte_offset,
     size_t nbytes, int prot __unused, struct uvm_object **uobjp,
-    voff_t *uoffsetp, struct file *file)
+    voff_t *uoffsetp, struct file *fp)
 {
+	struct drm_file *file = fp->f_data;
 	const unsigned long startpage = (byte_offset >> PAGE_SHIFT);
 	const unsigned long npages = (nbytes >> PAGE_SHIFT);
 
@@ -128,7 +135,7 @@ drm_gem_mmap_object_locked(struct drm_device *dev, off_t byte_offset,
 	KASSERT(obj->dev == dev);
 
 	/* Success!  */
-	drm_gem_object_reference(obj);
+	drm_gem_object_get(obj);
 	*uobjp = &obj->gemo_uvmobj;
 	*uoffsetp = 0;
 	return 0;

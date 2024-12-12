@@ -1,4 +1,4 @@
-/*	$NetBSD: ffs_snapshot.c,v 1.152 2020/04/18 19:18:34 christos Exp $	*/
+/*	$NetBSD: ffs_snapshot.c,v 1.155 2023/05/11 23:11:25 chs Exp $	*/
 
 /*
  * Copyright 2000 Marshall Kirk McKusick. All Rights Reserved.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ffs_snapshot.c,v 1.152 2020/04/18 19:18:34 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ffs_snapshot.c,v 1.155 2023/05/11 23:11:25 chs Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_ffs.h"
@@ -457,7 +457,7 @@ snapshot_setup(struct mount *mp, struct vnode *vp)
 	if (error)
 		return error;
 #if defined(QUOTA) || defined(QUOTA2)
-	/* shapshot inodes are not accounted in quotas */
+	/* snapshot inodes are not accounted in quotas */
 	chkiq(ip, -1, l->l_cred, 0);
 #endif
 	ip->i_flags |= (SF_SNAPSHOT | SF_SNAPINVAL);
@@ -613,7 +613,6 @@ snapshot_copyfs(struct mount *mp, struct vnode *vp, void **sbbuf)
 
 struct snapshot_expunge_ctx {
 	struct vnode *logvp;
-	struct lwp *l;
 	struct vnode *vp;
 	struct fs *copy_fs;
 };
@@ -621,7 +620,6 @@ struct snapshot_expunge_ctx {
 static bool
 snapshot_expunge_selector(void *cl, struct vnode *xvp)
 {
-	struct vattr vat;
 	struct snapshot_expunge_ctx *c = cl;
 	struct inode *xp;
 
@@ -639,8 +637,7 @@ snapshot_expunge_selector(void *cl, struct vnode *xvp)
 	if (xvp == c->logvp)
 		return true;
 
-	if (VOP_GETATTR(xvp, &vat, c->l->l_cred) == 0 &&
-	    vat.va_nlink > 0)
+	if (xp->i_nlink > 0)
 		return false;
 
 	if (ffs_checkfreefile(c->copy_fs, c->vp, xp->i_number))
@@ -664,7 +661,6 @@ snapshot_expunge(struct mount *mp, struct vnode *vp, struct fs *copy_fs,
 	daddr_t blkno, *blkp;
 	struct fs *fs = VFSTOUFS(mp)->um_fs;
 	struct inode *xp;
-	struct lwp *l = curlwp;
 	struct vnode *logvp = NULL, *xvp;
 	struct vnode_iterator *marker;
 	struct snapshot_expunge_ctx ctx;
@@ -688,7 +684,6 @@ snapshot_expunge(struct mount *mp, struct vnode *vp, struct fs *copy_fs,
 
 	vfs_vnode_iterator_init(mp, &marker);
 	ctx.logvp = logvp;
-	ctx.l = l;
 	ctx.vp = vp;
 	ctx.copy_fs = copy_fs;
 	while ((xvp = vfs_vnode_iterator_next(marker, snapshot_expunge_selector,
@@ -995,7 +990,7 @@ cgaccount1(int cg, struct vnode *vp, void *data, int passno)
 		    fs->fs_bsize - fs->fs_cgsize);
 	numblks = howmany(fs->fs_size, fs->fs_frag);
 	len = howmany(fs->fs_fpg, fs->fs_frag);
-	base = cg * fs->fs_fpg / fs->fs_frag;
+	base = cgbase(fs, cg) / fs->fs_frag;
 	if (base + len >= numblks)
 		len = numblks - base - 1;
 	loc = 0;

@@ -1,4 +1,4 @@
-/*	$NetBSD: lex_char.c,v 1.4 2021/06/29 07:28:01 rillig Exp $	*/
+/*	$NetBSD: lex_char.c,v 1.9 2024/02/02 19:07:58 rillig Exp $	*/
 # 3 "lex_char.c"
 
 /*
@@ -7,12 +7,14 @@
  * C99 6.4.4.4 "Character constants"
  */
 
+/* lint1-extra-flags: -X 351 */
+
 void sink(char);
 
 void
 test(void)
 {
-	/* expect+1: empty character constant */
+	/* expect+1: error: empty character constant [73] */
 	sink('');
 
 	sink('a');
@@ -20,13 +22,15 @@ test(void)
 	sink('\0');
 
 	/* UTF-8 */
-	/* expect+2: multi-character character constant */
-	/* expect+1: conversion of 'int' to 'char' is out of range */
+	/* expect+2: warning: multi-character character constant [294] */
+	/* expect+1: warning: conversion of 'int' to 'char' is out of range, arg #1 [295] */
 	sink('ä');
 
 	/* GCC extension */
-	/* expect+1: dubious escape \e */
 	sink('\e');
+
+	/* expect+1: warning: dubious escape \y [79] */
+	sink('\y');
 
 	/* since C99 */
 	sink('\x12');
@@ -34,7 +38,7 @@ test(void)
 	/* octal */
 	sink('\177');
 
-	/* expect+1: empty character constant */
+	/* expect+1: error: empty character constant [73] */
 	sink('');
 
 	/* U+0007 alarm/bell */
@@ -57,11 +61,25 @@ test(void)
 
 	/* U+000D carriage return */
 	sink('\r');
+
+	/* A double quote may be escaped or not, since C90. */
+	sink('"');
+	sink('\"');
+
+	/* A question mark may be escaped or not, since C90. */
+	sink('?');
+	sink('\?');
+
+	sink('\\');
+
+	sink('\'');
 }
 
 /*
- * Even though backslash-newline is not supported by C99, lint accepts it
- * in any mode, even for traditional C.
+ * The sequence backslash-newline is handled in an early stage of
+ * translation (C90 5.1.1.2 item 2, C99 5.1.1.2 item 2, C11 5.1.1.2 item 2),
+ * which allows it in character literals as well.  This doesn't typically
+ * occur in practice though.
  */
 char ch = '\
 \

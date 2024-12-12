@@ -1,4 +1,4 @@
-/* $NetBSD: dec_eb64plus.c,v 1.41 2012/10/13 17:58:54 jdc Exp $ */
+/* $NetBSD: dec_eb64plus.c,v 1.43 2024/03/31 19:06:31 thorpej Exp $ */
 
 /*
  * Copyright (c) 1995, 1996, 1997 Carnegie-Mellon University.
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: dec_eb64plus.c,v 1.41 2012/10/13 17:58:54 jdc Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dec_eb64plus.c,v 1.43 2024/03/31 19:06:31 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -127,7 +127,7 @@ dec_eb64plus_cons_init(void)
 	extern struct apecs_config apecs_configuration;
 
 	acp = &apecs_configuration;
-	apecs_init(acp, 0);
+	apecs_init(acp);
 
 	ctb = (struct ctb *)(((char *)hwrpb) + hwrpb->rpb_ctb_off);
 
@@ -191,7 +191,7 @@ dec_eb64plus_device_register(device_t dev, void *aux)
 	struct bootdev_data *b = bootdev_data;
 	device_t parent = device_parent(dev);
 
-	if (found)
+	if (b == NULL || found)
 		return;
 
 	if (!initted) {

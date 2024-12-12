@@ -1,4 +1,4 @@
-/*	$NetBSD: plumpower.c,v 1.13 2012/10/27 17:17:53 chs Exp $ */
+/*	$NetBSD: plumpower.c,v 1.15 2024/09/07 14:28:19 andvar Exp $ */
 
 /*-
  * Copyright (c) 1999, 2000 The NetBSD Foundation, Inc.
@@ -30,14 +30,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: plumpower.c,v 1.13 2012/10/27 17:17:53 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: plumpower.c,v 1.15 2024/09/07 14:28:19 andvar Exp $");
 
 #undef PLUMPOWERDEBUG
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 
 #include <machine/bus.h>
 #include <machine/intr.h>
@@ -116,7 +115,7 @@ plum_power_ioreset(plum_chipset_tag_t pc)
 	bus_space_handle_t regh = sc->sc_regh;
 	
 	plum_conf_write(regt, regh, PLUM_POWER_RESETC_REG,
-	    PLUM_POWER_RESETC_IO5CL1 |
+	    PLUM_POWER_RESETC_IO5CL0 |
 	    PLUM_POWER_RESETC_IO5CL1);
 	plum_conf_write(regt, regh, PLUM_POWER_RESETC_REG, 0);
 }

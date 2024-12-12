@@ -1,4 +1,4 @@
-/*	$NetBSD: if_bridgevar.h,v 1.35 2020/09/27 00:32:17 roy Exp $	*/
+/*	$NetBSD: if_bridgevar.h,v 1.39 2024/09/03 07:59:48 ozaki-r Exp $	*/
 
 /*
  * Copyright 2001 Wasabi Systems, Inc.
@@ -130,8 +130,9 @@ struct ifbreq {
 #define	IFBIF_LEARNING		0x01	/* if can learn */
 #define	IFBIF_DISCOVER		0x02	/* if sends packets w/ unknown dest. */
 #define	IFBIF_STP		0x04	/* if participates in spanning tree */
+#define	IFBIF_PROTECTED		0x08	/* if participates in protected mode */
 
-#define	IFBIFBITS	"\020\1LEARNING\2DISCOVER\3STP"
+#define	IFBIFBITS	"\020\1LEARNING\2DISCOVER\3STP\4PROTECTED"
 
 /* BRDGFLUSH */
 #define	IFBF_FLUSHDYN		0x00	/* flush learned addresses only */
@@ -269,6 +270,8 @@ struct bridge_iflist {
 	struct ifnet		*bif_ifp;	/* member if */
 	uint32_t		bif_flags;	/* member if flags */
 	struct psref_target	bif_psref;
+	void *			*bif_linkstate_hook;
+	void *			*bif_ifdetach_hook;
 };
 
 /*
@@ -333,8 +336,6 @@ struct bridge_softc {
 
 extern const uint8_t bstp_etheraddr[];
 
-void	bridge_ifdetach(struct ifnet *);
-
 int	bridge_output(struct ifnet *, struct mbuf *, const struct sockaddr *,
 	    const struct rtentry *);
 
@@ -346,14 +347,12 @@ void	bridge_enqueue(struct bridge_softc *, struct ifnet *, struct mbuf *,
 	    int);
 
 void	bridge_calc_csum_flags(struct bridge_softc *);
-void	bridge_calc_link_state(struct bridge_softc *);
 
-#define BRIDGE_LOCK(_sc)	mutex_enter(&(_sc)->sc_iflist_psref.bip_lock)
-#define BRIDGE_UNLOCK(_sc)	mutex_exit(&(_sc)->sc_iflist_psref.bip_lock)
-#define BRIDGE_LOCKED(_sc)	mutex_owned(&(_sc)->sc_iflist_psref.bip_lock)
+#define BRIDGE_LOCK_OBJ(_sc)	(&(_sc)->sc_iflist_psref.bip_lock)
+#define BRIDGE_LOCK(_sc)	mutex_enter(BRIDGE_LOCK_OBJ(_sc))
+#define BRIDGE_UNLOCK(_sc)	mutex_exit(BRIDGE_LOCK_OBJ(_sc))
+#define BRIDGE_LOCKED(_sc)	mutex_owned(BRIDGE_LOCK_OBJ(_sc))
 
-#define BRIDGE_PSZ_RENTER(__s)	do { __s = pserialize_read_enter(); } while (0)
-#define BRIDGE_PSZ_REXIT(__s)	do { pserialize_read_exit(__s); } while (0)
 #define BRIDGE_PSZ_PERFORM(_sc)	pserialize_perform((_sc)->sc_iflist_psref.bip_psz)
 
 #define BRIDGE_IFLIST_READER_FOREACH(_bif, _sc) \

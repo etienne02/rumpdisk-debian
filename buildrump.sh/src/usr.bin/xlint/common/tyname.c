@@ -1,4 +1,4 @@
-/*	$NetBSD: tyname.c,v 1.46 2021/08/31 23:49:21 rillig Exp $	*/
+/*	$NetBSD: tyname.c,v 1.65 2024/12/08 17:12:00 rillig Exp $	*/
 
 /*-
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
@@ -34,27 +34,19 @@
 #endif
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: tyname.c,v 1.46 2021/08/31 23:49:21 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: tyname.c,v 1.65 2024/12/08 17:12:00 rillig Exp $");
 #endif
 
+#include <assert.h>
 #include <limits.h>
 #include <string.h>
 #include <stdlib.h>
-#include <err.h>
 
-#if defined(IS_LINT1)
+#if IS_LINT1
 #include "lint1.h"
 #else
 #include "lint2.h"
-#endif
-
-#ifndef INTERNAL_ERROR
-#define INTERNAL_ERROR(fmt, args...) \
-	do { \
-		(void)warnx("%s, %d: " fmt, __FILE__, __LINE__, ##args); \
-		abort(); \
-	} while (false)
 #endif
 
 /* A tree of strings. */
@@ -63,13 +55,6 @@ typedef struct name_tree_node {
 	struct name_tree_node *ntn_less;
 	struct name_tree_node *ntn_greater;
 } name_tree_node;
-
-/* A growable string buffer. */
-typedef struct buffer {
-	size_t	len;
-	size_t	cap;
-	char *	data;
-} buffer;
 
 static name_tree_node *type_names;
 
@@ -109,7 +94,10 @@ intern(const char *name)
 	return n->ntn_name;
 }
 
-static void
+#if !IS_LINT1
+static
+#endif
+void
 buf_init(buffer *buf)
 {
 	buf->len = 0;
@@ -125,17 +113,33 @@ buf_done(buffer *buf)
 }
 
 static void
-buf_add(buffer *buf, const char *s)
+buf_add_mem(buffer *buf, const char *s, size_t n)
 {
-	size_t len = strlen(s);
-
-	while (buf->len + len + 1 >= buf->cap) {
-		buf->data = xrealloc(buf->data, 2 * buf->cap);
-		buf->cap = 2 * buf->cap;
+	while (buf->len + n + 1 >= buf->cap) {
+		buf->cap *= 2;
+		buf->data = xrealloc(buf->data, buf->cap);
 	}
 
-	memcpy(buf->data + buf->len, s, len + 1);
-	buf->len += len;
+	memcpy(buf->data + buf->len, s, n);
+	buf->len += n;
+	buf->data[buf->len] = '\0';
+}
+
+#if IS_LINT1
+void
+buf_add_char(buffer *buf, char c)
+{
+	buf_add_mem(buf, &c, 1);
+}
+#endif
+
+#if !IS_LINT1
+static
+#endif
+void
+buf_add(buffer *buf, const char *s)
+{
+	buf_add_mem(buf, s, strlen(s));
 }
 
 static void
@@ -150,43 +154,9 @@ buf_add_int(buffer *buf, int n)
 const char *
 tspec_name(tspec_t t)
 {
-	switch (t) {
-	case SIGNED:	return "signed";
-	case UNSIGN:	return "unsigned";
-	case BOOL:	return "_Bool";
-	case CHAR:	return "char";
-	case SCHAR:	return "signed char";
-	case UCHAR:	return "unsigned char";
-	case SHORT:	return "short";
-	case USHORT:	return "unsigned short";
-	case INT:	return "int";
-	case UINT:	return "unsigned int";
-	case LONG:	return "long";
-	case ULONG:	return "unsigned long";
-	case QUAD:	return "long long";
-	case UQUAD:	return "unsigned long long";
-#ifdef INT128_SIZE
-	case INT128:	return "__int128_t";
-	case UINT128:	return "__uint128_t";
-#endif
-	case FLOAT:	return "float";
-	case DOUBLE:	return "double";
-	case LDOUBLE:	return "long double";
-	case VOID:	return "void";
-	case STRUCT:	return "struct";
-	case UNION:	return "union";
-	case ENUM:	return "enum";
-	case PTR:	return "pointer";
-	case ARRAY:	return "array";
-	case FUNC:	return "function";
-	case COMPLEX:	return "_Complex";
-	case FCOMPLEX:	return "float _Complex";
-	case DCOMPLEX:	return "double _Complex";
-	case LCOMPLEX:	return "long double _Complex";
-	default:
-		INTERNAL_ERROR("tspec_name(%d)", t);
-		return NULL;
-	}
+	const char *name = ttab[t].tt_name;
+	assert(name != NULL);
+	return name;
 }
 
 static void
@@ -196,21 +166,19 @@ type_name_of_function(buffer *buf, const type_t *tp)
 
 	buf_add(buf, "(");
 	if (tp->t_proto) {
-#ifdef t_enum /* lint1 */
-		sym_t *arg;
-
-		arg = tp->t_args;
-		if (arg == NULL)
+#if IS_LINT1
+		const sym_t *param = tp->u.params;
+		if (param == NULL)
 			buf_add(buf, "void");
-		for (; arg != NULL; arg = arg->s_next) {
+		for (; param != NULL; param = param->s_next) {
 			buf_add(buf, sep), sep = ", ";
-			buf_add(buf, type_name(arg->s_type));
+			buf_add(buf, type_name(param->s_type));
 		}
-#else /* lint2 */
+#else
 		type_t **argtype;
 
 		argtype = tp->t_args;
-		if (argtype == NULL)
+		if (*argtype == NULL)
 			buf_add(buf, "void");
 		for (; *argtype != NULL; argtype++) {
 			buf_add(buf, sep), sep = ", ";
@@ -230,13 +198,13 @@ static void
 type_name_of_struct_or_union(buffer *buf, const type_t *tp)
 {
 	buf_add(buf, " ");
-#ifdef t_str
-	if (tp->t_str->sou_tag->s_name == unnamed &&
-	    tp->t_str->sou_first_typedef != NULL) {
+#if IS_LINT1
+	if (tp->u.sou->sou_tag->s_name == unnamed &&
+	    tp->u.sou->sou_first_typedef != NULL) {
 		buf_add(buf, "typedef ");
-		buf_add(buf, tp->t_str->sou_first_typedef->s_name);
+		buf_add(buf, tp->u.sou->sou_first_typedef->s_name);
 	} else {
-		buf_add(buf, tp->t_str->sou_tag->s_name);
+		buf_add(buf, tp->u.sou->sou_tag->s_name);
 	}
 #else
 	buf_add(buf, tp->t_isuniqpos ? "*anonymous*" : tp->t_tag->h_name);
@@ -247,13 +215,13 @@ static void
 type_name_of_enum(buffer *buf, const type_t *tp)
 {
 	buf_add(buf, " ");
-#ifdef t_enum
-	if (tp->t_enum->en_tag->s_name == unnamed &&
-	    tp->t_enum->en_first_typedef != NULL) {
+#if IS_LINT1
+	if (tp->u.enumer->en_tag->s_name == unnamed &&
+	    tp->u.enumer->en_first_typedef != NULL) {
 		buf_add(buf, "typedef ");
-		buf_add(buf, tp->t_enum->en_first_typedef->s_name);
+		buf_add(buf, tp->u.enumer->en_first_typedef->s_name);
 	} else {
-		buf_add(buf, tp->t_enum->en_tag->s_name);
+		buf_add(buf, tp->u.enumer->en_tag->s_name);
 	}
 #else
 	buf_add(buf, tp->t_isuniqpos ? "*anonymous*" : tp->t_tag->h_name);
@@ -264,11 +232,11 @@ static void
 type_name_of_array(buffer *buf, const type_t *tp)
 {
 	buf_add(buf, "[");
-#ifdef t_str /* lint1 */
+#if IS_LINT1
 	if (tp->t_incomplete_array)
 		buf_add(buf, "unknown_size");
 	else
-		buf_add_int(buf, tp->t_dim);
+		buf_add_int(buf, tp->u.dimension);
 #else
 	buf_add_int(buf, tp->t_dim);
 #endif
@@ -295,12 +263,23 @@ type_name(const type_t *tp)
 		buf_add(&buf, "const ");
 	if (tp->t_volatile)
 		buf_add(&buf, "volatile ");
+#if IS_LINT1
+	if (tp->t_noreturn)
+		buf_add(&buf, "noreturn ");
+#endif
 
-#ifdef t_str
-	if ((t == STRUCT || t == UNION) && tp->t_str->sou_incomplete)
+#if IS_LINT1
+	if (is_struct_or_union(t) && tp->u.sou->sou_incomplete)
 		buf_add(&buf, "incomplete ");
 #endif
 	buf_add(&buf, tspec_name(t));
+
+#if IS_LINT1
+	if (tp->t_bitfield) {
+		buf_add(&buf, ":");
+		buf_add_int(&buf, (int)tp->t_bit_field_width);
+	}
+#endif
 
 	switch (t) {
 	case PTR:

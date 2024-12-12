@@ -1,4 +1,4 @@
-/*	$NetBSD: if_le.c,v 1.13 2014/06/21 02:02:40 tsutsui Exp $	*/
+/*	$NetBSD: if_le.c,v 1.16 2024/04/29 14:42:07 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 1993 Adam Glass
@@ -72,12 +72,12 @@ struct le_sel {
 	int	le_bonus;
 };
 
-int le_probe(struct netif *, void *);
-int le_match(struct netif *, void *);
-void le_init(struct iodesc *, void *);
-int le_get(struct iodesc *, void *, size_t, saseconds_t);
-int le_put(struct iodesc *, void *, size_t);
-void le_end(struct netif *);
+static int le_probe(struct netif *, void *);
+static int le_match(struct netif *, void *);
+static void le_init(struct iodesc *, void *);
+static int le_get(struct iodesc *, void *, size_t, saseconds_t);
+static int le_put(struct iodesc *, void *, size_t);
+static void le_end(struct netif *);
 
 static inline void lewrcsr(struct le_softc *, uint16_t, uint16_t);
 static inline uint16_t lerdcsr(struct le_softc *, uint16_t);
@@ -92,21 +92,21 @@ static int le_poll(struct iodesc *, void *, int);
 int le_debug = 0;
 #endif
 
-struct le_sel le0conf[] = {
+static struct le_sel le0conf[] = {
 /* offsets for:	   ID   REGS     MEM   NVRAM	le_heat	le_bonus*/
 {		    0,	0x4000, 0x8000, 0xC008,	1,	10   }
 };
 #define NLE0CONF (sizeof(le0conf) / sizeof(le0conf[0]))
 
-extern struct netif_stats	le_stats[];
+static struct netif_stats	le_stats[];
 
-struct netif_dif le_ifs[] = {
+static struct netif_dif le_ifs[] = {
 /*	dif_unit	dif_nsel	dif_stats	dif_private	*/
 {	0,		NLE0CONF,	&le_stats[0],	le0conf,	},
 };
 #define NLE_IFS (sizeof(le_ifs) / sizeof(le_ifs[0]))
 
-struct netif_stats le_stats[NLE_IFS];
+static struct netif_stats le_stats[NLE_IFS];
 
 struct netif_driver le_driver = {
 	"le",			/* netif_bname */
@@ -120,7 +120,7 @@ struct netif_driver le_driver = {
 	NLE_IFS			/* netif_nifs */
 };
 
-struct le_softc le_softc[NLE];
+static struct le_softc le_softc[NLE];
 
 static inline void
 lewrcsr(struct le_softc *sc, uint16_t port, uint16_t val)
@@ -211,7 +211,7 @@ leinit(void)
 	}
 }
 
-int
+static int
 le_match(struct netif *nif, void *machdep_hint)
 {
 	struct le_sel *sels;
@@ -232,7 +232,7 @@ le_match(struct netif *nif, void *machdep_hint)
 	return rv;
 }
 
-int
+static int
 le_probe(struct netif *nif, void *machdep_hint)
 {
 #if 0
@@ -307,7 +307,7 @@ le_mem_summary(int unit)
 #define le_mem_summary(u)
 #endif
 
-void
+static void
 le_error(int unit, char *str, uint16_t stat)
 {
 
@@ -328,7 +328,7 @@ le_error(int unit, char *str, uint16_t stat)
 	((u_long)(a) - (u_long)sc->sc_mem)
 
 /* LANCE initialization block set up. */
-void
+static void
 lememinit(struct le_softc *sc)
 {
 	int i;
@@ -388,7 +388,7 @@ lememinit(struct le_softc *sc)
 	}
 }
 
-void
+static void
 le_reset(int unit, u_char *myea)
 {
 	struct le_softc *sc = &le_softc[unit];
@@ -450,7 +450,7 @@ le_reset(int unit, u_char *myea)
 	le_mem_summary(unit);
 }
 
-int
+static int
 le_poll(struct iodesc *desc, void *pkt, int len)
 {
 	int unit = /*nif->nif_unit*/0;
@@ -492,8 +492,9 @@ le_poll(struct iodesc *desc, void *pkt, int len)
 		printf("le_poll: length %d\n", length);
 #endif
 	if (length >= BUFSIZE) {
+		printf("le%d_poll: invalid length %d, status 0x%x\n",
+		    unit, length, stat);
 		length = 0;
-		panic("csr0 when bad things happen: %x", stat);
 		goto cleanup;
 	}
 	if (!length)
@@ -525,7 +526,7 @@ cleanup:
 	return length;
 }
 
-int
+static int
 le_put(struct iodesc *desc, void *pkt, size_t len)
 {
 	int unit = /*nif->nif_unit*/0;
@@ -627,7 +628,7 @@ le_put(struct iodesc *desc, void *pkt, size_t len)
 }
 
 
-int
+static int
 le_get(struct iodesc *desc, void *pkt, size_t len, saseconds_t timeout)
 {
 	satime_t t;
@@ -640,7 +641,7 @@ le_get(struct iodesc *desc, void *pkt, size_t len, saseconds_t timeout)
 	return cc;
 }
 
-void
+static void
 le_init(struct iodesc *desc, void *machdep_hint)
 {
 	struct netif *nif = desc->io_netif;
@@ -658,7 +659,7 @@ le_init(struct iodesc *desc, void *machdep_hint)
 	le_reset(unit, desc->myea);
 }
 
-void
+static void
 le_end(struct netif *nif)
 {
 	int unit = nif->nif_unit;

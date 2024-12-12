@@ -1,4 +1,4 @@
-/*	$NetBSD: ums.c,v 1.100 2021/02/03 23:26:08 thorpej Exp $	*/
+/*	$NetBSD: ums.c,v 1.106 2024/03/18 15:15:27 jakllsch Exp $	*/
 
 /*
  * Copyright (c) 1998, 2017 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ums.c,v 1.100 2021/02/03 23:26:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ums.c,v 1.106 2024/03/18 15:15:27 jakllsch Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -48,6 +48,7 @@ __KERNEL_RCSID(0, "$NetBSD: ums.c,v 1.100 2021/02/03 23:26:08 thorpej Exp $");
 #include <sys/ioctl.h>
 #include <sys/file.h>
 #include <sys/select.h>
+#include <sys/sysctl.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
 #include <sys/poll.h>
@@ -60,22 +61,65 @@ __KERNEL_RCSID(0, "$NetBSD: ums.c,v 1.100 2021/02/03 23:26:08 thorpej Exp $");
 #include <dev/usb/usbdevs.h>
 #include <dev/usb/usb_quirks.h>
 #include <dev/usb/uhidev.h>
+#include <dev/usb/usbhist.h>
 #include <dev/hid/hid.h>
 #include <dev/hid/hidms.h>
 
-#ifdef UMS_DEBUG
-#define DPRINTF(x)	if (umsdebug) printf x
-#define DPRINTFN(n,x)	if (umsdebug>(n)) printf x
-int	umsdebug = 0;
+#ifdef USB_DEBUG
+#ifndef UMS_DEBUG
+#define umsdebug 0
 #else
-#define DPRINTF(x)
-#define DPRINTFN(n,x)
+
+#ifndef UMS_DEBUG_DEFAULT
+#define UMS_DEBUG_DEFAULT 0
 #endif
+
+static int umsdebug = UMS_DEBUG_DEFAULT;
+
+SYSCTL_SETUP(sysctl_hw_ums_setup, "sysctl hw.ums setup")
+{
+	int err;
+	const struct sysctlnode *rnode;
+	const struct sysctlnode *cnode;
+
+	err = sysctl_createv(clog, 0, NULL, &rnode,
+	    CTLFLAG_PERMANENT, CTLTYPE_NODE, "ums",
+	    SYSCTL_DESCR("ums global controls"),
+	    NULL, 0, NULL, 0, CTL_HW, CTL_CREATE, CTL_EOL);
+
+	if (err)
+		goto fail;
+
+	/* control debugging printfs */
+	err = sysctl_createv(clog, 0, &rnode, &cnode,
+	    CTLFLAG_PERMANENT|CTLFLAG_READWRITE, CTLTYPE_INT,
+	    "debug", SYSCTL_DESCR("Enable debugging output"),
+	    NULL, 0, &umsdebug, sizeof(umsdebug), CTL_CREATE, CTL_EOL);
+	if (err)
+		goto fail;
+
+	return;
+fail:
+	aprint_error("%s: sysctl_createv failed (err = %d)\n", __func__, err);
+}
+
+#endif /* UMS_DEBUG */
+#endif /* USB_DEBUG */
+
+#define DPRINTF(FMT,A,B,C,D)	USBHIST_LOGN(umsdebug,1,FMT,A,B,C,D)
+#define DPRINTFN(N,FMT,A,B,C,D)	USBHIST_LOGN(umsdebug,N,FMT,A,B,C,D)
+#define UMSHIST_FUNC()		USBHIST_FUNC()
+#define UMSHIST_CALLED(name)	USBHIST_CALLED(umsdebug)
+#define UMSHIST_CALLARGS(FMT,A,B,C,D) \
+				USBHIST_CALLARGS(umsdebug,FMT,A,B,C,D)
+#define UMSHIST_CALLARGSN(N,FMT,A,B,C,D) \
+				USBHIST_CALLARGSN(umsdebug,N,FMT,A,B,C,D)
 
 #define UMSUNIT(s)	(minor(s))
 
 struct ums_softc {
-	struct uhidev sc_hdev;
+	struct uhidev *sc_hdev;
+	struct usbd_device *sc_udev;
 	struct hidms sc_ms;
 
 	bool	sc_alwayson;
@@ -84,7 +128,7 @@ struct ums_softc {
 	char	sc_dying;
 };
 
-Static void ums_intr(struct uhidev *, void *, u_int);
+Static void ums_intr(void *, void *, u_int);
 
 Static int	ums_enable(void *);
 Static void	ums_disable(void *);
@@ -126,7 +170,7 @@ ums_match(device_t parent, cfdata_t match, void *aux)
 	    !hid_is_collection(desc, size, uha->reportid,
 			       HID_USAGE2(HUP_GENERIC_DESKTOP, HUG_POINTER)) &&
 	    !hid_is_collection(desc, size, uha->reportid,
-			       HID_USAGE2(HUP_DIGITIZERS, 0x0002)))
+			       HID_USAGE2(HUP_DIGITIZERS, HUD_PEN)))
 		return UMATCH_NONE;
 
 	return UMATCH_IFACECLASS;
@@ -145,16 +189,16 @@ ums_attach(device_t parent, device_t self, void *aux)
 
 	aprint_naive("\n");
 
-	sc->sc_hdev.sc_dev = self;
-	sc->sc_hdev.sc_intr = ums_intr;
-	sc->sc_hdev.sc_parent = uha->parent;
-	sc->sc_hdev.sc_report_id = uha->reportid;
+	sc->sc_hdev = uha->parent;
+	sc->sc_udev = uha->uiaa->uiaa_device;
 
-	quirks = usbd_get_quirks(uha->parent->sc_udev)->uq_flags;
+	quirks = usbd_get_quirks(sc->sc_udev)->uq_flags;
 	if (quirks & UQ_MS_REVZ)
 		sc->sc_ms.flags |= HIDMS_REVZ;
 	if (quirks & UQ_SPUR_BUT_UP)
 		sc->sc_ms.flags |= HIDMS_SPUR_BUT_UP;
+	if (quirks & UQ_ALWAYS_ON)
+		sc->sc_alwayson = true;
 
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "couldn't establish power handler\n");
@@ -180,6 +224,7 @@ ums_attach(device_t parent, device_t self, void *aux)
 			fixpos = 24;
 			break;
 		case USB_PRODUCT_MICROSOFT_24GHZ_XCVR80:
+		case USB_PRODUCT_MICROSOFT_24GHZ_XCVR90:
 			fixpos = 40;
 			woffset = sc->sc_ms.hidms_loc_z.size;
 			break;
@@ -201,25 +246,6 @@ ums_attach(device_t parent, device_t self, void *aux)
 		}
 	}
 
-	if (uha->uiaa->uiaa_vendor == USB_VENDOR_HAILUCK &&
-	    uha->uiaa->uiaa_product == USB_PRODUCT_HAILUCK_KEYBOARD) {
-		/*
-		 * The HAILUCK USB Keyboard has a built-in touchpad, which
-		 * needs to be active for the keyboard to function properly.
-		 */
-		sc->sc_alwayson = true;
-	}
-
-	if (uha->uiaa->uiaa_vendor == USB_VENDOR_CHICONY &&
-	    uha->uiaa->uiaa_product == USB_PRODUCT_CHICONY_OPTMOUSE0939) {
-		/*
-		 * This cheap mouse will disconnect after 60 seconds,
-		 * reconnect, and then disconnect again (ad nauseum)
-		 * unless it's kept open.
-		 */
-		sc->sc_alwayson = true;
-	}
-
 	tpcalib_init(&sc->sc_ms.sc_tpcalib);
 
 	/* calibrate the pointer if it reports absolute events */
@@ -233,7 +259,7 @@ ums_attach(device_t parent, device_t self, void *aux)
 			while (hid_get_item(d, &item)) {
 				if (item.kind != hid_input
 				    || HID_GET_USAGE_PAGE(item.usage) != HUP_GENERIC_DESKTOP
-				    || item.report_ID != sc->sc_hdev.sc_report_id)
+				    || item.report_ID != uha->reportid)
 					continue;
 				if (HID_GET_USAGE(item.usage) == HUG_X) {
 					sc->sc_ms.sc_calibcoords.minx = item.logical_minimum;
@@ -253,7 +279,7 @@ ums_attach(device_t parent, device_t self, void *aux)
 	hidms_attach(self, &sc->sc_ms, &ums_accessops);
 
 	if (sc->sc_alwayson) {
-		error = uhidev_open(&sc->sc_hdev);
+		error = uhidev_open(sc->sc_hdev, &ums_intr, sc);
 		if (error != 0) {
 			aprint_error_dev(self,
 			    "WARNING: couldn't open always-on device\n");
@@ -291,10 +317,12 @@ ums_detach(device_t self, int flags)
 	struct ums_softc *sc = device_private(self);
 	int rv = 0;
 
-	DPRINTF(("ums_detach: sc=%p flags=%d\n", sc, flags));
+	UMSHIST_FUNC();
+	UMSHIST_CALLARGS("ums_detach: sc=%qd flags=%qd\n",
+	    (uintptr_t)sc, flags, 0, 0);
 
 	if (sc->sc_alwayson)
-		uhidev_close(&sc->sc_hdev);
+		uhidev_close(sc->sc_hdev);
 
 	/* No need to do reference counting of ums, wsmouse has all the goo. */
 	if (sc->sc_ms.hidms_wsmousedev != NULL)
@@ -306,9 +334,9 @@ ums_detach(device_t self, int flags)
 }
 
 Static void
-ums_intr(struct uhidev *addr, void *ibuf, u_int len)
+ums_intr(void *cookie, void *ibuf, u_int len)
 {
-	struct ums_softc *sc = (struct ums_softc *)addr;
+	struct ums_softc *sc = cookie;
 
 	if (sc->sc_enabled)
 		hidms_intr(&sc->sc_ms, ibuf, len);
@@ -320,7 +348,7 @@ ums_enable(void *v)
 	struct ums_softc *sc = v;
 	int error = 0;
 
-	DPRINTFN(1,("ums_enable: sc=%p\n", sc));
+	UMSHIST_FUNC(); UMSHIST_CALLARGS("sc=%jx\n", (uintptr_t)sc, 0, 0, 0);
 
 	if (sc->sc_dying)
 		return EIO;
@@ -332,7 +360,7 @@ ums_enable(void *v)
 	sc->sc_ms.hidms_buttons = 0;
 
 	if (!sc->sc_alwayson) {
-		error = uhidev_open(&sc->sc_hdev);
+		error = uhidev_open(sc->sc_hdev, &ums_intr, sc);
 		if (error)
 			sc->sc_enabled = 0;
 	}
@@ -345,7 +373,8 @@ ums_disable(void *v)
 {
 	struct ums_softc *sc = v;
 
-	DPRINTFN(1,("ums_disable: sc=%p\n", sc));
+	UMSHIST_FUNC(); UMSHIST_CALLARGS("sc=%jx\n", (uintptr_t)sc, 0, 0, 0);
+
 #ifdef DIAGNOSTIC
 	if (!sc->sc_enabled) {
 		printf("ums_disable: not enabled\n");
@@ -356,7 +385,7 @@ ums_disable(void *v)
 	if (sc->sc_enabled) {
 		sc->sc_enabled = 0;
 		if (!sc->sc_alwayson)
-			uhidev_close(&sc->sc_hdev);
+			uhidev_close(sc->sc_hdev);
 	}
 }
 

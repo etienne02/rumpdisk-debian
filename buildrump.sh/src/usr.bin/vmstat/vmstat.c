@@ -1,4 +1,4 @@
-/* $NetBSD: vmstat.c,v 1.247 2021/08/22 22:24:12 rillig Exp $ */
+/* $NetBSD: vmstat.c,v 1.258 2023/09/09 20:13:54 ad Exp $ */
 
 /*-
  * Copyright (c) 1998, 2000, 2001, 2007, 2019, 2020
@@ -71,7 +71,7 @@ __COPYRIGHT("@(#) Copyright (c) 1980, 1986, 1991, 1993\
 #if 0
 static char sccsid[] = "@(#)vmstat.c	8.2 (Berkeley) 3/1/95";
 #else
-__RCSID("$NetBSD: vmstat.c,v 1.247 2021/08/22 22:24:12 rillig Exp $");
+__RCSID("$NetBSD: vmstat.c,v 1.258 2023/09/09 20:13:54 ad Exp $");
 #endif
 #endif /* not lint */
 
@@ -99,6 +99,7 @@ __RCSID("$NetBSD: vmstat.c,v 1.247 2021/08/22 22:24:12 rillig Exp $");
 #include <sys/kernhist.h>
 #include <sys/vnode.h>
 #include <sys/vnode_impl.h>
+#include <sys/uidinfo.h>
 
 #include <uvm/uvm_extern.h>
 #include <uvm/uvm_stat.h>
@@ -285,7 +286,7 @@ kvm_t *kd;
 	    (val)) - (width);				\
 	if ((ovflw) < 0)				\
 		(ovflw) = 0;				\
-} while (/* CONSTCOND */0)
+} while (0)
 
 void	cpustats(int *);
 void	cpucounters(struct cpu_counter *);
@@ -329,6 +330,8 @@ static const int vmmeter_mib[] = { CTL_VM, VM_METER };
 static const int uvmexp2_mib[] = { CTL_VM, VM_UVMEXP2 };
 static const int boottime_mib[] = { CTL_KERN, KERN_BOOTTIME };
 
+static int numdisks = 2;
+
 int
 main(int argc, char *argv[])
 {
@@ -343,7 +346,7 @@ main(int argc, char *argv[])
 	reps = todo = verbose = wide = 0;
 	interval.tv_sec = 0;
 	interval.tv_nsec = 0;
-	while ((c = getopt(argc, argv, "Cc:efh:HilLM:mN:stu:UvWw:")) != -1) {
+	while ((c = getopt(argc, argv, "Cc:efh:HilLM:mN:n:stu:UvWw:")) != -1) {
 		switch (c) {
 		case 'c':
 			reps = atoi(optarg);
@@ -381,6 +384,9 @@ main(int argc, char *argv[])
 		case 'N':
 			nlistf = optarg;
 			break;
+		case 'n':
+			numdisks = atoi(optarg);
+			break;
 		case 's':
 			todo |= SUMSTAT;
 			break;
@@ -417,11 +423,13 @@ main(int argc, char *argv[])
 		kd = kvm_openfiles(NULL, NULL, NULL, KVM_NO_FILES, errbuf);
 	} else {
 		kd = kvm_openfiles(nlistf, memf, NULL, O_RDONLY, errbuf);
-		getnlist(todo);
 	}
 
 	if (kd == NULL)
 		errx(EXIT_FAILURE, "%s", errbuf);
+
+	if (memf != NULL)
+		getnlist(todo);	/* Only need this if a core is specified. */
 
 	if (todo & VMSTAT) {
 		struct winsize winsize;
@@ -569,7 +577,7 @@ getnlist(int todo)
 char **
 choosedrives(char **argv)
 {
-	size_t i;
+	size_t i, j, k;
 
 	/*
 	 * Choose drives to be displayed.  Priority goes to (in order) drives
@@ -591,11 +599,30 @@ choosedrives(char **argv)
 			break;
 		}
 	}
-	for (i = 0; i < ndrive && ndrives < 2; i++) {
-		if (drv_select[i])
-			continue;
-		drv_select[i] = 1;
-		++ndrives;
+
+	/*
+	 * Pick the most active drives.  Must read the stats once before
+	 * sorting so that there is current IO data, before selecting
+	 * just the first 'numdisks' (default 2) drives.
+	 */
+	drvreadstats();
+	for (i = 0; i < ndrive && ndrives < numdisks; i++) {
+		uint64_t high_bytes = 0, bytes;
+
+		k = ndrive;
+		for (j = 0; j < ndrive; j++) {
+			if (drv_select[j])
+				continue;
+			bytes = cur.rbytes[j] + cur.wbytes[j];
+			if (bytes > high_bytes) {
+				high_bytes = bytes;
+				k = j;
+			}
+		}
+		if (k != ndrive) {
+			drv_select[k] = 1;
+			++ndrives;
+		}
 	}
 
 	return (argv);
@@ -1372,7 +1399,7 @@ doevcnt(int verbose, int type)
 			    (int)total_max, counttotal,
 			    (int)rate_max, counttotal / uptime);
 		return;
-	} while (/*CONSTCOND*/ 0);
+	} while (0);
 
 	if (type == EVCNT_TYPE_ANY)
 		(void)printf("%-34s %16s %8s %s\n", "event", "total", "rate",
@@ -1440,24 +1467,25 @@ dopool_sysctl(int verbose, int wide)
 
 	(void)printf("Memory resource pool statistics\n");
 	(void)printf(
-	    "%-*s%*s%*s%*s%*s%s%s%*s%*s%*s%s%*s%6s%*s%5s%s%s\n",
+	    "%-*s%*s%*s%*s%*s%s%s%*s%*s%*s%s%*s%6s%*s%*s%s%s%s\n",
 	    wide ? 16 : 11, "Name",
-	    wide ? 7 : 5, "Size",
-	    wide ? 12 : 9, "Requests",
+	    wide ? 9 : 5, "Size",
+	    wide ? 13 : 9, "Requests",
 	    wide ? 8 : 5, "Fail",
-	    wide ? 12 : 9, "Releases",
+	    wide ? 13 : 9, "Releases",
 	    wide ? "    InUse" : "",
 	    wide ? "    Avail" : "",
 	    wide ? 11 : 6, "Pgreq",
 	    wide ? 11 : 6, "Pgrel",
-	    wide ? 8 : 6, "Npage",
-	    wide ? " PageSz" : "",
-	    wide ? 7 : 6, "Hiwat",
+	    wide ? 9 : 6, "Npage",
+	    wide ? "   PageSz" : "",
+	    wide ? 8 : 6, "Hiwat",
 	    "Minpg",
-	    wide ? 7 : 6, "Maxpg",
-	    "Idle",
+	    wide ? 9 : 6, "Maxpg",
+	    wide ? 8 : 5, "Idle",
 	    wide ? "   Flags" : "",
-	    wide ? "   Util" : "");
+	    wide ? "   Util" : "",
+	    wide ? "    TotalKB" : "");
 
 	name_len = MIN((int)sizeof(pp->pr_wchan), wide ? 16 : 11);
 	for (i = 0; i < len; ++i) {
@@ -1471,12 +1499,12 @@ dopool_sysctl(int verbose, int wide)
 			    pp->pr_maxpages);
 		ovflw = 0;
 		PRWORD(ovflw, "%-*s", name_len, 0, pp->pr_wchan);
-		PRWORD(ovflw, " %*" PRIu64, wide ? 7 : 5, 1, pp->pr_size);
-		PRWORD(ovflw, " %*" PRIu64, wide ? 12 : 9, 1, pp->pr_nget);
+		PRWORD(ovflw, " %*" PRIu64, wide ? 9 : 5, 1, pp->pr_size);
+		PRWORD(ovflw, " %*" PRIu64, wide ? 13 : 9, 1, pp->pr_nget);
 		pool_totals.pt_nget += pp->pr_nget;
 		PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 5, 1, pp->pr_nfail);
 		pool_totals.pt_nfail += pp->pr_nfail;
-		PRWORD(ovflw, " %*" PRIu64, wide ? 12 : 9, 1, pp->pr_nput);
+		PRWORD(ovflw, " %*" PRIu64, wide ? 13 : 9, 1, pp->pr_nput);
 		pool_totals.pt_nput += pp->pr_nput;
 		if (wide) {
 			PRWORD(ovflw, " %*" PRIu64, 9, 1, pp->pr_nout);
@@ -1488,14 +1516,14 @@ dopool_sysctl(int verbose, int wide)
 		pool_totals.pt_npagealloc += pp->pr_npagealloc;
 		PRWORD(ovflw, " %*" PRIu64, wide ? 11 : 6, 1, pp->pr_npagefree);
 		pool_totals.pt_npagefree += pp->pr_npagefree;
-		PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 6, 1, pp->pr_npages);
+		PRWORD(ovflw, " %*" PRIu64, wide ? 9 : 6, 1, pp->pr_npages);
 		pool_totals.pt_npages += pp->pr_npages;
 		if (wide)
-			PRWORD(ovflw, " %*" PRIu64, 7, 1, pp->pr_pagesize);
-		PRWORD(ovflw, " %*" PRIu64, wide ? 7 : 6, 1, pp->pr_hiwat);
+			PRWORD(ovflw, " %*" PRIu64, 9, 1, pp->pr_pagesize);
+		PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 6, 1, pp->pr_hiwat);
 		PRWORD(ovflw, " %*" PRIu64, 6, 1, pp->pr_minpages);
-		PRWORD(ovflw, " %*s", wide ? 7 : 6, 1, maxp);
-		PRWORD(ovflw, " %*" PRIu64, 5, 1, pp->pr_nidle);
+		PRWORD(ovflw, " %*s", wide ? 9 : 6, 1, maxp);
+		PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 5, 1, pp->pr_nidle);
 		if (wide)
 			PRWORD(ovflw, " 0x%0*" PRIx64, 6, 1,
 			    pp->pr_flags);
@@ -1514,27 +1542,29 @@ dopool_sysctl(int verbose, int wide)
 			total += this_total;
 		}
 		if (wide) {
-			if (this_total == 0)
+			if (this_total == 0) {
 				(void)printf("   ---");
-			else
-				(void)printf(" %5.1f%%",
-				    (100.0 * this_inuse) / this_total);
+			} else {
+				(void)printf(" %5.1f%% %10" PRIu64,
+				    (100.0 * this_inuse) / this_total,
+				    this_total / KILO);
+			}
 		}
 		(void)printf("\n");
 	}
 	ovflw = 0;
 	PRWORD(ovflw, "%-*s", name_len, 0, "Totals");
-	PRWORD(ovflw, " %*s", wide ? 7 : 5, 1, "");
-	PRWORD(ovflw, " %*" PRIu64, wide ? 12 : 9, 1, pool_totals.pt_nget);
+	PRWORD(ovflw, " %*s", wide ? 9 : 5, 1, "");
+	PRWORD(ovflw, " %*" PRIu64, wide ? 13 : 9, 1, pool_totals.pt_nget);
 	PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 5, 1, pool_totals.pt_nfail);
-	PRWORD(ovflw, " %*" PRIu64, wide ? 12 : 9, 1, pool_totals.pt_nput);
+	PRWORD(ovflw, " %*" PRIu64, wide ? 13 : 9, 1, pool_totals.pt_nput);
 	if (wide) {
 		PRWORD(ovflw, " %*" PRIu64, 9, 1, pool_totals.pt_nout);
 		PRWORD(ovflw, " %*" PRIu64, 9, 1, pool_totals.pt_nitems);
 	}
 	PRWORD(ovflw, " %*" PRIu64, wide ? 11 : 6, 1, pool_totals.pt_npagealloc);
 	PRWORD(ovflw, " %*" PRIu64, wide ? 11 : 6, 1, pool_totals.pt_npagefree);
-	PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 6, 1, pool_totals.pt_npages);
+	PRWORD(ovflw, " %*" PRIu64, wide ? 9 : 6, 1, pool_totals.pt_npages);
 	(void)printf("\n");
 
 	inuse /= KILO;
@@ -1552,7 +1582,7 @@ dopool(int verbose, int wide)
 {
 	int first, ovflw;
 	void *addr;
-	long total, inuse, this_total, this_inuse;
+	uint64_t total, inuse, this_total, this_inuse;
 	struct {
 		uint64_t pt_nget;
 		uint64_t pt_nfail;
@@ -1590,24 +1620,25 @@ dopool(int verbose, int wide)
 		if (first) {
 			(void)printf("Memory resource pool statistics\n");
 			(void)printf(
-			    "%-*s%*s%*s%*s%*s%s%s%*s%*s%*s%s%*s%6s%*s%5s%s%s\n",
+			    "%-*s%*s%*s%*s%*s%s%s%*s%*s%*s%s%*s%6s%*s%*s%s%s%s\n",
 			    wide ? 16 : 11, "Name",
-			    wide ? 7 : 5, "Size",
-			    wide ? 12 : 9, "Requests",
+			    wide ? 9 : 5, "Size",
+			    wide ? 13 : 9, "Requests",
 			    wide ? 8 : 5, "Fail",
-			    wide ? 12 : 9, "Releases",
+			    wide ? 13 : 9, "Releases",
 			    wide ? "    InUse" : "",
 			    wide ? "    Avail" : "",
 			    wide ? 11 : 6, "Pgreq",
 			    wide ? 11 : 6, "Pgrel",
-			    wide ? 8 : 6, "Npage",
-			    wide ? " PageSz" : "",
-			    wide ? 7 : 6, "Hiwat",
+			    wide ? 9 : 6, "Npage",
+			    wide ? "   PageSz" : "",
+			    wide ? 8 : 6, "Hiwat",
 			    "Minpg",
-			    wide ? 7 : 6, "Maxpg",
-			    "Idle",
+			    wide ? 9 : 6, "Maxpg",
+			    wide ? 8 : 5, "Idle",
 			    wide ? "   Flags" : "",
-			    wide ? "   Util" : "");
+			    wide ? "   Util" : "",
+			    wide ? "    TotalKB" : "");
 			first = 0;
 		}
 		if (pp->pr_nget == 0 && !verbose)
@@ -1619,12 +1650,12 @@ dopool(int verbose, int wide)
 			    pp->pr_maxpages);
 		ovflw = 0;
 		PRWORD(ovflw, "%-*s", wide ? 16 : 11, 0, name);
-		PRWORD(ovflw, " %*u", wide ? 7 : 5, 1, pp->pr_size);
-		PRWORD(ovflw, " %*lu", wide ? 12 : 9, 1, pp->pr_nget);
+		PRWORD(ovflw, " %*u", wide ? 9 : 5, 1, pp->pr_size);
+		PRWORD(ovflw, " %*lu", wide ? 13 : 9, 1, pp->pr_nget);
 		pool_totals.pt_nget += pp->pr_nget;
 		PRWORD(ovflw, " %*lu", wide ? 8 : 5, 1, pp->pr_nfail);
 		pool_totals.pt_nfail += pp->pr_nfail;
-		PRWORD(ovflw, " %*lu", wide ? 12 : 9, 1, pp->pr_nput);
+		PRWORD(ovflw, " %*lu", wide ? 13 : 9, 1, pp->pr_nput);
 		pool_totals.pt_nput += pp->pr_nput;
 		if (wide) {
 			PRWORD(ovflw, " %*u", 9, 1, pp->pr_nout);
@@ -1636,20 +1667,20 @@ dopool(int verbose, int wide)
 		pool_totals.pt_npagealloc += pp->pr_npagealloc;
 		PRWORD(ovflw, " %*lu", wide ? 11 : 6, 1, pp->pr_npagefree);
 		pool_totals.pt_npagefree += pp->pr_npagefree;
-		PRWORD(ovflw, " %*u", wide ? 8 : 6, 1, pp->pr_npages);
+		PRWORD(ovflw, " %*u", wide ? 9 : 6, 1, pp->pr_npages);
 		pool_totals.pt_npages += pp->pr_npages;
 		if (wide)
-			PRWORD(ovflw, " %*u", 7, 1, pa.pa_pagesz);
-		PRWORD(ovflw, " %*u", wide ? 7 : 6, 1, pp->pr_hiwat);
+			PRWORD(ovflw, " %*u", 9, 1, pa.pa_pagesz);
+		PRWORD(ovflw, " %*u", wide ? 8 : 6, 1, pp->pr_hiwat);
 		PRWORD(ovflw, " %*u", 6, 1, pp->pr_minpages);
-		PRWORD(ovflw, " %*s", wide ? 7 : 6, 1, maxp);
-		PRWORD(ovflw, " %*lu", 5, 1, pp->pr_nidle);
+		PRWORD(ovflw, " %*s", wide ? 9 : 6, 1, maxp);
+		PRWORD(ovflw, " %*lu", wide ? 8 : 5, 1, pp->pr_nidle);
 		if (wide)
 			PRWORD(ovflw, " 0x%0*x", 6, 1,
 			    pp->pr_flags | pp->pr_roflags);
 
-		this_inuse = pp->pr_nout * pp->pr_size;
-		this_total = pp->pr_npages * pa.pa_pagesz;
+		this_inuse = (uint64_t)pp->pr_nout * pp->pr_size;
+		this_total = (uint64_t)pp->pr_npages * pa.pa_pagesz;
 		if (pp->pr_roflags & PR_RECURSIVE) {
 			/*
 			 * Don't count in-use memory, since it's part
@@ -1662,33 +1693,36 @@ dopool(int verbose, int wide)
 			total += this_total;
 		}
 		if (wide) {
-			if (this_total == 0)
+			if (this_total == 0) {
 				(void)printf("   ---");
-			else
-				(void)printf(" %5.1f%%",
-				    (100.0 * this_inuse) / this_total);
+			} else {
+				(void)printf(" %5.1f%% %10" PRIu64,
+				    (100.0 * this_inuse) / this_total,
+				    this_total / KILO);
+			}
 		}
 		(void)printf("\n");
 	}
 	ovflw = 0;
 	PRWORD(ovflw, "%-*s", wide ? 16 : 11, 0, "Totals");
-	PRWORD(ovflw, " %*s", wide ? 7 : 5, 1, "");
-	PRWORD(ovflw, " %*" PRIu64, wide ? 12 : 9, 1, pool_totals.pt_nget);
+	PRWORD(ovflw, " %*s", wide ? 9 : 5, 1, "");
+	PRWORD(ovflw, " %*" PRIu64, wide ? 13 : 9, 1, pool_totals.pt_nget);
 	PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 5, 1, pool_totals.pt_nfail);
-	PRWORD(ovflw, " %*" PRIu64, wide ? 12 : 9, 1, pool_totals.pt_nput);
+	PRWORD(ovflw, " %*" PRIu64, wide ? 13 : 9, 1, pool_totals.pt_nput);
  	if (wide) {
 		PRWORD(ovflw, " %*" PRIu64, 9, 1, pool_totals.pt_nout);
 		PRWORD(ovflw, " %*" PRIu64, 9, 1, pool_totals.pt_nitems);
  	}
 	PRWORD(ovflw, " %*" PRIu64, wide ? 11 : 6, 1, pool_totals.pt_npagealloc);
 	PRWORD(ovflw, " %*" PRIu64, wide ? 11 : 6, 1, pool_totals.pt_npagefree);
-	PRWORD(ovflw, " %*" PRIu64, wide ? 8 : 6, 1, pool_totals.pt_npages);
+	PRWORD(ovflw, " %*" PRIu64, wide ? 9 : 6, 1, pool_totals.pt_npages);
 	(void)printf("\n");
 
 	inuse /= KILO;
 	total /= KILO;
 	(void)printf(
-	    "\nIn use %ldK, total allocated %ldK; utilization %.1f%%\n",
+	    "\nIn use %" PRIu64 "K, "
+	    "total allocated %" PRIu64 "K; utilization %.1f%%\n",
 	    inuse, total, (100.0 * inuse) / total);
 }
 
@@ -1852,12 +1886,6 @@ enum hashtype {			/* from <sys/systm.h> */
 	HASH_PSLIST
 };
 
-struct uidinfo {		/* XXX: no kernel header file */
-	LIST_ENTRY(uidinfo) ui_hash;
-	uid_t	ui_uid;
-	long	ui_proccnt;
-};
-
 struct kernel_hash {
 	const char *	description;	/* description */
 	int		hashsize;	/* nlist index for hash size */
@@ -1877,7 +1905,7 @@ struct kernel_hash {
 	}, {
 		"user info (uid -> used processes) hash",
 		X_UIHASH, X_UIHASHTBL,
-		HASH_LIST, offsetof(struct uidinfo, ui_hash),
+		HASH_SLIST, offsetof(struct uidinfo, ui_hash),
 	}, {
 		"vnode cache hash",
 		X_VCACHEHASH, X_VCACHETBL,
@@ -2272,7 +2300,7 @@ hist_dodump(struct kern_history *histp)
 			bintime2timeval(&e->bt, &tv);
 			(void)printf("%06ld.%06ld ", (long int)tv.tv_sec,
 			    (long int)tv.tv_usec);
-			(void)printf("%s#%" PRId32 "@%" PRId32 "d: ",
+			(void)printf("%s#%" PRId32 "@%" PRId32 ": ",
 			    fn, e->call, e->cpunum);
 			(void)printf(fmt, e->v[0], e->v[1], e->v[2], e->v[3]);
 			(void)putchar('\n');
@@ -2417,7 +2445,9 @@ usage(void)
 {
 
 	(void)fprintf(stderr,
-	    "usage: %s [-CefHiLlmstUvW] [-c count] [-h hashname] [-M core] [-N system]\n"
-	    "\t\t[-u histname] [-w wait] [disks]\n", getprogname());
+	    "usage: %s [-CefHiLlmstUvW] [-c count] [-h hashname]\n"
+	    "\t\t[-M core] [-N system] [-n diskcount] [-u histname]\n"
+	    "[-w wait] [disks]\n",
+	    getprogname());
 	exit(1);
 }

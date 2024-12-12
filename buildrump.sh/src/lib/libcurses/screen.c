@@ -1,4 +1,4 @@
-/*	$NetBSD: screen.c,v 1.35 2018/11/16 10:12:00 blymn Exp $	*/
+/*	$NetBSD: screen.c,v 1.40 2024/07/11 07:13:41 blymn Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)screen.c	8.2 (blymn) 11/27/2001";
 #else
-__RCSID("$NetBSD: screen.c,v 1.35 2018/11/16 10:12:00 blymn Exp $");
+__RCSID("$NetBSD: screen.c,v 1.40 2024/07/11 07:13:41 blymn Exp $");
 #endif
 #endif					/* not lint */
 
@@ -112,10 +112,8 @@ set_term(SCREEN *new)
 	_cursesi_reset_wacs(new);
 #endif /* HAVE_WCHAR */
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_SCREEN, "set_term: LINES = %d, COLS = %d\n",
 	    LINES, COLS);
-#endif
 
 	return old_screen;
 }
@@ -126,10 +124,10 @@ set_term(SCREEN *new)
  *
  */
 SCREEN *
-newterm(char *type, FILE *outfd, FILE *infd)
+newterm(const char *type, FILE *outfd, FILE *infd)
 {
 	SCREEN *new_screen;
-	char *sp;
+	const char *sp;
 
 	sp = type;
 	if (type == NULL && (sp = getenv("TERM")) == NULL)
@@ -138,9 +136,7 @@ newterm(char *type, FILE *outfd, FILE *infd)
 	if ((new_screen = calloc(1, sizeof(SCREEN))) == NULL)
 		return NULL;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_INIT, "newterm\n");
-#endif
 
 	new_screen->infd = infd;
 	/*
@@ -156,11 +152,12 @@ newterm(char *type, FILE *outfd, FILE *infd)
 	new_screen->echoit = new_screen->nl = 1;
 	new_screen->pfast = new_screen->rawmode = new_screen->noqch = 0;
 	new_screen->filtered = filtered;
-	filtered = FALSE; /* filter() must preceed each newterm() */
+	filtered = FALSE; /* filter() must precede each newterm() */
 	new_screen->nca = A_NORMAL;
 	new_screen->color_type = COLOR_NONE;
 	new_screen->COLOR_PAIRS = 0;
-	new_screen->old_mode = 2;
+	new_screen->curpair = -1;
+	new_screen->old_mode = 1;
 	new_screen->stdbuf = NULL;
 	new_screen->stdscr = NULL;
 	new_screen->curscr = NULL;
@@ -180,7 +177,7 @@ newterm(char *type, FILE *outfd, FILE *infd)
 	if (_cursesi_gettmode(new_screen) == ERR)
 		goto error_exit;
 
-	if (_cursesi_setterm((char *)sp, new_screen) == ERR)
+	if (_cursesi_setterm(sp, new_screen) == ERR)
 		goto error_exit;
 
 	/* Need either homing or cursor motion for refreshes */
@@ -229,10 +226,8 @@ newterm(char *type, FILE *outfd, FILE *infd)
 		set_term(new_screen);
 	}
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_SCREEN, "newterm: LINES = %d, COLS = %d\n",
 	    LINES, COLS);
-#endif
 	__startwin(new_screen);
 
 	return new_screen;
@@ -254,9 +249,7 @@ void
 delscreen(SCREEN *screen)
 {
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_SCREEN, "delscreen(%p)\n", screen);
-#endif
 
 	__delscreen(screen);
 

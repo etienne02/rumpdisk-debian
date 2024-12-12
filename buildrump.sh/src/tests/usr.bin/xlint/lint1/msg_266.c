@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_266.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_266.c,v 1.4 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_266.c"
 
-// Test for message: 'long double' is illegal in traditional C [266]
+/* Test for message: 'long double' is illegal in traditional C [266] */
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-flags: -tw -X 351 */
+
+/* expect+1: warning: 'long double' is illegal in traditional C [266] */
+long double ldbl = 0.0;

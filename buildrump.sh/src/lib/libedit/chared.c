@@ -1,4 +1,4 @@
-/*	$NetBSD: chared.c,v 1.59 2019/07/23 10:18:52 christos Exp $	*/
+/*	$NetBSD: chared.c,v 1.64 2024/06/29 14:13:14 christos Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)chared.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: chared.c,v 1.59 2019/07/23 10:18:52 christos Exp $");
+__RCSID("$NetBSD: chared.c,v 1.64 2024/06/29 14:13:14 christos Exp $");
 #endif
 #endif /* not lint && not SCCSID */
 
@@ -319,6 +319,8 @@ cv_prev_word(wchar_t *p, wchar_t *low, int n, int (*wtest)(wint_t))
 		test = (*wtest)(*p);
 		while ((p >= low) && (*wtest)(*p) == test)
 			p--;
+		if (p < low)
+			return low;
 	}
 	p++;
 
@@ -414,7 +416,7 @@ ch_init(EditLine *el)
 	el->el_chared.c_redo.buf	= el_calloc(EL_BUFSIZ,
 	    sizeof(*el->el_chared.c_redo.buf));
 	if (el->el_chared.c_redo.buf == NULL)
-		return -1;
+		goto out;
 	el->el_chared.c_redo.pos	= el->el_chared.c_redo.buf;
 	el->el_chared.c_redo.lim	= el->el_chared.c_redo.buf + EL_BUFSIZ;
 	el->el_chared.c_redo.cmd	= ED_UNASSIGNED;
@@ -425,7 +427,7 @@ ch_init(EditLine *el)
 	el->el_chared.c_kill.buf	= el_calloc(EL_BUFSIZ,
 	    sizeof(*el->el_chared.c_kill.buf));
 	if (el->el_chared.c_kill.buf == NULL)
-		return -1;
+		goto out;
 	el->el_chared.c_kill.mark	= el->el_line.buffer;
 	el->el_chared.c_kill.last	= el->el_chared.c_kill.buf;
 	el->el_chared.c_resizefun	= NULL;
@@ -442,6 +444,9 @@ ch_init(EditLine *el)
 	el->el_state.lastcmd		= ED_UNASSIGNED;
 
 	return 0;
+out:
+	ch_end(el);
+	return -1;
 }
 
 /* ch_reset():
@@ -622,6 +627,69 @@ el_deletestr(EditLine *el, int n)
 	el->el_line.cursor -= n;
 	if (el->el_line.cursor < el->el_line.buffer)
 		el->el_line.cursor = el->el_line.buffer;
+}
+
+/* el_deletestr1():
+ *	Delete characters between start and end
+ */
+int
+el_deletestr1(EditLine *el, int start, int end)
+{
+	size_t line_length, len;
+	wchar_t *p1, *p2;
+
+	if (end <= start)
+		return 0;
+
+	line_length = (size_t)(el->el_line.lastchar - el->el_line.buffer);
+
+	if (start >= (int)line_length || end >= (int)line_length)
+		return 0;
+
+	len = (size_t)(end - start);
+	if (len > line_length - (size_t)end)
+		len = line_length - (size_t)end;
+
+	p1 = el->el_line.buffer + start;
+	p2 = el->el_line.buffer + end;
+	for (size_t i = 0; i < len; i++) {
+		*p1++ = *p2++;
+		el->el_line.lastchar--;
+	}
+
+	if (el->el_line.cursor < el->el_line.buffer)
+		el->el_line.cursor = el->el_line.buffer;
+
+	return end - start;
+}
+
+/* el_wreplacestr():
+ *	Replace the contents of the line with the provided string
+ */
+int
+el_wreplacestr(EditLine *el, const wchar_t *s)
+{
+	size_t len;
+	wchar_t * p;
+
+	if (s == NULL || (len = wcslen(s)) == 0)
+		return -1;
+
+	if (el->el_line.buffer + len >= el->el_line.limit) {
+		if (!ch_enlargebufs(el, len))
+			return -1;
+	}
+
+	p = el->el_line.buffer;
+	for (size_t i = 0; i < len; i++)
+		*p++ = *s++;
+
+	el->el_line.buffer[len] = '\0';
+	el->el_line.lastchar = el->el_line.buffer + len;
+	if (el->el_line.cursor > el->el_line.lastchar)
+		el->el_line.cursor = el->el_line.lastchar;
+
+	return 0;
 }
 
 /* el_cursor():

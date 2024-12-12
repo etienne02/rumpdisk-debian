@@ -1,4 +1,4 @@
-/*	$NetBSD: vm_machdep.c,v 1.104 2020/07/06 10:52:12 rin Exp $	*/
+/*	$NetBSD: vm_machdep.c,v 1.106 2023/12/15 09:43:59 rin Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.104 2020/07/06 10:52:12 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.106 2023/12/15 09:43:59 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altivec.h"
@@ -95,8 +95,7 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack, size_t stacksize,
 	struct pcb * const pcb1 = lwp_getpcb(l1);
 	struct pcb * const pcb2 = lwp_getpcb(l2);
 
-	/* Copy MD part of lwp and set up user trapframe pointer.  */
-	l2->l_md = l1->l_md;
+	/* Set up user trapframe pointer. */
 	l2->l_md.md_utf = trapframe(l2);
 
 	/* Copy PCB. */
@@ -323,7 +322,8 @@ cpu_uarea_alloc(bool system)
 	 * Allocate a new physically contiguous uarea which can be
 	 * direct-mapped.
 	 */
-	error = uvm_pglistalloc(USPACE, 0, ~0UL, 0, 0, &pglist, 1, 1);
+	error = uvm_pglistalloc(USPACE, 0, PMAP_DIRECT_MAPPED_LEN, 0, 0,
+	    &pglist, 1, 1);
 	if (error) {
 		return NULL;
 	}

@@ -1,4 +1,4 @@
-/*	$NetBSD: i2c.c,v 1.80 2021/08/07 16:19:11 thorpej Exp $	*/
+/*	$NetBSD: i2c.c,v 1.90 2022/10/24 10:17:40 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -37,10 +37,23 @@
 
 #ifdef _KERNEL_OPT
 #include "opt_i2c.h"
-#endif
+
+#include "opt_fdt.h"
+#ifdef FDT
+#define	I2C_USE_FDT
+#endif /* FDT */
+
+#if defined(__aarch64__) || defined(__amd64__)
+#include "acpica.h"
+#if NACPICA > 0
+#define	I2C_USE_ACPI
+#endif /* NACPICA > 0 */
+#endif /* __aarch64__ || __amd64__ */
+
+#endif /* _KERNEL_OPT */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i2c.c,v 1.80 2021/08/07 16:19:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i2c.c,v 1.90 2022/10/24 10:17:40 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -56,6 +69,14 @@ __KERNEL_RCSID(0, "$NetBSD: i2c.c,v 1.80 2021/08/07 16:19:11 thorpej Exp $");
 #include <sys/module.h>
 #include <sys/once.h>
 #include <sys/mutex.h>
+
+#ifdef I2C_USE_ACPI
+#include <dev/acpi/acpivar.h>
+#endif /* I2C_USE_ACPI */
+
+#ifdef I2C_USE_FDT
+#include <dev/fdt/fdtvar.h>
+#endif /* I2C_USE_FDT */
 
 #include <dev/i2c/i2cvar.h>
 
@@ -98,7 +119,6 @@ const struct cdevsw iic_cdevsw = {
 	.d_flag = D_OTHER
 };
 
-static void	iic_smbus_intr_thread(void *);
 static void	iic_fill_compat(struct i2c_attach_args*, const char*,
 			size_t, char **);
 
@@ -108,8 +128,11 @@ iic_print_direct(void *aux, const char *pnp)
 	struct i2c_attach_args *ia = aux;
 
 	if (pnp != NULL)
-		aprint_normal("%s at %s addr 0x%02x",
+		aprint_normal("%s%s%s%s at %s addr 0x%02x",
 			      ia->ia_name ? ia->ia_name : "(unknown)",
+			      ia->ia_ncompat ? " (" : "",
+			      ia->ia_ncompat ? ia->ia_compat[0] : "",
+			      ia->ia_ncompat ? ")" : "",
 			      pnp, ia->ia_addr);
 	else
 		aprint_normal(" addr 0x%02x", ia->ia_addr);
@@ -402,7 +425,6 @@ iic_attach(device_t parent, device_t self, void *aux)
 	prop_dictionary_t props;
 	char *buf;
 	i2c_tag_t ic;
-	int rv;
 	bool no_indirect_config = false;
 
 	aprint_naive("\n");
@@ -411,16 +433,6 @@ iic_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->sc_tag = iba->iba_tag;
 	ic = sc->sc_tag;
-	ic->ic_devname = device_xname(self);
-
-	LIST_INIT(&(sc->sc_tag->ic_list));
-	LIST_INIT(&(sc->sc_tag->ic_proc_list));
-
-	rv = kthread_create(PRI_NONE, KTHREAD_MUSTJOIN, NULL,
-	    iic_smbus_intr_thread, ic, &ic->ic_intr_thread,
-	    "%s", ic->ic_devname);
-	if (rv)
-		aprint_error_dev(self, "unable to create intr thread\n");
 
 	if (!pmf_device_register(self, NULL, NULL))
 		aprint_error_dev(self, "couldn't establish power handler\n");
@@ -444,6 +456,7 @@ iic_attach(device_t parent, device_t self, void *aux)
 		uint32_t cookietype;
 		const char *name;
 		struct i2c_attach_args ia;
+		devhandle_t devhandle;
 		int loc[IICCF_NLOCS];
 
 		memset(loc, 0, sizeof loc);
@@ -473,6 +486,21 @@ iic_attach(device_t parent, device_t self, void *aux)
 			ia.ia_cookietype = cookietype;
 			ia.ia_prop = dev;
 
+			devhandle = devhandle_invalid();
+#ifdef I2C_USE_FDT
+			if (cookietype == I2C_COOKIE_OF) {
+				devhandle = devhandle_from_of(devhandle,
+							      (int)cookie);
+			}
+#endif /* I2C_USE_FDT */
+#ifdef I2C_USE_ACPI
+			if (cookietype == I2C_COOKIE_ACPI) {
+				devhandle =
+				    devhandle_from_acpi(devhandle,
+							(ACPI_HANDLE)cookie);
+			}
+#endif /* I2C_USE_ACPI */
+
 			buf = NULL;
 			cdata = prop_dictionary_get(dev, "compatible");
 			if (cdata)
@@ -493,7 +521,8 @@ iic_attach(device_t parent, device_t self, void *aux)
 					sc->sc_devices[addr] =
 					    config_found(self, &ia,
 					    iic_print_direct,
-					    CFARGS(.locators = loc));
+					    CFARGS(.locators = loc,
+						   .devhandle = devhandle));
 				}
 			}
 
@@ -514,142 +543,15 @@ iic_attach(device_t parent, device_t self, void *aux)
 static int
 iic_detach(device_t self, int flags)
 {
-	struct iic_softc *sc = device_private(self);
-	i2c_tag_t ic = sc->sc_tag;
-	int i, error;
-	void *hdl;
+	int error;
 
-	for (i = 0; i <= I2C_MAX_ADDR; i++) {
-		if (sc->sc_devices[i]) {
-			error = config_detach(sc->sc_devices[i], flags);
-			if (error)
-				return error;
-		}
-	}
-
-	if (ic->ic_running) {
-		ic->ic_running = 0;
-		wakeup(ic);
-		kthread_join(ic->ic_intr_thread);
-	}
-
-	if (!LIST_EMPTY(&ic->ic_list)) {
-		device_printf(self, "WARNING: intr handler list not empty\n");
-		while (!LIST_EMPTY(&ic->ic_list)) {
-			hdl = LIST_FIRST(&ic->ic_list);
-			iic_smbus_intr_disestablish(ic, hdl);
-		}
-	}
-	if (!LIST_EMPTY(&ic->ic_proc_list)) {
-		device_printf(self, "WARNING: proc handler list not empty\n");
-		while (!LIST_EMPTY(&ic->ic_proc_list)) {
-			hdl = LIST_FIRST(&ic->ic_proc_list);
-			iic_smbus_intr_disestablish_proc(ic, hdl);
-		}
-	}
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
 	pmf_device_deregister(self);
 
 	return 0;
-}
-
-static void
-iic_smbus_intr_thread(void *aux)
-{
-	i2c_tag_t ic;
-	struct ic_intr_list *il;
-
-	ic = (i2c_tag_t)aux;
-	ic->ic_running = 1;
-	ic->ic_pending = 0;
-
-	while (ic->ic_running) {
-		if (ic->ic_pending == 0)
-			tsleep(ic, PZERO, "iicintr", hz);
-		if (ic->ic_pending > 0) {
-			LIST_FOREACH(il, &(ic->ic_proc_list), il_next) {
-				(*il->il_intr)(il->il_intrarg);
-			}
-			ic->ic_pending--;
-		}
-	}
-
-	kthread_exit(0);
-}
-
-void *
-iic_smbus_intr_establish(i2c_tag_t ic, int (*intr)(void *), void *intrarg)
-{
-	struct ic_intr_list *il;
-
-	il = malloc(sizeof(struct ic_intr_list), M_DEVBUF, M_WAITOK);
-	if (il == NULL)
-		return NULL;
-
-	il->il_intr = intr;
-	il->il_intrarg = intrarg;
-
-	LIST_INSERT_HEAD(&(ic->ic_list), il, il_next);
-
-	return il;
-}
-
-void
-iic_smbus_intr_disestablish(i2c_tag_t ic, void *hdl)
-{
-	struct ic_intr_list *il;
-
-	il = (struct ic_intr_list *)hdl;
-
-	LIST_REMOVE(il, il_next);
-	free(il, M_DEVBUF);
-
-	return;
-}
-
-void *
-iic_smbus_intr_establish_proc(i2c_tag_t ic, int (*intr)(void *), void *intrarg)
-{
-	struct ic_intr_list *il;
-
-	il = malloc(sizeof(struct ic_intr_list), M_DEVBUF, M_WAITOK);
-	if (il == NULL)
-		return NULL;
-
-	il->il_intr = intr;
-	il->il_intrarg = intrarg;
-
-	LIST_INSERT_HEAD(&(ic->ic_proc_list), il, il_next);
-
-	return il;
-}
-
-void
-iic_smbus_intr_disestablish_proc(i2c_tag_t ic, void *hdl)
-{
-	struct ic_intr_list *il;
-
-	il = (struct ic_intr_list *)hdl;
-
-	LIST_REMOVE(il, il_next);
-	free(il, M_DEVBUF);
-
-	return;
-}
-
-int
-iic_smbus_intr(i2c_tag_t ic)
-{
-	struct ic_intr_list *il;
-
-	LIST_FOREACH(il, &(ic->ic_list), il_next) {
-		(*il->il_intr)(il->il_intrarg);
-	}
-
-	ic->ic_pending++;
-	wakeup(ic);
-
-	return 1;
 }
 
 static void
@@ -725,7 +627,7 @@ iic_compatible_lookup(const struct i2c_attach_args *ia,
 /*
  * iic_use_direct_match --
  *	Helper for direct-config of i2c.  Returns true if this is
- *	a direct-config situation, along with with match result.
+ *	a direct-config situation, along with match result.
  *	Returns false if the driver should use indirect-config
  *	matching logic.
  */
@@ -781,7 +683,7 @@ static int
 iic_ioctl_exec(struct iic_softc *sc, i2c_ioctl_exec_t *iie, int flag)
 {
 	i2c_tag_t ic = sc->sc_tag;
-	uint8_t buf[I2C_EXEC_MAX_BUFLEN];
+	uint8_t *buf = NULL;
 	void *cmd = NULL;
 	int error;
 
@@ -811,10 +713,13 @@ iic_ioctl_exec(struct iic_softc *sc, i2c_ioctl_exec_t *iie, int flag)
 			goto out;
 	}
 
-	if (iie->iie_buf != NULL && I2C_OP_WRITE_P(iie->iie_op)) {
-		error = copyin(iie->iie_buf, buf, iie->iie_buflen);
-		if (error)
-			goto out;
+	if (iie->iie_buf != NULL) {
+		buf = kmem_alloc(iie->iie_buflen, KM_SLEEP);
+		if (I2C_OP_WRITE_P(iie->iie_op)) {
+			error = copyin(iie->iie_buf, buf, iie->iie_buflen);
+			if (error)
+				goto out;
+		}
 	}
 
 	iic_acquire_bus(ic, 0);
@@ -829,14 +734,17 @@ iic_ioctl_exec(struct iic_softc *sc, i2c_ioctl_exec_t *iie, int flag)
 		error = EIO;
 
 out:
+	if (iie->iie_buf != NULL && I2C_OP_READ_P(iie->iie_op))
+		error = copyout(buf, iie->iie_buf, iie->iie_buflen);
+
+	if (buf)
+		kmem_free(buf, iie->iie_buflen);
+
 	if (cmd)
 		kmem_free(cmd, iie->iie_cmdlen);
 
 	if (error)
 		return error;
-
-	if (iie->iie_buf != NULL && I2C_OP_READ_P(iie->iie_op))
-		error = copyout(buf, iie->iie_buf, iie->iie_buflen);
 
 	return error;
 }
@@ -862,7 +770,7 @@ CFATTACH_DECL3_NEW(iic, sizeof(struct iic_softc),
     iic_match, iic_attach, iic_detach, NULL, iic_rescan, iic_child_detach,
     DVF_DETACH_SHUTDOWN);
 
-MODULE(MODULE_CLASS_DRIVER, iic, "i2cexec,i2c_bitbang");
+MODULE(MODULE_CLASS_DRIVER, iic, "i2cexec,i2c_bitbang,i2c_subr");
 
 #ifdef _MODULE
 #include "ioconf.c"
@@ -904,7 +812,7 @@ iic_modcmd(modcmd_t cmd, void *opaque)
 		if (error) {
 			aprint_error("%s: unable to init component\n",
 			    iic_cd.cd_name);
-			(void)devsw_detach(NULL, &iic_cdevsw);
+			devsw_detach(NULL, &iic_cdevsw);
 		}
 		mutex_exit(&iic_mtx);
 #endif
@@ -922,10 +830,7 @@ iic_modcmd(modcmd_t cmd, void *opaque)
 			mutex_exit(&iic_mtx);
 			break;
 		}
-		error = devsw_detach(NULL, &iic_cdevsw);
-		if (error != 0)
-			config_init_component(cfdriver_ioconf_iic,
-			    cfattach_ioconf_iic, cfdata_ioconf_iic);
+		devsw_detach(NULL, &iic_cdevsw);
 #endif
 		mutex_exit(&iic_mtx);
 		break;

@@ -1,7 +1,8 @@
 #
-#	$NetBSD: GENERIC.common,v 1.47 2021/06/26 09:29:14 nia Exp $
+#	$NetBSD: GENERIC.common,v 1.54 2024/11/07 08:46:37 msaitoh Exp $
 #
-#	GENERIC evbarm kernel config (template)
+#	GENERIC common evbarm kernel config items shared between 32 and 64
+#	kernels
 #
 
 # estimated number of users
@@ -26,15 +27,21 @@ no file-system 	CODA
 no pseudo-device vcoda
 
 # File system options
+# ffs
+options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-options 	DISKLABEL_EI	# disklabel Endian Independent support
-options 	FFS_EI		# FFS Endian Independent support
-options 	NFSSERVER
-options 	WAPBL		# File system journaling support
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	UFS_ACL		# UFS Access Control Lists
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+# lfs
+#options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH
+# ext2fs
+# other
+options 	DISKLABEL_EI	# disklabel Endian Independent support
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 
@@ -95,8 +102,9 @@ options 	SYSVSHM		# System V-like memory sharing
 options 	KTRACE			# system call tracing, a la ktrace(1)
 #options 	SCSIVERBOSE		# Verbose SCSI errors
 #options 	MIIVERBOSE		# Verbose MII autoconfuration messages
-#options 	USERCONF		# userconf(4) support
+options 	USERCONF		# userconf(4) support
 #options 	PIPE_SOCKETPAIR		# smaller, but slower pipe(2)
+options 	SYSCTL_INCLUDE_DESCR	# Include sysctl descriptions in kernel
 
 # Wedge support
 options 	DKWEDGE_AUTODISCOVER	# Automatically add dk(4) instances
@@ -168,6 +176,7 @@ pseudo-device	pty			# pseudo-terminals
 pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	ksyms			# /dev/ksyms
 pseudo-device	lockstat		# lock profiling
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 include "dev/veriexec.config"
 

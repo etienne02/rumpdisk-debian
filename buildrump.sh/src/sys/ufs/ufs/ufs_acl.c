@@ -36,9 +36,9 @@
 #if 0
 __FBSDID("$FreeBSD: head/sys/ufs/ufs/ufs_acl.c 356669 2020-01-13 02:31:51Z mjg $");
 #endif
-__KERNEL_RCSID(0, "$NetBSD: ufs_acl.c,v 1.1 2020/05/16 18:31:54 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ufs_acl.c,v 1.5 2023/02/22 21:49:45 riastradh Exp $");
 
-#if defined(_KERNEL_OPT) 
+#if defined(_KERNEL_OPT)
 #include "opt_ffs.h"
 #include "opt_quota.h"
 #include "opt_wapbl.h"
@@ -94,7 +94,7 @@ ufs_sync_acl_from_inode(struct inode *ip, struct acl *acl)
 			    ACL_USER_OBJ, ip->i_mode);
 			acl->acl_entry[i].ae_id = ACL_UNDEFINED_ID;
 			break;
-	
+
 		case ACL_GROUP_OBJ:
 			acl_group_obj = &acl->acl_entry[i];
 			acl->acl_entry[i].ae_id = ACL_UNDEFINED_ID;
@@ -114,7 +114,7 @@ ufs_sync_acl_from_inode(struct inode *ip, struct acl *acl)
 		case ACL_USER:
 		case ACL_GROUP:
 			break;
-	
+
 		default:
 			panic("ufs_sync_acl_from_inode(): bad ae_tag");
 		}
@@ -215,7 +215,7 @@ ufs_getacl_nfs4(struct vop_getacl_args *ap, struct lwp *l)
 {
 	int error;
 
-	if ((ap->a_vp->v_mount->mnt_flag & MNT_ACLS) == 0)
+	if ((ap->a_vp->v_mount->mnt_flag & MNT_NFS4ACLS) == 0)
 		return (EINVAL);
 
 	error = VOP_ACCESSX(ap->a_vp, VREAD_ACL, ap->a_cred);
@@ -362,7 +362,7 @@ ufs_getacl(void *v)
 {
 	struct vop_getacl_args *ap = v;
 
-	if ((ap->a_vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_ACLS)) == 0)
+	if ((ap->a_vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_NFS4ACLS)) == 0)
 		return (EOPNOTSUPP);
 
 	if (ap->a_type == ACL_TYPE_NFS4)
@@ -425,8 +425,6 @@ ufs_setacl_nfs4_internal(struct vnode *vp, struct acl *aclp,
 	DIP_ASSIGN(ip, mode, ip->i_mode);
 	ip->i_flag |= IN_CHANGE;
 
-	KNOTE(&vp->v_klist, NOTE_REVOKE);
-
 	error = UFS_UPDATE(vp, NULL, NULL, 0);
 	if (lock)
 		UFS_WAPBL_END(vp->v_mount);
@@ -440,7 +438,7 @@ ufs_setacl_nfs4(struct vop_setacl_args *ap, struct lwp *l)
 	int error;
 	struct inode *ip = VTOI(ap->a_vp);
 
-	if ((ap->a_vp->v_mount->mnt_flag & MNT_ACLS) == 0)
+	if ((ap->a_vp->v_mount->mnt_flag & MNT_NFS4ACLS) == 0)
 		return (EINVAL);
 
 	if (ap->a_vp->v_mount->mnt_flag & MNT_RDONLY)
@@ -607,7 +605,6 @@ ufs_setacl_posix1e(struct vnode *vp, int type, struct acl *aclp,
 		UFS_WAPBL_END(vp->v_mount);
 	}
 
-	KNOTE(&vp->v_klist, NOTE_ATTRIB);
 	return (error);
 }
 
@@ -615,7 +612,7 @@ int
 ufs_setacl(void *v)
 {
 	struct vop_setacl_args *ap = v;
-	if ((ap->a_vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_ACLS)) == 0)
+	if ((ap->a_vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_NFS4ACLS)) == 0)
 		return (EOPNOTSUPP);
 
 	if (ap->a_type == ACL_TYPE_NFS4)
@@ -630,7 +627,7 @@ ufs_aclcheck_nfs4(struct vop_aclcheck_args *ap, struct lwp *l)
 {
 	int is_directory = 0;
 
-	if ((ap->a_vp->v_mount->mnt_flag & MNT_ACLS) == 0)
+	if ((ap->a_vp->v_mount->mnt_flag & MNT_NFS4ACLS) == 0)
 		return (EINVAL);
 
 	/*
@@ -686,7 +683,7 @@ ufs_aclcheck(void *v)
 {
 	struct vop_aclcheck_args *ap = v;
 
-	if ((ap->a_vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_ACLS)) == 0)
+	if ((ap->a_vp->v_mount->mnt_flag & (MNT_POSIX1EACLS | MNT_NFS4ACLS)) == 0)
 		return (EOPNOTSUPP);
 
 	if (ap->a_type == ACL_TYPE_NFS4)

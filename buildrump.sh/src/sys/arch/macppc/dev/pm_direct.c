@@ -1,4 +1,4 @@
-/*	$NetBSD: pm_direct.c,v 1.37 2009/03/18 10:22:32 cegger Exp $	*/
+/*	$NetBSD: pm_direct.c,v 1.39 2024/06/02 13:28:46 andvar Exp $	*/
 
 /*
  * Copyright (C) 1997 Takashi Hamada
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pm_direct.c,v 1.37 2009/03/18 10:22:32 cegger Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pm_direct.c,v 1.39 2024/06/02 13:28:46 andvar Exp $");
 
 #ifdef DEBUG
 #ifndef ADB_DEBUG
@@ -481,7 +481,7 @@ pmgrop(PMData *pmdata)
 
 	s = splhigh();
 
-	/* disable all inetrrupts but PM */
+	/* disable all interrupts but PM */
 	via1_vIER = 0x10;
 	via1_vIER &= read_via_reg(VIA1, vIER);
 	write_via_reg(VIA1, vIER, via1_vIER);
@@ -575,7 +575,7 @@ pm_intr(void *arg)
 	s = splhigh();
 
 	PM_VIA_CLR_INTR();			/* clear VIA1 interrupt */
-						/* ask PM what happend */
+						/* ask PM what happened */
 	pmdata.command = PMU_INT_ACK;
 	pmdata.num_data = 0;
 	pmdata.s_buf = &pmdata.data[2];

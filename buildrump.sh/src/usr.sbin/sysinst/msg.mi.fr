@@ -1,4 +1,4 @@
-/*	$NetBSD: msg.mi.fr,v 1.34 2020/11/04 14:29:40 martin Exp $	*/
+/*	$NetBSD: msg.mi.fr,v 1.47 2024/04/22 14:41:26 nia Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -143,6 +143,8 @@ message ask_disk
 message Available_disks
 {Disques disponibles :}
 
+message Available_wedges	{Existing "wedges"}
+
 message heads
 {têtes}
 
@@ -150,7 +152,7 @@ message sectors
 {secteurs}
 
 message mountpoint
-{point de montage (ou 'aucun')}
+{point de montage (ou '-')}
 
 message cylname
 {cyl}
@@ -301,6 +303,8 @@ message cvtscheme_keep		{keep (use only part of disk)}
 message cvtscheme_delete	{delete (all data will be lost!)}
 message cvtscheme_convert	{convert to another partitioning method}
 message cvtscheme_abort		{abort}
+message cvtscheme_error
+{Could not convert all partitions}
 
 /* Called with:				Example
  *  $0 = device name			wd0
@@ -626,6 +630,12 @@ message net_defroute
 message net_media
 {Type de réseau (média)}
 
+message net_ssid
+{Wi-Fi SSID?}
+
+message net_passphrase
+{Wi-Fi passphrase?}
+
 message netok
 {Vous avez spécifié les valeurs suivantes :
 
@@ -866,6 +876,12 @@ message cur_distsets_header
 message set_base
 {Base}
 
+message set_base32
+{Base pour la compatibilit? 32 bits}
+
+message set_base64
+{Base pour la compatibilit? 64 bits}
+
 message set_system
 {Système (/etc)}
 
@@ -878,8 +894,14 @@ message set_dtb
 message set_games
 {Jeux}
 
+message set_gpufw
+{Graphics driver firmware}
+
 message set_man_pages
 {Pages de manuel}
+
+message set_man_pages_html
+{Pages de manuel (HTML)}
 
 message set_misc
 {Divers}
@@ -934,6 +956,12 @@ message set_xsrc
 
 message set_debug
 {Symboles de débogage}
+
+message set_debug32
+{Symboles de débogage (32-bit)}
+
+message set_debug64
+{Symboles de débogage (64-bit)}
 
 message set_xdebug
 {Symboles de débogage X11}
@@ -1036,6 +1064,12 @@ Nous vous recommandons de spécifier un mot de passe maintenant.
 Le souhaitez-vous ?
 }
 
+message force_rootpw
+{The root password of the newly installed system has not yet been
+initialized. 
+ 
+If you do not want to set a password, enter an empty line.}
+
 message rootsh
 {
 Spécifiez le shell par défaut qui sera utilisé par l'utilisateur "root".
@@ -1102,6 +1136,12 @@ message Set_Sizes {Spécifier les tailles des partitions NetBSD}
 message Use_Default_Parts {Use default partition sizes}
 
 /* Called with:				Example
+ *  $0 = partitioning name		Master Boot Record (MBR)
+ *  $1 = short version of $0		MBR
+ */
+message Use_Empty_Parts {Manually define partitions}
+
+/* Called with:				Example
  *  $0 = current partitioning name	Master Boot Record (MBR)
  *  $1 = short version of $0		MBR
  */
@@ -1135,6 +1175,7 @@ message Host {Serveur FTP}
 message Base_dir {Répertoire de base}
 message Set_dir_bin {Répertoire des composants binaire}
 message Set_dir_src {Répertoire des composants source}
+message Dist_postfix {Extension de fichier}
 message Xfer_dir {Répertoire de transfert}
 message transfer_method {Download via}
 message User {Utilisateur}
@@ -1269,6 +1310,7 @@ message failed {Échoué}
 message askfsmountadv {Point de montage ou de 'raid' ou 'cgd' ou 'lvm'?}
 message partman {Partitionnement étendu}
 message editpart {Modifier les partitions}
+message selectwedge {Preconfigured "wedges" dk(4)}
 
 message fremove {ENLEVER}
 message remove {Supprimer}
@@ -1398,7 +1440,9 @@ message Too_large {Trop grand!}
 message free_space_line {Espace à $0..$1 $3 (taille $2 $3)\n}
 
 message	fs_type_ffsv2	{FFSv2}
+message	fs_type_ffsv2ea	{FFSv2ea}
 message	fs_type_ffs	{FFS}
+message	fs_type_efi_sp	{EFI system partition}
 message fs_type_ext2old	{Linux Ext2 (old)}
 message	other_fs_type	{Other type}
 
@@ -1554,3 +1598,8 @@ message clone_target_hdr
 message clone_target_disp		{cloned partition(s)}
 message clone_src_done
 {Source selection OK, proceed to target selection}
+
+message network_ok
+{Your network seems to work fine. 
+Should we skip the configuration 
+and just use the network as-is?}

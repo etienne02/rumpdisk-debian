@@ -1,4 +1,4 @@
-/* $NetBSD: auixp.c,v 1.52 2021/08/21 09:59:46 andvar Exp $ */
+/* $NetBSD: auixp.c,v 1.55 2024/02/08 20:30:39 andvar Exp $ */
 
 /*
  * Copyright (c) 2004, 2005 Reinoud Zandijk <reinoud@netbsd.org>
@@ -38,12 +38,12 @@
  *   codec support problem.
  * - 32 bit recording works but can't try out playing: see above.
  * - no suspend/resume support yet.
- * - multiple codecs are `supported' but not tested; the implemetation needs
+ * - multiple codecs are `supported' but not tested; the implementation needs
  *   some cleaning up.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: auixp.c,v 1.52 2021/08/21 09:59:46 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: auixp.c,v 1.55 2024/02/08 20:30:39 andvar Exp $");
 
 #include <sys/types.h>
 #include <sys/errno.h>
@@ -716,7 +716,7 @@ auixp_update_busbusy(struct auixp_softc *sc)
  * audio is refilled by calling the intr() function when space is available
  * again.
  */
-/* XXX allmost literaly a copy of trigger-input; could be factorised XXX */
+/* XXX almost literally a copy of trigger-input; could be factorised XXX */
 static int
 auixp_trigger_output(void *hdl, void *start, void *end, int blksize,
     void (*intr)(void *), void *intrarg, const audio_params_t *param)
@@ -791,7 +791,7 @@ auixp_halt_output(void *hdl)
 }
 
 
-/* XXX allmost literaly a copy of trigger-output; could be factorised XXX */
+/* XXX almost literally a copy of trigger-output; could be factorised XXX */
 static int
 auixp_trigger_input(void *hdl, void *start, void *end, int blksize,
     void (*intr)(void *), void *intrarg, const audio_params_t *param)
@@ -870,8 +870,8 @@ auixp_halt_input(void *hdl)
  * IXP audio interrupt handler
  *
  * note that we return the number of bits handled; the return value is not
- * documentated but i saw it implemented in other drivers. Prolly returning a
- * value > 0 means "i've dealt with it"
+ * documented but I saw it implemented in other drivers. Prolly returning a
+ * value > 0 means "I've dealt with it"
  *
  */
 static int
@@ -1624,7 +1624,7 @@ auixp_reset_aclink(struct auixp_softc *sc)
 	value |= ATI_REG_CMD_AC_SOFT_RESET;
 	bus_space_write_4(iot, ioh, ATI_REG_CMD, value);
 
-	/* need to read the CMD reg and wait aprox. 10 usec to init */
+	/* need to read the CMD reg and wait approx. 10 usec to init */
 	value  = bus_space_read_4(iot, ioh, ATI_REG_CMD);
 	DELAY(20);
 

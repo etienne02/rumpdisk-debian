@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.46 2019/11/23 19:40:35 ad Exp $	*/
+/*	$NetBSD: cpu.h,v 1.55 2024/01/20 00:15:32 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -43,7 +43,7 @@
 
 #if defined(_KERNEL_OPT)
 #include "opt_lockdebug.h"
-#include "opt_m68k_arch.h"
+#include "opt_newsconf.h"
 #endif
 
 /*
@@ -72,68 +72,12 @@
 #define DCIC_CLR	(DC_CLR|IC_CLR)
 #define CACHE_BE	(DC_BE|IC_BE)
 
-/*
- * Get interrupt glue.
- */
-#include <machine/intr.h>
-
-/*
- * Arguments to hardclock and gatherstats encapsulate the previous
- * machine state in an opaque clockframe.  On the news68k, we use
- * what the hardware pushes on an interrupt (frame format 0).
- */
-struct clockframe {
-	u_short	sr;		/* sr at time of interrupt */
-	u_long	pc;		/* pc at time of interrupt */
-	u_short	vo;		/* vector offset (4-word frame) */
-};
-
-#define CLKF_USERMODE(framep)	(((framep)->sr & PSL_S) == 0)
-#define CLKF_PC(framep)		((framep)->pc)
-#if 0
-/* We would like to do it this way... */
-#define CLKF_INTR(framep)	(((framep)->sr & PSL_M) == 0)
-#else
-/* but until we start using PSL_M, we have to do this instead */
-#include <machine/intr.h>
-#define CLKF_INTR(framep)	(idepth > 1)	/* XXX */
-#endif
-
-
-/*
- * Preempt the current process if in interrupt from user mode,
- * or after the current trap/syscall if in system mode.
- */
-#define	cpu_need_resched(ci,l,flags)	do {	\
-	__USE(flags); 				\
-	aston();				\
-} while (/*CONSTCOND*/0)
-
-/*
- * Give a profiling tick to the current process when the user profiling
- * buffer pages are invalid.  On the news68k, request an ast to send us
- * through trap, marking the proc as needing a profiling tick.
- */
-#define cpu_need_proftick(l)	\
-	do { (l)->l_pflag |= LP_OWEUPC; aston(); } while (/* CONSTCOND */0)
-
-/*
- * Notify the current process (p) that it has a signal pending,
- * process as soon as possible.
- */
-#define cpu_signotify(l)	aston()
-
-extern int astpending;		/* need to trap before returning to user mode */
-extern volatile u_char *ctrl_ast;
-#define aston()		\
-	do { astpending++; *ctrl_ast = 0xff; } while (/* CONSTCOND */0)
-
-#if defined(news1700) || defined(news1200)
-#ifndef M68030
-#define M68030
-#endif
-#define M68K_MMU_MOTOROLA
-#endif
+#define	cpu_set_hw_ast(l)						\
+	do {								\
+		extern volatile u_char *ctrl_ast;			\
+		__USE(l);						\
+		*ctrl_ast = 0xff;					\
+	} while (/*CONSTCOND*/0)
 
 #if defined(news1700)
 #define CACHE_HAVE_PAC
@@ -147,19 +91,10 @@ extern int cpuspeed;
 extern char *intiobase, *intiolimit, *extiobase;
 extern u_int intiobase_phys, intiotop_phys;
 extern u_int extiobase_phys, extiotop_phys;
-extern u_int intrcnt[];
 
-extern void (*vectab[])(void);
 extern void *romcallvec;
 
 struct frame;
-
-/* locore.s functions */
-void loadustp(int);
-void badtrap(void);
-void intrhand_vectored(void);
-int getsr(void);
-
 
 void doboot(int)
 	__attribute__((__noreturn__));

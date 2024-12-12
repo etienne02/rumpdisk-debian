@@ -1,4 +1,4 @@
-/*	$NetBSD: apropos-utils.c,v 1.47 2019/08/18 09:14:30 abhinav Exp $	*/
+/*	$NetBSD: apropos-utils.c,v 1.51 2023/08/03 07:49:23 rin Exp $	*/
 /*-
  * Copyright (c) 2011 Abhinav Upadhyay <er.abhinav.upadhyay@gmail.com>
  * All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: apropos-utils.c,v 1.47 2019/08/18 09:14:30 abhinav Exp $");
+__RCSID("$NetBSD: apropos-utils.c,v 1.51 2023/08/03 07:49:23 rin Exp $");
 
 #include <sys/queue.h>
 #include <sys/stat.h>
@@ -202,11 +202,11 @@ create_db(sqlite3 *db)
 	    "CREATE VIRTUAL TABLE mandb USING fts4(section, name, "
 		"name_desc, desc, lib, return_vals, env, files, "
 		"exit_status, diagnostics, errors, md5_hash UNIQUE, machine, "
-#ifndef APROPOS_DEBUG		
+#ifndef APROPOS_DEBUG
 		"compress=zip, uncompress=unzip, tokenize=custom_apropos_tokenizer, "
 #else
 		"tokenize=porter, "
-#endif		
+#endif
 		"notindexed=section, notindexed=md5_hash); "
 	    //mandb_meta
 	    "CREATE TABLE IF NOT EXISTS mandb_meta(device, inode, mtime, "
@@ -241,7 +241,7 @@ out:
 
 /*
  * zip --
- *  User defined Sqlite function to compress the FTS table
+ *  User defined SQLite function to compress the FTS table
  */
 static void
 zip(sqlite3_context *pctx, int nval, sqlite3_value **apval)
@@ -262,7 +262,7 @@ zip(sqlite3_context *pctx, int nval, sqlite3_value **apval)
 
 /*
  * unzip --
- *  User defined Sqlite function to uncompress the FTS table.
+ *  User defined SQLite function to uncompress the FTS table.
  */
 static void
 unzip(sqlite3_context *pctx, int nval, sqlite3_value **apval)
@@ -459,7 +459,7 @@ error:
 
 /*
  * rank_func --
- *  Sqlite user defined function for ranking the documents.
+ *  SQLite user defined function for ranking the documents.
  *  For each phrase of the query, it computes the tf and idf and adds them over.
  *  It computes the final rank, by multiplying tf and idf together.
  *  Weight of term t for document d = (term frequency of t in d *
@@ -665,7 +665,7 @@ get_stmt_col_text(sqlite3_stmt *stmt, int col)
  * Execute the full text search query and return the number of results
  * obtained.
  */
-static unsigned int
+static int
 execute_search_query(sqlite3 *db, char *query, query_args *args)
 {
 	sqlite3_stmt *stmt;
@@ -699,8 +699,8 @@ execute_search_query(sqlite3 *db, char *query, query_args *args)
 		return -1;
 	}
 
-	unsigned int nresults = 0;
-	while (sqlite3_step(stmt) == SQLITE_ROW) {
+	int nresults = rc = 0;
+	while (rc == 0 && sqlite3_step(stmt) == SQLITE_ROW) {
 		nresults++;
 		callback_args.section = get_stmt_col_text(stmt, 0);
 		name_temp = get_stmt_col_text(stmt, 1);
@@ -725,11 +725,11 @@ execute_search_query(sqlite3 *db, char *query, query_args *args)
 		}
 		callback_args.name = name;
 		callback_args.other_data = args->callback_data;
-		(args->callback)(&callback_args);
+		rc = (args->callback)(&callback_args);
 		free(name);
 	}
 	sqlite3_finalize(stmt);
-	return nresults;
+	return (rc < 0) ? rc : nresults;
 }
 
 
@@ -752,9 +752,9 @@ run_query_internal(sqlite3 *db, const char *snippet_args[3], query_args *args)
 		return -1;
 	}
 
-	execute_search_query(db, query, args);
+	int rc = execute_search_query(db, query, args);
 	sqlite3_free(query);
-	return *(args->errmsg) == NULL ? 0 : -1;
+	return (rc < 0 || *(args->errmsg) != NULL) ? -1 : 0;
 }
 
 static char *
@@ -784,7 +784,7 @@ get_escaped_html_string(const char *src, size_t *slen)
     do {					\
 	memcpy(dst, (a), sizeof(a) - 1);	\
 	dst += sizeof(a) - 1; 			\
-    } while (/*CONSTCOND*/0)
+    } while (0)
 
 
 	ddst = dst = emalloc(*slen + count * 5 + 1);
@@ -845,10 +845,10 @@ callback_html(query_callback_args *callback_args)
 	callback_args->snippet = qsnippet;
 	callback_args->snippet_length = length;
 	callback_args->other_data = orig_data->data;
-	(*callback)(callback_args);
+	int rc = (*callback)(callback_args);
 	free(qsnippet);
 	free(qname_description);
-	return 0;
+	return rc;
 }
 
 /*
@@ -968,12 +968,12 @@ callback_pager(query_callback_args *callback_args)
 	callback_args->snippet = psnippet;
 	callback_args->snippet_length = psnippet_length;
 	callback_args->other_data = orig_data->data;
-	(orig_data->callback)(callback_args);
+	int rc = (orig_data->callback)(callback_args);
 	free(ul_section);
 	free(ul_name);
 	free(ul_name_desc);
 	free(psnippet);
-	return 0;
+	return rc;
 }
 
 struct term_args {
@@ -1013,11 +1013,11 @@ callback_term(query_callback_args *callback_args)
 	callback_args->name = ul_name;
 	callback_args->name_desc = ul_name_desc;
 	callback_args->other_data = orig_data->data;
-	(orig_data->callback)(callback_args);
+	int rc = (orig_data->callback)(callback_args);
 	free(ul_section);
 	free(ul_name);
 	free(ul_name_desc);
-	return 0;
+	return rc;
 }
 
 /*

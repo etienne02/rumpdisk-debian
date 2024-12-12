@@ -1,4 +1,4 @@
-/*	$NetBSD: if_kue.c,v 1.105 2021/06/13 09:26:24 mlelstv Exp $	*/
+/*	$NetBSD: if_kue.c,v 1.119 2022/08/20 14:08:59 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998, 1999, 2000
@@ -71,7 +71,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_kue.c,v 1.105 2021/06/13 09:26:24 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_kue.c,v 1.119 2022/08/20 14:08:59 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -174,11 +174,11 @@ CFATTACH_DECL_NEW(kue, sizeof(struct kue_softc), kue_match, kue_attach,
 static void kue_uno_rx_loop(struct usbnet *, struct usbnet_chain *, uint32_t);
 static unsigned kue_uno_tx_prepare(struct usbnet *, struct mbuf *,
 				   struct usbnet_chain *);
-static int kue_uno_ioctl(struct ifnet *, u_long, void *);
+static void kue_uno_mcast(struct ifnet *);
 static int kue_uno_init(struct ifnet *);
 
 static const struct usbnet_ops kue_ops = {
-	.uno_ioctl = kue_uno_ioctl,
+	.uno_mcast = kue_uno_mcast,
 	.uno_tx_prepare = kue_uno_tx_prepare,
 	.uno_rx_loop = kue_uno_rx_loop,
 	.uno_init = kue_uno_init,
@@ -318,11 +318,11 @@ kue_load_fw(struct usbnet *un)
 }
 
 static void
-kue_setiff_locked(struct usbnet *un)
+kue_uno_mcast(struct ifnet *ifp)
 {
+	struct usbnet *		un = ifp->if_softc;
 	struct ethercom *	ec = usbnet_ec(un);
 	struct kue_softc *	sc = usbnet_softc(un);
-	struct ifnet * const	ifp = usbnet_ifp(un);
 	struct ether_multi	*enm;
 	struct ether_multistep	step;
 	int			i;
@@ -330,14 +330,16 @@ kue_setiff_locked(struct usbnet *un)
 	DPRINTFN(5,("%s: %s: enter\n", device_xname(un->un_dev), __func__));
 
 	 /* If we want promiscuous mode, set the allframes bit. */
-	if (ifp->if_flags & IFF_PROMISC)
+	if (usbnet_ispromisc(un))
 		sc->kue_rxfilt |= KUE_RXFILT_PROMISC;
 	else
 		sc->kue_rxfilt &= ~KUE_RXFILT_PROMISC;
 
-	if (ifp->if_flags & IFF_PROMISC) {
+	if (usbnet_ispromisc(un)) {
+		ETHER_LOCK(ec);
 allmulti:
-		ifp->if_flags |= IFF_ALLMULTI;
+		ec->ec_flags |= ETHER_F_ALLMULTI;
+		ETHER_UNLOCK(ec);
 		sc->kue_rxfilt |= KUE_RXFILT_ALLMULTI|KUE_RXFILT_PROMISC;
 		sc->kue_rxfilt &= ~KUE_RXFILT_MULTICAST;
 		kue_setword(un, KUE_CMD_SET_PKT_FILTER, sc->kue_rxfilt);
@@ -353,7 +355,6 @@ allmulti:
 		if (i == KUE_MCFILTCNT(sc) ||
 		    memcmp(enm->enm_addrlo, enm->enm_addrhi,
 		    ETHER_ADDR_LEN) != 0) {
-			ETHER_UNLOCK(ec);
 			goto allmulti;
 		}
 
@@ -361,9 +362,8 @@ allmulti:
 		ETHER_NEXT_MULTI(step, enm);
 		i++;
 	}
+	ec->ec_flags &= ~ETHER_F_ALLMULTI;
 	ETHER_UNLOCK(ec);
-
-	ifp->if_flags &= ~IFF_ALLMULTI;
 
 	sc->kue_rxfilt |= KUE_RXFILT_MULTICAST;
 	kue_ctl(un, KUE_CTL_WRITE, KUE_CMD_SET_MCAST_FILTERS,
@@ -494,7 +494,7 @@ kue_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* First level attach, so kue_ctl() works. */
-	usbnet_attach(un, "kuedet");
+	usbnet_attach(un);
 
 	/* Read ethernet descriptor */
 	err = kue_ctl(un, KUE_CTL_READ, KUE_CMD_GET_ETHER_DESCRIPTOR,
@@ -591,19 +591,13 @@ kue_uno_tx_prepare(struct usbnet *un, struct mbuf *m, struct usbnet_chain *c)
 }
 
 static int
-kue_init_locked(struct ifnet *ifp)
+kue_uno_init(struct ifnet *ifp)
 {
 	struct usbnet * const	un = ifp->if_softc;
 	struct kue_softc	*sc = usbnet_softc(un);
 	uint8_t			eaddr[ETHER_ADDR_LEN];
 
 	DPRINTFN(5,("%s: %s: enter\n", device_xname(un->un_dev),__func__));
-
-	if (usbnet_isdying(un))
-		return EIO;
-
-	/* Cancel pending I/O */
-	usbnet_stop(un, ifp, 1);
 
 	memcpy(eaddr, CLLADDR(ifp->if_sadl), sizeof(eaddr));
 	/* Set MAC address */
@@ -620,47 +614,6 @@ kue_init_locked(struct ifnet *ifp)
 	kue_setword(un, KUE_CMD_SET_SOFS, 1);
 #endif
 	kue_setword(un, KUE_CMD_SET_URB_SIZE, 64);
-
-	/* Load the multicast filter. */
-	kue_setiff_locked(un);
-
-	return usbnet_init_rx_tx(un);
-}
-
-static int
-kue_uno_init(struct ifnet *ifp)
-{
-	struct usbnet * const	un = ifp->if_softc;
-	int rv;
-
-	usbnet_lock_core(un);
-	usbnet_busy(un);
-	rv = kue_init_locked(ifp);
-	usbnet_unbusy(un);
-	usbnet_unlock_core(un);
-
-	return rv;
-}
-
-static int
-kue_uno_ioctl(struct ifnet *ifp, u_long cmd, void *data)
-{
-	struct usbnet * const	un = ifp->if_softc;
-
-	usbnet_lock_core(un);
-	usbnet_busy(un);
-
-	switch (cmd) {
-	case SIOCADDMULTI:
-	case SIOCDELMULTI:
-		kue_setiff_locked(un);
-		break;
-	default:
-		break;
-	}
-
-	usbnet_unbusy(un);
-	usbnet_unlock_core(un);
 
 	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: sbcvar.h,v 1.12 2005/12/11 12:18:02 christos Exp $	*/
+/*	$NetBSD: sbcvar.h,v 1.15 2024/11/22 07:16:01 nat Exp $	*/
 
 /*
  * Copyright (C) 1996 Scott Reynolds.  All rights reserved.
@@ -63,6 +63,7 @@ struct sbc_softc {
 	volatile int		sc_resid;
 	int			sc_options;	/* options for this instance. */
 	struct sbc_pdma_handle sc_pdma[SCI_OPENINGS];
+	kmutex_t		sc_drq_lock;
 };
 
 /*
@@ -77,11 +78,12 @@ struct sbc_softc {
  * The options code is based on the sparc 'si' driver's version of
  * the same.
  */     
-#define	SBC_PDMA	0x01	/* Use PDMA for polled transfers */
-#define	SBC_INTR	0x02	/* Allow SCSI IRQ/DRQ interrupts */
-#define	SBC_RESELECT	0x04	/* Allow disconnect/reselect */
-#define	SBC_OPTIONS_MASK	(SBC_RESELECT|SBC_INTR|SBC_PDMA)
-#define	SBC_OPTIONS_BITS	"\10\3RESELECT\2INTR\1PDMA"
+#define	SBC_PDMA		0x01	/* Use PDMA for polled transfers */
+#define	SBC_INTR		0x02	/* Allow SCSI IRQ/DRQ interrupts */
+#define	SBC_RESELECT		0x04	/* Allow disconnect/reselect */
+#define	SBC_PDMA_NO_WRITE	0x08	/* No PDMA for writes */
+#define	SBC_OPTIONS_MASK (SBC_PDMA_NO_WRITE|SBC_RESELECT|SBC_INTR|SBC_PDMA)
+#define	SBC_OPTIONS_BITS	"\10\4NOWRITE\3RESELECT\2INTR\1PDMA"
 
 extern int	sbc_debug;
 extern int	sbc_link_flags;

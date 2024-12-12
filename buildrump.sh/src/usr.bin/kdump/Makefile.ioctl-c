@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.ioctl-c,v 1.38 2018/09/29 14:41:36 rmind Exp $
+#	$NetBSD: Makefile.ioctl-c,v 1.40 2024/04/01 18:33:24 riastradh Exp $
 
 # NOTE: <bsd.own.mk> needs to be previously .included for NETBSDSRCDIR
 
@@ -50,16 +50,20 @@ CWARNFLAGS+=	-Wno-unknown-pragmas
 .endif
 CPPFLAGS+=	-D_DEV_IC_BT8XX_H_
 CPPFLAGS+=	-D_ALTQ_ALTQ_JOBS_H_	# redefinition of inline
+CPPFLAGS+=	-D_I915_DRM_H_		# Dup ioctls
+# Once upon a time these only conflicted with themselves, but noe
+# the i915 version conflicts with base ioctls, so that one is now
+# always must be excluded.
 # De-select one, dup ioctls
 CPPFLAGS+=	-D_VIA_DRM_H_		# Missing header
-#CPPFLAGS+=	-D_I915_DRM_H_		# Dup ioctls
 CPPFLAGS+=	-DQXL_DRM_H		# Dup ioctls
 CPPFLAGS+=	-D__R128_DRM_H__	# Dup ioctls
 CPPFLAGS+=	-D__SIS_DRM_H__		# Dup ioctls
 CPPFLAGS+=	-D__SAVAGE_DRM_H__	# Dup ioctls
-CPPFLAGS+=	-D__RADEON_DRM_H__	# Dup ioctls
+#CPPFLAGS+=	-D__RADEON_DRM_H__	# Dup ioctls
 CPPFLAGS+=	-D__MACH64_DRM_H__	# Dup ioctls
 CPPFLAGS+=	-D__MGA_DRM_H__		# Dup ioctls
+CPPFLAGS+=	-D_SYS_ELFDEFINITIONS_H_	# collides with sys/exec_elf.h
 
 ${PROG}-ioctl.c: mkioctls Makefile ${DEPFILES} ${SETFILES}
 	${_MKTARGET_CREATE}

@@ -1,4 +1,4 @@
-.\"	$NetBSD: ktrace.1,v 1.46 2020/11/18 20:00:15 wiz Exp $
+.\"	$NetBSD: ktrace.1,v 1.49 2024/02/12 22:53:21 gutteridge Exp $
 .\"
 .\" Copyright (c) 1990, 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -74,8 +74,8 @@ translations, signal processing, and
 .Tn I/O .
 .Pp
 Once tracing is enabled on a process, trace data will be logged until
-either the process exits or the trace point is cleared.
-A traced process can generate enormous amounts of log data quickly;
+either the process exits or the tracepoint is cleared.
+A traced process can generate enormous amounts of log data quickly.
 It is strongly suggested that users memorize how to disable tracing before
 attempting to trace a process.
 The following command is sufficient to disable tracing on all user owned
@@ -103,10 +103,14 @@ The options are as follows:
 .It Fl a
 Append to the trace file instead of truncating it.
 .It Fl C
-Disable tracing on all user owned processes, and, if executed by root, all
+Clear
+.Pq disable
+tracing on all user owned processes, and, if executed by root, all
 processes in the system.
 .It Fl c
-Clear the trace points associated with the specified file or processes.
+Clear
+.Pq disable
+the tracepoints associated with the specified file or processes.
 .It Fl d
 Descendants; perform the operation for all current children of the
 designated processes.
@@ -124,9 +128,12 @@ Read the trace records from
 .Ar infile
 and print them in a human readable format to standard out.
 .It Fl g Ar pgid
-Enable (disable) tracing on all processes in the process group (only one
+Enable
+.Pq disable with Fl c
+tracing on all processes in the process group.
+Only one
 .Fl g
-flag is permitted).
+flag is permitted.
 .It Fl i
 Inherit; pass the trace flags to all future children of the designated
 processes.
@@ -161,9 +168,12 @@ Without this option
 will print its output in a human
 readable format to standard out.
 .It Fl p Ar pid
-Enable (disable) tracing on the indicated process id (only one
+Enable
+.Pq disable with Fl c
+tracing on the indicated process id.
+Only one
 .Fl p
-flag is permitted).
+flag is permitted.
 .It Fl R
 Display relative time stamps to output.
 .It Fl s
@@ -173,7 +183,7 @@ Same as the
 .Fl R
 option, but use absolute timestamps instead.
 .It Fl t Ar trstr
-The string argument represents the kernel trace points, one per letter.
+The string argument represents the kernel tracepoints, one per letter.
 The following table equates the letters with the tracepoints:
 .Pp
 .Bl -tag -width flag -compact
@@ -205,9 +215,9 @@ trace exec environment
 .It Cm w
 trace context switches
 .It Cm +
-trace the default set of trace points (c, e, i, n, s, u)
+trace the default set of tracepoints (c, e, i, n, s, u)
 .It Cm -
-do not trace following trace points
+do not trace following tracepoints
 .El
 .It Fl v Ar version
 Determines the
@@ -280,6 +290,6 @@ The
 command appeared in
 .Bx 4.4 .
 The
-.Nm ktrace
+.Nm ktruss
 command appeared in
 .Nx 1.5 .

@@ -1,4 +1,4 @@
-/*	$NetBSD: dwc2.c,v 1.76 2021/01/07 13:25:51 skrll Exp $	*/
+/*	$NetBSD: dwc2.c,v 1.81 2024/04/05 18:57:10 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dwc2.c,v 1.76 2021/01/07 13:25:51 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dwc2.c,v 1.81 2024/04/05 18:57:10 riastradh Exp $");
 
 #include "opt_usb.h"
 
@@ -403,7 +403,7 @@ dwc2_open(struct usbd_pipe *pipe)
 	switch (xfertype) {
 	case UE_CONTROL:
 		pipe->up_methods = &dwc2_device_ctrl_methods;
-		int err = usb_allocmem(&sc->sc_bus, sizeof(usb_device_request_t),
+		int err = usb_allocmem(sc->sc_bus.ub_dmatag, sizeof(usb_device_request_t),
 		    0, USBMALLOC_COHERENT, &dpipe->req_dma);
 		if (err)
 			return USBD_NOMEM;
@@ -515,7 +515,7 @@ dwc2_abortx(struct usbd_xfer *xfer)
 	}
 
 	/*
-	 * HC Step 1: Handle the hardware.
+	 * Handle the hardware.
 	 */
 	err = dwc2_hcd_urb_dequeue(hsotg, dxfer->urb);
 	if (err) {
@@ -524,11 +524,6 @@ dwc2_abortx(struct usbd_xfer *xfer)
 
 dying:
 	mutex_spin_exit(&hsotg->lock);
-
-	/*
-	 * Final Step: Notify completion to waiting xfers.
-	 */
-	usb_transfer_complete(xfer);
 	KASSERT(mutex_owned(&sc->sc_lock));
 }
 
@@ -614,17 +609,8 @@ dwc2_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 Static usbd_status
 dwc2_root_intr_transfer(struct usbd_xfer *xfer)
 {
-	struct dwc2_softc *sc = DWC2_XFER2SC(xfer);
-	usbd_status err;
 
 	DPRINTF("\n");
-
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
 
 	/* Pipe isn't running, start first */
 	return dwc2_root_intr_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
@@ -634,20 +620,17 @@ Static usbd_status
 dwc2_root_intr_start(struct usbd_xfer *xfer)
 {
 	struct dwc2_softc *sc = DWC2_XFER2SC(xfer);
-	const bool polling = sc->sc_bus.ub_usepolling;
 
 	DPRINTF("\n");
+
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
 
 	if (sc->sc_dying)
 		return USBD_IOERROR;
 
-	if (!polling)
-		mutex_enter(&sc->sc_lock);
 	KASSERT(sc->sc_intrxfer == NULL);
 	sc->sc_intrxfer = xfer;
 	xfer->ux_status = USBD_IN_PROGRESS;
-	if (!polling)
-		mutex_exit(&sc->sc_lock);
 
 	return USBD_IN_PROGRESS;
 }
@@ -711,17 +694,8 @@ dwc2_root_intr_done(struct usbd_xfer *xfer)
 Static usbd_status
 dwc2_device_ctrl_transfer(struct usbd_xfer *xfer)
 {
-	struct dwc2_softc *sc = DWC2_XFER2SC(xfer);
-	usbd_status err;
 
 	DPRINTF("\n");
-
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
 
 	/* Pipe isn't running, start first */
 	return dwc2_device_ctrl_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
@@ -732,17 +706,13 @@ dwc2_device_ctrl_start(struct usbd_xfer *xfer)
 {
 	struct dwc2_softc *sc = DWC2_XFER2SC(xfer);
 	usbd_status err;
-	const bool polling = sc->sc_bus.ub_usepolling;
 
 	DPRINTF("\n");
 
-	if (!polling)
-		mutex_enter(&sc->sc_lock);
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
 	xfer->ux_status = USBD_IN_PROGRESS;
 	err = dwc2_device_start(xfer);
-	if (!polling)
-		mutex_exit(&sc->sc_lock);
-
 	if (err)
 		return err;
 
@@ -763,13 +733,12 @@ dwc2_device_ctrl_abort(struct usbd_xfer *xfer)
 Static void
 dwc2_device_ctrl_close(struct usbd_pipe *pipe)
 {
-	struct dwc2_softc * const sc = DWC2_PIPE2SC(pipe);
 	struct dwc2_pipe * const dpipe = DWC2_PIPE2DPIPE(pipe);
 
 	DPRINTF("pipe=%p\n", pipe);
 	dwc2_close_pipe(pipe);
 
-	usb_freemem(&sc->sc_bus, &dpipe->req_dma);
+	usb_freemem(&dpipe->req_dma);
 }
 
 Static void
@@ -784,22 +753,12 @@ dwc2_device_ctrl_done(struct usbd_xfer *xfer)
 Static usbd_status
 dwc2_device_bulk_transfer(struct usbd_xfer *xfer)
 {
-	struct dwc2_softc *sc = DWC2_XFER2SC(xfer);
-	usbd_status err;
 
 	DPRINTF("xfer=%p\n", xfer);
 
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-
-	KASSERT(err == USBD_NORMAL_COMPLETION);
-
+	KASSERT(xfer->ux_status == USBD_NOT_STARTED);
 	xfer->ux_status = USBD_IN_PROGRESS;
-	err = dwc2_device_start(xfer);
-	mutex_exit(&sc->sc_lock);
-
-	return err;
+	return dwc2_device_start(xfer);
 }
 
 Static void
@@ -834,17 +793,8 @@ dwc2_device_bulk_done(struct usbd_xfer *xfer)
 Static usbd_status
 dwc2_device_intr_transfer(struct usbd_xfer *xfer)
 {
-	struct dwc2_softc *sc = DWC2_XFER2SC(xfer);
-	usbd_status err;
 
 	DPRINTF("xfer=%p\n", xfer);
-
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
 
 	/* Pipe isn't running, start first */
 	return dwc2_device_intr_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
@@ -857,15 +807,11 @@ dwc2_device_intr_start(struct usbd_xfer *xfer)
 	struct usbd_device *dev = dpipe->pipe.up_dev;
 	struct dwc2_softc *sc = dev->ud_bus->ub_hcpriv;
 	usbd_status err;
-	const bool polling = sc->sc_bus.ub_usepolling;
 
-	if (!polling)
-		mutex_enter(&sc->sc_lock);
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
 	xfer->ux_status = USBD_IN_PROGRESS;
 	err = dwc2_device_start(xfer);
-	if (!polling)
-		mutex_exit(&sc->sc_lock);
-
 	if (err)
 		return err;
 
@@ -905,22 +851,12 @@ dwc2_device_intr_done(struct usbd_xfer *xfer)
 usbd_status
 dwc2_device_isoc_transfer(struct usbd_xfer *xfer)
 {
-	struct dwc2_softc *sc = DWC2_XFER2SC(xfer);
-	usbd_status err;
 
 	DPRINTF("xfer=%p\n", xfer);
 
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-
-	KASSERT(err == USBD_NORMAL_COMPLETION);
-
+	KASSERT(xfer->ux_status == USBD_NOT_STARTED);
 	xfer->ux_status = USBD_IN_PROGRESS;
-	err = dwc2_device_start(xfer);
-	mutex_exit(&sc->sc_lock);
-
-	return err;
+	return dwc2_device_start(xfer);
 }
 
 void
@@ -973,6 +909,8 @@ dwc2_device_start(struct usbd_xfer *xfer)
 	int alloc_bandwidth = 0;
 
 	DPRINTFN(1, "xfer=%p pipe=%p\n", xfer, xfer->ux_pipe);
+
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
 
 	if (xfertype == UE_ISOCHRONOUS ||
 	    xfertype == UE_INTERRUPT) {
@@ -1154,17 +1092,15 @@ dwc2_device_start(struct usbd_xfer *xfer)
 	retval = dwc2_hcd_urb_enqueue(hsotg, dwc2_urb, qh, qtd);
 	if (retval)
 		goto fail2;
-	usbd_xfer_schedule_timeout(xfer);
 	xfer->ux_status = USBD_IN_PROGRESS;
+	usbd_xfer_schedule_timeout(xfer);
 
 	if (alloc_bandwidth) {
 		dwc2_allocate_bus_bandwidth(hsotg,
 				dwc2_hcd_get_ep_bandwidth(hsotg, dpipe),
 				xfer);
 	}
-
 	mutex_spin_exit(&hsotg->lock);
-// 	mutex_exit(&sc->sc_lock);
 
 	return USBD_IN_PROGRESS;
 

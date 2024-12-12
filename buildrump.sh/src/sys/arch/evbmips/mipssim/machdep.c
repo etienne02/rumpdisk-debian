@@ -1,4 +1,4 @@
-/* $NetBSD: machdep.c,v 1.2 2021/02/15 22:39:46 reinoud Exp $ */
+/* $NetBSD: machdep.c,v 1.5 2024/03/05 14:15:31 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2001,2021 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.2 2021/02/15 22:39:46 reinoud Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.5 2024/03/05 14:15:31 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -73,6 +73,16 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.2 2021/02/15 22:39:46 reinoud Exp $");
 #define	COMCNRATE	115200		/* not important, emulated device */
 #define	COM_FREQ	1843200		/* not important, emulated device */
 
+/*
+ * QEMU/mipssim sets the CPU frequency to 6 MHz for 64-bit guests and
+ * 12 MHz for 32-bit guests.
+ */
+#ifdef _LP64
+#define	CPU_FREQ	6	/* MHz */
+#else
+#define	CPU_FREQ	12	/* MHz */
+#endif
+
 /* XXX move phys map decl to a general mips location */
 /* Maps for VM objects. */
 struct vm_map *phys_map = NULL;
@@ -113,11 +123,7 @@ cal_timer(void)
 {
 	uint32_t cntfreq;
 
-	/*
-	 * Qemu seems to default to 200 MHz; wall clock looks the right speed
-	 * but we don't have an RTC to check.
-	 */
-	cntfreq = curcpu()->ci_cpu_freq = 200 * 1000 * 1000;
+	cntfreq = curcpu()->ci_cpu_freq = CPU_FREQ * 1000 * 1000;
 
 	if (mips_options.mips_cpu_flags & CPU_MIPS_DOUBLE_COUNT)
 		cntfreq /= 2;
@@ -147,12 +153,13 @@ mach_init(u_long arg0, u_long arg1, u_long arg2, u_long arg3)
 	/* enough of a console for printf() to work */
 	cn_tab = &early_console;
 
-	cal_timer();
-
 	/* set CPU model info for sysctl_hw */
 	cpu_setmodel("MIPSSIM");
 
 	mips_vector_init(NULL, false);
+
+	/* must be after CPU is identified in mips_vector_init() */
+	cal_timer();
 
 	uvm_md_init();
 
@@ -222,6 +229,9 @@ mach_init_memory(void)
 	size_t addr;
 	uint32_t *memptr;
 	extern char end[];	/* XXX */
+#ifdef MIPS64
+	size_t highaddr;
+#endif
 
 	l->l_addr = &dummypcb;
 	memsize = roundup2(MIPS_KSEG0_TO_PHYS((uintptr_t)(end)), 1024 * 1024);
@@ -239,13 +249,43 @@ mach_init_memory(void)
 	}
 	l->l_addr = NULL;
 
-	printf("Memory size: 0x%" PRIxPSIZE " (%" PRIdPSIZE " MB)\n",
-	    memsize, memsize / 1024 / 1024);
 	physmem = btoc(memsize);
 
 	mem_clusters[0].start = PAGE_SIZE;
 	mem_clusters[0].size = memsize - PAGE_SIZE;
 	mem_cluster_cnt = 1;
+
+#ifdef _LP64
+	/* probe for more memory above ISA I/O "hole" */
+	l->l_addr = &dummypcb;
+
+	for (highaddr = addr = MIPSSIM_MORE_MEM_BASE;
+	    addr < MIPSSIM_MORE_MEM_END;
+	    addr += 1024 * 1024) {
+		memptr = (void *)MIPS_PHYS_TO_XKPHYS(CCA_CACHEABLE,
+						addr - sizeof(*memptr));
+		if (badaddr(memptr, sizeof(uint32_t)) < 0)
+			break;
+
+		highaddr = addr;
+#ifdef MEM_DEBUG
+		printf("probed %zd MB\n", (addr - MIPSSIM_MORE_MEM_BASE)
+					/ 1024 * 1024);
+#endif
+	}
+	l->l_addr = NULL;
+
+	if (highaddr != MIPSSIM_MORE_MEM_BASE) {
+		mem_clusters[1].start = MIPSSIM_MORE_MEM_BASE;
+		mem_clusters[1].size = highaddr - MIPSSIM_MORE_MEM_BASE;
+		mem_cluster_cnt++;
+		physmem += btoc(mem_clusters[1].size);
+		memsize += mem_clusters[1].size;
+	}
+#endif /* _LP64 */
+
+	printf("Memory size: 0x%" PRIxPSIZE " (%" PRIdPSIZE " MB)\n",
+	    memsize, memsize / 1024 / 1024);
 }
 
 void
@@ -295,12 +335,6 @@ cpu_reboot(int howto, char *bootstr)
 		 * Synchronize the disks....
 		 */
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */

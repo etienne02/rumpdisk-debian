@@ -1,7 +1,12 @@
-/*	$NetBSD: msg_281.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_281.c,v 1.5 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_281.c"
 
-// Test for message: duplicate use of /* %s */ [281]
+// Test for message: duplicate comment /* %s */ [281]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+/* expect+1: warning: duplicate comment ** ARGSUSED ** [281] */
+/* ARGSUSED *//* ARGSUSED */
+void args_used(int x)
+{
+}

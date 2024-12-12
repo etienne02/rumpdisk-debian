@@ -1,4 +1,4 @@
-/*	$NetBSD: ip6_input.c,v 1.224 2021/02/19 14:52:00 christos Exp $	*/
+/*	$NetBSD: ip6_input.c,v 1.228 2024/06/29 13:00:44 riastradh Exp $	*/
 /*	$KAME: ip6_input.c,v 1.188 2001/03/29 05:34:31 itojun Exp $	*/
 
 /*
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip6_input.c,v 1.224 2021/02/19 14:52:00 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip6_input.c,v 1.228 2024/06/29 13:00:44 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_gateway.h"
@@ -182,6 +182,9 @@ ip6_init(void)
 
 	in6_init();
 
+	ip6_pktq = pktq_create(IFQ_MAXLEN, ip6intr, NULL);
+	KASSERT(ip6_pktq != NULL);
+
 	sysctl_net_inet6_ip6_setup(NULL);
 	pr = (const struct ip6protosw *)pffindproto(PF_INET6, IPPROTO_RAW, SOCK_RAW);
 	if (pr == 0)
@@ -193,9 +196,6 @@ ip6_init(void)
 		if (pr->pr_domain->dom_family == PF_INET6 &&
 		    pr->pr_protocol && pr->pr_protocol != IPPROTO_RAW)
 			ip6_protox[pr->pr_protocol] = pr - inet6sw;
-
-	ip6_pktq = pktq_create(IFQ_MAXLEN, ip6intr, NULL);
-	KASSERT(ip6_pktq != NULL);
 
 	scope6_init();
 	addrsel_policy_init();
@@ -421,9 +421,9 @@ ip6_input(struct mbuf *m, struct ifnet *rcvif)
 		if (ingroup) {
 			ours = 1;
 		} else if (!ip6_mrouter) {
-			uint64_t *ip6s = IP6_STAT_GETREF();
-			ip6s[IP6_STAT_NOTMEMBER]++;
-			ip6s[IP6_STAT_CANTFORWARD]++;
+			net_stat_ref_t ip6s = IP6_STAT_GETREF();
+			_NET_STATINC_REF(ip6s, IP6_STAT_NOTMEMBER);
+			_NET_STATINC_REF(ip6s, IP6_STAT_CANTFORWARD);
 			IP6_STAT_PUTREF();
 			in6_ifstat_inc(rcvif, ifs6_in_discard);
 			goto bad_unref;
@@ -1063,12 +1063,12 @@ ip6_unknown_opt(u_int8_t *optp, struct mbuf *m, int off)
 }
 
 void
-ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp, 
+ip6_savecontrol(struct inpcb *inp, struct mbuf **mp, 
 	struct ip6_hdr *ip6, struct mbuf *m)
 {
-	struct socket *so = in6p->in6p_socket;
+	struct socket *so = inp->inp_socket;
 #ifdef RFC2292
-#define IS2292(x, y)	((in6p->in6p_flags & IN6P_RFC2292) ? (x) : (y))
+#define IS2292(x, y)	((inp->inp_flags & IN6P_RFC2292) ? (x) : (y))
 #else
 #define IS2292(x, y)	(y)
 #endif
@@ -1083,7 +1083,7 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 		return;
 
 	/* RFC 2292 sec. 5 */
-	if ((in6p->in6p_flags & IN6P_PKTINFO) != 0) {
+	if ((inp->inp_flags & IN6P_PKTINFO) != 0) {
 		struct in6_pktinfo pi6;
 
 		memcpy(&pi6.ipi6_addr, &ip6->ip6_dst, sizeof(struct in6_addr));
@@ -1095,7 +1095,7 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 			mp = &(*mp)->m_next;
 	}
 
-	if (in6p->in6p_flags & IN6P_HOPLIMIT) {
+	if (inp->inp_flags & IN6P_HOPLIMIT) {
 		int hlim = ip6->ip6_hlim & 0xff;
 
 		*mp = sbcreatecontrol(&hlim, sizeof(hlim),
@@ -1104,7 +1104,7 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 			mp = &(*mp)->m_next;
 	}
 
-	if ((in6p->in6p_flags & IN6P_TCLASS) != 0) {
+	if ((inp->inp_flags & IN6P_TCLASS) != 0) {
 		u_int32_t flowinfo;
 		int tclass;
 
@@ -1126,7 +1126,7 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 	 * returned to normal user.
 	 * See also RFC3542 section 8 (or RFC2292 section 6).
 	 */
-	if ((in6p->in6p_flags & IN6P_HOPOPTS) != 0) {
+	if ((inp->inp_flags & IN6P_HOPOPTS) != 0) {
 		/*
 		 * Check if a hop-by-hop options header is contatined in the
 		 * received packet, and if so, store the options as ancillary
@@ -1170,7 +1170,7 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 	}
 
 	/* IPV6_DSTOPTS and IPV6_RTHDR socket options */
-	if (in6p->in6p_flags & (IN6P_DSTOPTS | IN6P_RTHDR)) {
+	if (inp->inp_flags & (IN6P_DSTOPTS | IN6P_RTHDR)) {
 		struct ip6_hdr *xip6 = mtod(m, struct ip6_hdr *);
 		int nxt = xip6->ip6_nxt, off = sizeof(struct ip6_hdr);
 
@@ -1219,7 +1219,7 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 
 			switch (nxt) {
 			case IPPROTO_DSTOPTS:
-				if (!(in6p->in6p_flags & IN6P_DSTOPTS))
+				if (!(inp->inp_flags & IN6P_DSTOPTS))
 					break;
 
 				*mp = sbcreatecontrol(ip6e, elen,
@@ -1230,7 +1230,7 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 				break;
 
 			case IPPROTO_ROUTING:
-				if (!(in6p->in6p_flags & IN6P_RTHDR))
+				if (!(inp->inp_flags & IN6P_RTHDR))
 					break;
 
 				*mp = sbcreatecontrol(ip6e, elen,
@@ -1271,14 +1271,14 @@ ip6_savecontrol(struct in6pcb *in6p, struct mbuf **mp,
 
 
 void
-ip6_notify_pmtu(struct in6pcb *in6p, const struct sockaddr_in6 *dst,
+ip6_notify_pmtu(struct inpcb *inp, const struct sockaddr_in6 *dst,
     uint32_t *mtu)
 {
 	struct socket *so;
 	struct mbuf *m_mtu;
 	struct ip6_mtuinfo mtuctl;
 
-	so = in6p->in6p_socket;
+	so = inp->inp_socket;
 
 	if (mtu == NULL)
 		return;
@@ -1559,6 +1559,7 @@ sysctl_net_inet6_ip6_stats(SYSCTLFN_ARGS)
 static void
 sysctl_net_inet6_ip6_setup(struct sysctllog **clog)
 {
+	const struct sysctlnode *ip6_node;
 
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT,
@@ -1566,7 +1567,7 @@ sysctl_net_inet6_ip6_setup(struct sysctllog **clog)
 		       SYSCTL_DESCR("PF_INET6 related settings"),
 		       NULL, 0, NULL, 0,
 		       CTL_NET, PF_INET6, CTL_EOL);
-	sysctl_createv(clog, 0, NULL, NULL,
+	sysctl_createv(clog, 0, NULL, &ip6_node,
 		       CTLFLAG_PERMANENT,
 		       CTLTYPE_NODE, "ip6",
 		       SYSCTL_DESCR("IPv6 related settings"),
@@ -1602,6 +1603,9 @@ sysctl_net_inet6_ip6_setup(struct sysctllog **clog)
 		       NULL, 0, &ip6_maxfragpackets, 0,
 		       CTL_NET, PF_INET6, IPPROTO_IPV6,
 		       IPV6CTL_MAXFRAGPACKETS, CTL_EOL);
+
+	pktq_sysctl_setup(ip6_pktq, clog, ip6_node, IPV6CTL_IFQ);
+
 	sysctl_createv(clog, 0, NULL, NULL,
 		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
 		       CTLTYPE_INT, "keepfaith",
@@ -1797,6 +1801,14 @@ sysctl_net_inet6_ip6_setup(struct sysctllog **clog)
 		       SYSCTL_DESCR("Maximum number of routes created via"
 			   " redirect"),
 		       NULL, 1, &ip6_maxdynroutes, 0,
+		       CTL_NET, PF_INET6, IPPROTO_IPV6,
+		       CTL_CREATE, CTL_EOL);
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
+		       CTLTYPE_INT, "param_rt_msg",
+		       SYSCTL_DESCR("How to send parameter changing"
+			   " routing message"),
+		       NULL, 0, &ip6_param_rt_msg, 0,
 		       CTL_NET, PF_INET6, IPPROTO_IPV6,
 		       CTL_CREATE, CTL_EOL);
 }

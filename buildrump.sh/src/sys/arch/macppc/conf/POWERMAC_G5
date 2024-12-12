@@ -63,6 +63,7 @@ options         DKWEDGE_METHOD_GPT      # Supports GPT partitions as wedges
 #options	DKWEDGE_METHOD_MBR      # Support MBR partitions as wedges
 #options	DKWEDGE_METHOD_APPLE    # Support Apple partitions as wedges
 #options 	DKWEDGE_METHOD_RDB	# Support RDB partitions as wedges
+#options 	DKWEDGE_METHOD_TOS	# Support Atari "TOS" partitions as wedges
 
 # File systems
 file-system 	FFS		# UFS
@@ -77,17 +78,16 @@ file-system	PTYFS		# /dev/pts/N support
 #file-system	HFS		# experimental - Apple HFS+ (read-only)
 
 # File system options
+#options 	APPLE_UFS	# Apple UFS support in FFS
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independant support
-options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-#options 	NFSSERVER	# Network File System server
-#options 	FFS_NO_SNAPSHOT	# ffs snapshots
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 #options 	UFS_EXTATTR	# Extended attribute support for UFS1
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
-#options 	APPLE_UFS	# Apple UFS support in FFS
+options 	WAPBL		# File system journaling support
+#options 	NFSSERVER	# Network File System server
+
 # Networking options
 #options 	GATEWAY		# packet forwarding
 options 	INET		# IP + ICMP + TCP + UDP
@@ -102,7 +102,9 @@ options 	INET6		# IPV6
 # wscons options
 #options 	WSEMUL_SUN			# sun terminal emulation
 options 	WSEMUL_VT100			# VT100 / VT220 emulation
-#options 	WSDISPLAY_COMPAT_USL		# wsconscfg VT handling
+options 	WSDISPLAY_COMPAT_PCVT		# emulate some ioctls
+options 	WSDISPLAY_COMPAT_SYSCONS	# emulate some ioctls
+options 	WSDISPLAY_COMPAT_USL		# wsconscfg VT handling
 #options 	WSDISPLAY_COMPAT_RAWKBD		# can get raw scancodes
 options 	WS_DEFAULT_FG=WSCOL_BLACK
 options 	WS_DEFAULT_BG=WSCOL_LIGHT_WHITE
@@ -156,6 +158,8 @@ adadc* 		at iic?
 fcu* 		at iic?
 smusat* 	at iic?
 deq* 		at iic?
+
+obiofan* 	at obio?	# PSU fan on PowerMac7,3
 
 pmu* 		at obio?	# Apple PMU
 
@@ -226,8 +230,8 @@ sd*	at atapibus? drive ? flags 0x0000	# ATAPI disk drives
 uk*	at atapibus? drive ? flags 0x0000	# ATAPI unknown
 
 
-#pseudo-device 	crypto			# opencrypto framework
-					# (disabled, requires generic softints)
+pseudo-device 	crypto			# /dev/crypto device
+pseudo-device	swcrypto		# software crypto implementation
 pseudo-device	vnd			# disk-like interface to files
 #pseudo-device	md			# memory disk device
 pseudo-device	loop			# network loopback
@@ -245,3 +249,6 @@ pseudo-device	bpfilter		# packet filter
 #options 	MEMORY_DISK_IS_ROOT		# Force root on ram-disk
 #options 	MEMORY_DISK_ROOT_SIZE=4096	# 2 Megabytes
 #options 	MEMORY_DISK_RBFLAGS=RB_SINGLE	# boot in single-user mode
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/macppc/conf/POWERMAC_G5.local"

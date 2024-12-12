@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.62 2019/11/23 19:40:37 ad Exp $	*/
+/*	$NetBSD: cpu.h,v 1.67 2024/01/20 00:15:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -42,7 +42,6 @@
 #define	_X68K_CPU_H_
 
 #if defined(_KERNEL_OPT)
-#include "opt_m68k_arch.h"
 #include "opt_lockdebug.h"
 #endif
 
@@ -52,64 +51,6 @@
 #include <m68k/cpu.h>
 
 #if defined(_KERNEL)
-/*
- * Exported definitions unique to x68k/68k cpu support.
- */
-#define	M68K_MMU_MOTOROLA
-
-/*
- * Get interrupt glue.
- */
-#include <machine/intr.h>
-
-/*
- * Arguments to hardclock and gatherstats encapsulate the previous
- * machine state in an opaque clockframe.  On the x68k, we use
- * what the hardware pushes on an interrupt (frame format 0).
- */
-struct clockframe {
-	u_short	sr;		/* sr at time of interrupt */
-	u_long	pc;		/* pc at time of interrupt */
-	u_short	vo;		/* vector offset (4-word frame) */
-};
-
-#define	CLKF_USERMODE(framep)	(((framep)->sr & PSL_S) == 0)
-#define	CLKF_PC(framep)		((framep)->pc)
-#if 0
-/* We would like to do it this way... */
-#define	CLKF_INTR(framep)	(((framep)->sr & PSL_M) == 0)
-#else
-/* but until we start using PSL_M, we have to do this instead */
-#define	CLKF_INTR(framep)	(0)	/* XXX */
-#endif
-
-
-/*
- * Preempt the current process if in interrupt from user mode,
- * or after the current trap/syscall if in system mode.
- */
-#define	cpu_need_resched(ci,l,flags)	do {	\
-	__USE(flags); 				\
-	aston();				\
-} while (/*CONSTCOND*/0)
-
-/*
- * Give a profiling tick to the current process when the user profiling
- * buffer pages are invalid.  On the x68k, request an ast to send us
- * through trap, marking the proc as needing a profiling tick.
- */
-#define	cpu_need_proftick(l)	\
-	do { (l)->l_pflag |= LP_OWEUPC; aston(); } while (/* CONSTCOND */ 0)
-
-/*
- * Notify the current process (p) that it has a signal pending,
- * process as soon as possible.
- */
-#define	cpu_signotify(l)	aston()
-
-extern int astpending;		/* need to trap before returning to user mode */
-#define aston() (astpending++)
-
 /*
  * The rest of this should probably be moved to <machine/x68kcpu.h>
  * although some of it could probably be put into generic 68k headers.
@@ -121,14 +62,11 @@ extern uint8_t *intiolimit;
 /* machdep.c functions */
 void	dumpsys(void);
 
-/* locore.s functions */
-void	loadustp(int);
-
 /* machdep.c functions */
 int	badaddr(volatile void*);
 int	badbaddr(volatile void*);
 
-#endif
+#endif /* _KERNEL */
 
 /* physical memory sections */
 #define INTIOBASE	(0x00C00000)

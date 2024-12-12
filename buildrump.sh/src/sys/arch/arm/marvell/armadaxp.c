@@ -1,4 +1,4 @@
-/*	$NetBSD: armadaxp.c,v 1.24 2021/08/30 00:04:30 rin Exp $	*/
+/*	$NetBSD: armadaxp.c,v 1.26 2022/06/25 12:41:56 jmcneill Exp $	*/
 /*******************************************************************************
 Copyright (C) Marvell International Ltd. and its affiliates
 
@@ -37,7 +37,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 *******************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: armadaxp.c,v 1.24 2021/08/30 00:04:30 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: armadaxp.c,v 1.26 2022/06/25 12:41:56 jmcneill Exp $");
 
 #define _INTR_PRIVATE
 
@@ -656,10 +656,18 @@ armadaxp_pic_set_priority(struct pic_softc *pic, int ipl)
 {
 	int ctp;
 
+	register_t psw = DISABLE_INTERRUPT_SAVE();
+
 	ctp = MPIC_CPU_READ(ARMADAXP_MLMB_MPIC_CTP);
 	ctp &= ~(0xf << MPIC_CTP_SHIFT);
 	ctp |= (ipl << MPIC_CTP_SHIFT);
 	MPIC_CPU_WRITE(ARMADAXP_MLMB_MPIC_CTP, ctp);
+
+	curcpu()->ci_cpl = ipl;
+
+	if ((psw & I32_bit) == 0) {
+		ENABLE_INTERRUPT();
+	}
 }
 
 static void
@@ -1149,7 +1157,7 @@ armadaxp_init_mbus(void)
 		reg |= MVSOC_MLMB_WCR_TARGET(def->target);
 		reg |= MVSOC_MLMB_WCR_ATTR(def->attr);
 #ifdef AURORA_IO_CACHE_COHERENCY
-		reg |= MVSOC_MLMB_WCR_SYNC; /* enbale I/O coherency barrior */
+		reg |= MVSOC_MLMB_WCR_SYNC; /* enable I/O coherency barrier */
 #endif
 		reg |= MVSOC_MLMB_WCR_WINEN;
 		write_mlmbreg(MVSOC_MLMB_WCR(def->window), reg);

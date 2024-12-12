@@ -1,4 +1,4 @@
-/*	$NetBSD: file.h,v 1.2 2014/03/18 18:20:43 riastradh Exp $	*/
+/*	$NetBSD: file.h,v 1.7 2021/12/19 10:39:06 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -31,5 +31,48 @@
 
 #ifndef _LINUX_FILE_H_
 #define _LINUX_FILE_H_
+
+#include <sys/param.h>
+#include <sys/file.h>
+#include <sys/filedesc.h>
+#include <sys/proc.h>
+
+struct file;
+
+struct fd {
+	struct file	*file;
+	int		fd_number;
+};
+
+static inline struct fd
+fdget(int number)
+{
+	struct fd fd;
+
+	fd.file = fd_getfile(number);
+	fd.fd_number = number;
+
+	return fd;
+}
+
+static inline void
+fdput(struct fd fd)
+{
+
+	fd_putfile(fd.fd_number);
+}
+
+/* fget translates; fput(fp) doesn't because we have fd_putfile(fd).  */
+static inline struct file *
+fget(int fd)
+{
+	return fd_getfile(fd);
+}
+
+static inline void
+fd_install(int fd, struct file *fp)
+{
+	fd_affix(curproc, fp, fd);
+}
 
 #endif  /* _LINUX_FILE_H_ */

@@ -1,31 +1,43 @@
-/*	$NetBSD: msg_021.c,v 1.2 2021/01/31 09:48:47 rillig Exp $	*/
+/*	$NetBSD: msg_021.c,v 1.7 2024/12/01 18:37:54 rillig Exp $	*/
 # 3 "msg_021.c"
 
-// Test for message: redeclaration of formal parameter %s [21]
+// Test for message: redeclaration of formal parameter '%s' [21]
+
+/* See also message 237, which has the same text. */
+
+/* lint1-extra-flags: -X 351 */
 
 /*ARGSUSED*/
 void
-old_style_with_duplicate_parameter(parameter, parameter) /* expect: 21 */
+/* expect+2: error: redeclaration of formal parameter 'parameter' [21] */
+/* expect+1: warning: function definition with identifier list is obsolete in C23 [384] */
+old_style_with_duplicate_parameter(parameter, parameter)
     int parameter;
-{				/* expect: 32 */
+{
+	/* expect-1: warning: type of parameter 'parameter' defaults to 'int' [32] */
 }
 
 void
+/* expect+1: warning: function definition with identifier list is obsolete in C23 [384] */
 old_style_with_duplicate_parameter_declaration(parameter)
     int parameter;
-    int parameter;		/* expect: 237 */
+    /* expect+1: error: redeclaration of formal parameter 'parameter' [237] */
+    int parameter;
 {
 }
 
+/* expect+1: warning: function definition with identifier list is obsolete in C23 [384] */
 void old_style_with_local_variable(parameter)
     int parameter;
 {
-	int parameter;		/* expect: 27 */
+	/* expect+1: error: redeclaration of 'parameter' [27] */
+	int parameter;
 }
 
 /*ARGSUSED*/
 void
-prototype_with_duplicate_parameter(int param, int param) /* expect: 237 */
+/* expect+1: error: redeclaration of formal parameter 'param' [237] */
+prototype_with_duplicate_parameter(int param, int param)
 {
 
 }
@@ -33,5 +45,6 @@ prototype_with_duplicate_parameter(int param, int param) /* expect: 237 */
 void
 prototype_with_local_variable(int parameter)
 {
-	int parameter;		/* expect: 27 */
+	/* expect+1: error: redeclaration of 'parameter' [27] */
+	int parameter;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: ralink_gpio.c,v 1.11 2021/08/07 16:18:59 thorpej Exp $	*/
+/*	$NetBSD: ralink_gpio.c,v 1.14 2022/02/12 15:51:29 thorpej Exp $	*/
 /*-
  * Copyright (c) 2011 CradlePoint Technology, Inc.
  * All rights reserved.
@@ -29,7 +29,7 @@
 /* ra_gpio.c -- Ralink 3052 gpio driver */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ralink_gpio.c,v 1.11 2021/08/07 16:18:59 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ralink_gpio.c,v 1.14 2022/02/12 15:51:29 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -495,7 +495,7 @@ static int  gpio_event_app_user_event(struct knote *, long);
 static struct klist knotes;
 static int app_filter_id;
 static struct filterops app_fops = {
-	.f_isfd = 0,
+	.f_flags = 0,
 	.f_attach = gpio_event_app_user_attach,
 	.f_detach = gpio_event_app_user_detach,
 	.f_event = gpio_event_app_user_event,
@@ -660,7 +660,7 @@ ra_gpio_attach(device_t parent, device_t self, void *aux)
 		goto fail_3;
 	}
 
-	SLIST_INIT(&knotes);
+	klist_init(&knotes);
 	if (kfilter_register("CP_GPIO_EVENT", &app_fops, &app_filter_id) != 0) {
 		RALINK_DEBUG(RALINK_DEBUG_ERROR,
 			"%s: kfilter_register for CP_GPIO_EVENT failed\n",
@@ -900,7 +900,7 @@ ra_gpio_pin_read(void *arg, int pin)
 		 * then warn and return 0
 		 */
 		const int index = pin_tab_index[pin];
-		KASSERTMSG(index != -1, "%s: non-existant pin=%d\n",
+		KASSERTMSG(index != -1, "%s: non-existent pin=%d\n",
 			__func__, pin);
 		if (index == -1) {
 			rv = 0;
@@ -1001,7 +1001,7 @@ ra_gpio_pin_write(void *arg, int pin, int value)
 	 * then warn and return
 	 */
 	const int index = pin_tab_index[pin];
-	KASSERTMSG(index != -1, "%s: non-existant pin=%d\n", __func__, pin);
+	KASSERTMSG(index != -1, "%s: non-existent pin=%d\n", __func__, pin);
 	if (index == -1)
 		return;
 
@@ -1432,7 +1432,7 @@ disable_gpio_interrupt(ra_gpio_softc_t *sc, int pin)
 {
 	RALINK_DEBUG_FUNC_ENTRY();
 	const int index = pin_tab_index[pin];
-	KASSERTMSG(index != -1, "%s: non-existant pin=%d\n", __func__, pin);
+	KASSERTMSG(index != -1, "%s: non-existent pin=%d\n", __func__, pin);
 	if (index == -1)
 		return;
 
@@ -1456,7 +1456,7 @@ static void
 enable_gpio_interrupt(ra_gpio_softc_t *sc, int pin)
 {
 	const int index = pin_tab_index[pin];
-	KASSERTMSG(index != -1, "%s: non-existant pin=%d\n", __func__, pin);
+	KASSERTMSG(index != -1, "%s: non-existent pin=%d\n", __func__, pin);
 	if (index == -1)
 		return;
 
@@ -1514,7 +1514,7 @@ gpio_event_app_user_attach(struct knote *kn)
 	}
 
 	kn->kn_flags |= EV_CLEAR;	/* automatically set */
-	SLIST_INSERT_HEAD(&knotes, kn, kn_selnext);
+	klist_insert(&knotes, kn);
 
 	return 0;
 }
@@ -1530,7 +1530,7 @@ gpio_event_app_user_detach(struct knote *kn)
 		RALINK_DEBUG(RALINK_DEBUG_ERROR, "Null kn found\n");
 		return;
 	}
-	SLIST_REMOVE(&knotes, kn, knote, kn_selnext);
+	klist_remove(&knotes, kn);
 }
 
 /*

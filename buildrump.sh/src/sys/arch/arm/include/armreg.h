@@ -1,4 +1,4 @@
-/*	$NetBSD: armreg.h,v 1.130 2021/01/31 06:18:50 skrll Exp $	*/
+/*	$NetBSD: armreg.h,v 1.136 2022/12/03 20:24:21 ryo Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Ben Harris
@@ -270,7 +270,7 @@
 #define	MPCORE_AUXCTL_EX	0x00000010 /* exclusive L1/L2 cache */
 #define	MPCORE_AUXCTL_SA	0x00000020 /* SMP/AMP */
 
-/* Marvell PJ4B Auxillary Control Register (CP15.0.R1.c0.1) */
+/* Marvell PJ4B Auxiliary Control Register (CP15.0.R1.c0.1) */
 #define PJ4B_AUXCTL_FW		__BIT(0)   /* Cache and TLB updates broadcast */
 #define PJ4B_AUXCTL_SMPNAMP	__BIT(6)   /* 0 = AMP, 1 = SMP */
 #define PJ4B_AUXCTL_L1PARITY	__BIT(9)   /* L1 parity checking */
@@ -311,6 +311,12 @@
 #define	CORTEXA15_ACTLR_SMP	__BIT(6)  /* SMP */
 #define	CORTEXA15_ACTLR_IOBEU	__BIT(15) /* In order issue in Branch Exec Unit */
 #define	CORTEXA15_ACTLR_SDEH	__BIT(31) /* snoop-delayed exclusive handling */
+
+/* Cortex-A17 Auxiliary Control Register (CP15 register 1, opcode 1) */
+#define	CORTEXA17_ACTLR_SMP	__BIT(6)  /* SMP */
+#define	CORTEXA17_ACTLR_ASSE	__BIT(3)  /* ACE STREX Signaling Enable */
+#define	CORTEXA17_ACTLR_L2PF	__BIT(2)  /* Enable L2 prefetch */
+#define	CORTEXA17_ACTLR_L1PF	__BIT(1)  /* Enable L1 prefetch */
 
 /* Marvell Feroceon Extra Features Register (CP15 register 1, opcode2 0) */
 #define FC_DCACHE_REPL_LOCK	0x80000000 /* Replace DCache Lock */
@@ -479,6 +485,26 @@
 #define	ARM11_PMCEVT_RETURN_MISS	38	/* return addr. mispredicted */
 #define	ARM11_PMCEVT_CYCLE		255	/* Increment each cycle */
 
+/* ARMv7 PMCR, Performance Monitor Control Register */
+#define	PMCR_N			__BITS(15,11)
+#define	PMCR_D			__BIT(3)
+#define	PMCR_E			__BIT(0)
+
+/* ARMv7 INTEN{SET,CLR}, Performance Monitors Interrupt Enable Set register */
+#define	PMINTEN_C		__BIT(31)
+#define	PMINTEN_P		__BITS(30,0)
+#define	PMCNTEN_C		__BIT(31)
+#define	PMCNTEN_P		__BITS(30,0)
+
+/* ARMv7 PMOVSR, Performance Monitors Overflow Flag Status Register */
+#define	PMOVS_C			__BIT(31)
+#define	PMOVS_P			__BITS(30,0)
+
+/* ARMv7 PMXEVTYPER, Performance Monitors Event Type Select Register */
+#define	PMEVTYPER_P		__BIT(31)
+#define	PMEVTYPER_U		__BIT(30)
+#define	PMEVTYPER_EVTCOUNT	__BITS(7,0)
+
 /* Defines for ARM CORTEX performance counters */
 #define CORTEX_CNTENS_C __BIT(31)	/* Enables the cycle counter */
 #define CORTEX_CNTENC_C __BIT(31)	/* Disables the cycle counter */
@@ -538,9 +564,10 @@
 #define PRRR_TR_STRONG	0		// Strongly Ordered
 #define PRRR_TR_DEVICE	1		// Device
 #define PRRR_TR_NORMAL	2		// Normal Memory
+					// 3 is reserved
 
 /* ARMv7 MPIDR, Multiprocessor Affinity Register generic format  */
-#define MPIDR_MP		__BIT(31)	/* 1 = Have MP Extention */
+#define MPIDR_MP		__BIT(31)	/* 1 = Have MP Extension */
 #define MPIDR_U			__BIT(30)	/* 1 = Uni-Processor System */
 #define MPIDR_MT		__BIT(24)	/* 1 = SMT(AFF0 is logical) */
 #define MPIDR_AFF2		__BITS(23,16)	/* Affinity Level 2 */
@@ -909,7 +936,16 @@ ARMREG_WRITE64_INLINE(cntv_cval, "p15,3,%Q0,%R0,c14") /* PL1 Virtual Timer Compa
 ARMREG_READ64_INLINE(cntvoff, "p15,4,%Q0,%R0,c14") /* Virtual Offset Register */
 ARMREG_WRITE64_INLINE(cntvoff, "p15,4,%Q0,%R0,c14") /* Virtual Offset Register */
 /* cp15 c15 registers */
+/* Cortex A17 Diagnostic control registers */
+ARMREG_READ_INLINE(dgnctlr0, "p15,0,%0,c15,c0,0")	/* DGNCTLR0 */
+ARMREG_WRITE_INLINE(dgnctlr0, "p15,0,%0,c15,c0,0")	/* DGNCTLR0 */
+ARMREG_READ_INLINE(dgnctlr1, "p15,0,%0,c15,c0,1")	/* DGNCTLR1 */
+ARMREG_WRITE_INLINE(dgnctlr1, "p15,0,%0,c15,c0,1")	/* DGNCTLR1 */
+ARMREG_READ_INLINE(dgnctlr2, "p15,0,%0,c15,c0,2")	/* DGNCTLR2 */
+ARMREG_WRITE_INLINE(dgnctlr2, "p15,0,%0,c15,c0,2")	/* DGNCTLR2 */
+
 ARMREG_READ_INLINE(cbar, "p15,4,%0,c15,c0,0")	/* Configuration Base Address Register */
+
 ARMREG_READ_INLINE(pmcrv6, "p15,0,%0,c15,c12,0") /* PMC Control Register (armv6) */
 ARMREG_WRITE_INLINE(pmcrv6, "p15,0,%0,c15,c12,0") /* PMC Control Register (armv6) */
 ARMREG_READ_INLINE(pmccntrv6, "p15,0,%0,c15,c12,1") /* PMC Cycle Counter (armv6) */

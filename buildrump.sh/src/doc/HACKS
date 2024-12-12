@@ -1,4 +1,4 @@
-# $NetBSD: HACKS,v 1.224 2021/07/16 10:02:50 rin Exp $
+# $NetBSD: HACKS,v 1.247 2024/09/23 07:35:44 rin Exp $
 #
 # This file is intended to document workarounds for currently unsolved
 # (mostly) compiler bugs.
@@ -422,6 +422,14 @@ kcah
 
 port	vax
 
+	hack	gcc10/vax ICE
+	cdate	Sun Jan 22 15:37:56 EST 2023
+	who	christos
+	file	external/mit/xorg/lib/fontconfig/src/Makefile : 1.28
+	descr
+		Disable optimization on some files
+	kcah
+
 	hack	gcc4/vax ICE
 	cdate	Sat Dec 22 08:17:57 2007 UTC
 	who	tsutsui
@@ -583,6 +591,23 @@ port	vax
 		Besides, some clients, e.g., pkgsrc/x11/kterm, receive SIGSEGV.
 	kcah
 
+	hack	gomoku compiler crash
+	date	Tue May 31 15:11:39 EDT 2022
+	who	christos
+	file	src/games/gomoku/Makefile : 1.12
+	descr
+		pickmove.c crashes with -O2, warns about ovi.o_intersect being
+		uninitialized with -O1, works with -O0
+	kcah
+
+	hack	gdtoa/misc.c miscompile
+	cdate	Sun Dec  4 22:27:26 UTC 2022
+	who	jakllsch
+	file	src/lib/libc/gdtoa/Makefile.inc : 1.11
+	descr
+		some doubles print as garbage if gdtoa/misc.c isn't compiled at -O0
+	kcah
+
 port	arm
 
 	hack	gcc-unsigned-compare
@@ -720,6 +745,16 @@ port	mips
 		assembler warning on MIPS:
 			Warning: No .cprestore pseudo-op used in PIC code
 		Add COPTS.count.c+=-Wa,--no-warn to avoid -Wa,--fatal-warnings
+	kcah
+
+	hack	mips-use-binutils-old
+	cdate	Sun May  7 14:28:55 CEST 2023
+	who	martin
+	file	src/share/mk/bsd.own.mk : 1.1311, 1.1308
+	descr
+		Use binutils.old for 64bit mips with 32bit userland.
+		Version 2.39 causes random (cross-) build failures
+		that are hard to reproduce or analyze.
 	kcah
 
 port	i386
@@ -965,9 +1000,9 @@ descr	Disable optimization on tc.c, logerr.c, ubsan.c crashes:
 kcah
 
 port	m68k
-hack	compile aes_ccm_tag() with -O0 for GCC8 and GCC9
+hack	compile aes_ccm_tag() with -O0
 cdate	Mon Aug 10 06:27:29 UTC 2020
-mdate	Mon Oct  5 22:00:00 JST 2020
+mdate	Wed Aug 10 00:00:00 UTC 2022
 who	rin
 file	src/sys/crypto/aes/aes_ccm.c: 1.5
 descr	GCC 9.4 and 8.3 miscompile aes_ccm_tag() for m68k with optimization
@@ -975,6 +1010,7 @@ descr	GCC 9.4 and 8.3 miscompile aes_ccm_tag() for m68k with optimization
 	For 9.4, -O0 and -O1 work but -O2 fails for amiga (A1200, 68060) and
 	mac68k (Quadra 840AV, 68040). Whereas -O0 and -O2 work but -O1 fails
 	for sun3 (TME, 68020 emulator) and sun2 (TME, 68010 emulator).
+	aes_ccm_selftest() still fails with GCC 10.4 and -O2.
 kcah
 
 port	sh3
@@ -998,15 +1034,137 @@ port	sh3
 		https://gcc.gnu.org/bugzilla/show_bug.cgi?id=101177
 kcah
 
-port	sh3
-hack	compile lint1/initdecl() with -O0 for sh3 (port-sh3/56311)
-cdate	Thu Jul 15 07:58:05 UTC 2021
-mdate	Fri Jul 16 10:00:00 UTC 2021
+port	vax
+hack	compile blake2b.c with -O0 for vax
+cdate	Wed Oct 13 14:28:32 UTC 2021
+mdate	Wed Oct 13 14:28:32 UTC 2021
+who	nia
+file	src/lib/libcrypt/Makefile: 1.200
+descr	GCC 10 fails to build blake2b.c with an internal compiler
+	error unless optimization is disabled.
+kcah
+
+port	arm
+hack	compile t_sig_backtrace with -fno-omit-frame-pointer for arm
+cdate	Tue Nov 23 23:24:37 UTC 2021
+mdate	Tue Nov 23 23:24:37 UTC 2021
+who	thorpej
+file	src/tests/lib/libexecinfo/Makefile: 1.8
+file	src/tests/lib/libexecinfo/t_sig_backtrace: 1.2
+descr	Unit test fails to pass unless t_sig_backtrace.c is compiled
+	with -fno-omit-frame-pointer and -DNOINLINE_HACK.
+kcah
+
+hack	alpha gcc error in lint
+cdate	2022/04/10 13:21:34
+who	martin
+port	alpha, vax
+file	usr.bin/xlint/Makefile.inc: 1.23, 1.25
+pr	56789
+descr
+	Compiling lint with -ftrapv fails with an internal
+	gcc compiler error.
+
+	https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105209
+
+	Supposedly fixed in gcc 11 or newer.
+kcah
+
+hack	compile copy{in,out}() for ibm4xx with -O0 for clang
+cdate	Mon Sep 12 08:06:36 UTC 2022
 who	rin
-file	src/usr.bin/xlint/lint1/decl.c: 1.200
-descr	GCC 9 and 10 miscompile initdecl() due to mischoice of register,
-	as described in the PR. Compiling this function with -O0 works
-	around the problem.
-	The problem has been reported to upstream as GCC Bug 101469:
-	https://gcc.gnu.org/bugzilla/show_bug.cgi?id=101469
+port	evbppc
+file	sys/arch/powerpc/ibm4xx/trap.c: 1.99
+descr
+	clang 13.0.0 miscompiles copy{in,out}() with -O[12]. As a result,
+	kernel cannot execute /sbin/init.
+kcah
+
+hack	Disable secure PLT for alpha
+cdate	Fri Jul  7 08:33:25 UTC 2023
+who	rin
+port	alpha
+file	src/external/gpl3/binutils/dist/bfd/elf64-alpha.c: 1.11
+pr	port-alpha/57511
+descr
+	Temporally disable secure PLT support, introduced by
+	binutils 2.39 for us. We need its support to ld.elf_so(1).
+kcah
+
+hack	openssl: Disable ec_nistp_64_gcc_128 on aarch64eb
+cdate	Sat Jul  8 23:54:27 UTC 2023
+who	rin
+port	aarch64eb
+file	src/crypto/external/bsd/openssl/lib/libcrypto/arch/aarch64/ec.inc : 1.4
+descr
+	As described in upstream document:
+	https://github.com/openssl/openssl/blob/master/INSTALL.md#enable-ec_nistp_64_gcc_128
+	This feature (for LP64) does not support big-endian machines.
+	Note that sparc64 does not use this (port-sparc64/57472).
+kcah
+
+hack	GCC: Disable "-Warray-bounds" for x86 curcpu() and curlwp()
+cdate	Mon Sep  4 13:59:32 PDT 2023
+who	mrg
+port	i386 amd64
+file	src/sys/arch/amd64/include/cpu.h : 1.71
+file	src/sys/arch/i386/include/cpu.h : 1.184
+descr
+	These functions trigger eg:
+	./machine/cpu.h:57:9: error: array subscript 0 is outside array bounds of 'struct cpu_info * const[0]' [-Werror=array-bounds]
+	   56 |         __asm("movq %%gs:%1, %0" :
+	and can't easily be worked around.
+kcah
+
+hack	ctfconvert/gcc: disable gcc dwarf-4 generation
+cdate	Thu Apr  4 19:51:05 EDT 2024
+who	christos
+file	src/external/mit/xorg/lib/gallium.old/Makefile : 1.9
+descr
+	Some files create dwarf info that our ctfmerge can't handle.
+	We downgrade dwarf generation to version 3 which works.
+kcah
+
+hack	ia64: work around feclearexcept/fetestexcept compiler bug
+cdate	Sun May  5 23:06:10 UTC 2024
+who	riastradh
+file	tests/lib/libm/t_fe_round.c
+descr
+	Without judiciously placed __insn_barrier, we get:
+	/tmp//ccJayu9g.s:2793: Warning: Use of 'mov.m' violates RAW dependency 'AR[FPSR].sf0.flags' (impliedf)
+	/tmp//ccJayu9g.s:2793: Warning: Only the first path encountering the conflict is reported
+	/tmp//ccJayu9g.s:2757: Warning: This is the location of the conflicting usage
+kcah
+
+hack	m68k: work around stack protector m68k compiler bug
+cdate	Thu Jun  6 15:53:21 PDT 2024
+udate	Sat Aug 17 15:18:30 UTC 2024
+port	m68k
+who	mrg, rin
+file	lib/libc/stdlib/strsuftoll.c : 1.10
+file	lib/libc/citrus/citrus_module.c : 1.14
+file	crypto/external/bsd/openssl/lib/libcrypto/blake2.inc : 1.3
+file	crypto/external/bsd/openssl/lib/libcrypto/sha.inc : 1.8
+file	external/mit/xorg/lib/freetype/Makefile : 1.26
+file	external/mit/xorg/lib/gallium/Makefile : 1.56
+descr
+	With GCC 12, strsuftoll() triggers an stack protector issue
+	that does not appear to be valid.  _citrus_find_getops() does
+	the same.  They both have minimal stack usage themselves and
+	I suspect a GCC bug.
+	Other cases are less well studied.
+kcah
+
+hack	gcc: work around alignment limitations in ld.elf_so
+cdate	Mon Jun 17 23:35:52 UTC 2024
+who	riastradh
+file	external/gpl3/gcc/dist/libsanitizer/tsan/tsan_interceptors_posix.cpp : 1.4
+file	src/external/gpl3/gcc/dist/libsanitizer/tsan/tsan_rtl.cpp : 1.4
+file	external/gpl3/gcc/dist/libsanitizer/tsan/tsan_rtl.h : 1.5
+descr
+	ld.elf_so only supports 2*pointer-aligned objects (typically
+	8- or 16-byte) in thread-local storage, but tsan expects
+	cacheline-aligned objects (typically >=64-byte).  To work
+	around this, allocate n + 63 bytes and pick whichever pointer
+	in that interval is aligned (PR lib/58349).
 kcah

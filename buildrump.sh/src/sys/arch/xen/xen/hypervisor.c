@@ -1,4 +1,4 @@
-/* $NetBSD: hypervisor.c,v 1.92 2021/08/07 16:19:08 thorpej Exp $ */
+/* $NetBSD: hypervisor.c,v 1.98 2024/12/06 10:53:42 bouyer Exp $ */
 
 /*
  * Copyright (c) 2005 Manuel Bouyer.
@@ -53,7 +53,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hypervisor.c,v 1.92 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hypervisor.c,v 1.98 2024/12/06 10:53:42 bouyer Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -63,6 +63,7 @@ __KERNEL_RCSID(0, "$NetBSD: hypervisor.c,v 1.92 2021/08/07 16:19:08 thorpej Exp 
 #include "xenbus.h"
 #include "xencons.h"
 #include "isa.h"
+#include "isadma.h"
 #include "pci.h"
 #include "acpica.h"
 #include "kernfs.h"
@@ -74,6 +75,7 @@ __KERNEL_RCSID(0, "$NetBSD: hypervisor.c,v 1.92 2021/08/07 16:19:08 thorpej Exp 
 #include <xen/hypervisor.h>
 #include <xen/evtchn.h>
 #include <xen/include/public/version.h>
+#include <xen/include/public/vcpu.h>
 #include <x86/pio.h>
 #include <x86/machdep.h>
 
@@ -169,7 +171,6 @@ struct  x86_isa_chipset x86_isa_chipset;
 #include <xen/include/public/arch-x86/hvm/start_info.h>
 #include <xen/include/public/hvm/hvm_op.h>
 #include <xen/include/public/hvm/params.h>
-#include <xen/include/public/vcpu.h>
 
 #include <x86/bootinfo.h>
 
@@ -240,10 +241,25 @@ void
 init_xen_early(void)
 {
 	const char *cmd_line;
+	if (!vm_guest_is_pvh())
+		return;
+
+	hvm_start_info = (void *)((uintptr_t)hvm_start_paddr + KERNBASE);
+
+	if (hvm_start_info->cmdline_paddr != 0) {
+		cmd_line =
+		    (void *)((uintptr_t)hvm_start_info->cmdline_paddr + KERNBASE);
+		strlcpy(xen_start_info.cmd_line, cmd_line,
+		    sizeof(xen_start_info.cmd_line));
+	} else {
+		xen_start_info.cmd_line[0] = '\0';
+	}
+	xen_start_info.flags = hvm_start_info->flags;
+
 	if (vm_guest != VM_GUEST_XENPVH)
 		return;
+
 	xen_init_hypercall_page();
-	hvm_start_info = (void *)((uintptr_t)hvm_start_paddr + KERNBASE);
 
 	HYPERVISOR_shared_info = (void *)((uintptr_t)HYPERVISOR_shared_info_pa + KERNBASE);
 	struct xen_add_to_physmap xmap = {
@@ -261,15 +277,6 @@ init_xen_early(void)
 	}
 	delay_func = x86_delay = xen_delay;
 	x86_initclock_func = xen_initclocks;
-	if (hvm_start_info->cmdline_paddr != 0) {
-		cmd_line =
-		    (void *)((uintptr_t)hvm_start_info->cmdline_paddr + KERNBASE);
-		strlcpy(xen_start_info.cmd_line, cmd_line,
-		    sizeof(xen_start_info.cmd_line));
-	} else {
-		xen_start_info.cmd_line[0] = '\0';
-	}
-	xen_start_info.flags = hvm_start_info->flags;
 }
 
 
@@ -441,7 +448,7 @@ xen_hvm_init(void)
 	/*
 	 * PR port-amd64/55543
 	 * workround for amazon's Xen 4.2: it looks like the Xen clock is not
-	 * fully funtionnal here. This version also doesn't support
+	 * fully functional here. This version also doesn't support
 	 * HVM_PARAM_CONSOLE_PFN. 
 	 */
 	if (xencons_interface != 0) {
@@ -476,7 +483,7 @@ xen_hvm_init_cpu(struct cpu_info *ci)
 		ci->ci_vcpuid = ci->ci_acpiid;
 	}
 
-	ci->ci_vcpu = &HYPERVISOR_shared_info->vcpu_info[ci->ci_vcpuid];
+	xen_map_vcpu(ci);
 
 	/* Register event callback handler. */
 
@@ -689,6 +696,14 @@ hypervisor_attach(device_t parent, device_t self, void *aux)
 
 #if defined(DOM0OPS)
 #if defined(XENPV)
+#if NISADMA > 0 && NACPICA > 0
+        /*
+	 * ACPI needs ISA DMA initialized before they start probing.
+	 */
+	isa_dmainit(&x86_isa_chipset, x86_bus_space_io, &isa_bus_dma_tag,
+	    self);
+#endif
+
 #if NPCI > 0
 #if NACPICA > 0
 	if (acpi_present) {
@@ -813,4 +828,50 @@ xenkernfs_init(void)
 	kernfs_addentry(NULL, dkt);
 	kernxen_pkt = KERNFS_ENTOPARENTDIR(dkt);
 #endif
+}
+
+/*
+ * setup Xen's vcpu_info. requires ci_vcpuid to be initialized.
+ */
+void
+xen_map_vcpu(struct cpu_info *ci)
+{
+	int size;
+	uintptr_t ptr;
+	struct vcpu_register_vcpu_info vcpu_info_op;
+	paddr_t ma;
+	int ret;
+
+	if (ci->ci_vcpuid < XEN_LEGACY_MAX_VCPUS) {
+		ci->ci_vcpu = &HYPERVISOR_shared_info->vcpu_info[ci->ci_vcpuid];
+		return;
+	}
+
+	/*
+	 * need to map it via VCPUOP_register_vcpu_info
+	 * aligning to the smallest power-of-2 size which can contain
+	 * vcpu_info ensures this. Also make sure it's cache-line aligned,
+	 * for performances.
+	 */
+	size = CACHE_LINE_SIZE;
+	while (size < sizeof(struct vcpu_info)) {
+		size = size << 1;
+	}
+	ptr = (uintptr_t)uvm_km_alloc(kernel_map,
+		    sizeof(struct vcpu_info) + size - 1, 0,
+		    UVM_KMF_WIRED|UVM_KMF_ZERO);
+	ptr = roundup2(ptr, size);
+	ci->ci_vcpu = (struct vcpu_info *)ptr;
+
+	pmap_extract_ma(pmap_kernel(), (ptr & ~PAGE_MASK), &ma);
+	vcpu_info_op.mfn = ma >> PAGE_SHIFT;
+	vcpu_info_op.offset = (ptr & PAGE_MASK);
+	vcpu_info_op.rsvd = 0;
+
+	ret = HYPERVISOR_vcpu_op(VCPUOP_register_vcpu_info,
+	    ci->ci_vcpuid, &vcpu_info_op);
+	if (ret) {
+		panic("VCPUOP_register_vcpu_info for %d failed: %d",
+		    ci->ci_vcpuid, ret);
+	}
 }

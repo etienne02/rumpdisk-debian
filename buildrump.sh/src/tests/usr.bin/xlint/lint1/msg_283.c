@@ -1,10 +1,10 @@
-/*	$NetBSD: msg_283.c,v 1.3 2021/08/30 19:48:21 rillig Exp $	*/
+/*	$NetBSD: msg_283.c,v 1.8 2023/08/02 18:51:25 rillig Exp $	*/
 # 3 "msg_283.c"
 
-// Test for message: argument number mismatch with directive: /* %s */ [283]
+// Test for message: parameter number mismatch in comment /* %s */ [283]
 
 /* Do not warn about unused parameters. */
-/* lint1-extra-flags: -X 231 */
+/* lint1-extra-flags: -X 231,351 */
 
 /* PRINTFLIKE */
 void
@@ -27,6 +27,6 @@ printflike_2_comment(int a, const char *fmt)
 /* PRINTFLIKE 3 */
 void
 printflike_3_comment(int a, const char *fmt)
-/* expect+1: warning: argument number mismatch with directive */
+/* expect+1: warning: parameter number mismatch in comment ** PRINTFLIKE ** [283] */
 {
 }

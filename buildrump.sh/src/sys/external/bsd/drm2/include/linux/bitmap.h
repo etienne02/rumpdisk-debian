@@ -1,4 +1,4 @@
-/*	$NetBSD: bitmap.h,v 1.8 2018/08/27 14:52:16 riastradh Exp $	*/
+/*	$NetBSD: bitmap.h,v 1.13 2021/12/19 12:21:30 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -35,6 +35,8 @@
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/systm.h>
+
+#include <linux/slab.h>
 
 /*
  * bitmap_zero(bitmap, nbits)
@@ -165,6 +167,37 @@ bitmap_clear(unsigned long *bitmap, size_t startbit, size_t nbits)
 }
 
 /*
+ * bitmap_copy(dst, src, nbits)
+ *
+ *	Copy the bitmap from src to dst.  dst and src may alias (but
+ *	why would you bother?).
+ */
+static inline void
+bitmap_copy(unsigned long *dst, const unsigned long *src, size_t nbits)
+{
+	const size_t bpl = NBBY * sizeof(unsigned long);
+	size_t n = howmany(nbits, bpl);
+
+	while (n --> 0)
+		*dst++ = *src++;
+}
+
+/*
+ * bitmap_complement(dst, src, nbits)
+ *
+ *	Set dst to the the bitwise NOT of src.  dst and src may alias.
+ */
+static inline void
+bitmap_complement(unsigned long *dst, const unsigned long *src, size_t nbits)
+{
+	const size_t bpl = NBBY * sizeof(unsigned long);
+	size_t n = howmany(nbits, bpl);
+
+	while (n --> 0)
+		*dst++ = ~*src++;
+}
+
+/*
  * bitmap_and(dst, src1, src2, nbits)
  *
  *	Set dst to be the bitwise AND of src1 and src2, all bitmaps
@@ -183,6 +216,24 @@ bitmap_and(unsigned long *dst, const unsigned long *src1,
 }
 
 /*
+ * bitmap_andnot(dst, src1, src2, nbits)
+ *
+ *	Set dst to be the bitwise AND of src1 and ~src2, all bitmaps
+ *	allocated to have nbits bits.  Yes, this modifies bits past
+ *	nbits.  Any pair of {dst, src1, src2} may be aliases.
+ */
+static inline void
+bitmap_andnot(unsigned long *dst, const unsigned long *src1,
+    const unsigned long *src2, size_t nbits)
+{
+	const size_t bpl = NBBY * sizeof(unsigned long);
+	size_t n = howmany(nbits, bpl);
+
+	while (n --> 0)
+		*dst++ = *src1++ & ~*src2++;
+}
+
+/*
  * bitmap_or(dst, src1, src2, nbits)
  *
  *	Set dst to be the bitwise inclusive-OR of src1 and src2, all
@@ -198,6 +249,22 @@ bitmap_or(unsigned long *dst, const unsigned long *src1,
 
 	while (n --> 0)
 		*dst++ = *src1++ | *src2++;
+}
+
+static inline unsigned long *
+bitmap_zalloc(size_t nbits, gfp_t gfp)
+{
+	const size_t bpl = NBBY * sizeof(unsigned long);
+	size_t n = howmany(nbits, bpl);
+
+	return kcalloc(n, sizeof(unsigned long), gfp);
+}
+
+static inline void
+bitmap_free(unsigned long *bitmap)
+{
+
+	kfree(bitmap);
 }
 
 #endif  /* _LINUX_BITMAP_H_ */

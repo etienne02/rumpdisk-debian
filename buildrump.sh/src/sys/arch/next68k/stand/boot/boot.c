@@ -1,4 +1,4 @@
-/*	$NetBSD: boot.c,v 1.12 2016/06/11 06:35:00 dholland Exp $	*/
+/*	$NetBSD: boot.c,v 1.15 2023/02/12 10:04:56 tsutsui Exp $	*/
 /*
  * Copyright (c) 1994 Rolf Grossmann
  * All rights reserved.
@@ -34,17 +34,17 @@
 
 #include <lib/libsa/stand.h>
 #include <lib/libsa/loadfile.h>
+#include <lib/libsa/dev_net.h>
 #include <lib/libkern/libkern.h>
 
 #include <machine/cpu.h>        /* for NEXT_RAMBASE */
 
 #include <next68k/next68k/nextrom.h>
 
+#include "samachdep.h"
+
 #define KERN_LOADADDR NEXT_RAMBASE
 
-extern int errno;
-
-extern char *mg;
 #define	MON(type, off) (*(type *)((u_int) (mg) + off))
 
 int devparse(const char *, int *, char *, char *, char *, char **);
@@ -56,17 +56,11 @@ int devparse(const char *, int *, char *, char *, char *, char **);
  * Boot device is derived from PROM provided information.
  */
 
-extern char bootprog_rev[];
-extern char bootprog_name[];
-extern int build;
 #define KNAMEN 100
 char kernel[KNAMEN];
 int entry_point;		/* return value filled in by machdep_start */
+int cpuspeed = MHZ_33;		/* assume fastest 33 MHz for sanity */
 int turbo;
-
-extern void rtc_init(void);
-
-extern int try_bootp;
 
 volatile int qq;
 
@@ -84,10 +78,15 @@ main(char *boot_arg)
 #endif
 
 	machine = MON(char, MG_machine_type);
-	if (machine == NeXT_TURBO_MONO || machine == NeXT_TURBO_COLOR)
+	if (machine == NeXT_TURBO_MONO ||
+	    machine == NeXT_TURBO_COLOR ||
+	    machine == NeXT_CUBE_TURBO) {
 		turbo = 1;
-	else
+		cpuspeed = MHZ_33;
+	} else {
 		turbo = 0;
+		cpuspeed = MHZ_25;
+	}
 
 	memset(marks, 0, sizeof(marks));
 	printf(">> %s BOOT [%s #%d]\n", bootprog_name, bootprog_rev, build);

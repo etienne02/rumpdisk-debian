@@ -1,4 +1,4 @@
-/*	$NetBSD: syslogd.c,v 1.137 2021/08/13 20:19:14 andvar Exp $	*/
+/*	$NetBSD: syslogd.c,v 1.147 2024/11/09 16:31:31 jschauma Exp $	*/
 
 /*
  * Copyright (c) 1983, 1988, 1993, 1994
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1983, 1988, 1993, 1994\
 #if 0
 static char sccsid[] = "@(#)syslogd.c	8.3 (Berkeley) 4/4/94";
 #else
-__RCSID("$NetBSD: syslogd.c,v 1.137 2021/08/13 20:19:14 andvar Exp $");
+__RCSID("$NetBSD: syslogd.c,v 1.147 2024/11/09 16:31:31 jschauma Exp $");
 #endif
 #endif /* not lint */
 
@@ -205,6 +205,7 @@ bool	BSDOutputFormat = true;	/* if true emit traditional BSD Syslog lines,
 				 * this, it will only break some syslog-sign
 				 * configurations (e.g. with SG="0").
 				 */
+bool	KernXlat = true;	/* translate kern.* -> user.* */
 char	appname[]   = "syslogd";/* the APPNAME for own messages */
 char   *include_pid;		/* include PID in own messages */
 char	include_pid_buf[11];
@@ -212,6 +213,7 @@ char	include_pid_buf[11];
 
 /* init and setup */
 void		usage(void) __attribute__((__noreturn__));
+void		set_debug(const char *);
 void		logpath_add(char ***, int *, int *, const char *);
 void		logpath_fileadd(char ***, int *, int *, const char *);
 void		init(int fd, short event, void *ev);  /* SIGHUP kevent dispatch routine */
@@ -314,11 +316,12 @@ main(int argc, char *argv[])
 	struct group   *gr;
 	struct passwd  *pw;
 	unsigned long l;
+	char pfpath[PATH_MAX];
 
 	/* should we set LC_TIME="C" to ensure correct timestamps&parsing? */
 	(void)setlocale(LC_ALL, "");
 
-	while ((ch = getopt(argc, argv, "b:B:dnsSf:m:o:p:P:ru:g:t:TUvX")) != -1)
+	while ((ch = getopt(argc, argv, "b:B:d::knsSf:m:o:p:P:ru:g:t:TUvX")) != -1)
 		switch(ch) {
 		case 'b':
 			bindhostname = optarg;
@@ -329,9 +332,27 @@ main(int argc, char *argv[])
 				buflen = RCVBUFLEN;
 			break;
 		case 'd':		/* debug */
-			Debug = D_DEFAULT;
-			/* is there a way to read the integer value
-			 * for Debug as an optional argument? */
+			if (optarg != NULL) {
+				/*
+				 * getopt passes as optarg everything
+				 * after 'd' in -darg, manually accept
+				 * -d=arg too.
+				 */
+				if (optarg[0] == '=')
+					++optarg;
+			} else if (optind < argc) {
+				/*
+				 * :: treats "-d ..." as missing
+				 * optarg, so look ahead manually and
+				 * pick up the next arg if it looks
+				 * like one.
+				 */
+				if (argv[optind][0] != '-') {
+					optarg = argv[optind];
+					++optind;
+				}
+			}
+			set_debug(optarg);
 			break;
 		case 'f':		/* configuration file */
 			ConfFile = optarg;
@@ -340,6 +361,9 @@ main(int argc, char *argv[])
 			group = optarg;
 			if (*group == '\0')
 				usage();
+			break;
+		case 'k':		/* pass-through (remote) kern.* */
+			KernXlat = false;
 			break;
 		case 'm':		/* mark interval */
 			MarkInterval = atoi(optarg) * 60;
@@ -538,11 +562,38 @@ getgroup:
 #if (IETF_NUM_PRIVALUES != (LOG_NFACILITIES<<3))
 	logerror("Warning: system defines %d priority values, but "
 	    "syslog-protocol/syslog-sign specify %d values",
-	    LOG_NFACILITIES, SIGN_NUM_PRIVALS);
+	    LOG_NFACILITIES, IETF_NUM_PRIVALUES>>3);
 #endif
 
+#ifdef __NetBSD_Version__
+	if ((uid != 0) || (gid != 0)) {
+		/* Create the pidfile here so we can chown it to the target
+		 * user/group and possibly report any error before daemonizing.
+		 * We then call pidfile(3) again to write the actual
+		 * daemon pid below.
+		 *
+		 * Note: this will likely leave the truncated pidfile in
+		 * place upon exit, since the effective user is unlikely
+		 * to have write permissions to _PATH_VARRUN. */
+		if (pidfile(NULL)) {
+			logerror("Failed to create pidfile");
+			die(0, 0, NULL);
+		}
+		j = sizeof(pfpath);
+		if (snprintf(pfpath, j, "%s%s.pid",
+					_PATH_VARRUN, getprogname()) >= j) {
+			logerror("Pidfile path `%s' too long.", pfpath);
+			die(0, 0, NULL);
+		}
+		if (chown(pfpath, uid, gid) < 0) {
+			logerror("Failed to chown pidfile `%s` to `%d:%d`", pfpath, uid, gid);
+			die(0, 0, NULL);
+		}
+	}
+#endif /* __NetBSD_Version__ */
+
 	/*
-	 * All files are open, we can drop privileges and chroot
+	 * All files are open, we can drop privileges and chroot.
 	 */
 	DPRINTF(D_MISC, "Attempt to chroot to `%s'\n", root);
 	if (chroot(root) == -1) {
@@ -563,12 +614,12 @@ getgroup:
 	 * We cannot detach from the terminal before we are sure we won't
 	 * have a fatal error, because error message would not go to the
 	 * terminal and would not be logged because syslogd dies.
-	 * All die() calls are behind us, we can call daemon()
+	 * All die() calls are behind us, we can call daemon().
 	 */
 	if (!Debug) {
 		(void)daemon(0, 0);
 		daemonized = 1;
-		/* tuck my process id away, if i'm not in debug mode */
+		/* Tuck my process id away, if I'm not in debug mode. */
 #ifdef __NetBSD_Version__
 		pidfile(NULL);
 #endif /* __NetBSD_Version__ */
@@ -667,7 +718,7 @@ usage(void)
 {
 
 	(void)fprintf(stderr,
-	    "usage: %s [-dnrSsTUvX] [-B buffer_length] [-b bind_address]\n"
+	    "usage: %s [-dknrSsTUvX] [-B buffer_length] [-b bind_address]\n"
 	    "\t[-f config_file] [-g group]\n"
 	    "\t[-m mark_interval] [-P file_list] [-p log_socket\n"
 	    "\t[-p log_socket2 ...]] [-t chroot_dir] [-u user]\n",
@@ -1530,12 +1581,12 @@ printline(const char *hname, char *msg, int flags)
 		pri = DEFUPRI;
 
 	/*
-	 * Don't allow users to log kernel messages.
+	 * Don't (usually) allow users to log kernel messages.
 	 * NOTE: Since LOG_KERN == 0, this will also match
 	 *	 messages with no facility specified.
 	 */
-	if ((pri & LOG_FACMASK) == LOG_KERN)
-		pri = LOG_MAKEPRI(LOG_USER, LOG_PRI(pri));
+	if ((pri & LOG_FACMASK) == LOG_KERN && KernXlat)
+		pri = LOG_USER | LOG_PRI(pri);
 
 	if (bsdsyslog) {
 		buffer = printline_bsdsyslog(hname, p, flags, pri);
@@ -1758,7 +1809,7 @@ check_timestamp(unsigned char *from_buf, char **to_buf,
 			 	 */
 				*to_buf = strdup("-");
 			} else {
-				/* with BSD Syslog the field is reqired
+				/* with BSD Syslog the field is required
 				 * so replace it with current time
 				 */
 				*to_buf = make_timestamp(NULL, false, 0);
@@ -3518,7 +3569,7 @@ init(int fd, short event, void *ev)
 	}							\
 	src->f_qsize = 0;					\
 	src->f_qelements = 0;					\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 	/*
 	 *  Free old log files.
@@ -4756,7 +4807,7 @@ make_timestamp(time_t *in_now, bool iso, size_t tlen)
 	}
 }
 
-/* auxillary code to allocate memory and copy a string */
+/* auxiliary code to allocate memory and copy a string */
 bool
 copy_string(char **mem, const char *p, const char *q)
 {
@@ -4874,6 +4925,67 @@ writev1(int fd, struct iovec *iov, size_t count)
 	}
 	return tot == 0 ? nw : tot;
 }
+
+
+#ifdef NDEBUG
+/*
+ * -d also controls daemoniziation, so it makes sense even with
+ * NDEBUG, but if the user also tries to specify the logging details
+ * with an argument, warn them it's not compiled into this binary.
+ */
+void
+set_debug(const char *level)
+{
+	Debug = D_DEFAULT;
+	if (level == NULL)
+		return;
+
+	/* don't bother parsing the argument */
+	fprintf(stderr,
+		"%s: debug logging is not compiled\n",
+		getprogname());
+}
+
+#else  /* !NDEBUG */
+void
+set_debug(const char *level)
+{
+	if (level == NULL) {
+		Debug = D_DEFAULT; /* compat */
+		return;
+	}
+
+	/* skip initial whitespace for consistency with strto*l */
+	while (isspace((unsigned char)*level))
+		++level;
+
+	/* accept ~num to mean "all except num" */
+	bool invert = level[0] == '~';
+	if (invert)
+		++level;
+
+	errno = 0;
+	char *endp = NULL;
+	unsigned long bits = strtoul(level, &endp, 0);
+	if (errno || endp == level || *endp != '\0') {
+		fprintf(stderr, "%s: bad argument to -d\n", getprogname());
+		usage();
+	}
+	if (invert)
+		bits = ~bits;
+
+	Debug = bits & D_ALL;
+
+	/*
+	 * make it possible to use -d to stay in the foreground but
+	 * suppress all dbprintf output (there better be free bits in
+	 * typeof(Debug) that are not in D_ALL).
+	 */
+	if (Debug == 0)
+		Debug = ~D_ALL;
+}
+#endif	/* !NDEBUG */
+
 
 #ifndef NDEBUG
 void

@@ -1,4 +1,4 @@
-# $NetBSD: comment.mk,v 1.3 2020/11/15 14:07:53 rillig Exp $
+# $NetBSD: comment.mk,v 1.7 2024/04/23 22:51:28 rillig Exp $
 #
 # Demonstrate how comments are written in makefiles.
 
@@ -15,13 +15,15 @@ on and on.
  # Comments can be indented with spaces, but that is rather unusual.
 
 	# Comments can be indented with a tab.
-	# These are not shell commands, they are just makefile comments.
+	# Since parse.c 1.127 from 2007-01-01, these are not shell commands,
+	# they are just makefile comments.  Before that commit, these comments
+	# triggered the error message "Unassociated shell command".
 
 .if 1			# There can be comments after conditions.
 .endif			# And after the closing directive.
 
 VAR=			# This comment makes the variable value empty.
-			# ParseGetLine removes any whitespace before the
+			# ParseRawLine removes any whitespace before the
 			# comment.
 .if ${VAR} != ""
 .  error
@@ -51,9 +53,9 @@ VAR=	\#		# Both in the assignment.
 .  error
 .endif
 
-# Since 2012-03-24 the variable modifier :[#] does not need to be escaped.
-# To keep the parsing code simple, any "[#" does not start a comment, even
-# outside of a variable expression.
+# Since 2012-03-24 the modifier :[#] does not need to be escaped.
+# To keep the parsing code simple, the "#" in "[#" does not start a comment,
+# regardless of the syntactical context it appears in.
 WORDS=	${VAR:[#]} [#
 .if ${WORDS} != "1 [#"
 .  error

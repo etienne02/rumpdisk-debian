@@ -1,4 +1,4 @@
-/*	$NetBSD: cz.c,v 1.64 2018/12/09 11:14:02 jdolecek Exp $	*/
+/*	$NetBSD: cz.c,v 1.66 2024/02/09 22:08:35 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2000 Zembu Labs, Inc.
@@ -73,7 +73,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cz.c,v 1.64 2018/12/09 11:14:02 jdolecek Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cz.c,v 1.66 2024/02/09 22:08:35 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -696,7 +696,7 @@ cz_intr(void *arg)
 		/* XXX - is this needed? */
 		(void)CZ_FWCTL_READ(cz, BRDCTL_FWCMD_PARAM);
 
-		/* now clear this interrupt, posslibly enabling another */
+		/* now clear this interrupt, possibly enabling another */
 		CZ_PLX_WRITE(cz, PLX_LOCAL_PCI_DOORBELL, command);
 
 		if (cz->cz_ports == NULL) {
@@ -731,9 +731,9 @@ cz_intr(void *arg)
 				/*
 				 * Do wakeup stuff here.
 				 */
-				mutex_spin_enter(&tty_lock); /* XXX */
+				ttylock(tp); /* XXX */
 				ttwakeup(tp);
-				mutex_spin_exit(&tty_lock); /* XXX */
+				ttyunlock(tp); /* XXX */
 				wakeup(tp);
 			}
 			break;
@@ -754,9 +754,9 @@ cz_intr(void *arg)
 				/*
 				 * Do wakeup stuff here.
 				 */
-				mutex_spin_enter(&tty_lock); /* XXX */
+				ttylock(tp); /* XXX */
 				ttwakeup(tp);
-				mutex_spin_exit(&tty_lock); /* XXX */
+				ttyunlock(tp); /* XXX */
 				wakeup(tp);
 			}
 			break;
@@ -804,9 +804,9 @@ cz_intr(void *arg)
 			 * flags set. So TTY_FE by itself works.
 			 */
 			(*tp->t_linesw->l_rint)(TTY_FE, tp);
-			mutex_spin_enter(&tty_lock); /* XXX */
+			ttylock(tp); /* XXX */
 			ttwakeup(tp);
-			mutex_spin_exit(&tty_lock); /* XXX */
+			ttyunlock(tp); /* XXX */
 			wakeup(tp);
 			break;
 

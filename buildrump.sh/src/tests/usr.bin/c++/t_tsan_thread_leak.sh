@@ -28,41 +28,33 @@
 
 test_target()
 {
-	SUPPORT='n'
-	# Detect address space larger than 32 bits
-	maxaddress=`sysctl vm.maxaddress|awk '{print $3}'`
-	if [ $maxaddress -gt 4294967295 ]; then
-		if command -v cc >/dev/null 2>&1; then
-			if ! echo __clang__ | cc -E - | grep -q __clang__; then
-				SUPPORT='y'
-			elif ! cc -v 2>&1 | awk '/gcc version/{print $3}' | \
-				awk -F '.' '($0+0) > 9 {exit 1}'; then
-				SUPPORT='y'
-			fi
-		fi
-	fi
+	atf_set "require.arch" "x86_64"
 }
 
 atf_test_case thread_leak
 thread_leak_head() {
 	atf_set "descr" "Test thread sanitizer for thread leak condition"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 
 atf_test_case thread_leak_profile
 thread_leak_profile_head() {
 	atf_set "descr" "Test thread sanitizer for thread leak with profiling option"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 atf_test_case thread_leak_pic
 thread_leak_pic_head() {
 	atf_set "descr" "Test thread sanitizer for thread leak with position independent code (PIC) flag"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 atf_test_case thread_leak_pie
 thread_leak_pie_head() {
 	atf_set "descr" "Test thread sanitizer for thread leak with position independent execution (PIE) flag"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 
 thread_leak_body(){
@@ -115,7 +107,7 @@ int main() {
 }
 EOF
 
-	c++ -fsanitize=thread -o test -pg test.cc
+	c++ -fsanitize=thread -static -o test -pg test.cc
 	paxctl +a test
 	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: thread leak" ./test
 }
@@ -157,9 +149,9 @@ EOF
 	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: thread leak" ./test
 }
 thread_leak_pie_body(){
-	
+
 	#check whether -pie flag is supported on this architecture
-	if ! c++ -pie -dM -E - < /dev/null 2>/dev/null >/dev/null; then 
+	if ! c++ -pie -dM -E - < /dev/null 2>/dev/null >/dev/null; then
 		atf_set_skip "c++ -pie not supported on this architecture"
 	fi
 	cat > test.cc << EOF
@@ -202,11 +194,6 @@ target_not_supported_body()
 
 atf_init_test_cases()
 {
-	test_target
-	test $SUPPORT = 'n' && {
-		atf_add_test_case target_not_supported
-		return 0
-	}
 	atf_add_test_case thread_leak
 	atf_add_test_case thread_leak_profile
 	atf_add_test_case thread_leak_pie

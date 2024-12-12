@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.78 2017/11/06 03:47:46 christos Exp $	*/
+/*	$NetBSD: machdep.c,v 1.80 2024/03/05 14:15:32 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002, 2004 The NetBSD Foundation, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.78 2017/11/06 03:47:46 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.80 2024/03/05 14:15:32 thorpej Exp $");
 
 #include "opt_md.h"
 #include "opt_ddb.h"
@@ -395,12 +395,6 @@ cpu_reboot(int howto, char *bootstr)
 		 * Synchronize the disks....
 		 */
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */
@@ -604,7 +598,7 @@ intc_intr(int ssr, int spc, int ssp)
 	ih = EVTCODE_IH(evtcode);
 	KDASSERT(ih->ih_func);
 	/*
-	 * On entry, all interrrupts are disabled,
+	 * On entry, all interrupts are disabled,
 	 * and exception is enabled for P3 access. (kernel stack is P3,
 	 * SH3 may or may not cause TLB miss when access stack.)
 	 * Enable higher level interrupt here.

@@ -1,7 +1,7 @@
-/*	$NetBSD: cpu_subr.c,v 1.58 2020/08/17 15:22:51 skrll Exp $	*/
+/*	$NetBSD: cpu_subr.c,v 1.64 2023/10/04 20:28:05 ad Exp $	*/
 
 /*-
- * Copyright (c) 2010, 2019 The NetBSD Foundation, Inc.
+ * Copyright (c) 2010, 2019, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.58 2020/08/17 15:22:51 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.64 2023/10/04 20:28:05 ad Exp $");
 
 #include "opt_cputype.h"
 #include "opt_ddb.h"
@@ -42,6 +42,7 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_subr.c,v 1.58 2020/08/17 15:22:51 skrll Exp $");
 #include <sys/bitops.h>
 #include <sys/cpu.h>
 #include <sys/device.h>
+#include <sys/device_impl.h>	/* XXX autoconf abuse */
 #include <sys/idle.h>
 #include <sys/intr.h>
 #include <sys/ipi.h>
@@ -217,7 +218,7 @@ cpu_hwrena_setup(void)
 
 	if (CPUISMIPSNNR2) {
 		mipsNN_cp0_hwrena_write(
-		    (MIPS_HAS_USERLOCAL ? MIPS_HWRENA_UL : 0)
+		    (MIPS_HAS_USERLOCAL ? MIPS_HWRENA_ULR : 0)
 		    | MIPS_HWRENA_CCRES
 		    | MIPS_HWRENA_CC
 		    | MIPS_HWRENA_SYNCI_STEP
@@ -236,6 +237,11 @@ cpu_attach_common(device_t self, struct cpu_info *ci)
 
 	/*
 	 * Cross link cpu_info and its device together
+	 *
+	 * XXX autoconf abuse: Can't use device_set_private here
+	 * because some callers already do so -- and some callers
+	 * (sbmips cpu_attach) already have a softc allocated by
+	 * autoconf.
 	 */
 	ci->ci_dev = self;
 	self->dv_private = ci;
@@ -267,10 +273,12 @@ cpu_attach_common(device_t self, struct cpu_info *ci)
 	if (ci != &cpu_info_store) {
 		/*
 		 * Tail insert this onto the list of cpu_info's.
+		 * atomic_store_release matches PTR_L/SYNC_ACQ in
+		 * locore_octeon.S (XXX what about non-Octeon?).
 		 */
 		KASSERT(cpuid_infos[ci->ci_cpuid] == NULL);
-		cpuid_infos[ci->ci_cpuid] = ci;
-		membar_producer();
+		atomic_store_release(&cpuid_infos[ci->ci_cpuid], ci);
+		membar_producer(); /* Cavium sync plunger */
 	}
 	KASSERT(cpuid_infos[ci->ci_cpuid] != NULL);
 	evcnt_attach_dynamic(&ci->ci_evcnt_synci_activate_rqst,
@@ -617,17 +625,15 @@ cpu_idle(void)
 bool
 cpu_intr_p(void)
 {
-	uint64_t ncsw;
 	int idepth;
+	long pctr;
 	lwp_t *l;
 
 	l = curlwp;
 	do {
-		ncsw = l->l_ncsw;
-		__insn_barrier();
+		pctr = lwp_pctr();
 		idepth = l->l_cpu->ci_idepth;
-		__insn_barrier();
-	} while (__predict_false(ncsw != l->l_ncsw));
+	} while (__predict_false(pctr != lwp_pctr()));
 
 	return idepth != 0;
 }
@@ -648,11 +654,11 @@ cpu_multicast_ipi(const kcpuset_t *kcp, int tag)
 	struct cpu_info * const ci = curcpu();
 	kcpuset_t *kcp2 = ci->ci_multicastcpus;
 
-	if (kcpuset_match(cpus_running, ci->ci_data.cpu_kcpuset))
+	if (kcpuset_match(cpus_running, ci->ci_kcpuset))
 		return;
 
 	kcpuset_copy(kcp2, kcp);
-	kcpuset_remove(kcp2, ci->ci_data.cpu_kcpuset);
+	kcpuset_remove(kcp2, ci->ci_kcpuset);
 	for (cpuid_t cii; (cii = kcpuset_ffs(kcp2)) != 0; ) {
 		kcpuset_clear(kcp2, --cii);
 		(void)cpu_send_ipi(cpu_lookup(cii), tag);
@@ -721,13 +727,13 @@ cpu_halt_others(void)
 	kcpuset_t *kcp;
 
 	// If we are the only CPU running, there's nothing to do.
-	if (kcpuset_match(cpus_running, curcpu()->ci_data.cpu_kcpuset))
+	if (kcpuset_match(cpus_running, curcpu()->ci_kcpuset))
 		return;
 
 	// Get all running CPUs
 	kcpuset_clone(&kcp, cpus_running);
 	// Remove ourself
-	kcpuset_remove(kcp, curcpu()->ci_data.cpu_kcpuset);
+	kcpuset_remove(kcp, curcpu()->ci_kcpuset);
 	// Remove any halted CPUs
 	kcpuset_remove(kcp, cpus_halted);
 	// If there are CPUs left, send the IPIs
@@ -784,13 +790,13 @@ cpu_pause_others(void)
 {
 	struct cpu_info * const ci = curcpu();
 
-	if (cold || kcpuset_match(cpus_running, ci->ci_data.cpu_kcpuset))
+	if (cold || kcpuset_match(cpus_running, ci->ci_kcpuset))
 		return;
 
 	kcpuset_t *kcp = ci->ci_ddbcpus;
 
 	kcpuset_copy(kcp, cpus_running);
-	kcpuset_remove(kcp, ci->ci_data.cpu_kcpuset);
+	kcpuset_remove(kcp, ci->ci_kcpuset);
 	kcpuset_remove(kcp, cpus_paused);
 
 	cpu_broadcast_ipi(IPI_SUSPEND);

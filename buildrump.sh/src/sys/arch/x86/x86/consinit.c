@@ -1,4 +1,4 @@
-/*	$NetBSD: consinit.c,v 1.33 2020/05/02 16:44:36 bouyer Exp $	*/
+/*	$NetBSD: consinit.c,v 1.40 2024/12/02 13:31:32 bouyer Exp $	*/
 
 /*
  * Copyright (c) 1998
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: consinit.c,v 1.33 2020/05/02 16:44:36 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: consinit.c,v 1.40 2024/12/02 13:31:32 bouyer Exp $");
 
 #include "opt_kgdb.h"
 #include "opt_puc.h"
@@ -100,6 +100,7 @@ __KERNEL_RCSID(0, "$NetBSD: consinit.c,v 1.33 2020/05/02 16:44:36 bouyer Exp $")
 #endif
 
 #ifdef XENPVHVM
+#include <xen/hypervisor.h>
 #include <xen/xen.h>
 #endif
 
@@ -164,17 +165,26 @@ consinit(void)
 {
 	const struct btinfo_console *consinfo;
 #if (NGENFB > 0)
-	const struct btinfo_framebuffer *fbinfo;
+	const struct btinfo_framebuffer *fbinfo = NULL;
 #endif
 	static int initted;
 #if (NCOM > 0)
 	int rv;
 #endif
+	char console_devname[16] = "";
 
 #ifdef XENPVHVM
 	if (vm_guest == VM_GUEST_XENPVH) {
-		xen_pvh_consinit();
-		return;
+		if (xen_pvh_consinit() != 0)
+			return;
+		/* fallback to native console selection, useful for dom0 PVH */
+	}
+	if (vm_guest == VM_GUEST_GENPVH) {
+		union xen_cmdline_parseinfo xcp;
+		/* get console= parameter from generic PVH VMM */
+		xen_parse_cmdline(XEN_PARSE_CONSOLE, &xcp);
+		strncpy(console_devname, xcp.xcp_console,
+			sizeof(console_devname));
 	}
 #endif
 	if (initted)
@@ -186,15 +196,31 @@ consinit(void)
 	if (!consinfo)
 #endif
 		consinfo = &default_consinfo;
-
+	/* console= parameter was not passed via a generic PVH VMM */
+	if (!console_devname[0])
+		strncpy(console_devname, consinfo->devname,
+			sizeof(console_devname));
 #if (NGENFB > 0)
-	fbinfo = lookup_bootinfo(BTINFO_FRAMEBUFFER);
+#if defined(XENPVHVM) && defined(DOM0OPS)
+	if (vm_guest == VM_GUEST_XENPVH && xendomain_is_dom0())
+		fbinfo = xen_genfb_getbtinfo();
+	else
+#endif /* XENPVHVM */
+		fbinfo = lookup_bootinfo(BTINFO_FRAMEBUFFER);
 #endif
-
-	if (!strcmp(consinfo->devname, "pc")) {
+	if (!strcmp(console_devname, "pc")) {
 		int error;
 #if (NGENFB > 0)
 		if (fbinfo && fbinfo->physaddr > 0) {
+			/*
+			 * If we have a framebuffer address, and
+			 * x86_genfb_cnattach can map it, then
+			 * genfb_cnattach causes genfb_is_console to
+			 * later return true.  device_pci_register will
+			 * use this to set up the device properties for
+			 * a PCI display-class device to notify it that
+			 * it has been selected as the console.
+			 */
 			if (x86_genfb_cnattach() == -1) {
 				initted = 0;	/* defer */
 				return;
@@ -238,7 +264,7 @@ dokbd:
 		return;
 	}
 #if (NCOM > 0)
-	if (!strcmp(consinfo->devname, "com")) {
+	if (!strcmp(console_devname, "com")) {
 		int addr = consinfo->addr;
 		int speed = consinfo->speed;
 
@@ -262,14 +288,14 @@ dokbd:
 	}
 #endif
 #if (NNULLCONS > 0)
-	if (!strcmp(consinfo->devname, "nullcons")) {
+	if (!strcmp(console_devname, "nullcons")) {
 		void nullcninit(struct consdev *cn);
 
 		nullcninit(0);
 		return;
 	}
 #endif
-	panic("invalid console device %s", consinfo->devname);
+	panic("invalid console device %s", console_devname);
 }
 
 #ifdef KGDB
@@ -277,7 +303,7 @@ void
 kgdb_port_init(void)
 {
 #if (NCOM > 0)
-	if(!strcmp(kgdb_devname, "com")) {
+	if (!strcmp(kgdb_devname, "com")) {
 		com_kgdb_attach(x86_bus_space_io, comkgdbaddr, comkgdbrate,
 		    COM_FREQ, COM_TYPE_NORMAL, comkgdbmode);
 	}

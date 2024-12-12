@@ -1,4 +1,4 @@
-/*	$NetBSD: if_tap.c,v 1.122 2021/06/16 00:21:19 riastradh Exp $	*/
+/*	$NetBSD: if_tap.c,v 1.136 2024/11/10 10:57:52 mlelstv Exp $	*/
 
 /*
  *  Copyright (c) 2003, 2004, 2008, 2009 The NetBSD Foundation.
@@ -33,11 +33,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_tap.c,v 1.122 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_tap.c,v 1.136 2024/11/10 10:57:52 mlelstv Exp $");
 
 #if defined(_KERNEL_OPT)
-
 #include "opt_modular.h"
+#include "opt_net_mpsafe.h"
 #endif
 
 #include <sys/param.h>
@@ -117,7 +117,7 @@ CFATTACH_DECL_NEW(tap, sizeof(struct tap_softc),
 extern struct cfdriver tap_cd;
 
 /* Real device access routines */
-static int	tap_dev_close(struct tap_softc *);
+static void	tap_dev_close(struct tap_softc *);
 static int	tap_dev_read(int, struct uio *, int);
 static int	tap_dev_write(int, struct uio *, int);
 static int	tap_dev_ioctl(int, u_long, void *, struct lwp *);
@@ -210,7 +210,7 @@ struct if_clone tap_cloners = IF_CLONE_INITIALIZER("tap",
 
 /* Helper functions shared by the two cloning code paths */
 static struct tap_softc *	tap_clone_creator(int);
-int	tap_clone_destroyer(device_t);
+static void			tap_clone_destroyer(device_t);
 
 static struct sysctllog *tap_sysctl_clog;
 
@@ -233,7 +233,12 @@ tapattach(int n)
 static void
 tapinit(void)
 {
-	int error = config_cfattach_attach(tap_cd.cd_name, &tap_ca);
+	int error;
+
+#ifdef _MODULE
+	devsw_attach("tap", NULL, &tap_bmajor, &tap_cdevsw, &tap_cmajor);
+#endif
+	error = config_cfattach_attach(tap_cd.cd_name, &tap_ca);
 
 	if (error) {
 		aprint_error("%s: unable to register cfattach\n",
@@ -244,9 +249,6 @@ tapinit(void)
 
 	if_clone_attach(&tap_cloners);
 	sysctl_tap_setup(&tap_sysctl_clog);
-#ifdef _MODULE
-	devsw_attach("tap", NULL, &tap_bmajor, &tap_cdevsw, &tap_cmajor);
-#endif
 }
 
 static int
@@ -255,31 +257,20 @@ tapdetach(void)
 	int error = 0;
 
 	if_clone_detach(&tap_cloners);
-#ifdef _MODULE
-	error = devsw_detach(NULL, &tap_cdevsw);
-	if (error != 0)
-		goto out2;
-#endif
 
 	if (tap_count != 0) {
-		error = EBUSY;
-		goto out1;
+		if_clone_attach(&tap_cloners);
+		return EBUSY;
 	}
 
 	error = config_cfattach_detach(tap_cd.cd_name, &tap_ca);
-	if (error != 0)
-		goto out1;
-
-	sysctl_teardown(&tap_sysctl_clog);
-
-	return 0;
-
- out1:
+	if (error == 0) {
 #ifdef _MODULE
-	devsw_attach("tap", NULL, &tap_bmajor, &tap_cdevsw, &tap_cmajor);
- out2:
+		devsw_detach(NULL, &tap_cdevsw);
 #endif
-	if_clone_attach(&tap_cloners);
+		sysctl_teardown(&tap_sysctl_clog);
+	} else
+		if_clone_attach(&tap_cloners);
 
 	return error;
 }
@@ -564,7 +555,7 @@ tap_init(struct ifnet *ifp)
 
 /*
  * _stop() is called when an interface goes down.  It is our
- * responsability to validate that state by clearing the
+ * responsibility to validate that state by clearing the
  * IFF_RUNNING flag.
  *
  * We have to wake up all the sleeping processes to have the pending
@@ -634,33 +625,25 @@ tap_clone_creator(int unit)
 	return device_private(config_attach_pseudo(cf));
 }
 
-/*
- * The clean design of if_clone and autoconf(9) makes that part
- * really straightforward.  The second argument of config_detach
- * means neither QUIET nor FORCED.
- */
 static int
 tap_clone_destroy(struct ifnet *ifp)
 {
 	struct tap_softc *sc = ifp->if_softc;
-	int error = tap_clone_destroyer(sc->sc_dev);
 
-	if (error == 0)
-		atomic_dec_uint(&tap_count);
-	return error;
+	tap_clone_destroyer(sc->sc_dev);
+	atomic_dec_uint(&tap_count);
+	return 0;
 }
 
-int
+static void
 tap_clone_destroyer(device_t dev)
 {
 	cfdata_t cf = device_cfdata(dev);
 	int error;
 
-	if ((error = config_detach(dev, 0)) != 0)
-		aprint_error_dev(dev, "unable to detach instance\n");
+	error = config_detach(dev, DETACH_FORCE);
+	KASSERTMSG(error == 0, "error=%d", error);
 	kmem_free(cf, sizeof(*cf));
-
-	return error;
 }
 
 /*
@@ -680,7 +663,7 @@ tap_clone_destroyer(device_t dev)
  * call ends in tap_cdev_open.  The actual place where it is handled is
  * tap_dev_cloner.
  *
- * An tap device cannot be opened more than once at a time, so the cdevsw
+ * A tap device cannot be opened more than once at a time, so the cdevsw
  * part of open() does nothing but noting that the interface is being used and
  * hence ready to actually handle packets.
  */
@@ -744,6 +727,7 @@ tap_dev_cloner(struct lwp *l)
 	}
 
 	sc->sc_flags |= TAP_INUSE;
+	if_link_state_change(&sc->sc_ec.ec_if, LINK_STATE_UP);
 
 	return fd_clone(fp, fd, FREAD | FWRITE, &tap_fileops,
 	    (void *)(intptr_t)device_unit(sc->sc_dev));
@@ -767,7 +751,8 @@ tap_cdev_close(dev_t dev, int flags, int fmt, struct lwp *l)
 	if (sc == NULL)
 		return ENXIO;
 
-	return tap_dev_close(sc);
+	tap_dev_close(sc);
+	return 0;
 }
 
 /*
@@ -781,33 +766,27 @@ tap_fops_close(file_t *fp)
 {
 	struct tap_softc *sc;
 	int unit = fp->f_devunit;
-	int error;
 
 	sc = device_lookup_private(&tap_cd, unit);
 	if (sc == NULL)
 		return ENXIO;
 
-	/* tap_dev_close currently always succeeds, but it might not
-	 * always be the case. */
 	KERNEL_LOCK(1, NULL);
-	if ((error = tap_dev_close(sc)) != 0) {
-		KERNEL_UNLOCK_ONE(NULL);
-		return error;
-	}
+	tap_dev_close(sc);
 
-	/* Destroy the device now that it is no longer useful,
-	 * unless it's already being destroyed. */
-	if ((sc->sc_flags & TAP_GOING) != 0) {
-		KERNEL_UNLOCK_ONE(NULL);
-		return 0;
-	}
+	/*
+	 * Destroy the device now that it is no longer useful, unless
+	 * it's already being destroyed.
+	 */
+	if ((sc->sc_flags & TAP_GOING) != 0)
+		goto out;
+	tap_clone_destroyer(sc->sc_dev);
 
-	error = tap_clone_destroyer(sc->sc_dev);
-	KERNEL_UNLOCK_ONE(NULL);
-	return error;
+out:	KERNEL_UNLOCK_ONE(NULL);
+	return 0;
 }
 
-static int
+static void
 tap_dev_close(struct tap_softc *sc)
 {
 	struct ifnet *ifp;
@@ -840,8 +819,6 @@ tap_dev_close(struct tap_softc *sc)
 	}
 	sc->sc_flags &= ~(TAP_INUSE | TAP_ASYNCIO);
 	if_link_state_change(ifp, LINK_STATE_DOWN);
-
-	return 0;
 }
 
 static int
@@ -880,13 +857,7 @@ tap_dev_read(int unit, struct uio *uio, int flags)
 	if ((ifp->if_flags & IFF_UP) == 0)
 		return EHOSTDOWN;
 
-	/* In the TAP_NBIO case, we have to make sure we won't be sleeping */
-	if ((sc->sc_flags & TAP_NBIO) != 0) {
-		if (!mutex_tryenter(&sc->sc_lock))
-			return EWOULDBLOCK;
-	} else
-		mutex_enter(&sc->sc_lock);
-
+	mutex_enter(&sc->sc_lock);
 	if (IFQ_IS_EMPTY(&ifp->if_snd)) {
 		ifp->if_flags &= ~IFF_OACTIVE;
 		if (sc->sc_flags & TAP_NBIO)
@@ -931,8 +902,7 @@ tap_dev_read(int unit, struct uio *uio, int flags)
 		m = n = m_free(m);
 	} while (m != NULL && uio->uio_resid > 0 && error == 0);
 
-	if (m != NULL)
-		m_freem(m);
+	m_freem(m);
 
 out:
 	return error;
@@ -1006,6 +976,7 @@ tap_dev_write(int unit, struct uio *uio, int flags)
 		if_statinc(ifp, if_ierrors);
 		return ENOBUFS;
 	}
+	MCLAIM(m, &sc->sc_ec.ec_rx_mowner);
 	m->m_pkthdr.len = uio->uio_resid;
 
 	mp = &m;
@@ -1016,6 +987,7 @@ tap_dev_write(int unit, struct uio *uio, int flags)
 				error = ENOBUFS;
 				break;
 			}
+			MCLAIM(*mp, &sc->sc_ec.ec_rx_mowner);
 		}
 		(*mp)->m_len = uimin(MHLEN, uio->uio_resid);
 		len += (*mp)->m_len;
@@ -1169,17 +1141,10 @@ tap_dev_poll(int unit, int events, struct lwp *l)
 }
 
 static struct filterops tap_read_filterops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = tap_kqdetach,
 	.f_event = tap_kqread,
-};
-
-static struct filterops tap_seltrue_filterops = {
-	.f_isfd = 1,
-	.f_attach = NULL,
-	.f_detach = tap_kqdetach,
-	.f_event = filt_seltrue,
 };
 
 static int
@@ -1204,24 +1169,25 @@ tap_dev_kqfilter(int unit, struct knote *kn)
 	if (sc == NULL)
 		return ENXIO;
 
-	KERNEL_LOCK(1, NULL);
 	switch(kn->kn_filter) {
 	case EVFILT_READ:
 		kn->kn_fop = &tap_read_filterops;
-		break;
-	case EVFILT_WRITE:
-		kn->kn_fop = &tap_seltrue_filterops;
-		break;
-	default:
+		kn->kn_hook = sc;
+		KERNEL_LOCK(1, NULL);
+		mutex_spin_enter(&sc->sc_lock);
+		selrecord_knote(&sc->sc_rsel, kn);
+		mutex_spin_exit(&sc->sc_lock);
 		KERNEL_UNLOCK_ONE(NULL);
+		break;
+
+	case EVFILT_WRITE:
+		kn->kn_fop = &seltrue_filtops;
+		break;
+
+	default:
 		return EINVAL;
 	}
 
-	kn->kn_hook = sc;
-	mutex_spin_enter(&sc->sc_lock);
-	selrecord_knote(&sc->sc_rsel, kn);
-	mutex_spin_exit(&sc->sc_lock);
-	KERNEL_UNLOCK_ONE(NULL);
 	return 0;
 }
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.h,v 1.21 2014/03/22 21:49:18 tsutsui Exp $	*/
+/*	$NetBSD: intr.h,v 1.23 2024/01/07 07:58:33 isaki Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -40,9 +40,9 @@
 #define splsoftclock()	splraise1()
 #define splsoftnet()	splraise1()
 #define splsoftserial()	splraise1()
-#define splvm()         splraise5()
-#define splsched()      spl7()
-#define splhigh()       spl7()
+#define splvm()		splraise5()
+#define splsched()	spl7()
+#define splhigh()	spl7()
 
 #define	splnone()	spl0()
 #define	splzs()		splraise5()	/* disallow serial interrupts */
@@ -64,6 +64,8 @@ typedef struct {
 	uint16_t _psl;
 } ipl_cookie_t;
 
+#ifdef _KERNEL
+
 static inline ipl_cookie_t
 makeiplcookie(ipl_t ipl)
 {
@@ -84,4 +86,7 @@ splx(int sr)
 
 	__asm volatile("movew %0,%%sr" : : "di" (sr));
 }
+
+#endif	/* _KERNEL */
+
 #endif /* !_X68K_INTR_H_ */

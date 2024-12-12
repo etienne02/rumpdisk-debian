@@ -1,4 +1,4 @@
-/* $NetBSD: main.c,v 1.4 2021/07/18 11:45:31 nia Exp $ */
+/* $NetBSD: main.c,v 1.7 2024/11/03 10:43:27 rillig Exp $ */
 /*-
  * Copyright (c) 2021 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -149,7 +149,12 @@ slide_control(struct aiomixer *aio,
 
 	switch (info->type) {
 	case AUDIO_MIXER_VALUE:
-		delta = right ? info->un.v.delta : -info->un.v.delta;
+		if (info->un.v.delta != 0) {
+			delta = right ? info->un.v.delta : -info->un.v.delta;
+		} else {
+			/* delta is 0 in qemu with sb(4) */
+			delta = right ? 16 : -16;
+		}
 		/*
 		 * work around strange problem where the level can be
 		 * increased but not decreased, seen with uaudio(4)
@@ -494,13 +499,12 @@ int
 main(int argc, char **argv)
 {
 	const char *mixer_device = NULL;
-	extern char *optarg;
-	extern int optind;
 	struct aiomixer *aio;
 	char mixer_path[32];
 	unsigned int mixer_count = 0;
 	int i, fd;
 	int ch;
+	char *no_color = getenv("NO_COLOR");
 
 	if ((aio = malloc(sizeof(struct aiomixer))) == NULL) {
 		err(EXIT_FAILURE, "malloc failed");
@@ -535,7 +539,15 @@ main(int argc, char **argv)
 	cbreak();
 	noecho();
 
-	if (has_colors()) {
+	aio->use_colour = true;
+
+	if (!has_colors())
+		aio->use_colour = false;
+
+	if (no_color != NULL && no_color[0] != '\0')
+		aio->use_colour = false;
+
+	if (aio->use_colour) {
 		start_color();
 		use_default_colors();
 		init_pair(COLOR_CONTROL_SELECTED, COLOR_BLUE, COLOR_BLACK);

@@ -1,4 +1,4 @@
-/*	$NetBSD: glxsb.c,v 1.16 2020/06/29 23:32:24 riastradh Exp $	*/
+/*	$NetBSD: glxsb.c,v 1.19 2022/05/22 11:39:26 riastradh Exp $	*/
 /* $OpenBSD: glxsb.c,v 1.7 2007/02/12 14:31:45 tom Exp $ */
 
 /*
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: glxsb.c,v 1.16 2020/06/29 23:32:24 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: glxsb.c,v 1.19 2022/05/22 11:39:26 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -180,7 +180,7 @@ CFATTACH_DECL_NEW(glxsb, sizeof(struct glxsb_softc),
 int glxsb_crypto_setup(struct glxsb_softc *);
 int glxsb_crypto_newsession(void *, uint32_t *, struct cryptoini *);
 int glxsb_crypto_process(void *, struct cryptop *, int);
-int glxsb_crypto_freesession(void *, uint64_t);
+void glxsb_crypto_freesession(void *, uint64_t);
 static __inline void glxsb_aes(struct glxsb_softc *, uint32_t, uint32_t,
     uint32_t, void *, int, void *);
 
@@ -314,8 +314,7 @@ glxsb_crypto_newsession(void *aux, uint32_t *sidp, struct cryptoini *cri)
 	struct glxsb_session *ses = NULL;
 	int sesn;
 
-	if (sc == NULL || sidp == NULL || cri == NULL ||
-	    cri->cri_next != NULL || cri->cri_alg != CRYPTO_AES_CBC ||
+	if (cri->cri_next != NULL || cri->cri_alg != CRYPTO_AES_CBC ||
 	    cri->cri_klen != 128)
 		return (EINVAL);
 
@@ -353,20 +352,18 @@ glxsb_crypto_newsession(void *aux, uint32_t *sidp, struct cryptoini *cri)
 	return (0);
 }
 
-int
+void
 glxsb_crypto_freesession(void *aux, uint64_t tid)
 {
 	struct glxsb_softc *sc = aux;
 	int sesn;
 	uint32_t sid = ((uint32_t)tid) & 0xffffffff;
 
-	if (sc == NULL)
-		return (EINVAL);
 	sesn = GLXSB_SESSION(sid);
-	if (sesn >= sc->sc_nsessions)
-		return (EINVAL);
+	KASSERTMSG(sesn < sc->sc_nsessions, "sesn=%d nsessions=%d",
+	    sesn, sc->sc_nsessions);
+
 	memset(&sc->sc_sessions[sesn], 0, sizeof(sc->sc_sessions[sesn]));
-	return (0);
 }
 
 /*
@@ -581,7 +578,7 @@ out:
 	crp->crp_etype = err;
 	crypto_done(crp);
 	splx(s);
-	return (err);
+	return 0;
 }
 
 int

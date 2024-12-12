@@ -1,4 +1,4 @@
-/*	$NetBSD: ppb.c,v 1.73 2021/08/07 16:19:14 thorpej Exp $	*/
+/*	$NetBSD: ppb.c,v 1.76 2024/08/29 20:41:49 andvar Exp $	*/
 
 /*
  * Copyright (c) 1996, 1998 Christopher G. Demetriou.  All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ppb.c,v 1.73 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ppb.c,v 1.76 2024/08/29 20:41:49 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ppb.h"
@@ -58,8 +58,8 @@ __KERNEL_RCSID(0, "$NetBSD: ppb.c,v 1.73 2021/08/07 16:19:14 thorpej Exp $");
 	(PCIE_SLCSR_ABP | PCIE_SLCSR_PFD | PCIE_SLCSR_MSC |	\
 	 PCIE_SLCSR_PDC | PCIE_SLCSR_CC | PCIE_SLCSR_LACS)
 
-static const char pcie_linkspeed_strings[5][5] = {
-	"1.25", "2.5", "5.0", "8.0", "16.0"
+static const char pcie_linkspeed_strings[6][5] = {
+	"1.25", "2.5", "5.0", "8.0", "16.0", "32.0",
 };
 
 int	ppb_printevent = 0; /* Print event type if the value is not 0 */
@@ -146,7 +146,7 @@ ppb_print_pcie(device_t self)
 	case PCIE_XCAP_TYPE_PCI_DEV:
 		aprint_normal("Legacy PCI-E Endpoint device");
 		break;
-	case PCIE_XCAP_TYPE_ROOT:
+	case PCIE_XCAP_TYPE_RP:
 		aprint_normal("Root Port of PCI-E Root Complex");
 		break;
 	case PCIE_XCAP_TYPE_UP:
@@ -167,7 +167,7 @@ ppb_print_pcie(device_t self)
 	}
 
 	switch (devtype) {
-	case PCIE_XCAP_TYPE_ROOT:
+	case PCIE_XCAP_TYPE_RP:
 	case PCIE_XCAP_TYPE_DOWN:
 	case PCIE_XCAP_TYPE_PCI2PCIE:
 		reg = pci_conf_read(sc->sc_pc, sc->sc_tag, off + PCIE_LCAP);
@@ -533,7 +533,7 @@ ppb_intr(void *arg)
 
 	/*
 	 * Not me. This check is only required for INTx.
-	 * ppb_intr() would be spilted int ppb_intr_legacy() and ppb_intr_msi()
+	 * ppb_intr() would be split into ppb_intr_legacy() and ppb_intr_msi()
 	 */
 	if ((reg & PCIE_SLCSR_STATCHG_MASK) == 0)
 		return 0;

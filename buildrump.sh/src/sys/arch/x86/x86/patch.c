@@ -1,4 +1,4 @@
-/*	$NetBSD: patch.c,v 1.49 2020/05/07 18:13:05 maxv Exp $	*/
+/*	$NetBSD: patch.c,v 1.53 2022/08/20 23:48:51 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008, 2009 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: patch.c,v 1.49 2020/05/07 18:13:05 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: patch.c,v 1.53 2022/08/20 23:48:51 riastradh Exp $");
 
 #include "opt_lockdebug.h"
 #ifdef i386
@@ -51,7 +51,9 @@ __KERNEL_RCSID(0, "$NetBSD: patch.c,v 1.49 2020/05/07 18:13:05 maxv Exp $");
 
 #include <uvm/uvm.h>
 #include <machine/pmap.h>
+#include <machine/pmap_private.h>
 
+#include <x86/bootspace.h>
 #include <x86/cpuvar.h>
 #include <x86/cputypes.h>
 
@@ -116,32 +118,6 @@ static const struct x86_hotpatch_descriptor hp_nolock_desc = {
 	.srcs = { &hp_nolock_source }
 };
 __link_set_add_rodata(x86_hotpatch_descriptors, hp_nolock_desc);
-
-/* Use LFENCE if available, part of SSE2. */
-extern uint8_t sse2_lfence, sse2_lfence_end;
-static const struct x86_hotpatch_source hp_sse2_lfence_source = {
-	.saddr = &sse2_lfence,
-	.eaddr = &sse2_lfence_end
-};
-static const struct x86_hotpatch_descriptor hp_sse2_lfence_desc = {
-	.name = HP_NAME_SSE2_LFENCE,
-	.nsrc = 1,
-	.srcs = { &hp_sse2_lfence_source }
-};
-__link_set_add_rodata(x86_hotpatch_descriptors, hp_sse2_lfence_desc);
-
-/* Use MFENCE if available, part of SSE2. */
-extern uint8_t sse2_mfence, sse2_mfence_end;
-static const struct x86_hotpatch_source hp_sse2_mfence_source = {
-	.saddr = &sse2_mfence,
-	.eaddr = &sse2_mfence_end
-};
-static const struct x86_hotpatch_descriptor hp_sse2_mfence_desc = {
-	.name = HP_NAME_SSE2_MFENCE,
-	.nsrc = 1,
-	.srcs = { &hp_sse2_mfence_source }
-};
-__link_set_add_rodata(x86_hotpatch_descriptors, hp_sse2_mfence_desc);
 
 #ifdef i386
 /* CAS_64. */
@@ -338,17 +314,6 @@ x86_patch(bool early)
 		 */
 		x86_hotpatch(HP_NAME_NOLOCK, 0);
 #endif
-	}
-
-	if (!early && (cpu_feature[0] & CPUID_SSE2) != 0) {
-		/*
-		 * Faster memory barriers.  We do not need to patch
-		 * membar_producer to use SFENCE because on x86
-		 * ordinary non-temporal stores are always issued in
-		 * program order to main memory and to other CPUs.
-		 */
-		x86_hotpatch(HP_NAME_SSE2_LFENCE, 0);
-		x86_hotpatch(HP_NAME_SSE2_MFENCE, 0);
 	}
 
 #ifdef i386

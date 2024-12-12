@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_cpu.c,v 1.93 2020/10/08 09:16:13 rin Exp $	*/
+/*	$NetBSD: kern_cpu.c,v 1.97 2023/09/02 17:44:59 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008, 2009, 2010, 2012, 2019 The NetBSD Foundation, Inc.
@@ -60,10 +60,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_cpu.c,v 1.93 2020/10/08 09:16:13 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_cpu.c,v 1.97 2023/09/02 17:44:59 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_cpu_ucode.h"
+#include "opt_heartbeat.h"
 #endif
 
 #include <sys/param.h>
@@ -85,6 +86,7 @@ __KERNEL_RCSID(0, "$NetBSD: kern_cpu.c,v 1.93 2020/10/08 09:16:13 rin Exp $");
 #include <sys/namei.h>
 #include <sys/callout.h>
 #include <sys/pcu.h>
+#include <sys/heartbeat.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -137,8 +139,8 @@ mi_cpu_attach(struct cpu_info *ci)
 	/*
 	 * Create a convenience cpuset of just ourselves.
 	 */
-	kcpuset_create(&ci->ci_data.cpu_kcpuset, true);
-	kcpuset_set(ci->ci_data.cpu_kcpuset, cpu_index(ci));
+	kcpuset_create(&ci->ci_kcpuset, true);
+	kcpuset_set(ci->ci_kcpuset, cpu_index(ci));
 
 	TAILQ_INIT(&ci->ci_data.cpu_ld_locks);
 	__cpu_simple_lock_init(&ci->ci_data.cpu_ld_lock);
@@ -368,6 +370,8 @@ cpu_xc_offline(struct cpu_info *ci, void *unused)
 	pcu_save_all_on_cpu();
 #endif
 
+	heartbeat_suspend();
+
 #ifdef __HAVE_MD_CPU_OFFLINE
 	cpu_offline_md();
 #endif
@@ -384,6 +388,8 @@ cpu_xc_online(struct cpu_info *ci, void *unused)
 {
 	struct schedstate_percpu *spc;
 	int s;
+
+	heartbeat_resume();
 
 	spc = &ci->ci_schedstate;
 	s = splsched();

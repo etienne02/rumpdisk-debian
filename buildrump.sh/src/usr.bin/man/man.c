@@ -1,4 +1,4 @@
-/*	$NetBSD: man.c,v 1.68 2020/04/06 19:53:22 maya Exp $	*/
+/*	$NetBSD: man.c,v 1.73 2022/05/10 00:42:00 gutteridge Exp $	*/
 
 /*
  * Copyright (c) 1987, 1993, 1994, 1995
@@ -40,7 +40,7 @@ __COPYRIGHT("@(#) Copyright (c) 1987, 1993, 1994, 1995\
 #if 0
 static char sccsid[] = "@(#)man.c	8.17 (Berkeley) 1/31/95";
 #else
-__RCSID("$NetBSD: man.c,v 1.68 2020/04/06 19:53:22 maya Exp $");
+__RCSID("$NetBSD: man.c,v 1.73 2022/05/10 00:42:00 gutteridge Exp $");
 #endif
 #endif /* not lint */
 
@@ -69,8 +69,13 @@ __RCSID("$NetBSD: man.c,v 1.68 2020/04/06 19:53:22 maya Exp $");
 #define MAN_DEBUG 0		/* debug path output */
 #endif
 
+enum inserttype {
+	INS_TAIL,
+	INS_HEAD
+};
+
 /*
- * manstate: structure collecting the current global state so we can 
+ * manstate: structure collecting the current global state so we can
  * easily identify it and pass it to helper functions in one arg.
  */
 struct manstate {
@@ -85,13 +90,13 @@ struct manstate {
 	char *sectionname;	/* -s: limit search to a given man section */
 	int where;		/* -w: just show paths of all matching files */
 	int getpath;	/* -p: print the path of directories containing man pages */
-		
+
 	/* important tags from the config file */
 	TAG *defaultpath;	/* _default: default MANPATH */
 	TAG *subdirs;		/* _subdir: default subdir search list */
 	TAG *suffixlist;	/* _suffix: for files that can be cat()'d */
 	TAG *buildlist;		/* _build: for files that must be built */
-	
+
 	/* tags for internal use */
 	TAG *intmp;		/* _intmp: tmp files we must cleanup */
 	TAG *missinglist;	/* _missing: pages we couldn't find */
@@ -117,7 +122,8 @@ static void	 jump(char **, const char *, const char *) __dead;
 static int	 manual(char *, struct manstate *, glob_t *);
 static void	 onsig(int) __dead;
 static void	 usage(void) __dead;
-static void	 addpath(struct manstate *, const char *, size_t, const char *);
+static void	 addpath(struct manstate *, const char *, size_t, const char *,
+		     enum inserttype);
 static const char *getclass(const char *);
 static void printmanpath(struct manstate *);
 
@@ -240,8 +246,8 @@ main(int argc, char **argv)
 			argc--;
 		}
 
-	} 
-	
+	}
+
 	if (m.manpath == NULL)
 		m.manpath = getenv("MANPATH"); /* note: -M overrides getenv */
 
@@ -255,7 +261,7 @@ main(int argc, char **argv)
 	m.defaultpath = gettag("_default", 1);
 	m.subdirs = gettag("_subdir", 1);
 	m.suffixlist = gettag("_suffix", 1);
-	m.buildlist = gettag("_build", 1); 
+	m.buildlist = gettag("_build", 1);
 	/* internal use */
 	m.mymanpath = gettag("_new_path", 1);
 	m.missinglist = gettag("_missing", 1);
@@ -270,7 +276,7 @@ main(int argc, char **argv)
 	 * as config() will ensure that any additional entries will match
 	 * the first one.)
 	 */
-	abs_section = (m.section != NULL && 
+	abs_section = (m.section != NULL &&
 		!TAILQ_EMPTY(&m.section->entrylist) &&
 	    		*(TAILQ_FIRST(&m.section->entrylist)->s) == '/');
 
@@ -291,7 +297,7 @@ main(int argc, char **argv)
 
 	/*
 	 * [2] section can now only be non-null if the user asked for
-	 *     a section and that section's elements did not have 
+	 *     a section and that section's elements did not have
 	 *     absolute paths.  in this case we use the section's
 	 *     elements to override _subdir from the config file.
 	 *
@@ -306,10 +312,10 @@ main(int argc, char **argv)
 	 *     go with the default.   in either case we need to append
 	 *     the subdir and machine spec to each element of the path.
 	 *
-	 *     for absolute section paths that come from the config file, 
-	 *     we only append the subdir spec if the path ends in 
-	 *     a '/' --- elements that do not end in '/' are assumed to 
-	 *     not have subdirectories.  this is mainly for backward compat, 
+	 *     for absolute section paths that come from the config file,
+	 *     we only append the subdir spec if the path ends in
+	 *     a '/' --- elements that do not end in '/' are assumed to
+	 *     not have subdirectories.  this is mainly for backward compat,
 	 *     but it allows non-subdir configs like:
 	 *	sect3       /usr/share/man/{old/,}cat3
 	 *	doc         /usr/{pkg,share}/doc/{sendmail/op,sendmail/intro}
@@ -327,7 +333,7 @@ main(int argc, char **argv)
 			if (len < 1)
 				continue;
 			TAILQ_FOREACH(esubd, &m.subdirs->entrylist, q)
-				addpath(&m, p, len, esubd->s);
+				addpath(&m, p, len, esubd->s, INS_TAIL);
 		}
 
 	} else {
@@ -335,20 +341,20 @@ main(int argc, char **argv)
 		TAILQ_FOREACH(epath, &m.defaultpath->entrylist, q) {
 			/* handle trailing "/" magic here ... */
 		  	if (abs_section && epath->s[epath->len - 1] != '/') {
-				addpath(&m, "", 1, epath->s);
+				addpath(&m, "", 1, epath->s, INS_TAIL);
 				continue;
 			}
 
 			TAILQ_FOREACH(esubd, &m.subdirs->entrylist, q)
-				addpath(&m, epath->s, epath->len, esubd->s);
+				addpath(&m, epath->s, epath->len, esubd->s, INS_TAIL);
 		}
 
 	}
 
 	/*
-	 * [4] finally, prepend the "-m" m.addpath to mymanpath if it 
+	 * [4] finally, prepend the "-m" m.addpath to mymanpath if it
 	 *     was specified.   subdirs and machine are always applied to
-	 *     m.addpath. 
+	 *     m.addpath.
 	 */
 	if (m.addpath) {
 
@@ -358,7 +364,7 @@ main(int argc, char **argv)
 			if (len < 1)
 				continue;
 			TAILQ_FOREACH(esubd, &m.subdirs->entrylist, q)
-				addpath(&m, p, len, esubd->s);
+				addpath(&m, p, len, esubd->s, INS_HEAD); /* Add to front */
 		}
 
 	}
@@ -367,7 +373,7 @@ main(int argc, char **argv)
 		printmanpath(&m);
 		exit(cleanup());
 	}
-		
+
 	/*
 	 * now m.mymanpath is complete!
 	 */
@@ -379,8 +385,8 @@ main(int argc, char **argv)
 #endif
 
 	/*
-	 * start searching for matching files and format them if necessary.   
-	 * setup an interrupt handler so that we can ensure that temporary 
+	 * start searching for matching files and format them if necessary.
+	 * setup an interrupt handler so that we can ensure that temporary
 	 * files go away.
 	 */
 	(void)signal(SIGINT, onsig);
@@ -426,7 +432,7 @@ main(int argc, char **argv)
 		}
 		exit(cleanup());
 	}
-		
+
 	/*
 	 * normal case - we display things in a single command, so
 	 * build a list of things to display.  first compute total
@@ -599,7 +605,7 @@ manual(char *page, struct manstate *mp, glob_t *pg)
 
 		/* literal file only yields one match */
 		cnt = pg->gl_pathc - pg->gl_matchc;
- 
+
 		if (manual_find_literalfile(mp, &pg->gl_pathv[cnt])) {
 			anyfound = 1;
 		} else {
@@ -622,7 +628,7 @@ manual(char *page, struct manstate *mp, glob_t *pg)
 	/* For each man directory in mymanpath ... */
 	TAILQ_FOREACH(mdir, &mp->mymanpath->entrylist, q) {
 
-		/* 
+		/*
 		 * use glob(3) to look in the filesystem for matching files.
 		 * match any suffix here, as we will check that later.
 		 */
@@ -641,8 +647,8 @@ manual(char *page, struct manstate *mp, glob_t *pg)
 			continue;
 
 		/*
-		 * start going through the matches glob(3) just found and 
-		 * use m.pathsearch (if present) to filter out pages we 
+		 * start going through the matches glob(3) just found and
+		 * use m.pathsearch (if present) to filter out pages we
 		 * don't want.  then verify the suffix is valid, and build
 		 * the page if we have a _build suffix.
 		 */
@@ -731,7 +737,7 @@ fmtcheck_ok(const char *userfmt, const char *template)
 	return userfmt;
 }
 
-/* 
+/*
  * build_page --
  *	Build a man page for display.
  */
@@ -752,7 +758,7 @@ build_page(const char *fmt, char **pathp, struct manstate *mp)
 	}
 
        /*
-        * Historically man chdir'd to the root of the man tree. 
+        * Historically man chdir'd to the root of the man tree.
         * This was used in man pages that contained relative ".so"
         * directives (including other man pages for command aliases etc.)
         * It even went one step farther, by examining the first line
@@ -760,12 +766,12 @@ build_page(const char *fmt, char **pathp, struct manstate *mp)
         * make hard(?) links to the cat'ted man pages for space savings.
         * (We don't do that here, but we could).
         */
- 
+
        /* copy and find the end */
        for (b = buf, p = *pathp; (*b++ = *p++) != '\0';)
                continue;
- 
-	/* 
+
+	/*
 	 * skip the last two path components, page name and man[n] ...
 	 * (e.g. buf will be "/usr/share/man" and p will be "man1/man.1")
 	 * we also save a pointer to our current directory so that we
@@ -797,7 +803,7 @@ build_page(const char *fmt, char **pathp, struct manstate *mp)
 	if ((tmpdir = getenv("TMPDIR")) == NULL)
 		tmpdir = _PATH_TMP;
 	tmpdirlen = strlen(tmpdir);
-	(void)snprintf(tpath, sizeof (tpath), "%s%s%s", tmpdir, 
+	(void)snprintf(tpath, sizeof (tpath), "%s%s%s", tmpdir,
 	    (tmpdirlen > 0 && tmpdir[tmpdirlen-1] == '/') ? "" : "/", TMPFILE);
 	if ((fd = mkstemp(tpath)) == -1) {
 		warn("%s", tpath);
@@ -926,7 +932,7 @@ check_pager(const char *name)
 		++p;
 
 	/* make sure it's "more", not "morex" */
-	if (!strncmp(p, "more", 4) && (!p[4] || isspace((unsigned char)p[4]))){
+	if (!strncmp(p, "more", 4) && (!p[4] || isspace((unsigned char)p[4]))) {
 		char *newname;
 		(void)asprintf(&newname, "%s %s", p, "-s");
 		name = newname;
@@ -954,7 +960,7 @@ jump(char **argv, const char *flag, const char *name)
 	err(EXIT_FAILURE, "Cannot execute `%s'", name);
 }
 
-/* 
+/*
  * onsig --
  *	If signaled, delete the temporary files.
  */
@@ -982,7 +988,7 @@ cleanup(void)
 	int rval;
 
 	rval = EXIT_SUCCESS;
-	/* 
+	/*
 	 * note that _missing and _intmp were created by main(), so
 	 * gettag() cannot return NULL here.
 	 */
@@ -1012,14 +1018,15 @@ getclass(const char *machine)
 }
 
 static void
-addpath(struct manstate *m, const char *dir, size_t len, const char *sub)
+addpath(struct manstate *m, const char *dir, size_t len, const char *sub,
+	enum inserttype ishead)
 {
 	char buf[2 * MAXPATHLEN + 1];
 	(void)snprintf(buf, sizeof(buf), "%s%s%s{/%s,%s%s%s}",
 	     dir, (dir[len - 1] == '/') ? "" : "/", sub, m->machine,
 	     m->machclass ? "/" : "", m->machclass ? m->machclass : "",
 	     m->machclass ? "," : "");
-	if (addentry(m->mymanpath, buf, 0) < 0)
+	if (addentry(m->mymanpath, buf, (int)ishead) < 0)
 		errx(EXIT_FAILURE, "malloc failed");
 }
 
@@ -1033,8 +1040,8 @@ usage(void)
 	(void)fprintf(stderr, "Usage: %s [-acw|-h] [-C cfg] [-M path] "
 	    "[-m path] [-S srch] [[-s] sect] name ...\n", getprogname());
 	(void)fprintf(stderr, "Usage: %s [-C file] -f command ...\n", getprogname());
-	(void)fprintf(stderr, 
-	    "Usage: %s [-C file] -k keyword ...\n", 
+	(void)fprintf(stderr,
+	    "Usage: %s [-C file] -k keyword ...\n",
 	    getprogname());
 	(void)fprintf(stderr, "Usage: %s -p\n", getprogname());
 	exit(EXIT_FAILURE);
@@ -1052,11 +1059,11 @@ printmanpath(struct manstate *m)
 	glob_t pg;
 	struct stat sb;
 	TAG *path = m->mymanpath;
-	
+
 	/* the tail queue is empty if no _default tag is defined in * man.conf */
 	if (TAILQ_EMPTY(&path->entrylist))
 		errx(EXIT_FAILURE, "Empty manpath");
-		
+
 	TAILQ_FOREACH(epath, &path->entrylist, q) {
 		if (glob(epath->s, GLOB_BRACE | GLOB_NOSORT, NULL, &pg) != 0)
 			err(EXIT_FAILURE, "glob failed");

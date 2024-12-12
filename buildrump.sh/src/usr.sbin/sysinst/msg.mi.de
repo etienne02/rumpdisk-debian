@@ -1,4 +1,4 @@
-/*	$NetBSD: msg.mi.de,v 1.33 2021/01/31 22:19:24 rillig Exp $	*/
+/*	$NetBSD: msg.mi.de,v 1.50 2024/06/20 19:00:35 rillig Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -143,6 +143,8 @@ message ask_disk
 message Available_disks
 {Verfügbare Festplatten}
 
+message Available_wedges	{Vordefinierte "wedges"}
+
 message heads
 {Köpfe}
 
@@ -150,7 +152,7 @@ message sectors
 {Sektoren}
 
 message mountpoint
-{Mountpoint (oder 'kein(e)'))}
+{Mountpoint (oder '-')}
 
 message cylname
 {Zyl}
@@ -303,6 +305,8 @@ message cvtscheme_keep		{beibehalten (nur einen Teil benutzen)}
 message cvtscheme_delete	{löschen (alle Daten gehen verloren!)}
 message cvtscheme_convert	{in ein anderes Schema konvertieren}
 message cvtscheme_abort		{abbrechen}
+message cvtscheme_error
+{Nicht alle Partitionen konnten übernommen werden}
 
 /* Called with:				Example
  *  $0 = device name			wd0
@@ -639,7 +643,13 @@ message net_defroute
 {IPv4-Gateway}
 
 message net_media
-{Art der Netzwerkverbindung}
+{Art der Netzwerkverbindung (für Automatik leer lassen)}
+
+message net_ssid
+{WLAN-SSID?}
+
+message net_passphrase
+{WLAN-Passwort?}
 
 message netok
 {Nachfolgend sehen Sie die aktuellen Netzwerkeinstellungen.
@@ -865,12 +875,18 @@ message cur_distsets
 }
 
 message cur_distsets_header
-{   Distributionspaket       Ausgewählt
-   ------------------------ ----------
+{   Distributionspaket                 Ausgewählt
+   ---------------------------------- ----------
 }
 
 message set_base
 {Basispaket}
+
+message set_base32
+{Basispaket f?r 32-Bit-Kompatibilit?t}
+
+message set_base64
+{Basispaket f?r 64-Bit-Kompatibilit?t}
 
 message set_system
 {Systemkonfiguration (/etc)}
@@ -884,8 +900,14 @@ message set_dtb
 message set_games
 {Spiele}
 
+message set_gpufw
+{Graphics driver firmware}
+
 message set_man_pages
 {Handbuchseiten (man pages)}
+
+message set_man_pages_html
+{Handbuchseiten (man pages) in HTML}
 
 message set_misc
 {Verschiedenes}
@@ -940,6 +962,12 @@ message set_xsrc
 
 message set_debug
 {Debug-Information}
+
+message set_debug32
+{Debug-Information (32-Bit)}
+
+message set_debug64
+{Debug-Information (64-Bit)}
 
 message set_xdebug
 {X11 Debug-Information}
@@ -1025,6 +1053,13 @@ message rootpw
 {Das Rootpasswort für das neu installierte System wurde noch nicht gesetzt
 und ist somit leer. Möchten Sie jetzt ein Rootpasswort für das System setzen?}
 
+message force_rootpw
+{Das Rootpasswort für das neu installierte System wurde noch nicht gesetzt.
+Geben Sie es jetzt ein. 
+ 
+Falls Sie kein Rootpasswort setzen möchten, geben Sie ein leeres
+Passwort ein.}
+
 message rootsh
 {Sie können jetzt die Standardshell für Benutzer "root" auswählen.
 Die Vorgabe dafür ist /bin/sh, aber vielleicht bevorzugen Sie eine andere
@@ -1089,12 +1124,18 @@ message Set_Sizes {Größen der NetBSD-Partitionen festlegen}
  */
 message Use_Default_Parts {Standard-Partitionsgößen verwenden}
 
+/* Called with: 			Example
+ *  $0 = partitioning name		Master Boot Record (MBR)
+ *  $1 = short version of $0		MBR
+ */
+message Use_Empty_Parts {Partitionen frei definieren}
+
 /* Called with:				Example
  *  $0 = current partitioning name	Master Boot Record (MBR)
  *  $1 = short version of $0		MBR
  */
 message Use_Different_Part_Scheme
-{Alles löschen, anderes Partitionierungsverfahren statt $1 verwenden}
+{Alles löschen, anders partitionieren (statt $1)}
 
 message Gigabytes	{Gigabyte}
 message Megabytes	{Megabyte}
@@ -1123,6 +1164,7 @@ message Host {Host}
 message Base_dir {Basispfad}
 message Set_dir_bin {Binärpaket-Verzeichnis}
 message Set_dir_src {Quelltext-Verzeichnis}
+message Dist_postfix {Dateierweiterung}
 message Xfer_dir {Zwischenspeicher}
 message transfer_method {Download via}
 message User {Benutzer}
@@ -1252,6 +1294,7 @@ message failed {Fehlgeschlagen}
 message askfsmountadv {Mountpoint oder 'raid' oder 'cgd' oder 'lvm'?}
 message partman {Erweiterte Partitionierung}
 message editpart {Partitionen bearbeiten}
+message selectwedge {Bereits existierende "wedges" dk(4)}
 
 message fremove {ENTFERNEN}
 message remove {Entfernen}
@@ -1381,7 +1424,9 @@ message No_free_space {Kein freier Speicherplatz.}
 message free_space_line {Speicherplatz bei $0..$1 $3 (Größe $2 $3)\n}
 
 message	fs_type_ffsv2	{FFSv2}
+message	fs_type_ffsv2ea	{FFSv2ea}
 message	fs_type_ffs	{FFS}
+message	fs_type_efi_sp	{EFI Systempartition}
 message fs_type_ext2old	{Linux Ext2 (alt)}
 message	other_fs_type	{Anderer Typ}
 
@@ -1537,3 +1582,8 @@ message clone_target_hdr
 message clone_target_disp		{duplizierte Partition(en)}
 message clone_src_done
 {Quellauswahl OK, weiter mit der Zielauswahl}
+
+message network_ok
+{Ihr Netzwerk scheint bereits zu funktionieren. 
+Möchten Sie die Konfiguration überspringen 
+und die bisherigen Einstellungen verwenden?}

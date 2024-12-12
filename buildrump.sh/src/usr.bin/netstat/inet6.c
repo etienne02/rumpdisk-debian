@@ -1,10 +1,10 @@
-/*	$NetBSD: inet6.c,v 1.77 2020/08/28 07:23:48 ozaki-r Exp $	*/
+/*	$NetBSD: inet6.c,v 1.84 2022/10/28 05:27:17 ozaki-r Exp $	*/
 /*	BSDI inet.c,v 2.3 1995/10/24 02:19:29 prb Exp	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, 1998, and 1999 WIDE Project.
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -16,7 +16,7 @@
  * 3. Neither the name of the project nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -64,7 +64,7 @@
 #if 0
 static char sccsid[] = "@(#)inet.c	8.4 (Berkeley) 4/20/94";
 #else
-__RCSID("$NetBSD: inet6.c,v 1.77 2020/08/28 07:23:48 ozaki-r Exp $");
+__RCSID("$NetBSD: inet6.c,v 1.84 2022/10/28 05:27:17 ozaki-r Exp $");
 #endif
 #endif /* not lint */
 
@@ -167,20 +167,20 @@ static struct timeval now;
 static void
 ip6protoprhdr(void)
 {
-	
+
 	printf("Active Internet6 connections");
-	
+
 	if (aflag)
 		printf(" (including servers)");
 	putchar('\n');
-	
+
 	if (Aflag) {
 		printf("%-8.8s ", "PCB");
 		width = 18;
 	}
 	printf(
 	    Vflag ? "%-5.5s %-6.6s %-6.6s  %*.*s %*.*s %-13.13s Expires\n"
-	          : "%-5.5s %-6.6s %-6.6s  %*.*s %*.*s %s\n",
+		  : "%-5.5s %-6.6s %-6.6s  %*.*s %*.*s %s\n",
 	    "Proto", "Recv-Q", "Send-Q",
 	    -width, width, "Local Address",
 	    -width, width, "Foreign Address", "(state)");
@@ -188,14 +188,14 @@ ip6protoprhdr(void)
 
 static void
 ip6protopr0(intptr_t ppcb, u_long rcv_sb_cc, u_long snd_sb_cc,
-	const struct in6_addr *laddr, u_int16_t lport,
-	const struct in6_addr *faddr, u_int16_t fport,
+	const struct in6_addr *laddr, uint16_t lport,
+	const struct in6_addr *faddr, uint16_t fport,
 	short t_state, const char *name, const struct timeval *expires)
 {
 	static const char *shorttcpstates[] = {
 		"CLOSED",       "LISTEN",       "SYNSEN",       "SYSRCV",
 		"ESTABL",       "CLWAIT",       "FWAIT1",       "CLOSNG",
-		"LASTAK",       "FWAIT2",       "TMWAIT",
+		"LASTAK",       "FWAIT2",       "TMWAIT"
 	};
 	int istcp;
 
@@ -239,10 +239,11 @@ ip6protopr0(intptr_t ppcb, u_long rcv_sb_cc, u_long snd_sb_cc,
 static void
 dbg_printf(const char *fmt, ...)
 {
+
 	return;
 }
 
-void 
+void
 print_vtw_v6(const vtw_t *vtw)
 {
 	const vtw_v6_t *v6 = (const vtw_v6_t *)vtw;
@@ -256,23 +257,23 @@ print_vtw_v6(const vtw_t *vtw)
 	timersub(&vtw->expire, &now, &delta);
 
 	if (vtw->expire.tv_sec == 0 && vtw->expire.tv_usec == -1) {
-		dbg_printf("%15.15s:%d %15.15s:%d reclaimed\n"
-		    ,buf[0], ntohs(v6->lport)
-		    ,buf[1], ntohs(v6->fport));
+		dbg_printf("%15.15s:%d %15.15s:%d reclaimed\n",
+		    buf[0], ntohs(v6->lport),
+		    buf[1], ntohs(v6->fport));
 		if (!(Vflag && vflag))
 			return;
 	} else if (vtw->expire.tv_sec == 0)
 		return;
 	else if (timercmp(&delta, &zero, <) && !(Vflag && vflag)) {
-		dbg_printf("%15.15s:%d %15.15s:%d expired\n"
-		    ,buf[0], ntohs(v6->lport)
-		    ,buf[1], ntohs(v6->fport));
+		dbg_printf("%15.15s:%d %15.15s:%d expired\n",
+		    buf[0], ntohs(v6->lport),
+		    buf[1], ntohs(v6->fport));
 		return;
 	} else {
-		dbg_printf("%15.15s:%d %15.15s:%d expires in %.3fms\n"
-		    ,buf[0], ntohs(v6->lport)
-		    ,buf[1], ntohs(v6->fport)
-		    ,delta.tv_sec * 1000.0 + delta.tv_usec / 1000.0);
+		dbg_printf("%15.15s:%d %15.15s:%d expires in %.3fms\n",
+		    buf[0], ntohs(v6->lport),
+		    buf[1], ntohs(v6->fport),
+		    delta.tv_sec * 1000.0 + delta.tv_usec / 1000.0);
 	}
 	ip6protopr0(0, 0, 0,
 		 &v6->laddr, v6->lport,
@@ -286,7 +287,8 @@ getpcblist_kmem(u_long off, const char *name, size_t *len)
 {
 	struct socket sockb;
 	struct inpcbtable table;
-	struct inpcb_hdr *next, *prev;
+	struct inpcb *next, *prev;
+	struct inpcb *inp;
 	int istcp = strcmp(name, "tcp6") == 0;
 	struct kinfo_pcb *pcblist;
 	size_t size = 100, i;
@@ -302,47 +304,46 @@ getpcblist_kmem(u_long off, const char *name, size_t *len)
 	next = TAILQ_FIRST(head);
 	prev = TAILQ_END(head);
 
-	if ((pcblist = malloc(size * sizeof(*pcblist))) == NULL)
-		err(1, "malloc");
+	pcblist = NULL;
+	if (reallocarr(&pcblist, size, sizeof(*pcblist)) != 0)
+		err(1, "reallocarr");
 
 	i = 0;
 	while (next != TAILQ_END(head)) {
 		kread((u_long)next, (char *)&in6pcb, sizeof in6pcb);
-		next = TAILQ_NEXT(&in6pcb, in6p_queue);
+		inp = (struct inpcb *)&in6pcb;
+		next = TAILQ_NEXT(inp, inp_queue);
 		prev = next;
 
-		if (in6pcb.in6p_af != AF_INET6)
+		if (inp->inp_af != AF_INET6)
 			continue;
 
-		kread((u_long)in6pcb.in6p_socket, (char *)&sockb, 
+		kread((u_long)inp->inp_socket, (char *)&sockb,
 		    sizeof (sockb));
 		if (istcp) {
 #ifdef TCP6
-			kread((u_long)in6pcb.in6p_ppcb,
+			kread((u_long)inp->inp_ppcb,
 			    (char *)&tcp6cb, sizeof (tcp6cb));
 #else
-			kread((u_long)in6pcb.in6p_ppcb,
+			kread((u_long)inp->inp_ppcb,
 			    (char *)&tcpcb, sizeof (tcpcb));
 #endif
 		}
-		pcblist[i].ki_ppcbaddr = 
-		    istcp ? (uintptr_t) in6pcb.in6p_ppcb : (uintptr_t) prev;
+		pcblist[i].ki_ppcbaddr =
+		    istcp ? (uintptr_t) inp->inp_ppcb : (uintptr_t) prev;
 		pcblist[i].ki_rcvq = (uint64_t)sockb.so_rcv.sb_cc;
 		pcblist[i].ki_sndq = (uint64_t)sockb.so_snd.sb_cc;
-		sin6.sin6_addr = in6pcb.in6p_laddr;
-		sin6.sin6_port = in6pcb.in6p_lport;
+		sin6.sin6_addr = in6p_laddr(inp);
+		sin6.sin6_port = inp->inp_lport;
 		memcpy(&pcblist[i].ki_s, &sin6, sizeof(sin6));
-		sin6.sin6_addr = in6pcb.in6p_faddr;
-		sin6.sin6_port = in6pcb.in6p_fport;
+		sin6.sin6_addr = in6p_faddr(inp);
+		sin6.sin6_port = inp->inp_fport;
 		memcpy(&pcblist[i].ki_d, &sin6, sizeof(sin6));
 		pcblist[i].ki_tstate = tcpcb.t_state;
 		if (i++ == size) {
 			size += 100;
-			struct kinfo_pcb *n = realloc(pcblist,
-			    size * sizeof(*pcblist));
-			if (n == NULL)
-				err(1, "realloc");
-			pcblist = n;
+			if (reallocarr(&pcblist, size, sizeof(*pcblist)) != 0)
+				err(1, "reallocarr");
 		}
 	}
 	*len = i;
@@ -426,56 +427,61 @@ tcp6_stats(u_long off, const char *name)
 
 	printf ("%s:\n", name);
 
-#define	p(f, m) if (tcp6stat.f || sflag <= 1) \
-    printf(m, tcp6stat.f, plural(tcp6stat.f))
-#define	p2(f1, f2, m) if (tcp6stat.f1 || tcp6stat.f2 || sflag <= 1) \
-    printf(m, tcp6stat.f1, plural(tcp6stat.f1), tcp6stat.f2, plural(tcp6stat.f2))
-#define	p3(f, m) if (tcp6stat.f || sflag <= 1) \
-    printf(m, tcp6stat.f, plurales(tcp6stat.f))
+#define	p(f, m) if (tcp6stat.f || sflag <= 1)			\
+		printf(m, tcp6stat.f, plural(tcp6stat.f))
+#define	p2(f1, f2, m) if (tcp6stat.f1 || tcp6stat.f2 || sflag <= 1)	 \
+		printf(m, tcp6stat.f1, plural(tcp6stat.f1), tcp6stat.f2, \
+		    plural(tcp6stat.f2))
+#define	p3(f, m) if (tcp6stat.f || sflag <= 1)			\
+		printf(m, tcp6stat.f, plurales(tcp6stat.f))
 
 	p(tcp6s_sndtotal, "\t%ld packet%s sent\n");
 	p2(tcp6s_sndpack,tcp6s_sndbyte,
-		"\t\t%ld data packet%s (%ld byte%s)\n");
+	    "\t\t%ld data packet%s (%ld byte%s)\n");
 	p2(tcp6s_sndrexmitpack, tcp6s_sndrexmitbyte,
-		"\t\t%ld data packet%s (%ld byte%s) retransmitted\n");
+	    "\t\t%ld data packet%s (%ld byte%s) retransmitted\n");
 	p2(tcp6s_sndacks, tcp6s_delack,
-		"\t\t%ld ack-only packet%s (%ld packet%s delayed)\n");
+	    "\t\t%ld ack-only packet%s (%ld packet%s delayed)\n");
 	p(tcp6s_sndurg, "\t\t%ld URG only packet%s\n");
 	p(tcp6s_sndprobe, "\t\t%ld window probe packet%s\n");
 	p(tcp6s_sndwinup, "\t\t%ld window update packet%s\n");
 	p(tcp6s_sndctrl, "\t\t%ld control packet%s\n");
 	p(tcp6s_rcvtotal, "\t%ld packet%s received\n");
-	p2(tcp6s_rcvackpack, tcp6s_rcvackbyte, "\t\t%ld ack%s (for %ld byte%s)\n");
+	p2(tcp6s_rcvackpack, tcp6s_rcvackbyte,
+	    "\t\t%ld ack%s (for %ld byte%s)\n");
 	p(tcp6s_rcvdupack, "\t\t%ld duplicate ack%s\n");
 	p(tcp6s_rcvacktoomuch, "\t\t%ld ack%s for unsent data\n");
 	p2(tcp6s_rcvpack, tcp6s_rcvbyte,
-		"\t\t%ld packet%s (%ld byte%s) received in-sequence\n");
+	    "\t\t%ld packet%s (%ld byte%s) received in-sequence\n");
 	p2(tcp6s_rcvduppack, tcp6s_rcvdupbyte,
-		"\t\t%ld completely duplicate packet%s (%ld byte%s)\n");
+	    "\t\t%ld completely duplicate packet%s (%ld byte%s)\n");
 	p(tcp6s_pawsdrop, "\t\t%ld old duplicate packet%s\n");
 	p2(tcp6s_rcvpartduppack, tcp6s_rcvpartdupbyte,
-		"\t\t%ld packet%s with some dup. data (%ld byte%s duped)\n");
+	    "\t\t%ld packet%s with some dup. data (%ld byte%s duped)\n");
 	p2(tcp6s_rcvoopack, tcp6s_rcvoobyte,
-		"\t\t%ld out-of-order packet%s (%ld byte%s)\n");
+	    "\t\t%ld out-of-order packet%s (%ld byte%s)\n");
 	p2(tcp6s_rcvpackafterwin, tcp6s_rcvbyteafterwin,
-		"\t\t%ld packet%s (%ld byte%s) of data after window\n");
+	    "\t\t%ld packet%s (%ld byte%s) of data after window\n");
 	p(tcp6s_rcvwinprobe, "\t\t%ld window probe%s\n");
 	p(tcp6s_rcvwinupd, "\t\t%ld window update packet%s\n");
 	p(tcp6s_rcvafterclose, "\t\t%ld packet%s received after close\n");
 	p(tcp6s_rcvbadsum, "\t\t%ld discarded for bad checksum%s\n");
-	p(tcp6s_rcvbadoff, "\t\t%ld discarded for bad header offset field%s\n");
+	p(tcp6s_rcvbadoff,
+	    "\t\t%ld discarded for bad header offset field%s\n");
 	p(tcp6s_rcvshort, "\t\t%ld discarded because packet%s too short\n");
 	p(tcp6s_connattempt, "\t%ld connection request%s\n");
 	p(tcp6s_accepts, "\t%ld connection accept%s\n");
 	p(tcp6s_badsyn, "\t%ld bad connection attempt%s\n");
-	p(tcp6s_connects, "\t%ld connection%s established (including accepts)\n");
+	p(tcp6s_connects,
+	    "\t%ld connection%s established (including accepts)\n");
 	p2(tcp6s_closed, tcp6s_drops,
-		"\t%ld connection%s closed (including %ld drop%s)\n");
+	    "\t%ld connection%s closed (including %ld drop%s)\n");
 	p(tcp6s_conndrops, "\t%ld embryonic connection%s dropped\n");
 	p2(tcp6s_rttupdated, tcp6s_segstimed,
-		"\t%ld segment%s updated rtt (of %ld attempt%s)\n");
+	    "\t%ld segment%s updated rtt (of %ld attempt%s)\n");
 	p(tcp6s_rexmttimeo, "\t%ld retransmit timeout%s\n");
-	p(tcp6s_timeoutdrop, "\t\t%ld connection%s dropped by rexmit timeout\n");
+	p(tcp6s_timeoutdrop,
+	    "\t\t%ld connection%s dropped by rexmit timeout\n");
 	p(tcp6s_persisttimeo, "\t%ld persist timeout%s\n");
 	p(tcp6s_persistdrop, "\t%ld connection%s timed out in persist\n");
 	p(tcp6s_keeptimeo, "\t%ld keepalive timeout%s\n");
@@ -497,7 +503,7 @@ void
 udp6_stats(u_long off, const char *name)
 {
 	uint64_t udp6stat[UDP6_NSTATS];
-	u_quad_t delivered;
+	uint64_t delivered;
 
 	if (use_sysctl) {
 		size_t size = sizeof(udp6stat);
@@ -510,10 +516,10 @@ udp6_stats(u_long off, const char *name)
 		return;
 	}
 	printf("%s:\n", name);
-#define	p(f, m) if (udp6stat[f] || sflag <= 1) \
-    printf(m, (unsigned long long)udp6stat[f], plural(udp6stat[f]))
-#define	p1(f, m) if (udp6stat[f] || sflag <= 1) \
-    printf(m, (unsigned long long)udp6stat[f])
+#define	p(f, m) if (udp6stat[f] || sflag <= 1)				      \
+		printf(m, (unsigned long long)udp6stat[f], plural(udp6stat[f]))
+#define	p1(f, m) if (udp6stat[f] || sflag <= 1)			\
+		printf(m, (unsigned long long)udp6stat[f])
 	p(UDP6_STAT_IPACKETS, "\t%llu datagram%s received\n");
 	p1(UDP6_STAT_HDROPS, "\t%llu with incomplete header\n");
 	p1(UDP6_STAT_BADLEN, "\t%llu with bad data length field\n");
@@ -629,7 +635,7 @@ static	const char *ip6nh[] = {
 /*220*/	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 /*240*/	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL
 };
 
 /*
@@ -655,10 +661,10 @@ ip6_stats(u_long off, const char *name)
 	}
 	printf("%s:\n", name);
 
-#define	p(f, m) if (ip6stat[f] || sflag <= 1) \
-    printf(m, (unsigned long long)ip6stat[f], plural(ip6stat[f]))
-#define	p1(f, m) if (ip6stat[f] || sflag <= 1) \
-    printf(m, (unsigned long long)ip6stat[f])
+#define	p(f, m) if (ip6stat[f] || sflag <= 1)				     \
+		printf(m, (unsigned long long)ip6stat[f], plural(ip6stat[f]))
+#define	p1(f, m) if (ip6stat[f] || sflag <= 1)			\
+		printf(m, (unsigned long long)ip6stat[f])
 
 	p(IP6_STAT_TOTAL, "\t%llu total packet%s received\n");
 	p1(IP6_STAT_TOOSMALL, "\t%llu with size smaller than minimum\n");
@@ -674,14 +680,15 @@ ip6_stats(u_long off, const char *name)
 	p(IP6_STAT_DELIVERED, "\t%llu packet%s for this host\n");
 	p(IP6_STAT_FORWARD, "\t%llu packet%s forwarded\n");
 	p(IP6_STAT_FASTFORWARD, "\t%llu packet%s fast forwarded\n");
-	p1(IP6_STAT_FASTFORWARDFLOWS, "\t%llu fast forward flows\n");	
+	p1(IP6_STAT_FASTFORWARDFLOWS, "\t%llu fast forward flows\n");
 	p(IP6_STAT_CANTFORWARD, "\t%llu packet%s not forwardable\n");
 	p(IP6_STAT_REDIRECTSENT, "\t%llu redirect%s sent\n");
 	p(IP6_STAT_LOCALOUT, "\t%llu packet%s sent from this host\n");
 	p(IP6_STAT_RAWOUT, "\t%llu packet%s sent with fabricated ip header\n");
 	p(IP6_STAT_ODROPPED,
 	    "\t%llu output packet%s dropped due to no bufs, etc.\n");
-	p(IP6_STAT_NOROUTE, "\t%llu output packet%s discarded due to no route\n");
+	p(IP6_STAT_NOROUTE,
+	    "\t%llu output packet%s discarded due to no route\n");
 	p(IP6_STAT_FRAGMENTED, "\t%llu output datagram%s fragmented\n");
 	p(IP6_STAT_OFRAGMENTS, "\t%llu fragment%s created\n");
 	p(IP6_STAT_CANTFRAG, "\t%llu datagram%s that can't be fragmented\n");
@@ -709,14 +716,14 @@ ip6_stats(u_long off, const char *name)
 	p(IP6_STAT_M1, "\t\t%llu one mbuf%s\n");
 	for (first = 1, i = 0; i < 32; i++) {
 		char ifbuf[IFNAMSIZ];
-		if (ip6stat[IP6_STAT_M2M + i] != 0) {		
+		if (ip6stat[IP6_STAT_M2M + i] != 0) {
 			if (first) {
 				printf("\t\ttwo or more mbuf:\n");
 				first = 0;
 			}
 			printf("\t\t\t%s = %llu\n",
-			       if_indextoname(i, ifbuf),
-			       (unsigned long long)ip6stat[IP6_STAT_M2M + i]);
+			    if_indextoname(i, ifbuf),
+			    (unsigned long long)ip6stat[IP6_STAT_M2M + i]);
 		}
 	}
 	p(IP6_STAT_MEXT1, "\t\t%llu one ext mbuf%s\n");
@@ -724,30 +731,31 @@ ip6_stats(u_long off, const char *name)
 	p(IP6_STAT_EXTHDRTOOLONG,
 	    "\t%llu packet%s whose headers are not continuous\n");
 	p(IP6_STAT_NOGIF, "\t%llu tunneling packet%s that can't find gif\n");
-	p(IP6_STAT_NOIPSEC, "\t%llu tunneling packet%s that can't find ipsecif\n");
+	p(IP6_STAT_NOIPSEC,
+	    "\t%llu tunneling packet%s that can't find ipsecif\n");
 	p(IP6_STAT_TOOMANYHDR,
 	    "\t%llu packet%s discarded due to too many headers\n");
 
 	/* for debugging source address selection */
-#define PRINT_SCOPESTAT(s,i) do {\
-		switch(i) { /* XXX hardcoding in each case */\
-		case 1:\
-			p(s, "\t\t%llu node-local%s\n");\
-			break;\
-		case 2:\
-			p(s, "\t\t%llu link-local%s\n");\
-			break;\
-		case 5:\
-			p(s, "\t\t%llu site-local%s\n");\
-			break;\
-		case 14:\
-			p(s, "\t\t%llu global%s\n");\
-			break;\
-		default:\
-			printf("\t\t%llu addresses scope=%x\n",\
-			       (unsigned long long)ip6stat[s], i);\
-		}\
-	} while(/*CONSTCOND*/0);
+#define PRINT_SCOPESTAT(s, i) do {				\
+		switch (i) { /* XXX hardcoding in each case */	\
+		case 1:						\
+			p(s, "\t\t%llu node-local%s\n");	\
+			break;					\
+		case 2:						\
+			p(s, "\t\t%llu link-local%s\n");	\
+			break;					\
+		case 5:						\
+			p(s, "\t\t%llu site-local%s\n");	\
+			break;					\
+		case 14:					\
+			p(s, "\t\t%llu global%s\n");		\
+			break;					\
+		default:					\
+			printf("\t\t%llu addresses scope=%x\n",	\
+			    (unsigned long long)ip6stat[s], i);	\
+		}						\
+	} while(0);
 
 	p(IP6_STAT_SOURCES_NONE,
 	  "\t%llu failure%s of source address selection\n");
@@ -803,11 +811,15 @@ ip6_stats(u_long off, const char *name)
 	p(IP6_STAT_PFILDROP_OUT, "\t%llu output packet%s dropped by pfil\n");
 	p(IP6_STAT_IPSECDROP_IN, "\t%llu input packet%s dropped by IPsec\n");
 	p(IP6_STAT_IPSECDROP_OUT, "\t%llu output packet%s dropped by IPsec\n");
-	p(IP6_STAT_IFDROP, "\t%llu input packet%s dropped due to interface state\n");
-	p(IP6_STAT_IDROPPED, "\t%llu input packet%s dropped due to no bufs, etc.\n");
-	p(IP6_STAT_TIMXCEED, "\t%llu packet%s dropped due to hop limit exceeded\n");
+	p(IP6_STAT_IFDROP,
+	    "\t%llu input packet%s dropped due to interface state\n");
+	p(IP6_STAT_IDROPPED,
+	    "\t%llu input packet%s dropped due to no bufs, etc.\n");
+	p(IP6_STAT_TIMXCEED,
+	    "\t%llu packet%s dropped due to hop limit exceeded\n");
 	p(IP6_STAT_TOOBIG, "\t%llu packet%s dropped (too big)\n");
-	p(IP6_STAT_RTREJECT, "\t%llu output packet%s discarded due to reject route\n");
+	p(IP6_STAT_RTREJECT,
+	    "\t%llu output packet%s discarded due to reject route\n");
 #undef p
 #undef p1
 }
@@ -820,11 +832,11 @@ ip6_ifstats(const char *ifname)
 {
 	struct in6_ifreq ifr;
 	int s;
-#define	p(f, m) if (ifr.ifr_ifru.ifru_stat.f || sflag <= 1) \
-    printf(m, (unsigned long long)ifr.ifr_ifru.ifru_stat.f, \
-	plural(ifr.ifr_ifru.ifru_stat.f))
-#define	p_5(f, m) if (ifr.ifr_ifru.ifru_stat.f || sflag <= 1) \
-    printf(m, (unsigned long long)ip6stat.f)
+#define	p(f, m) if (ifr.ifr_ifru.ifru_stat.f || sflag <= 1)		\
+		printf(m, (unsigned long long)ifr.ifr_ifru.ifru_stat.f, \
+		    plural(ifr.ifr_ifru.ifru_stat.f))
+#define	p_5(f, m) if (ifr.ifr_ifru.ifru_stat.f || sflag <= 1)	\
+		printf(m, (unsigned long long)ip6stat.f)
 
 	if ((s = socket(AF_INET6, SOCK_DGRAM, 0)) < 0) {
 		perror("Warning: socket(AF_INET6)");
@@ -845,17 +857,19 @@ ip6_ifstats(const char *ifname)
 	p(ifs6_in_noroute, "\t%llu datagram%s with no route received\n");
 	p(ifs6_in_addrerr, "\t%llu datagram%s with invalid dst received\n");
 	p(ifs6_in_truncated, "\t%llu truncated datagram%s received\n");
-	p(ifs6_in_protounknown, "\t%llu datagram%s with unknown proto received\n");
+	p(ifs6_in_protounknown,
+	    "\t%llu datagram%s with unknown proto received\n");
 	p(ifs6_in_discard, "\t%llu input datagram%s discarded\n");
 	p(ifs6_in_deliver,
-	  "\t%llu datagram%s delivered to an upper layer protocol\n");
+	    "\t%llu datagram%s delivered to an upper layer protocol\n");
 	p(ifs6_out_forward, "\t%llu datagram%s forwarded to this interface\n");
 	p(ifs6_out_request,
-	  "\t%llu datagram%s sent from an upper layer protocol\n");
+	    "\t%llu datagram%s sent from an upper layer protocol\n");
 	p(ifs6_out_discard, "\t%llu total discarded output datagram%s\n");
 	p(ifs6_out_fragok, "\t%llu output datagram%s fragmented\n");
 	p(ifs6_out_fragfail, "\t%llu output datagram%s failed on fragment\n");
-	p(ifs6_out_fragcreat, "\t%llu output datagram%s succeeded on fragment\n");
+	p(ifs6_out_fragcreat,
+	    "\t%llu output datagram%s succeeded on fragment\n");
 	p(ifs6_reass_reqd, "\t%llu incoming datagram%s fragmented\n");
 	p(ifs6_reass_ok, "\t%llu datagram%s reassembled\n");
 	p(ifs6_reass_fail, "\t%llu datagram%s failed on reassembling\n");
@@ -889,7 +903,7 @@ static	const char *icmp6names[256] = {
 	"#16",
 	"#17",
 	"#18",
-	"#19",	
+	"#19",
 	"#20",
 	"#21",
 	"#22",
@@ -899,7 +913,7 @@ static	const char *icmp6names[256] = {
 	"#26",
 	"#27",
 	"#28",
-	"#29",	
+	"#29",
 	"#30",
 	"#31",
 	"#32",
@@ -909,7 +923,7 @@ static	const char *icmp6names[256] = {
 	"#36",
 	"#37",
 	"#38",
-	"#39",	
+	"#39",
 	"#40",
 	"#41",
 	"#42",
@@ -919,7 +933,7 @@ static	const char *icmp6names[256] = {
 	"#46",
 	"#47",
 	"#48",
-	"#49",	
+	"#49",
 	"#50",
 	"#51",
 	"#52",
@@ -929,7 +943,7 @@ static	const char *icmp6names[256] = {
 	"#56",
 	"#57",
 	"#58",
-	"#59",	
+	"#59",
 	"#60",
 	"#61",
 	"#62",
@@ -939,7 +953,7 @@ static	const char *icmp6names[256] = {
 	"#66",
 	"#67",
 	"#68",
-	"#69",	
+	"#69",
 	"#70",
 	"#71",
 	"#72",
@@ -949,7 +963,7 @@ static	const char *icmp6names[256] = {
 	"#76",
 	"#77",
 	"#78",
-	"#79",	
+	"#79",
 	"#80",
 	"#81",
 	"#82",
@@ -959,7 +973,7 @@ static	const char *icmp6names[256] = {
 	"#86",
 	"#87",
 	"#88",
-	"#89",	
+	"#89",
 	"#80",
 	"#91",
 	"#92",
@@ -969,7 +983,7 @@ static	const char *icmp6names[256] = {
 	"#96",
 	"#97",
 	"#98",
-	"#99",	
+	"#99",
 	"#100",
 	"#101",
 	"#102",
@@ -979,7 +993,7 @@ static	const char *icmp6names[256] = {
 	"#106",
 	"#107",
 	"#108",
-	"#109",	
+	"#109",
 	"#110",
 	"#111",
 	"#112",
@@ -989,7 +1003,7 @@ static	const char *icmp6names[256] = {
 	"#116",
 	"#117",
 	"#118",
-	"#119",	
+	"#119",
 	"#120",
 	"#121",
 	"#122",
@@ -999,7 +1013,7 @@ static	const char *icmp6names[256] = {
 	"#126",
 	"#127",
 	"echo",
-	"echo reply",	
+	"echo reply",
 	"multicast listener query",
 	"multicast listener report",
 	"multicast listener done",
@@ -1019,7 +1033,7 @@ static	const char *icmp6names[256] = {
 	"mobile prefix solicitation",
 	"mobile prefix advertisement",
 	"#148",
-	"#149",	
+	"#149",
 	"#150",
 	"multicast router advertisement",
 	"multicast router solicitation",
@@ -1029,7 +1043,7 @@ static	const char *icmp6names[256] = {
 	"#156",
 	"#157",
 	"#158",
-	"#159",	
+	"#159",
 	"#160",
 	"#161",
 	"#162",
@@ -1039,7 +1053,7 @@ static	const char *icmp6names[256] = {
 	"#166",
 	"#167",
 	"#168",
-	"#169",	
+	"#169",
 	"#170",
 	"#171",
 	"#172",
@@ -1049,7 +1063,7 @@ static	const char *icmp6names[256] = {
 	"#176",
 	"#177",
 	"#178",
-	"#179",	
+	"#179",
 	"#180",
 	"#181",
 	"#182",
@@ -1059,7 +1073,7 @@ static	const char *icmp6names[256] = {
 	"#186",
 	"#187",
 	"#188",
-	"#189",	
+	"#189",
 	"#180",
 	"#191",
 	"#192",
@@ -1069,7 +1083,7 @@ static	const char *icmp6names[256] = {
 	"#196",
 	"#197",
 	"#198",
-	"#199",	
+	"#199",
 	"#200",
 	"#201",
 	"#202",
@@ -1079,7 +1093,7 @@ static	const char *icmp6names[256] = {
 	"#206",
 	"#207",
 	"#208",
-	"#209",	
+	"#209",
 	"#210",
 	"#211",
 	"#212",
@@ -1089,7 +1103,7 @@ static	const char *icmp6names[256] = {
 	"#216",
 	"#217",
 	"#218",
-	"#219",	
+	"#219",
 	"#220",
 	"#221",
 	"#222",
@@ -1099,7 +1113,7 @@ static	const char *icmp6names[256] = {
 	"#226",
 	"#227",
 	"#228",
-	"#229",	
+	"#229",
 	"#230",
 	"#231",
 	"#232",
@@ -1109,7 +1123,7 @@ static	const char *icmp6names[256] = {
 	"#236",
 	"#237",
 	"#238",
-	"#239",	
+	"#239",
 	"#240",
 	"#241",
 	"#242",
@@ -1119,13 +1133,13 @@ static	const char *icmp6names[256] = {
 	"#246",
 	"#247",
 	"#248",
-	"#249",	
+	"#249",
 	"#250",
 	"#251",
 	"#252",
 	"#253",
 	"#254",
-	"#255",
+	"#255"
 };
 
 /*
@@ -1140,20 +1154,22 @@ icmp6_stats(u_long off, const char *name)
 	if (use_sysctl) {
 		size_t size = sizeof(icmp6stat);
 
-		if (prog_sysctlbyname("net.inet6.icmp6.stats", icmp6stat, &size,
-		    NULL, 0) == -1 && errno != ENOMEM)
+		if (prog_sysctlbyname("net.inet6.icmp6.stats", icmp6stat,
+		    &size, NULL, 0) == -1 && errno != ENOMEM)
 			return;
 	} else {
 		warnx("%s stats not available via KVM.", name);
 		return;
 	}
-	
+
 	printf("%s:\n", name);
 
-#define	p(f, m) if (icmp6stat[f] || sflag <= 1) \
-    printf(m, (unsigned long long)icmp6stat[f], plural(icmp6stat[f]))
+#define	p(f, m) if (icmp6stat[f] || sflag <= 1)			\
+		printf(m, (unsigned long long)icmp6stat[f],	\
+		    plural(icmp6stat[f]))
 #define p_oerr(f, m) if (icmp6stat[ICMP6_STAT_OUTERRHIST + f] || sflag <= 1) \
-    printf(m, (unsigned long long)icmp6stat[ICMP6_STAT_OUTERRHIST + f])
+		printf(m,						     \
+		    (unsigned long long)icmp6stat[ICMP6_STAT_OUTERRHIST + f])
 
 	p(ICMP6_STAT_ERROR, "\t%llu call%s to icmp6_error\n");
 	p(ICMP6_STAT_CANTERROR,
@@ -1184,27 +1200,38 @@ icmp6_stats(u_long off, const char *name)
 		}
 	printf("\tHistogram of error messages to be generated:\n");
 	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_NOROUTE, "\t\t%llu no route\n");
-	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_ADMIN, "\t\t%llu administratively prohibited\n");
-	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_BEYONDSCOPE, "\t\t%llu beyond scope\n");
-	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_ADDR, "\t\t%llu address unreachable\n");
-	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_NOPORT, "\t\t%llu port unreachable\n");
+	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_ADMIN,
+	    "\t\t%llu administratively prohibited\n");
+	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_BEYONDSCOPE,
+	    "\t\t%llu beyond scope\n");
+	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_ADDR,
+	    "\t\t%llu address unreachable\n");
+	p_oerr(ICMP6_ERRSTAT_DST_UNREACH_NOPORT,
+	    "\t\t%llu port unreachable\n");
 	p_oerr(ICMP6_ERRSTAT_PACKET_TOO_BIG, "\t\t%llu packet too big\n");
-	p_oerr(ICMP6_ERRSTAT_TIME_EXCEED_TRANSIT, "\t\t%llu time exceed transit\n");
-	p_oerr(ICMP6_ERRSTAT_TIME_EXCEED_REASSEMBLY, "\t\t%llu time exceed reassembly\n");
-	p_oerr(ICMP6_ERRSTAT_PARAMPROB_HEADER, "\t\t%llu erroneous header field\n");
-	p_oerr(ICMP6_ERRSTAT_PARAMPROB_NEXTHEADER, "\t\t%llu unrecognized next header\n");
-	p_oerr(ICMP6_ERRSTAT_PARAMPROB_OPTION, "\t\t%llu unrecognized option\n");
+	p_oerr(ICMP6_ERRSTAT_TIME_EXCEED_TRANSIT,
+	    "\t\t%llu time exceed transit\n");
+	p_oerr(ICMP6_ERRSTAT_TIME_EXCEED_REASSEMBLY,
+	    "\t\t%llu time exceed reassembly\n");
+	p_oerr(ICMP6_ERRSTAT_PARAMPROB_HEADER,
+	    "\t\t%llu erroneous header field\n");
+	p_oerr(ICMP6_ERRSTAT_PARAMPROB_NEXTHEADER,
+	    "\t\t%llu unrecognized next header\n");
+	p_oerr(ICMP6_ERRSTAT_PARAMPROB_OPTION,
+	    "\t\t%llu unrecognized option\n");
 	p_oerr(ICMP6_ERRSTAT_REDIRECT, "\t\t%llu redirect\n");
 	p_oerr(ICMP6_ERRSTAT_UNKNOWN, "\t\t%llu unknown\n");
 
 	p(ICMP6_STAT_REFLECT, "\t%llu message response%s generated\n");
-	p(ICMP6_STAT_ND_TOOMANYOPT, "\t%llu message%s with too many ND options\n");
+	p(ICMP6_STAT_ND_TOOMANYOPT,
+	    "\t%llu message%s with too many ND options\n");
 	p(ICMP6_STAT_ND_BADOPT, "\t%llu message%s with bad ND options\n");
 	p(ICMP6_STAT_BADNS, "\t%llu bad neighbor solicitation message%s\n");
 	p(ICMP6_STAT_BADNA, "\t%llu bad neighbor advertisement message%s\n");
 	p(ICMP6_STAT_BADRS, "\t%llu bad router solicitation message%s\n");
 	p(ICMP6_STAT_BADRA, "\t%llu bad router advertisement message%s\n");
-	p(ICMP6_STAT_DROPPED_RAROUTE, "\t%llu router advertisement route%s dropped\n");
+	p(ICMP6_STAT_DROPPED_RAROUTE,
+	    "\t%llu router advertisement route%s dropped\n");
 	p(ICMP6_STAT_BADREDIRECT, "\t%llu bad redirect message%s\n");
 	p(ICMP6_STAT_PMTUCHG, "\t%llu path MTU change%s\n");
 #undef p
@@ -1219,9 +1246,9 @@ icmp6_ifstats(const char *ifname)
 {
 	struct in6_ifreq ifr;
 	int s;
-#define	p(f, m) if (ifr.ifr_ifru.ifru_icmp6stat.f || sflag <= 1) \
-    printf(m, (unsigned long long)ifr.ifr_ifru.ifru_icmp6stat.f, \
-	plural(ifr.ifr_ifru.ifru_icmp6stat.f))
+#define	p(f, m) if (ifr.ifr_ifru.ifru_icmp6stat.f || sflag <= 1)	      \
+		printf(m, (unsigned long long)ifr.ifr_ifru.ifru_icmp6stat.f,  \
+		    plural(ifr.ifr_ifru.ifru_icmp6stat.f))
 
 	if ((s = socket(AF_INET6, SOCK_DGRAM, 0)) < 0) {
 		perror("Warning: socket(AF_INET6)");
@@ -1237,9 +1264,11 @@ icmp6_ifstats(const char *ifname)
 	}
 
 	p(ifs6_in_msg, "\t%llu total input message%s\n");
-	p(ifs6_in_error, "\t%llu total input error message%s\n"); 
-	p(ifs6_in_dstunreach, "\t%llu input destination unreachable error%s\n");
-	p(ifs6_in_adminprohib, "\t%llu input administratively prohibited error%s\n");
+	p(ifs6_in_error, "\t%llu total input error message%s\n");
+	p(ifs6_in_dstunreach,
+	    "\t%llu input destination unreachable error%s\n");
+	p(ifs6_in_adminprohib,
+	    "\t%llu input administratively prohibited error%s\n");
 	p(ifs6_in_timeexceed, "\t%llu input time exceeded error%s\n");
 	p(ifs6_in_paramprob, "\t%llu input parameter problem error%s\n");
 	p(ifs6_in_pkttoobig, "\t%llu input packet too big error%s\n");
@@ -1256,8 +1285,10 @@ icmp6_ifstats(const char *ifname)
 
 	p(ifs6_out_msg, "\t%llu total output message%s\n");
 	p(ifs6_out_error, "\t%llu total output error message%s\n");
-	p(ifs6_out_dstunreach, "\t%llu output destination unreachable error%s\n");
-	p(ifs6_out_adminprohib, "\t%llu output administratively prohibited error%s\n");
+	p(ifs6_out_dstunreach,
+	    "\t%llu output destination unreachable error%s\n");
+	p(ifs6_out_adminprohib,
+	    "\t%llu output administratively prohibited error%s\n");
 	p(ifs6_out_timeexceed, "\t%llu output time exceeded error%s\n");
 	p(ifs6_out_paramprob, "\t%llu output parameter problem error%s\n");
 	p(ifs6_out_pkttoobig, "\t%llu output packet too big error%s\n");
@@ -1291,18 +1322,22 @@ pim6_stats(u_long off, const char *name)
 		if (prog_sysctlbyname("net.inet6.pim6.stats", pim6stat, &size,
 		    NULL, 0) == -1 && errno != ENOMEM)
 			return;
-        } else {
+	} else {
 		warnx("%s stats not available via KVM.", name);
 		return;
 	}
 	printf("%s:\n", name);
 
-#define	p(f, m) if (pim6stat[f] || sflag <= 1) \
-    printf(m, (unsigned long long)pim6stat[f], plural(pim6stat[f]))
+#define	p(f, m) if (pim6stat[f] || sflag <= 1)				      \
+		printf(m, (unsigned long long)pim6stat[f], plural(pim6stat[f]))
+
 	p(PIM6_STAT_RCV_TOTAL, "\t%llu message%s received\n");
-	p(PIM6_STAT_RCV_TOOSHORT, "\t%llu message%s received with too few bytes\n");
-	p(PIM6_STAT_RCV_BADSUM, "\t%llu message%s received with bad checksum\n");
-	p(PIM6_STAT_RCV_BADVERSION, "\t%llu message%s received with bad version\n");
+	p(PIM6_STAT_RCV_TOOSHORT,
+	    "\t%llu message%s received with too few bytes\n");
+	p(PIM6_STAT_RCV_BADSUM,
+	    "\t%llu message%s received with bad checksum\n");
+	p(PIM6_STAT_RCV_BADVERSION,
+	    "\t%llu message%s received with bad version\n");
 	p(PIM6_STAT_RCV_REGISTERS, "\t%llu register%s received\n");
 	p(PIM6_STAT_RCV_BADREGISTERS, "\t%llu bad register%s received\n");
 	p(PIM6_STAT_SND_REGISTERS, "\t%llu register%s sent\n");
@@ -1316,7 +1351,7 @@ void
 rip6_stats(u_long off, const char *name)
 {
 	uint64_t rip6stat[RIP6_NSTATS];
-	u_quad_t delivered;
+	uint64_t delivered;
 
 	if (use_sysctl) {
 		size_t size = sizeof(rip6stat);
@@ -1358,15 +1393,16 @@ rip6_stats(u_long off, const char *name)
 void
 inet6print(const struct in6_addr *in6, int port, const char *proto)
 {
-#define GETSERVBYPORT6(port, proto, ret)\
-do {\
-	if (strcmp((proto), "tcp6") == 0)\
-		(ret) = getservbyport((int)(port), "tcp");\
-	else if (strcmp((proto), "udp6") == 0)\
-		(ret) = getservbyport((int)(port), "udp");\
-	else\
-		(ret) = getservbyport((int)(port), (proto));\
-} while (0)
+#define GETSERVBYPORT6(port, proto, ret)				\
+	do {								\
+		if (strcmp((proto), "tcp6") == 0)			\
+			(ret) = getservbyport((int)(port), "tcp");	\
+		else if (strcmp((proto), "udp6") == 0)			\
+			(ret) = getservbyport((int)(port), "udp");	\
+		else							\
+			(ret) = getservbyport((int)(port), (proto));	\
+	} while (0)
+
 	struct servent *sp = 0;
 	char line[80], *cp;
 	int lwidth;
@@ -1397,7 +1433,7 @@ do {\
  */
 
 char *
-inet6name(const struct in6_addr *in6p)
+inet6name(const struct in6_addr *inp)
 {
 	char *cp;
 	static char line[NI_MAXHOST];
@@ -1417,8 +1453,8 @@ inet6name(const struct in6_addr *in6p)
 			domain[0] = 0;
 	}
 	cp = 0;
-	if (!numeric_addr && !IN6_IS_ADDR_UNSPECIFIED(in6p)) {
-		hp = gethostbyaddr((const char *)in6p, sizeof(*in6p), AF_INET6);
+	if (!numeric_addr && !IN6_IS_ADDR_UNSPECIFIED(inp)) {
+		hp = gethostbyaddr((const char *)inp, sizeof(*inp), AF_INET6);
 		if (hp) {
 			if ((cp = strchr(hp->h_name, '.')) &&
 			    !strcmp(cp + 1, domain))
@@ -1426,7 +1462,7 @@ inet6name(const struct in6_addr *in6p)
 			cp = hp->h_name;
 		}
 	}
-	if (IN6_IS_ADDR_UNSPECIFIED(in6p))
+	if (IN6_IS_ADDR_UNSPECIFIED(inp))
 		strlcpy(line, "*", sizeof(line));
 	else if (cp)
 		strlcpy(line, cp, sizeof(line));
@@ -1434,15 +1470,15 @@ inet6name(const struct in6_addr *in6p)
 		memset(&sin6, 0, sizeof(sin6));
 		sin6.sin6_len = sizeof(sin6);
 		sin6.sin6_family = AF_INET6;
-		sin6.sin6_addr = *in6p;
-		inet6_getscopeid(&sin6, INET6_IS_ADDR_LINKLOCAL|
-		    INET6_IS_ADDR_MC_LINKLOCAL);
+		sin6.sin6_addr = *inp;
+		inet6_getscopeid(&sin6,
+		    INET6_IS_ADDR_LINKLOCAL | INET6_IS_ADDR_MC_LINKLOCAL);
 		if (getnameinfo((struct sockaddr *)&sin6, sin6.sin6_len,
 				hbuf, sizeof(hbuf), NULL, 0, niflag) != 0)
 			strlcpy(hbuf, "?", sizeof(hbuf));
 		strlcpy(line, hbuf, sizeof(line));
 	}
-	return (line);
+	return line;
 }
 
 /*
@@ -1462,9 +1498,9 @@ tcp6_dump(u_long off, const char *name, u_long pcbaddr)
 	size_t j, len;
 
 	if (use_sysctl)
-		pcblist = getpcblist_sysctl(name, &len);	
+		pcblist = getpcblist_sysctl(name, &len);
 	else
-		pcblist = getpcblist_kmem(off, name, &len);	
+		pcblist = getpcblist_kmem(off, name, &len);
 
 	for (j = 0; j < len; j++)
 		if (pcblist[j].ki_ppcbaddr == pcbaddr)
@@ -1495,8 +1531,8 @@ tcp6_dump(u_long off, const char *name, u_long pcbaddr)
 		printf("State: %d", mypcb.t_state);
 	else
 		printf("State: %s", tcp6states[mypcb.t_state]);
-	printf(", flags 0x%x, in6pcb 0x%lx\n\n", mypcb.t_flags,
-	    (u_long)mypcb.t_in6pcb);
+	printf(", flags 0x%x, inpcb 0x%lx\n\n", mypcb.t_flags,
+	    (u_long)mypcb.t_inpcb);
 
 	printf("rxtshift %d, rxtcur %d, dupacks %d\n", mypcb.t_rxtshift,
 	    mypcb.t_rxtcur, mypcb.t_dupacks);
@@ -1504,7 +1540,7 @@ tcp6_dump(u_long off, const char *name, u_long pcbaddr)
 	printf("peermaxseg %u, maxseg %u, force %d\n\n", mypcb.t_peermaxseg,
 	    mypcb.t_maxseg, mypcb.t_force);
 #else
-        printf("peermss %u, ourmss %u, segsz %u, segqlen %u\n\n",
+	printf("peermss %u, ourmss %u, segsz %u, segqlen %u\n\n",
 	    tcpcb.t_peermss, tcpcb.t_ourmss, tcpcb.t_segsz, tcpcb.t_segqlen);
 #endif
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: udp_usrreq.c,v 1.261 2021/02/19 14:51:59 christos Exp $	*/
+/*	$NetBSD: udp_usrreq.c,v 1.266 2024/10/08 02:30:04 riastradh Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: udp_usrreq.c,v 1.261 2021/02/19 14:51:59 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udp_usrreq.c,v 1.266 2024/10/08 02:30:04 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -186,7 +186,7 @@ static int
 do_udpinit(void)
 {
 
-	in_pcbinit(&udbtable, udbhashsize, udbhashsize);
+	inpcb_init(&udbtable, udbhashsize, udbhashsize);
 	udpstat_percpu = percpu_alloc(sizeof(uint64_t) * UDP_NSTATS);
 
 	MOWNER_ATTACH(&udp_tx_mowner);
@@ -428,8 +428,7 @@ udp_input(struct mbuf *m, int off, int proto)
 	}
 
 bad:
-	if (m)
-		m_freem(m);
+	m_freem(m);
 	return;
 
 badcsum:
@@ -470,8 +469,7 @@ udp4_sendup(struct mbuf *m, int off /* offset of data portion */,
 		m_adj(n, off);
 		if (sbappendaddr(&so->so_rcv, src, n, opts) == 0) {
 			m_freem(n);
-			if (opts)
-				m_freem(opts);
+			m_freem(opts);
 			UDP_STATINC(UDP_STAT_FULLSOCK);
 			soroverflow(so);
 		} else
@@ -488,7 +486,6 @@ udp4_realinput(struct sockaddr_in *src, struct sockaddr_in *dst,
 	u_int16_t *sport, *dport;
 	int rcvcnt;
 	struct in_addr *src4, *dst4;
-	struct inpcb_hdr *inph;
 	struct inpcb *inp;
 	struct mbuf *m = *mp;
 
@@ -528,19 +525,18 @@ udp4_realinput(struct sockaddr_in *src, struct sockaddr_in *dst,
 		/*
 		 * Locate pcb(s) for datagram.
 		 */
-		TAILQ_FOREACH(inph, &udbtable.inpt_queue, inph_queue) {
-			inp = (struct inpcb *)inph;
+		TAILQ_FOREACH(inp, &udbtable.inpt_queue, inp_queue) {
 			if (inp->inp_af != AF_INET)
 				continue;
 
 			if (inp->inp_lport != *dport)
 				continue;
-			if (!in_nullhost(inp->inp_laddr)) {
-				if (!in_hosteq(inp->inp_laddr, *dst4))
+			if (!in_nullhost(in4p_laddr(inp))) {
+				if (!in_hosteq(in4p_laddr(inp), *dst4))
 					continue;
 			}
-			if (!in_nullhost(inp->inp_faddr)) {
-				if (!in_hosteq(inp->inp_faddr, *src4) ||
+			if (!in_nullhost(in4p_faddr(inp))) {
+				if (!in_hosteq(in4p_faddr(inp), *src4) ||
 				    inp->inp_fport != *sport)
 					continue;
 			}
@@ -565,11 +561,11 @@ udp4_realinput(struct sockaddr_in *src, struct sockaddr_in *dst,
 		/*
 		 * Locate pcb for datagram.
 		 */
-		inp = in_pcblookup_connect(&udbtable, *src4, *sport, *dst4,
+		inp = inpcb_lookup(&udbtable, *src4, *sport, *dst4,
 		    *dport, 0);
 		if (inp == 0) {
 			UDP_STATINC(UDP_STAT_PCBHASHMISS);
-			inp = in_pcblookup_bind(&udbtable, *dst4, *dport);
+			inp = inpcb_lookup_bound(&udbtable, *dst4, *dport);
 			if (inp == 0)
 				return rcvcnt;
 		}
@@ -579,10 +575,12 @@ udp4_realinput(struct sockaddr_in *src, struct sockaddr_in *dst,
 		if (inp->inp_flags & INP_ESPINUDP) {
 			switch (udp4_espinudp(mp, off)) {
 			case -1: /* Error, m was freed */
+				KASSERT(*mp == NULL);
 				rcvcnt = -1;
 				goto bad;
 
 			case 1: /* ESP over UDP */
+				KASSERT(*mp == NULL);
 				rcvcnt++;
 				goto bad;
 
@@ -603,6 +601,7 @@ udp4_realinput(struct sockaddr_in *src, struct sockaddr_in *dst,
 			    sintosa(src), inp->inp_overudp_arg);
 			switch (ret) {
 			case -1: /* Error, m was freed */
+				KASSERT(*mp == NULL);
 				rcvcnt = -1;
 				goto bad;
 
@@ -625,7 +624,7 @@ udp4_realinput(struct sockaddr_in *src, struct sockaddr_in *dst,
 		/*
 		 * Check the minimum TTL for socket.
 		 */
-		if (mtod(m, struct ip *)->ip_ttl < inp->inp_ip_minttl)
+		if (mtod(m, struct ip *)->ip_ttl < in4p_ip_minttl(inp))
 			goto bad;
 
 		udp4_sendup(m, off, (struct sockaddr *)src, inp->inp_socket);
@@ -666,7 +665,7 @@ udp_ctlinput(int cmd, const struct sockaddr *sa, void *v)
 
 	errno = inetctlerrmap[cmd];
 	if (PRC_IS_REDIRECT(cmd)) {
-		notify = in_rtchange;
+		notify = inpcb_rtchange;
 		ip = NULL;
 	} else if (cmd == PRC_HOSTDEAD) {
 		ip = NULL;
@@ -676,11 +675,11 @@ udp_ctlinput(int cmd, const struct sockaddr *sa, void *v)
 
 	if (ip) {
 		uh = (struct udphdr *)((char *)ip + (ip->ip_hl << 2));
-		in_pcbnotify(&udbtable, satocsin(sa)->sin_addr, uh->uh_dport,
+		inpcb_notify(&udbtable, satocsin(sa)->sin_addr, uh->uh_dport,
 		    ip->ip_src, uh->uh_sport, errno, notify);
 		/* XXX mapped address case */
 	} else {
-		in_pcbnotifyall(&udbtable, satocsin(sa)->sin_addr, errno,
+		inpcb_notifyall(&udbtable, satocsin(sa)->sin_addr, errno,
 		    notify);
 	}
 
@@ -806,10 +805,8 @@ udp_output(struct mbuf *m, struct inpcb *inp, struct mbuf *control,
 	if (error != 0)
 		goto release;
 
-	if (control != NULL) {
-		m_freem(control);
-		control = NULL;
-	}
+	m_freem(control);
+	control = NULL;
 
 	/*
 	 * Fill in mbuf with extended UDP header
@@ -818,7 +815,7 @@ udp_output(struct mbuf *m, struct inpcb *inp, struct mbuf *control,
 	ui = mtod(m, struct udpiphdr *);
 	ui->ui_pr = IPPROTO_UDP;
 	ui->ui_src = pktopts.ippo_laddr.sin_addr;
-	ui->ui_dst = inp->inp_faddr;
+	ui->ui_dst = in4p_faddr(inp);
 	ui->ui_sport = inp->inp_lport;
 	ui->ui_dport = inp->inp_fport;
 	ui->ui_ulen = htons((u_int16_t)len + sizeof(struct udphdr));
@@ -842,16 +839,15 @@ udp_output(struct mbuf *m, struct inpcb *inp, struct mbuf *control,
 		ui->ui_sum = 0;
 
 	((struct ip *)ui)->ip_len = htons(sizeof(struct udpiphdr) + len);
-	((struct ip *)ui)->ip_ttl = inp->inp_ip.ip_ttl;	/* XXX */
-	((struct ip *)ui)->ip_tos = inp->inp_ip.ip_tos;	/* XXX */
+	((struct ip *)ui)->ip_ttl = in4p_ip(inp).ip_ttl;	/* XXX */
+	((struct ip *)ui)->ip_tos = in4p_ip(inp).ip_tos;	/* XXX */
 	UDP_STATINC(UDP_STAT_OPACKETS);
 
 	flags |= inp->inp_socket->so_options & (SO_DONTROUTE|SO_BROADCAST);
 	return ip_output(m, inp->inp_options, ro, flags, pktopts.ippo_imo, inp);
 
  release:
-	if (control != NULL)
-		m_freem(control);
+	m_freem(control);
 	m_freem(m);
 	return error;
 }
@@ -879,12 +875,12 @@ udp_attach(struct socket *so, int proto)
 		}
 	}
 
-	error = in_pcballoc(so, &udbtable);
+	error = inpcb_create(so, &udbtable);
 	if (error) {
 		return error;
 	}
 	inp = sotoinpcb(so);
-	inp->inp_ip.ip_ttl = ip_defttl;
+	in4p_ip(inp).ip_ttl = ip_defttl;
 	KASSERT(solocked(so));
 
 	return error;
@@ -898,7 +894,7 @@ udp_detach(struct socket *so)
 	KASSERT(solocked(so));
 	inp = sotoinpcb(so);
 	KASSERT(inp != NULL);
-	in_pcbdetach(inp);
+	inpcb_destroy(inp);
 }
 
 static int
@@ -924,7 +920,7 @@ udp_bind(struct socket *so, struct sockaddr *nam, struct lwp *l)
 	KASSERT(nam != NULL);
 
 	s = splsoftnet();
-	error = in_pcbbind(inp, sin, l);
+	error = inpcb_bind(inp, sin, l);
 	splx(s);
 
 	return error;
@@ -950,7 +946,7 @@ udp_connect(struct socket *so, struct sockaddr *nam, struct lwp *l)
 	KASSERT(nam != NULL);
 
 	s = splsoftnet();
-	error = in_pcbconnect(inp, (struct sockaddr_in *)nam, l);
+	error = inpcb_connect(inp, (struct sockaddr_in *)nam, l);
 	if (! error)
 		soisconnected(so);
 	splx(s);
@@ -977,9 +973,9 @@ udp_disconnect(struct socket *so)
 	s = splsoftnet();
 	/*soisdisconnected(so);*/
 	so->so_state &= ~SS_ISCONNECTED;	/* XXX */
-	in_pcbdisconnect(inp);
-	inp->inp_laddr = zeroin_addr;		/* XXX */
-	in_pcbstate(inp, INP_BOUND);		/* XXX */
+	inpcb_disconnect(inp);
+	in4p_laddr(inp) = zeroin_addr;		/* XXX */
+	inpcb_set_state(inp, INP_BOUND);		/* XXX */
 	splx(s);
 
 	return 0;
@@ -1034,7 +1030,7 @@ udp_peeraddr(struct socket *so, struct sockaddr *nam)
 	KASSERT(nam != NULL);
 
 	s = splsoftnet();
-	in_setpeeraddr(sotoinpcb(so), (struct sockaddr_in *)nam);
+	inpcb_fetch_peeraddr(sotoinpcb(so), (struct sockaddr_in *)nam);
 	splx(s);
 
 	return 0;
@@ -1050,7 +1046,7 @@ udp_sockaddr(struct socket *so, struct sockaddr *nam)
 	KASSERT(nam != NULL);
 
 	s = splsoftnet();
-	in_setsockaddr(sotoinpcb(so), (struct sockaddr_in *)nam);
+	inpcb_fetch_sockaddr(sotoinpcb(so), (struct sockaddr_in *)nam);
 	splx(s);
 
 	return 0;
@@ -1089,12 +1085,12 @@ udp_send(struct socket *so, struct mbuf *m, struct sockaddr *nam,
 
 	s = splsoftnet();
 	if (nam) {
-		laddr = inp->inp_laddr;		/* XXX */
+		laddr = in4p_laddr(inp);		/* XXX */
 		if ((so->so_state & SS_ISCONNECTED) != 0) {
 			error = EISCONN;
 			goto die;
 		}
-		error = in_pcbconnect(inp, (struct sockaddr_in *)nam, l);
+		error = inpcb_connect(inp, (struct sockaddr_in *)nam, l);
 		if (error)
 			goto die;
 	} else {
@@ -1107,15 +1103,13 @@ udp_send(struct socket *so, struct mbuf *m, struct sockaddr *nam,
 	m = NULL;
 	control = NULL;
 	if (nam) {
-		in_pcbdisconnect(inp);
-		inp->inp_laddr = laddr;		/* XXX */
-		in_pcbstate(inp, INP_BOUND);	/* XXX */
+		inpcb_disconnect(inp);
+		in4p_laddr(inp) = laddr;		/* XXX */
+		inpcb_set_state(inp, INP_BOUND);	/* XXX */
 	}
   die:
-	if (m != NULL)
-		m_freem(m);
-	if (control != NULL)
-		m_freem(control);
+	m_freem(m);
+	m_freem(control);
 
 	splx(s);
 	return error;
@@ -1139,7 +1133,7 @@ udp_purgeif(struct socket *so, struct ifnet *ifp)
 
 	s = splsoftnet();
 	mutex_enter(softnet_lock);
-	in_pcbpurgeif0(&udbtable, ifp);
+	inpcb_purgeif0(&udbtable, ifp);
 #ifdef NET_MPSAFE
 	mutex_exit(softnet_lock);
 #endif
@@ -1147,7 +1141,7 @@ udp_purgeif(struct socket *so, struct ifnet *ifp)
 #ifdef NET_MPSAFE
 	mutex_enter(softnet_lock);
 #endif
-	in_pcbpurgeif(&udbtable, ifp);
+	inpcb_purgeif(&udbtable, ifp);
 	mutex_exit(softnet_lock);
 	splx(s);
 
@@ -1267,7 +1261,7 @@ udp4_espinudp(struct mbuf **mp, int off)
 
 	if (m->m_len < minlen) {
 		if ((*mp = m_pullup(m, minlen)) == NULL) {
-			return -1;
+			return -1; /* dropped */
 		}
 		m = *mp;
 	}
@@ -1279,15 +1273,15 @@ udp4_espinudp(struct mbuf **mp, int off)
 	if ((len == 1) && (*data == 0xff)) {
 		m_freem(m);
 		*mp = NULL; /* avoid any further processing by caller */
-		return 1;
+		return 1;	/* consumed */
 	}
 
 	/* Handle Non-ESP marker (32bit). If zero, then IKE. */
 	marker = (uint32_t *)data;
 	if (len <= sizeof(uint32_t))
-		return 0;
+		return 0;	/* passthrough */
 	if (marker[0] == 0)
-		return 0;
+		return 0;	/* passthrough */
 
 	/*
 	 * Get the UDP ports. They are handled in network order
@@ -1332,7 +1326,8 @@ udp4_espinudp(struct mbuf **mp, int off)
 	if ((tag = m_tag_get(PACKET_TAG_IPSEC_NAT_T_PORTS,
 	    sizeof(sport) + sizeof(dport), M_DONTWAIT)) == NULL) {
 		m_freem(m);
-		return -1;
+		*mp = NULL;
+		return -1;	/* dropped */
 	}
 	((u_int16_t *)(tag + 1))[0] = sport;
 	((u_int16_t *)(tag + 1))[1] = dport;
@@ -1345,7 +1340,7 @@ udp4_espinudp(struct mbuf **mp, int off)
 
 	/* We handled it, it shouldn't be handled by UDP */
 	*mp = NULL; /* avoid free by caller ... */
-	return 1;
+	return 1;		/* consumed */
 }
 #endif
 

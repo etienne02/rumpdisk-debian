@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_socket.c,v 1.152 2020/11/03 22:08:44 christos Exp $	*/
+/*	$NetBSD: linux_socket.c,v 1.156 2024/10/01 16:41:29 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998, 2008 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_socket.c,v 1.152 2020/11/03 22:08:44 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_socket.c,v 1.156 2024/10/01 16:41:29 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_inet.h"
@@ -85,7 +85,7 @@ __KERNEL_RCSID(0, "$NetBSD: linux_socket.c,v 1.152 2020/11/03 22:08:44 christos 
 #include <compat/linux/common/linux_sched.h>
 #include <compat/linux/common/linux_socket.h>
 #include <compat/linux/common/linux_fcntl.h>
-#if !defined(__alpha__) && !defined(__amd64__)
+#if !defined(__aarch64__) && !defined(__alpha__) && !defined(__amd64__)
 #include <compat/linux/common/linux_socketcall.h>
 #endif
 #include <compat/linux/common/linux_sockio.h>
@@ -440,6 +440,7 @@ linux_sys_sendto(struct lwp *l, const struct linux_sys_sendto_args *uap, registe
 static void
 linux_to_bsd_msghdr(const struct linux_msghdr *lmsg, struct msghdr *bmsg)
 {
+	memset(bmsg, 0, sizeof(*bmsg));
 	bmsg->msg_name = lmsg->msg_name;
 	bmsg->msg_namelen = lmsg->msg_namelen;
 	bmsg->msg_iov = lmsg->msg_iov;
@@ -452,6 +453,7 @@ linux_to_bsd_msghdr(const struct linux_msghdr *lmsg, struct msghdr *bmsg)
 static void
 bsd_to_linux_msghdr(const struct msghdr *bmsg, struct linux_msghdr *lmsg)
 {
+	memset(lmsg, 0, sizeof(*lmsg));
 	lmsg->msg_name = bmsg->msg_name;
 	lmsg->msg_namelen = bmsg->msg_namelen;
 	lmsg->msg_iov = bmsg->msg_iov;
@@ -597,7 +599,7 @@ linux_sys_sendmsg(struct lwp *l, const struct linux_sys_sendmsg_args *uap, regis
 			cmsg->cmsg_type = l_cmsg.cmsg_type;
 
 			/* Zero area between header and data */
-			memset(cmsg + 1, 0, 
+			memset(cmsg + 1, 0,
 				CMSG_ALIGN(sizeof(*cmsg)) - sizeof(*cmsg));
 
 			/* Copyin the data */
@@ -699,6 +701,7 @@ linux_copyout_msg_control(struct lwp *l, struct msghdr *mp, struct mbuf *control
 		 * 1. different values for level/type on some archs
 		 * 2. different alignment of CMSG_DATA on some archs
 		 */
+		memset(&linux_cmsg, 0, sizeof(linux_cmsg));
 		linux_cmsg.cmsg_len = cmsg->cmsg_len - LINUX_CMSG_ALIGN_DELTA;
 		linux_cmsg.cmsg_level = cmsg->cmsg_level;
 		linux_cmsg.cmsg_type = cmsg->cmsg_type;
@@ -954,6 +957,8 @@ linux_to_bsd_ip_sockopt(int lopt)
 		return IP_ADD_MEMBERSHIP;
 	case LINUX_IP_DROP_MEMBERSHIP:
 		return IP_DROP_MEMBERSHIP;
+	case LINUX_IP_RECVERR:
+		return -2;	/* ignored */
 	default:
 		return -1;
 	}
@@ -1072,6 +1077,8 @@ linux_sys_setsockopt(struct lwp *l, const struct linux_sys_setsockopt_args *uap,
 
 	if (name == -1)
 		return EINVAL;
+	if (name == -2)
+		return 0;
 	SCARG(&bsa, name) = name;
 
 	return sys_setsockopt(l, &bsa, retval);
@@ -1345,7 +1352,7 @@ linux_getifhwaddr(struct lwp *l, register_t *retval, u_int fd,
 			    sadl->sdl_type != IFT_ETHER)
 				continue;
 			if (ifnum--)
-				/* not the reqested iface */
+				/* not the requested iface */
 				continue;
 			memcpy(&lreq.ifr_hwaddr.sa_data,
 			       CLLADDR(sadl),
@@ -1695,7 +1702,7 @@ linux_sa_put(struct osockaddr *osa)
 	return (0);
 }
 
-#ifndef __amd64__
+#if !defined(__aarch64__) && !defined(__amd64__)
 int
 linux_sys_recv(struct lwp *l, const struct linux_sys_recv_args *uap, register_t *retval)
 {

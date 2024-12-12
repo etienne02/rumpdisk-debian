@@ -1,4 +1,4 @@
-/* $Id: imx23_olinuxino_machdep.c,v 1.12 2021/08/10 06:47:48 skrll Exp $ */
+/* $Id: imx23_olinuxino_machdep.c,v 1.16 2024/03/05 14:15:29 thorpej Exp $ */
 
 /*
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -91,20 +91,14 @@ do {									\
 /*
  * Static device map for i.MX23 peripheral address space.
  */
-#define _A(a)	((a) & ~L1_S_OFFSET)
-#define _S(s)	(((s) + L1_S_SIZE - 1) & ~(L1_S_SIZE-1))
 static const struct pmap_devmap devmap[] = {
-	{
-		_A(APBH_BASE),			/* Virtual address. */
-		_A(APBH_BASE),			/* Physical address. */
-		_S(APBH_SIZE + APBX_SIZE),	/* APBX located after APBH. */
-		VM_PROT_READ|VM_PROT_WRITE,	/* Protection bits. */
-		PTE_NOCACHE			/* Cache attributes. */
-	},
-	{ 0, 0, 0, 0, 0 }
+	DEVMAP_ENTRY(
+		APBH_BASE,		/* Virtual address. */
+		APBH_BASE,		/* Physical address. */
+		APBH_SIZE + APBX_SIZE	/* APBX located after APBH. */
+	),
+	DEVMAP_ENTRY_END
 };
-#undef _A
-#undef _S
 
 static struct plcom_instance imx23_pi = {
 	.pi_type = PLCOM_TYPE_PL011,
@@ -226,7 +220,6 @@ cpu_reboot(int howto, char *bootstr)
 	 */
 	if (!cpu_reboot_called && !(boothowto & RB_NOSYNC)) {
 		vfs_shutdown();
-		resettodr();
 	}
 
 	cpu_reboot_called = 1;
@@ -320,7 +313,7 @@ power_vddio_from_dcdc(int target, int brownout)
 {
         uint32_t tmp_r;
 
-        /* BO_OFFSET must be withing 2700mV - 3475mV */
+        /* BO_OFFSET must be within 2700mV - 3475mV */
         if (brownout > 3475)
                 brownout = 3475;
         else if (brownout < 2700)

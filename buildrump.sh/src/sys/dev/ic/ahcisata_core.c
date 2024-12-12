@@ -1,4 +1,4 @@
-/*	$NetBSD: ahcisata_core.c,v 1.100 2021/08/07 16:19:11 thorpej Exp $	*/
+/*	$NetBSD: ahcisata_core.c,v 1.108 2023/09/10 14:04:28 abs Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahcisata_core.c,v 1.100 2021/08/07 16:19:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahcisata_core.c,v 1.108 2023/09/10 14:04:28 abs Exp $");
 
 #include <sys/types.h>
 #include <sys/malloc.h>
@@ -50,6 +50,8 @@ __KERNEL_RCSID(0, "$NetBSD: ahcisata_core.c,v 1.100 2021/08/07 16:19:11 thorpej 
 
 #include "atapibus.h"
 
+#include "opt_ahcisata.h"
+
 #ifdef AHCI_DEBUG
 int ahcidebug_mask = 0;
 #endif
@@ -69,13 +71,13 @@ static void ahci_killpending(struct ata_drive_datas *);
 
 static int  ahci_cmd_start(struct ata_channel *, struct ata_xfer *);
 static int  ahci_cmd_complete(struct ata_channel *, struct ata_xfer *, int);
-static void ahci_cmd_poll(struct ata_channel *, struct ata_xfer *);
+static int  ahci_cmd_poll(struct ata_channel *, struct ata_xfer *);
 static void ahci_cmd_abort(struct ata_channel *, struct ata_xfer *);
 static void ahci_cmd_done(struct ata_channel *, struct ata_xfer *);
 static void ahci_cmd_done_end(struct ata_channel *, struct ata_xfer *);
 static void ahci_cmd_kill_xfer(struct ata_channel *, struct ata_xfer *, int);
 static int  ahci_bio_start(struct ata_channel *, struct ata_xfer *);
-static void ahci_bio_poll(struct ata_channel *, struct ata_xfer *);
+static int  ahci_bio_poll(struct ata_channel *, struct ata_xfer *);
 static void ahci_bio_abort(struct ata_channel *, struct ata_xfer *);
 static int  ahci_bio_complete(struct ata_channel *, struct ata_xfer *, int);
 static void ahci_bio_kill_xfer(struct ata_channel *, struct ata_xfer *, int) ;
@@ -93,7 +95,7 @@ static void ahci_atapi_minphys(struct buf *);
 static void ahci_atapi_scsipi_request(struct scsipi_channel *,
     scsipi_adapter_req_t, void *);
 static int  ahci_atapi_start(struct ata_channel *, struct ata_xfer *);
-static void ahci_atapi_poll(struct ata_channel *, struct ata_xfer *);
+static int  ahci_atapi_poll(struct ata_channel *, struct ata_xfer *);
 static void ahci_atapi_abort(struct ata_channel *, struct ata_xfer *);
 static int  ahci_atapi_complete(struct ata_channel *, struct ata_xfer *, int);
 static void ahci_atapi_kill_xfer(struct ata_channel *, struct ata_xfer *, int);
@@ -112,6 +114,17 @@ static const struct scsipi_bustype ahci_atapi_bustype = {
 #define ATA_DELAY 10000 /* 10s for a drive I/O */
 #define ATA_RESET_DELAY 31000 /* 31s for a drive reset */
 #define AHCI_RST_WAIT (ATA_RESET_DELAY / 10)
+
+#ifndef AHCISATA_EXTRA_DELAY_MS
+#define	AHCISATA_EXTRA_DELAY_MS	500	/* XXX need to adjust */
+#endif
+
+#if !defined(AHCISATA_REMOVE_EXTRA_DELAY) && AHCISATA_EXTRA_DELAY_MS > 0
+#define	AHCISATA_DO_EXTRA_DELAY(sc, chp, msg, flags)			\
+    ata_delay(chp, AHCISATA_EXTRA_DELAY_MS, msg, flags)
+#else
+#define	AHCISATA_DO_EXTRA_DELAY(sc, chp, msg, flags) do { } while (0)
+#endif
 
 const struct ata_bustype ahci_ata_bustype = {
 	.bustype_type = SCSIPI_BUSTYPE_ATA,
@@ -144,30 +157,18 @@ static int
 ahci_reset(struct ahci_softc *sc)
 {
 	int i;
-	uint32_t timeout_ms = 1000;	/* default to 1s timeout */
-	prop_dictionary_t dict;
 
 	/* reset controller */
 	AHCI_WRITE(sc, AHCI_GHC, AHCI_GHC_HR);
-
-	/* some systems (rockchip rk3399) need extra reset time for ahcisata. */
-	dict = device_properties(sc->sc_atac.atac_dev);
-	if (dict)
-		prop_dictionary_get_uint32(dict, "ahci-reset-ms", &timeout_ms);
-
-	/* wait for reset to complete */
-	for (i = 0; i < timeout_ms; i++) {
+	/* wait up to 1s for reset to complete */
+	for (i = 0; i < 1000; i++) {
 		delay(1000);
 		if ((AHCI_READ(sc, AHCI_GHC) & AHCI_GHC_HR) == 0)
 			break;
 	}
-	if ((AHCI_READ(sc, AHCI_GHC) & AHCI_GHC_HR) != 0) {
-		aprint_error_dev(sc->sc_atac.atac_dev, "reset failed\n");
+	if ((AHCI_READ(sc, AHCI_GHC) & AHCI_GHC_HR)) {
+		aprint_error("%s: reset failed\n", AHCINAME(sc));
 		return -1;
-	}
-	if (i > 1000) {
-		aprint_normal_dev(sc->sc_atac.atac_dev,
-		    "reset took %d milliseconds\n", i);
 	}
 	/* enable ahci mode */
 	ahci_enable(sc);
@@ -980,7 +981,7 @@ again:
 	    AHCI_READ(sc, AHCI_P_CMD(chp->ch_channel))), DEBUG_PROBE);
 end:
 	ahci_channel_stop(sc, chp, flags);
-	ata_delay(chp, 500, "ahcirst", flags);
+	AHCISATA_DO_EXTRA_DELAY(sc, chp, "ahcirst", flags);
 	/* clear port interrupt register */
 	AHCI_WRITE(sc, AHCI_P_IS(chp->ch_channel), 0xffffffff);
 	ahci_channel_start(sc, chp, flags,
@@ -1004,7 +1005,7 @@ ahci_reset_channel(struct ata_channel *chp, int flags)
 		/* XXX and then ? */
 	}
 	ata_kill_active(chp, KILL_RESET, flags);
-	ata_delay(chp, 500, "ahcirst", flags);
+	AHCISATA_DO_EXTRA_DELAY(sc, chp, "ahcirst", flags);
 	/* clear port interrupt register */
 	AHCI_WRITE(sc, AHCI_P_IS(chp->ch_channel), 0xffffffff);
 	/* clear SErrors and start operations */
@@ -1074,7 +1075,7 @@ ahci_probe_drive(struct ata_channel *chp)
 	switch (sata_reset_interface(chp, sc->sc_ahcit, achp->ahcic_scontrol,
 	    achp->ahcic_sstatus, AT_WAIT)) {
 	case SStatus_DET_DEV:
-		ata_delay(chp, 500, "ahcidv", AT_WAIT);
+		AHCISATA_DO_EXTRA_DELAY(sc, chp, "ahcidv", AT_WAIT);
 
 		/* Initial value, used in case the soft reset fails */
 		sig = AHCI_READ(sc, AHCI_P_SIG(chp->ch_channel));
@@ -1113,8 +1114,11 @@ ahci_probe_drive(struct ata_channel *chp)
 		    AHCI_P_IX_IFS |
 		    AHCI_P_IX_OFS | AHCI_P_IX_DPS | AHCI_P_IX_UFS |
 		    AHCI_P_IX_PSS | AHCI_P_IX_DHRS | AHCI_P_IX_SDBS);
-		/* wait 500ms before actually starting operations */
-		ata_delay(chp, 500, "ahciprb", AT_WAIT);
+		/*
+		 * optionally, wait AHCISATA_EXTRA_DELAY_MS msec before
+		 * actually starting operations
+		 */
+		AHCISATA_DO_EXTRA_DELAY(sc, chp, "ahciprb", AT_WAIT);
 		break;
 
 	default:
@@ -1220,7 +1224,7 @@ ahci_cmd_start(struct ata_channel *chp, struct ata_xfer *xfer)
 		return ATASTART_POLL;
 }
 
-static void
+static int
 ahci_cmd_poll(struct ata_channel *chp, struct ata_xfer *xfer)
 {
 	struct ahci_softc *sc = AHCI_CH2SC(chp);
@@ -1257,6 +1261,8 @@ ahci_cmd_poll(struct ata_channel *chp, struct ata_xfer *xfer)
 	}
 	/* reenable interrupts */
 	AHCI_WRITE(sc, AHCI_GHC, AHCI_READ(sc, AHCI_GHC) | AHCI_GHC_IE);
+
+	return ATAPOLL_DONE;
 }
 
 static void
@@ -1363,7 +1369,7 @@ ahci_cmd_done(struct ata_channel *chp, struct ata_xfer *xfer)
 	AHCI_CMDH_SYNC(sc, achp, xfer->c_slot,
 	    BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 
-	/* ata(4) expects IDENTIFY data to be in host endianess */
+	/* ata(4) expects IDENTIFY data to be in host endianness */
 	if (ata_c->r_command == WDCC_IDENTIFY ||
 	    ata_c->r_command == ATAPI_IDENTIFY_DEVICE) {
 		idwordbuf = xfer->c_databuf;
@@ -1468,7 +1474,7 @@ ahci_bio_start(struct ata_channel *chp, struct ata_xfer *xfer)
 		return ATASTART_POLL;
 }
 
-static void
+static int
 ahci_bio_poll(struct ata_channel *chp, struct ata_xfer *xfer)
 {
 	struct ahci_softc *sc = (struct ahci_softc *)chp->ch_atac;
@@ -1498,6 +1504,7 @@ ahci_bio_poll(struct ata_channel *chp, struct ata_xfer *xfer)
 	}
 	/* reenable interrupts */
 	AHCI_WRITE(sc, AHCI_GHC, AHCI_READ(sc, AHCI_GHC) | AHCI_GHC_IE);
+	return ATAPOLL_DONE;
 }
 
 static void
@@ -1965,7 +1972,7 @@ ahci_atapi_start(struct ata_channel *chp, struct ata_xfer *xfer)
 		return ATASTART_POLL;
 }
 
-static void
+static int
 ahci_atapi_poll(struct ata_channel *chp, struct ata_xfer *xfer)
 {
 	struct ahci_softc *sc = (struct ahci_softc *)chp->ch_atac;
@@ -1995,6 +2002,7 @@ ahci_atapi_poll(struct ata_channel *chp, struct ata_xfer *xfer)
 	}
 	/* reenable interrupts */
 	AHCI_WRITE(sc, AHCI_GHC, AHCI_READ(sc, AHCI_GHC) | AHCI_GHC_IE);
+	return ATAPOLL_DONE;
 }
 
 static void

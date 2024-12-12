@@ -1,4 +1,4 @@
-/*	$NetBSD: ultrix_misc.c,v 1.125 2018/08/10 21:44:59 pgoyette Exp $	*/
+/*	$NetBSD: ultrix_misc.c,v 1.127 2023/08/03 08:32:52 mrg Exp $	*/
 
 /*
  * Copyright (c) 1995, 1997 Jonathan Stone (hereinafter referred to as the author)
@@ -76,7 +76,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ultrix_misc.c,v 1.125 2018/08/10 21:44:59 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ultrix_misc.c,v 1.127 2023/08/03 08:32:52 mrg Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_sysv.h"
@@ -628,6 +628,7 @@ ultrix_sys_sigvec(struct lwp *l, const struct ultrix_sys_sigvec_args *uap, regis
 	if (error)
 		return error;
 	if (SCARG(uap, osv)) {
+		memset(&osv, 0, sizeof(osv));
 		osv.sv_handler = osa.sa_handler;
 		osv.sv_flags = osa.sa_flags ^ SA_RESTART;
 		osv.sv_flags &= (ULTRIX_SV_ONSTACK | ULTRIX_SV_INTERRUPT);
@@ -647,7 +648,7 @@ ultrix_sys_shmsys(struct lwp *l, const struct ultrix_sys_shmsys_args *uap, regis
 	/* Ultrix SVSHM weirndess: */
 	struct sys_shmat_args shmat_args;
 	struct compat_14_sys_shmctl_args shmctl_args;
-	struct sys_shmdt_args shmdt_args;
+	struct sys_shmdt_args shmdt_args = {0};
 	struct sys_shmget_args shmget_args;
 
 
@@ -687,6 +688,8 @@ static int
 ultrix_to_bsd_flock(struct ultrix_flock *ufl, struct flock *fl)
 {
 
+	memset(fl, 0, sizeof(*fl));
+
 	fl->l_start = ufl->l_start;
 	fl->l_len = ufl->l_len;
 	fl->l_pid = ufl->l_pid;
@@ -712,6 +715,8 @@ ultrix_to_bsd_flock(struct ultrix_flock *ufl, struct flock *fl)
 static void
 bsd_to_ultrix_flock(struct flock *fl, struct ultrix_flock *ufl)
 {
+
+	memset(ufl, 0, sizeof(*ufl));
 
 	ufl->l_start = fl->l_start;
 	ufl->l_len = fl->l_len;

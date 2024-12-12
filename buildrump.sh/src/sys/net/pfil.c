@@ -1,4 +1,4 @@
-/*	$NetBSD: pfil.c,v 1.39 2020/06/22 16:39:56 maxv Exp $	*/
+/*	$NetBSD: pfil.c,v 1.42 2022/08/16 04:35:57 knakahara Exp $	*/
 
 /*
  * Copyright (c) 2013 Mindaugas Rasiukevicius <rmind at NetBSD org>
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pfil.c,v 1.39 2020/06/22 16:39:56 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pfil.c,v 1.42 2022/08/16 04:35:57 knakahara Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_net_mpsafe.h"
@@ -39,6 +39,7 @@ __KERNEL_RCSID(0, "$NetBSD: pfil.c,v 1.39 2020/06/22 16:39:56 maxv Exp $");
 #include <sys/queue.h>
 #include <sys/kmem.h>
 #include <sys/psref.h>
+#include <sys/cpu.h>
 
 #include <net/if.h>
 #include <net/pfil.h>
@@ -266,6 +267,8 @@ pfil_add_hook(pfil_func_t func, void *arg, int flags, pfil_head_t *ph)
 	KASSERT(func != NULL);
 	KASSERT((flags & ~PFIL_ALL) == 0);
 
+	ASSERT_SLEEPABLE();
+
 	for (u_int i = 0; i < __arraycount(pfil_flag_cases); i++) {
 		const int fcase = pfil_flag_cases[i];
 		pfil_listset_t *phlistset;
@@ -299,6 +302,8 @@ pfil_add_ihook(pfil_ifunc_t func, void *arg, int flags, pfil_head_t *ph)
 
 	KASSERT(func != NULL);
 	KASSERT(flags == PFIL_IFADDR || flags == PFIL_IFNET);
+
+	ASSERT_SLEEPABLE();
 
 	phlistset = pfil_hook_get(flags, ph);
 	return pfil_list_add(phlistset, (pfil_polyfunc_t)func, arg, flags);
@@ -364,6 +369,8 @@ pfil_remove_hook(pfil_func_t func, void *arg, int flags, pfil_head_t *ph)
 {
 	KASSERT((flags & ~PFIL_ALL) == 0);
 
+	ASSERT_SLEEPABLE();
+
 	for (u_int i = 0; i < __arraycount(pfil_flag_cases); i++) {
 		const int fcase = pfil_flag_cases[i];
 		pfil_listset_t *pflistset;
@@ -383,6 +390,9 @@ pfil_remove_ihook(pfil_ifunc_t func, void *arg, int flags, pfil_head_t *ph)
 	pfil_listset_t *pflistset;
 
 	KASSERT(flags == PFIL_IFADDR || flags == PFIL_IFNET);
+
+	ASSERT_SLEEPABLE();
+
 	pflistset = pfil_hook_get(flags, ph);
 	(void)pfil_list_remove(pflistset, (pfil_polyfunc_t)func, arg);
 	return 0;
@@ -402,6 +412,7 @@ pfil_run_hooks(pfil_head_t *ph, struct mbuf **mp, ifnet_t *ifp, int dir)
 	int ret = 0;
 
 	KASSERT(dir == PFIL_IN || dir == PFIL_OUT);
+	KASSERT(!cpu_intr_p());
 
 	if (ph == NULL) {
 		return ret;
@@ -414,6 +425,11 @@ pfil_run_hooks(pfil_head_t *ph, struct mbuf **mp, ifnet_t *ifp, int dir)
 	bound = curlwp_bind();
 	s = pserialize_read_enter();
 	phlist = atomic_load_consume(&phlistset->active);
+	if (phlist->nhooks == 0) {
+		pserialize_read_exit(s);
+		curlwp_bindx(bound);
+		return ret;
+	}
 	psref_acquire(&psref, &phlist->psref, pfil_psref_class);
 	pserialize_read_exit(s);
 	for (u_int i = 0; i < phlist->nhooks; i++) {
@@ -439,6 +455,8 @@ pfil_run_arg(pfil_listset_t *phlistset, u_long cmd, void *arg)
 	pfil_list_t *phlist;
 	struct psref psref;
 	int s, bound;
+
+	KASSERT(!cpu_intr_p());
 
 	bound = curlwp_bind();
 	s = pserialize_read_enter();

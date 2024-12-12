@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_disk.c,v 1.133 2021/05/17 08:50:36 mrg Exp $	*/
+/*	$NetBSD: subr_disk.c,v 1.137 2023/05/09 12:04:04 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1999, 2000, 2009 The NetBSD Foundation, Inc.
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_disk.c,v 1.133 2021/05/17 08:50:36 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_disk.c,v 1.137 2023/05/09 12:04:04 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -530,11 +530,25 @@ disk_ioctl(struct disk *dk, dev_t dev, u_long cmd, void *data, int flag,
 #endif
 
 	switch (cmd) {
-	case DIOCGDISKINFO:
-		if (dk->dk_info == NULL)
-			return ENOTSUP;
-		return prop_dictionary_copyout_ioctl(data, cmd, dk->dk_info);
+	case DIOCGDISKINFO: {
+		prop_dictionary_t disk_info;
+		int error;
 
+		mutex_enter(&dk->dk_openlock);
+		if ((disk_info = dk->dk_info) == NULL) {
+			error = ENOTSUP;
+		} else {
+			prop_object_retain(disk_info);
+			error = 0;
+		}
+		mutex_exit(&dk->dk_openlock);
+		if (error)
+			return error;
+
+		error = prop_dictionary_copyout_ioctl(data, cmd, disk_info);
+		prop_object_release(disk_info);
+		return error;
+	}
 	case DIOCGSECTORSIZE:
 		*(u_int *)data = dk->dk_geom.dg_secsize;
 		return 0;
@@ -641,7 +655,7 @@ disk_ioctl(struct disk *dk, dev_t dev, u_long cmd, void *data, int flag,
 		if ((flag & FWRITE) == 0)
 			return EBADF;
 
-		dkwedge_delall(dk);
+		dkwedge_delidle(dk);
 		return 0;
 
 	default:
@@ -649,6 +663,14 @@ disk_ioctl(struct disk *dk, dev_t dev, u_long cmd, void *data, int flag,
 	}
 }
 
+/*
+ * disk_set_info --
+ *	Canonicalize dk->dk_geom and set some parameters.
+ *
+ *	If disk_set_info can happen concurrently with disk_ioctl in a
+ *	driver, the driver must serialize calls to disk_set_info with
+ *	dk_openlock.
+ */
 void
 disk_set_info(device_t dev, struct disk *dk, const char *type)
 {
@@ -727,4 +749,11 @@ disk_set_info(device_t dev, struct disk *dk, const char *type)
 	 */
 	if (odisk_info)
 		prop_object_release(odisk_info);
+}
+
+int
+disklabel_dev_unit(dev_t dev)
+{
+
+	return DISKUNIT(dev);
 }

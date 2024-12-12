@@ -1,4 +1,4 @@
-/*	$NetBSD: in.c,v 1.241 2020/09/29 19:33:36 roy Exp $	*/
+/*	$NetBSD: in.c,v 1.248 2024/08/20 08:22:35 ozaki-r Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -91,7 +91,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in.c,v 1.241 2020/09/29 19:33:36 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in.c,v 1.248 2024/08/20 08:22:35 ozaki-r Exp $");
 
 #include "arp.h"
 
@@ -521,7 +521,8 @@ in_control0(struct socket *so, u_long cmd, void *data, struct ifnet *ifp)
 			goto out;
 		}
 
-		if (kauth_authorize_network(curlwp->l_cred, KAUTH_NETWORK_INTERFACE,
+		if (kauth_authorize_network(kauth_cred_get(),
+		    KAUTH_NETWORK_INTERFACE,
 		    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp, (void *)cmd,
 		    NULL) != 0) {
 			error = EPERM;
@@ -565,7 +566,8 @@ in_control0(struct socket *so, u_long cmd, void *data, struct ifnet *ifp)
 		break;
 
 	case SIOCSIFBRDADDR:
-		if (kauth_authorize_network(curlwp->l_cred, KAUTH_NETWORK_INTERFACE,
+		if (kauth_authorize_network(kauth_cred_get(),
+		    KAUTH_NETWORK_INTERFACE,
 		    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp, (void *)cmd,
 		    NULL) != 0) {
 			error = EPERM;
@@ -788,6 +790,10 @@ in_ifaddlocal(struct ifaddr *ifa)
 	struct in_ifaddr *ia;
 
 	ia = (struct in_ifaddr *)ifa;
+	if ((ia->ia_ifp->if_flags & IFF_UNNUMBERED)) {
+		rt_addrmsg(RTM_NEWADDR, ifa);
+		return;
+	}
 	if (ia->ia_addr.sin_addr.s_addr == INADDR_ANY ||
 	    (ia->ia_ifp->if_flags & IFF_POINTOPOINT &&
 	    in_hosteq(ia->ia_dstaddr.sin_addr, ia->ia_addr.sin_addr)))
@@ -811,10 +817,17 @@ in_ifremlocal(struct ifaddr *ifa)
 	int bound = curlwp_bind();
 
 	ia = (struct in_ifaddr *)ifa;
+	if ((ia->ia_ifp->if_flags & IFF_UNNUMBERED)) {
+		rt_addrmsg(RTM_DELADDR, ifa);
+		goto out;
+	}
 	/* Delete the entry if exactly one ifaddr matches the
 	 * address, ifa->ifa_addr. */
 	s = pserialize_read_enter();
 	IN_ADDRLIST_READER_FOREACH(p) {
+		if ((p->ia_ifp->if_flags & IFF_UNNUMBERED))
+			continue;
+
 		if (!in_hosteq(p->ia_addr.sin_addr, ia->ia_addr.sin_addr))
 			continue;
 		if (p->ia_ifp != ia->ia_ifp)
@@ -1192,7 +1205,11 @@ in_ifinit(struct ifnet *ifp, struct in_ifaddr *ia,
 		return error;
 	}
 
-	if (scrub || hostIsNew) {
+	/*
+	 * The interface which does not have IPv4 address is not required
+	 * to scrub old address.  So, skip scrub such cases.
+	 */
+	if (oldaddr.sin_family == AF_INET && (scrub || hostIsNew)) {
 		int newflags = ia->ia4_flags;
 
 		ia->ia_ifa.ifa_addr = sintosa(&oldaddr);
@@ -1317,6 +1334,9 @@ in_addprefix(struct in_ifaddr *target, int flags)
 		if (prefix.s_addr != p.s_addr)
 			continue;
 
+		if ((ia->ia_ifp->if_flags & IFF_UNNUMBERED))
+			continue;
+
 		/*
 		 * if we got a matching prefix route inserted by other
 		 * interface address, we don't need to bother
@@ -1333,16 +1353,31 @@ in_addprefix(struct in_ifaddr *target, int flags)
 	/*
 	 * noone seem to have prefix route.  insert it.
 	 */
-	error = rtinit(&target->ia_ifa, RTM_ADD, flags);
-	if (error == 0)
-		target->ia_flags |= IFA_ROUTE;
-	else if (error == EEXIST) {
-		/*
-		 * the fact the route already exists is not an error.
-		 */
+	if (target->ia_ifa.ifa_ifp->if_flags & IFF_UNNUMBERED) {
 		error = 0;
+	} else {
+		error = rtinit(&target->ia_ifa, RTM_ADD, flags);
+		if (error == 0)
+			target->ia_flags |= IFA_ROUTE;
+		else if (error == EEXIST) {
+			/*
+			 * the fact the route already exists is not an error.
+			 */
+			error = 0;
+		}
 	}
 	return error;
+}
+
+static int
+in_rt_ifa_matcher(struct rtentry *rt, void *v)
+{
+	struct ifaddr *ifa = v;
+
+	if (rt->rt_ifa == ifa)
+		return 1;
+	else
+		return 0;
 }
 
 /*
@@ -1382,6 +1417,9 @@ in_scrubprefix(struct in_ifaddr *target)
 		if (prefix.s_addr != p.s_addr)
 			continue;
 
+		if ((ia->ia_ifp->if_flags & IFF_UNNUMBERED))
+			continue;
+
 		/*
 		 * if we got a matching prefix route, move IFA_ROUTE to him
 		 */
@@ -1401,6 +1439,16 @@ in_scrubprefix(struct in_ifaddr *target)
 			if (error == 0)
 				ia->ia_flags |= IFA_ROUTE;
 
+			if (!ISSET(target->ia_ifa.ifa_flags, IFA_DESTROYING))
+				goto skip;
+			/*
+			 * Replace rt_ifa of routes that have the removing address
+			 * with the new address.
+			 */
+			rt_replace_ifa_matched_entries(AF_INET,
+			    in_rt_ifa_matcher, &target->ia_ifa, &ia->ia_ifa);
+
+		skip:
 			ia4_release(ia, &psref);
 			curlwp_bindx(bound);
 
@@ -1414,6 +1462,13 @@ in_scrubprefix(struct in_ifaddr *target)
 	 */
 	rtinit(&target->ia_ifa, RTM_DELETE, rtinitflags(target));
 	target->ia_flags &= ~IFA_ROUTE;
+
+	if (ISSET(target->ia_ifa.ifa_flags, IFA_DESTROYING)) {
+		/* Remove routes that have the removing address as rt_ifa. */
+		rt_delete_matched_entries(AF_INET, in_rt_ifa_matcher,
+		    &target->ia_ifa, true);
+	}
+
 	return 0;
 }
 
@@ -1494,8 +1549,7 @@ in_if_link_up(struct ifnet *ifp)
 		/* If detached then mark as tentative */
 		if (ia->ia4_flags & IN_IFF_DETACHED) {
 			ia->ia4_flags &= ~IN_IFF_DETACHED;
-			if (ip_dad_enabled() && if_do_dad(ifp) &&
-			    ia->ia_dad_start != NULL)
+			if (if_do_dad(ifp) && ia->ia_dad_start != NULL)
 				ia->ia4_flags |= IN_IFF_TENTATIVE;
 			else if ((ia->ia4_flags & IN_IFF_TENTATIVE) == 0)
 				rt_addrmsg(RTM_NEWADDR, ifa);
@@ -1831,7 +1885,7 @@ in_selectsrc(struct sockaddr_in *sin, struct route *ro,
 		ia = ifatoia(ifa);
 	}
 	if (ia == NULL) {
-		u_int16_t fport = sin->sin_port;
+		in_port_t fport = sin->sin_port;
 		struct ifaddr *ifa;
 		int s;
 
@@ -2381,7 +2435,7 @@ in_sysctl_init(struct sysctllog **clog)
 #if NARP > 0
 
 static struct lltable *
-in_lltattach(struct ifnet *ifp)
+in_lltattach(struct ifnet *ifp, struct in_ifinfo *ii)
 {
 	struct lltable *llt;
 
@@ -2397,6 +2451,12 @@ in_lltattach(struct ifnet *ifp)
 	llt->llt_fill_sa_entry = in_lltable_fill_sa_entry;
 	llt->llt_free_entry = in_lltable_free_entry;
 	llt->llt_match_prefix = in_lltable_match_prefix;
+#ifdef MBUFTRACE
+	struct mowner *mowner = &ii->ii_mowner;
+	mowner_init_owner(mowner, ifp->if_xname, "arp");
+	MOWNER_ATTACH(mowner);
+	llt->llt_mowner = mowner;
+#endif
 	lltable_link(llt);
 
 	return (llt);
@@ -2412,7 +2472,7 @@ in_domifattach(struct ifnet *ifp)
 	ii = kmem_zalloc(sizeof(struct in_ifinfo), KM_SLEEP);
 
 #if NARP > 0
-	ii->ii_llt = in_lltattach(ifp);
+	ii->ii_llt = in_lltattach(ifp, ii);
 #endif
 
 #ifdef IPSELSRC
@@ -2433,6 +2493,9 @@ in_domifdetach(struct ifnet *ifp, void *aux)
 #endif
 #if NARP > 0
 	lltable_free(ii->ii_llt);
+#ifdef MBUFTRACE
+	MOWNER_DETACH(&ii->ii_mowner);
+#endif
 #endif
 	kmem_free(ii, sizeof(struct in_ifinfo));
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_sq.c,v 1.54 2020/01/30 06:25:46 martin Exp $	*/
+/*	$NetBSD: if_sq.c,v 1.60 2024/07/05 04:31:50 rin Exp $	*/
 
 /*
  * Copyright (c) 2001 Rafal K. Boni
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_sq.c,v 1.54 2020/01/30 06:25:46 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_sq.c,v 1.60 2024/07/05 04:31:50 rin Exp $");
 
 
 #include <sys/param.h>
@@ -41,7 +41,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_sq.c,v 1.54 2020/01/30 06:25:46 martin Exp $");
 #include <sys/device.h>
 #include <sys/callout.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -456,7 +455,6 @@ sq_init(struct ifnet *ifp)
 		sq_hpc_write(sc, HPC1_ENET_INTDELAY, HPC1_ENET_INTDELAY_OFF);
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	return 0;
 }
@@ -535,7 +533,7 @@ sq_start(struct ifnet *ifp)
 	bus_dmamap_t dmamap;
 	int err, totlen, nexttx, firsttx, lasttx = -1, ofree, seg;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	/*
@@ -563,7 +561,7 @@ sq_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we were
+		 * didn't fit in the allotted number of segments, or we were
 		 * short on resources.  In this case, we'll copy and try
 		 * again.
 		 * Also copy it if we need to pad, so that we are sure there
@@ -619,16 +617,13 @@ sq_start(struct ifnet *ifp)
 			 * Not enough free descriptors to transmit this
 			 * packet.  We haven't committed to anything yet,
 			 * so just unload the DMA map, put the packet
-			 * back on the queue, and punt.  Notify the upper
-			 * layer that there are no more slots left.
+			 * back on the queue, and punt.
 			 *
 			 * XXX We could allocate an mbuf and copy, but
 			 * XXX it is worth it?
 			 */
-			ifp->if_flags |= IFF_OACTIVE;
 			bus_dmamap_unload(sc->sc_dmat, dmamap);
-			if (m != NULL)
-				m_freem(m);
+			m_freem(m);
 			break;
 		}
 
@@ -718,10 +713,6 @@ sq_start(struct ifnet *ifp)
 		sc->sc_nfreetx -= dmamap->dm_nsegs;
 		sc->sc_nexttx = nexttx;
 	}
-
-	/* All transmit descriptors used up, let upper layers know */
-	if (sc->sc_nfreetx == 0)
-		ifp->if_flags |= IFF_OACTIVE;
 
 	if (sc->sc_nfreetx != ofree) {
 		SQ_DPRINTF(("%s: %d packets enqueued, first %d, INTR on %d\n",
@@ -839,7 +830,7 @@ sq_stop(struct ifnet *ifp, int disable)
 
 	sq_reset(sc);
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 }
 
@@ -903,10 +894,10 @@ sq_intr(void *arg)
 
 	stat = sq_hpc_read(sc, sc->hpc_regs->enetr_reset);
 
-	if ((stat & 2) == 0)
+	if ((stat & 2) == 0) {
 		SQ_DPRINTF(("%s: Unexpected interrupt!\n",
 		    device_xname(sc->sc_dev)));
-	else
+	} else
 		sq_hpc_write(sc, sc->hpc_regs->enetr_reset, (stat | 2));
 
 	/*
@@ -1078,19 +1069,19 @@ sq_txintr(struct sq_softc *sc)
 	tmp = (sc->hpc_regs->enetx_ctl_active >> shift) | TXSTAT_GOOD;
 	if ((status & tmp) == 0) {
 		if (status & TXSTAT_COLL)
-			if_statinc_ref(nsr, if_collisions);
+			if_statinc_ref(ifp, nsr, if_collisions);
 
 		if (status & TXSTAT_UFLOW) {
 			printf("%s: transmit underflow\n",
 			    device_xname(sc->sc_dev));
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 		}
 
 		if (status & TXSTAT_16COLL) {
 			printf("%s: max collisions reached\n",
 			    device_xname(sc->sc_dev));
-			if_statinc_ref(nsr, if_oerrors);
-			if_statadd_ref(nsr, if_collisions, 16);
+			if_statinc_ref(ifp, nsr, if_oerrors);
+			if_statadd_ref(ifp, nsr, if_collisions, 16);
 		}
 	}
 	IF_STAT_PUTREF(ifp);
@@ -1100,10 +1091,6 @@ sq_txintr(struct sq_softc *sc)
 		sq_txring_hpc3(sc);
 	else
 		sq_txring_hpc1(sc);
-
-	/* If we have buffers free, let upper layers know */
-	if (sc->sc_nfreetx > 0)
-		ifp->if_flags &= ~IFF_OACTIVE;
 
 	/* If all packets have left the coop, cancel watchdog */
 	if (sc->sc_nfreetx == SQ_NTXDESC)

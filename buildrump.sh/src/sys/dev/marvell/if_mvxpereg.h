@@ -1,4 +1,4 @@
-/*	$NetBSD: if_mvxpereg.h,v 1.6 2021/08/17 22:00:31 andvar Exp $	*/
+/*	$NetBSD: if_mvxpereg.h,v 1.8 2024/02/02 22:39:10 andvar Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -225,8 +225,8 @@
 /* SGMII PHY Registers */
 #define MVXPE_PPLLC		0x2e04	/* Power and PLL Control */
 #define MVXPE_TESTC0		0x2e54	/* PHY Test Control 0 */
-#define MVXPE_TESTPRBSEC0	0x2e7c	/* PHY Test PRBS Erorr Counter 0 */
-#define MVXPE_TESTPRBSEC1	0x2e80	/* PHY Test PRBS Erorr Counter 1 */
+#define MVXPE_TESTPRBSEC0	0x2e7c	/* PHY Test PRBS Error Counter 0 */
+#define MVXPE_TESTPRBSEC1	0x2e80	/* PHY Test PRBS Error Counter 1 */
 #define MVXPE_TESTOOB0		0x2e84	/* PHY Test OOB 0 */
 #define MVXPE_DLE		0x2e8c	/* Digital Loopback Enable */
 #define MVXPE_RCS		0x2f18	/* Reference Clock Select */
@@ -489,7 +489,7 @@
 #define MVXPE_PTXS_GET_PDC(x)		((x) & 0x3fff)
 
 /* Port TX queues Status Update (MVXPE_PTXSU) */
-					/* Number Of Written Descriptoes */
+					/* Number Of Written Descriptors */
 #define MVXPE_PTXSU_NOWD(x)		(((x) & 0xff) << 0)
 					/* Number Of Released Buffers */
 #define MVXPE_PTXSU_NORB(x)		(((x) & 0xff) << 16)

@@ -1,4 +1,4 @@
-/*	$NetBSD: tape.c,v 1.71 2021/06/19 13:56:35 christos Exp $	*/
+/*	$NetBSD: tape.c,v 1.75 2024/02/05 22:08:04 andvar Exp $	*/
 
 /*
  * Copyright (c) 1983, 1993
@@ -39,7 +39,7 @@
 #if 0
 static char sccsid[] = "@(#)tape.c	8.9 (Berkeley) 5/1/95";
 #else
-__RCSID("$NetBSD: tape.c,v 1.71 2021/06/19 13:56:35 christos Exp $");
+__RCSID("$NetBSD: tape.c,v 1.75 2024/02/05 22:08:04 andvar Exp $");
 #endif
 #endif /* not lint */
 
@@ -377,7 +377,7 @@ setup(void)
  * Prompt user to load a new dump volume.
  * "Nextvol" is the next suggested volume to use.
  * This suggested volume is enforced when doing full
- * or incremental restores, but can be overrridden by
+ * or incremental restores, but can be overridden by
  * the user when only extracting a subset of the files.
  */
 void
@@ -656,7 +656,9 @@ extractfile(char *name)
 		ctimep[1].tv_nsec = curfile.birthtime_nsec;
 	}
 	extsize = curfile.extsize;
-	uid = curfile.uid;
+	uid = getuid();
+	if (uid == 0)
+		uid = curfile.uid;
 	gid = curfile.gid;
 	mode = curfile.mode;
 	flags = curfile.file_flags;
@@ -696,13 +698,13 @@ extractfile(char *name)
 		if (uflag)
 			(void) unlink(name);
 		if (linkit(lnkbuf, name, SYMLINK) == GOOD) {
-			if (extsize > 0)
-				set_extattr(-1, name, buf, extsize, SXA_LINK);
 			if (setbirth)
 				(void) lutimens(name, ctimep);
 			(void) lutimens(name, mtimep);
 			(void) lchown(name, uid, gid);
 			(void) lchmod(name, mode);
+			if (extsize > 0)
+				set_extattr(-1, name, buf, extsize, SXA_LINK);
 			if (Mtreefile) {
 				writemtree(name, "link",
 				    uid, gid, mode, flags);
@@ -728,6 +730,8 @@ extractfile(char *name)
 			skipfile();
 			return (FAIL);
 		}
+		(void) chown(name, uid, gid);
+		(void) chmod(name, mode);
 		if (extsize == 0) {
 			skipfile();
 		} else {
@@ -738,8 +742,6 @@ extractfile(char *name)
 		if (setbirth)
 			(void) utimens(name, ctimep);
 		(void) utimens(name, mtimep);
-		(void) chown(name, uid, gid);
-		(void) chmod(name, mode);
 		if (Mtreefile) {
 			writemtree(name,
 			    ((mode & (S_IFBLK | IFCHR)) == IFBLK) ?
@@ -763,6 +765,8 @@ extractfile(char *name)
 			skipfile();
 			return (FAIL);
 		}
+		(void) chown(name, uid, gid);
+		(void) chmod(name, mode);
 		if (extsize == 0) {
 			skipfile();
 		} else {
@@ -773,8 +777,6 @@ extractfile(char *name)
 		if (setbirth)
 			(void) utimens(name, ctimep);
 		(void) utimens(name, mtimep);
-		(void) chown(name, uid, gid);
-		(void) chmod(name, mode);
 		if (Mtreefile) {
 			writemtree(name, "fifo",
 			    uid, gid, mode, flags);
@@ -795,6 +797,8 @@ extractfile(char *name)
 		}
 		if (Dflag)
 			(*ddesc->dd_init)(&dcontext);
+		(void) fchown(ofile, uid, gid);
+		(void) fchmod(ofile, mode);
 		buf = setupextattr(extsize);
 		getfile(xtrfile, xtrattr, xtrskip);
 		if (extsize > 0)
@@ -812,8 +816,6 @@ extractfile(char *name)
 		if (setbirth)
 			(void) futimens(ofile, ctimep);
 		(void) futimens(ofile, mtimep);
-		(void) fchown(ofile, uid, gid);
-		(void) fchmod(ofile, mode);
 		if (Mtreefile) {
 			writemtree(name, "file",
 			    uid, gid, mode, flags);
@@ -1122,7 +1124,7 @@ loop:
 			curfile.name, blksread);
 	}
 	if (curblk > 0)
-		panic("getfile: lost data\n");
+		panic("getfile: lost data: %s\n", curfile.name);
 	/* Skip over Linux extended attributes. */
 	if (spcl.c_type == TS_INODE && (spcl.c_flags & DR_EXTATTRIBUTES)) {
 		for (i = 0; i < spcl.c_count; i++)

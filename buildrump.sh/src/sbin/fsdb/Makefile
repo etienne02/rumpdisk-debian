@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.41 2021/04/15 01:56:00 mrg Exp $
+#	$NetBSD: Makefile,v 1.43 2023/10/07 12:15:53 rin Exp $
 #	@(#)Makefile	8.1 (Berkeley) 6/5/93
 
 .include <bsd.own.mk>
@@ -39,12 +39,6 @@ COPTS.${f}.c+=	-Wno-pointer-sign
 COPTS.pass1.c+=	-fno-tree-fre -fno-tree-lrs
 .endif
 
-.if ${MACHINE_ARCH} == "vax"
-COPTS.pass1.c+=	-O0
-COPTS.inode.c+=	-O0
-COPTS.fsdb.c+=	-O0
-.endif
-
-CWARNFLAGS.gcc+=	${GCC_NO_ADDR_OF_PACKED_MEMBER}
+CWARNFLAGS.gcc+=	${CC_WNO_ADDRESS_OF_PACKED_MEMBER}
 
 .include <bsd.prog.mk>

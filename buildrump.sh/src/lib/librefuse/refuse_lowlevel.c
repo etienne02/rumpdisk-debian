@@ -1,4 +1,4 @@
-/*	$NetBSD: refuse_lowlevel.c,v 1.1 2016/11/20 13:26:28 pho Exp $	*/
+/*	$NetBSD: refuse_lowlevel.c,v 1.4 2022/01/22 08:09:39 pho Exp $	*/
 
 /*
  * Copyright (c) 2016 The NetBSD Foundation, Inc.
@@ -31,10 +31,10 @@
 
 #include <sys/cdefs.h>
 #if !defined(lint)
-__RCSID("$NetBSD: refuse_lowlevel.c,v 1.1 2016/11/20 13:26:28 pho Exp $");
+__RCSID("$NetBSD: refuse_lowlevel.c,v 1.4 2022/01/22 08:09:39 pho Exp $");
 #endif /* !lint */
 
-#include <fuse_lowlevel.h>
+#include <fuse_internal.h>
 #include <fuse_opt.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -45,8 +45,9 @@ __RCSID("$NetBSD: refuse_lowlevel.c,v 1.1 2016/11/20 13:26:28 pho Exp $");
 	{ t, offsetof(struct fuse_cmdline_opts, p), v }
 
 static struct fuse_opt fuse_lowlevel_opts[] = {
-	REFUSE_LOWLEVEL_OPT("-h"       , show_help       , 1),
-	REFUSE_LOWLEVEL_OPT("--help"   , show_help       , 1),
+	REFUSE_LOWLEVEL_OPT("-h"       , show_help       , REFUSE_SHOW_HELP_FULL),
+	REFUSE_LOWLEVEL_OPT("--help"   , show_help       , REFUSE_SHOW_HELP_FULL),
+	REFUSE_LOWLEVEL_OPT("-ho"      , show_help       , REFUSE_SHOW_HELP_NO_HEADER),
 	REFUSE_LOWLEVEL_OPT("-V"       , show_version    , 1),
 	REFUSE_LOWLEVEL_OPT("--version", show_version    , 1),
 	REFUSE_LOWLEVEL_OPT("-d"       , debug           , 1),
@@ -120,7 +121,8 @@ static int add_default_fsname(struct fuse_args *args)
 	}
 }
 
-int fuse_parse_cmdline(struct fuse_args *args, struct fuse_cmdline_opts *opts)
+int
+__fuse_parse_cmdline(struct fuse_args *args, struct fuse_cmdline_opts *opts)
 {
 	memset(opts, 0, sizeof(*opts));
 

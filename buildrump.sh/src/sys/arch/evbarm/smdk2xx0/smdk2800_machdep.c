@@ -1,4 +1,4 @@
-/*	$NetBSD: smdk2800_machdep.c,v 1.50 2021/08/17 22:00:29 andvar Exp $ */
+/*	$NetBSD: smdk2800_machdep.c,v 1.52 2024/02/20 23:36:01 andvar Exp $ */
 
 /*
  * Copyright (c) 2002, 2003, 2005 Fujitsu Component Limited
@@ -106,7 +106,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: smdk2800_machdep.c,v 1.50 2021/08/17 22:00:29 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: smdk2800_machdep.c,v 1.52 2024/02/20 23:36:01 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_console.h"
@@ -312,13 +312,12 @@ cpu_reboot(int howto, char *bootstr)
  * at the same position.
  */
 static const struct pmap_devmap smdk2800_devmap[] = {
-	{
+	DEVMAP_ENTRY(
 		SMDK2800_IO_AREA_VBASE,
 		S3C2800_PERIPHERALS,
-		S3C2800_PERIPHERALS_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE, PTE_NOCACHE,
-	},
-	{ 0, 0, 0, 0 }
+		S3C2800_PERIPHERALS_SIZE
+	),
+	DEVMAP_ENTRY_END
 };
 
 #define ioreg_vaddr(pa)	((pa) - S3C2800_PERIPHERALS + SMDK2800_IO_AREA_VBASE)
@@ -453,7 +452,7 @@ initarm(void *arg)
 
 #ifdef VERBOSE_INIT_ARM
 	/* Tell the user about the memory */
-	printf("physmemory: %d pages at 0x%08lx -> 0x%08lx\n", physmem,
+	printf("physmemory: 0x%"PRIxPSIZE" pages at 0x%08lx -> 0x%08lx\n", physmem,
 	    physical_start, physical_end - 1);
 #endif
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_nfsdserv.c,v 1.4 2016/12/13 21:50:32 pgoyette Exp $	*/
+/*	$NetBSD: nfs_nfsdserv.c,v 1.6 2024/07/05 04:31:52 rin Exp $	*/
 /*-
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>
 /* __FBSDID("FreeBSD: head/sys/fs/nfsserver/nfs_nfsdserv.c 299514 2016-05-12 05:03:12Z cem "); */
-__RCSID("$NetBSD: nfs_nfsdserv.c,v 1.4 2016/12/13 21:50:32 pgoyette Exp $");
+__RCSID("$NetBSD: nfs_nfsdserv.c,v 1.6 2024/07/05 04:31:52 rin Exp $");
 
 /*
  * nfs version 2, 3 and 4 server calls to vnode ops
@@ -384,7 +384,7 @@ nfsrvd_setattr(struct nfsrv_descript *nd, __unused int isdgram,
 
 	if (!nd->nd_repstat && (nd->nd_flag & ND_NFSV4)) {
 	    /*
-	     * For V4, try setting the attrbutes in sets, so that the
+	     * For V4, try setting the attributes in sets, so that the
 	     * reply bitmap will be correct for an error case.
 	     */
 	    if (NFSISSET_ATTRBIT(&attrbits, NFSATTRBIT_OWNER) ||
@@ -753,8 +753,7 @@ nfsrvd_read(struct nfsrv_descript *nd, __unused int isdgram,
 		}
 		if (nd->nd_repstat) {
 			vput(vp);
-			if (m3)
-				mbuf_freem(m3);
+			mbuf_freem(m3);
 			if (nd->nd_flag & ND_NFSV3)
 				nfsrv_postopattr(nd, getret, &nva);
 			goto out;

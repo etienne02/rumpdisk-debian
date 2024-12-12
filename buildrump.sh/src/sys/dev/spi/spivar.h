@@ -1,4 +1,4 @@
-/* $NetBSD: spivar.h,v 1.10 2020/08/04 13:20:45 kardel Exp $ */
+/* $NetBSD: spivar.h,v 1.13 2024/02/23 23:45:54 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2006 Urbana-Champaign Independent Media Center.
@@ -55,15 +55,23 @@
 struct spi_handle;
 struct spi_transfer;
 
+#define	SPI_MODE_CPHA	__BIT(0)
+#define	SPI_MODE_CPOL	__BIT(1)
+
 /*
  * De facto standard latching modes.
  */
-#define	SPI_MODE_0	0	/* CPOL = 0, CPHA = 0 */
-#define	SPI_MODE_1	1	/* CPOL = 0, CPHA = 1 */
-#define	SPI_MODE_2	2	/* CPOL = 1, CPHA = 0 */
-#define	SPI_MODE_3	3	/* CPOL = 1, CPHA = 1 */
+#define	SPI_MODE_0	0
+#define	SPI_MODE_1	SPI_MODE_CPHA
+#define	SPI_MODE_2	SPI_MODE_CPOL
+#define	SPI_MODE_3	(SPI_MODE_CPHA | SPI_MODE_CPOL)
+
 /* Philips' Microwire is just Mode 0 */
 #define	SPI_MODE_MICROWIRE	SPI_MODE_0
+
+/* SPI transfer speed helper macros -- converts to Hz for spi_configure(). */
+#define	SPI_FREQ_kHz(x)	((x) * 1000)
+#define	SPI_FREQ_MHz(x)	((x) * 1000000)
 
 struct spi_controller {
 	void	*sct_cookie;	/* controller private data */
@@ -142,7 +150,10 @@ SIMPLEQ_HEAD(spi_transq, spi_transfer);
 
 int spi_compatible_match(const struct spi_attach_args *, const cfdata_t,
 			  const struct device_compatible_entry *);
-int spi_configure(struct spi_handle *, int, int);
+const struct device_compatible_entry *
+    spi_compatible_lookup(const struct spi_attach_args *,
+			  const struct device_compatible_entry *);
+int spi_configure(device_t, struct spi_handle *, int, int);
 int spi_transfer(struct spi_handle *, struct spi_transfer *);
 void spi_transfer_init(struct spi_transfer *);
 void spi_chunk_init(struct spi_chunk *, int, const uint8_t *, uint8_t *);

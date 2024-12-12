@@ -1,4 +1,4 @@
-/* $NetBSD: imxuart.c,v 1.27 2021/03/08 06:23:31 mlelstv Exp $ */
+/* $NetBSD: imxuart.c,v 1.30 2022/10/26 23:38:06 riastradh Exp $ */
 
 /*
  * Copyright (c) 2009, 2010  Genetec Corporation.  All rights reserved.
@@ -96,7 +96,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: imxuart.c,v 1.27 2021/03/08 06:23:31 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: imxuart.c,v 1.30 2022/10/26 23:38:06 riastradh Exp $");
 
 #include "opt_imxuart.h"
 #include "opt_ddb.h"
@@ -155,6 +155,8 @@ __KERNEL_RCSID(0, "$NetBSD: imxuart.c,v 1.27 2021/03/08 06:23:31 mlelstv Exp $")
 #include <sys/intr.h>
 
 #include <sys/bus.h>
+
+#include <ddb/db_active.h>
 
 #include <arm/imx/imxuartreg.h>
 #include <arm/imx/imxuartvar.h>
@@ -1819,7 +1821,6 @@ imxuintr_read(struct imxuart_softc *sc)
 	while (cc > 0) {
 		int cn_trapped = 0;
 
-
 		sc->sc_rbuf[sc->sc_rbuf_in] = rd =
 		    bus_space_read_4(iot, ioh, IMX_URXD);
 
@@ -2111,8 +2112,7 @@ imxuart_common_getc(dev_t dev, struct imxuart_regs *regsp)
 	uint32_t usr2;
 
 	/* got a character from reading things earlier */
-	if (imxuart_readahead_in != imxuart_readahead_out) {
-
+	if (!READAHEAD_IS_EMPTY()) {
 		c = imxuart_readahead[imxuart_readahead_out];
 		imxuart_readahead_out = (imxuart_readahead_out + 1) &
 		    (READAHEAD_RING_LEN-1);
@@ -2122,16 +2122,13 @@ imxuart_common_getc(dev_t dev, struct imxuart_regs *regsp)
 
 	/* block until a character becomes available */
 	while (!((usr2 = bus_space_read_4(iot, ioh, IMX_USR2)) & IMX_USR2_RDR))
-		;
+		continue;
 
 	c = 0xff & bus_space_read_4(iot, ioh, IMX_URXD);
 
 	{
-		int __attribute__((__unused__))cn_trapped = 0; /* unused */
-#ifdef DDB
-		extern int db_active;
+		int cn_trapped __unused = 0;
 		if (!db_active)
-#endif
 			cn_check_magic(dev, c, imxuart_cnm_state);
 	}
 	splx(s);
@@ -2153,6 +2150,7 @@ imxuart_common_putc(dev_t dev, struct imxuart_regs *regsp, int c)
 		int __attribute__((__unused__))cn_trapped = 0;
 		cin = bus_space_read_4(iot, ioh, IMX_URXD);
 		cn_check_magic(dev, cin & 0xff, imxuart_cnm_state);
+		imxuart_readahead[imxuart_readahead_in] = cin & 0xff;
 		imxuart_readahead_in = (imxuart_readahead_in + 1) &
 		    (READAHEAD_RING_LEN-1);
 	}

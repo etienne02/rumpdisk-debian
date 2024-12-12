@@ -1,4 +1,4 @@
-/* $NetBSD: lint2.h,v 1.19 2021/08/29 10:13:02 rillig Exp $ */
+/* $NetBSD: lint2.h,v 1.27 2023/12/03 18:17:41 rillig Exp $ */
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All Rights Reserved.
@@ -15,7 +15,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -39,34 +39,34 @@
  */
 struct lint2_type {
 	tspec_t	t_tspec;	/* type specifier */
-	bool	t_const : 1;	/* constant */
-	bool	t_volatile : 1;	/* volatile */
-	bool	t_vararg : 1;	/* function has variable number of arguments */
-	bool	t_is_enum : 1;
-	bool	t_proto : 1;	/* this is a prototype */
-	bool	t_istag : 1;	/* tag with _t_tag valid */
-	bool	t_istynam : 1;	/* tag with _t_tynam valid */
-	bool	t_isuniqpos : 1; /* tag with _t_uniqpos valid */
+	bool	t_const:1;	/* constant */
+	bool	t_volatile:1;	/* volatile */
+	bool	t_vararg:1;	/* function has variable number of arguments */
+	bool	t_is_enum:1;
+	bool	t_proto:1;	/* this is a prototype */
+	bool	t_istag:1;	/* tag with _t_tag valid */
+	bool	t_istynam:1;	/* tag with _t_tynam valid */
+	bool	t_isuniqpos:1;	/* tag with _t_uniqpos valid */
 	union {
 		int	_t_dim;		/* if the type is an ARRAY than this
-					   is the dimension of the array. */
-		struct	hte *_t_tag;	/* hash table entry of tag if
-					   t_is_enum, STRUCT or UNION */
-		struct	hte *_t_tynam;	/* hash table entry of typename if
-					   t_is_enum, STRUCT or UNION */
+					 * is the dimension of the array. */
+		struct hte *_t_tag;	/* hash table entry of tag if
+					 * t_is_enum, STRUCT or UNION */
+		struct hte *_t_tynam;	/* hash table entry of typename if
+					 * t_is_enum, STRUCT or UNION */
 		struct {
 			int p_line;
 			short p_file;
 			int p_uniq;
 		} _t_uniqpos;		/* unique position, for untagged
-					   untyped STRUCTs, UNIONS, and ENUMs,
-					   if t_isuniqpos */
-		struct	lint2_type **_t_args; /* list of argument types if
-					   this is a prototype */
+					 * untyped STRUCTs, UNIONS, and ENUMs,
+					 * if t_isuniqpos */
+		struct lint2_type **_t_args; /* list of argument types if
+					 * this is a prototype */
 	} t_u;
-	struct	lint2_type *t_subt;	/* element type (if ARRAY),
-					   return type (if FUNC),
-					   target type (if PTR) */
+	struct lint2_type *t_subt;	/*- element type (if ARRAY),
+					 * return type (if FUNC),
+					 * target type (if PTR) */
 };
 
 #define	t_dim		t_u._t_dim
@@ -81,30 +81,29 @@ struct lint2_type {
  * Such a structure is created for each argument of a function call
  * which is an integer constant or a constant string.
  */
-typedef	struct arginf {
+typedef struct arginf {
 	int	a_num;		/* # of argument (1..) */
-	bool	a_zero : 1;	/* argument is 0 */
-	bool	a_pcon : 1;	/* msb of argument is not set */
-	bool	a_ncon : 1;	/* msb of argument is set */
-	bool	a_fmt : 1;	/* a_fstrg points to format string */
+	bool	a_zero:1;	/* argument is 0 */
+	bool	a_pcon:1;	/* msb of argument is not set */
+	bool	a_ncon:1;	/* msb of argument is set */
+	bool	a_fmt:1;	/* a_fstrg points to format string */
 	char	*a_fstrg;	/* format string */
-	struct	arginf *a_next;	/* information for next const. argument */
+	struct arginf *a_next;	/* information for next const. argument */
 } arginf_t;
 
 /*
  * Keeps information about position in source file.
  */
-typedef	struct {
-	unsigned short p_src;	/* index of name of translation unit
-				   (the name which was specified at the
-				   command line) */
+typedef struct {
+	unsigned short p_src;	/* index of name of translation unit (the name
+				 * which was specified at the command line) */
 	unsigned short p_line;	/* line number in p_src */
 	unsigned short p_isrc;	/* index of (included) file */
 	unsigned short p_iline;	/* line number in p_iline */
 } pos_t;
 
 /* Used for definitions and declarations. */
-typedef	struct sym {
+typedef struct sym {
 	struct {
 		pos_t	s_pos;		/* pos of def./decl. */
 #if !defined(lint) && !defined(DEBUG)
@@ -112,16 +111,15 @@ typedef	struct sym {
 #else
 		def_t	s_def;
 #endif
-		bool	s_function_has_return_value : 1;
-		bool	s_inline : 1;
-		bool	s_old_style_function : 1;
-		bool	s_static : 1;
-		bool	s_check_only_first_args : 1;
-		bool	s_printflike : 1;
-		bool	s_scanflike : 1;
+		bool	s_function_has_return_value:1;
+		bool	s_inline:1;
+		bool	s_old_style_function:1;
+		bool	s_static:1;
+		bool	s_check_only_first_args:1;
+		bool	s_printflike:1;
+		bool	s_scanflike:1;
 		unsigned short s_type;
-		/* XXX: gap of 4 bytes on LP64 platforms */
-		struct	sym *s_next;	/* next symbol with same name */
+		struct sym *s_next;	/* next symbol with same name */
 	} s_s;
 	/*
 	 * To save memory, the remaining members are only allocated if one of
@@ -147,39 +145,39 @@ typedef	struct sym {
 /*
  * Used to store information about function calls.
  */
-typedef	struct fcall {
+typedef struct fcall {
 	pos_t	f_pos;		/* position of call */
-	bool	f_rused : 1;	/* return value used */
-	bool	f_rdisc : 1;	/* return value discarded (casted to void) */
+	bool	f_rused:1;	/* return value used */
+	bool	f_rdisc:1;	/* return value discarded (casted to void) */
 	unsigned short f_type;	/* types of expected return value and args */
 	arginf_t *f_args;	/* information about constant arguments */
-	struct	fcall *f_next;	/* next call of same function */
+	struct fcall *f_next;	/* next call of same function */
 } fcall_t;
 
 /*
  * Used to store information about usage of symbols other
  * than for function calls.
  */
-typedef	struct usym {
+typedef struct usym {
 	pos_t	u_pos;		/* position */
-	struct	usym *u_next;	/* next usage */
+	struct usym *u_next;	/* next usage */
 } usym_t;
 
 /*
  * hash table entry
  */
-typedef	struct hte {
-	const	char *h_name;	/* name */
-	bool	h_used : 1;	/* symbol is used */
-	bool	h_def : 1;	/* symbol is defined */
-	bool	h_static : 1;	/* static symbol */
+typedef struct hte {
+	const char *h_name;	/* name */
+	bool	h_used:1;	/* symbol is used */
+	bool	h_def:1;	/* symbol is defined */
+	bool	h_static:1;	/* static symbol */
 	sym_t	*h_syms;	/* declarations and definitions */
 	sym_t	**h_lsym;	/* points to s_next of last decl./def. */
 	fcall_t	*h_calls;	/* function calls */
 	fcall_t	**h_lcall;	/* points to f_next of last call */
 	usym_t	*h_usyms;	/* usage info */
 	usym_t	**h_lusym;	/* points to u_next of last usage info */
-	struct	hte *h_link;	/* next hte with same hash function */
+	struct hte *h_link;	/* next hte with same hash function */
 	struct  hte *h_hte;	/* pointer to other htes (for renames) */
 } hte_t;
 
@@ -187,7 +185,8 @@ typedef	struct hte {
 
 /* maps type indices into pointers to type structs */
 static inline type_t *
-TP(unsigned short type_id) {
+TP(unsigned short type_id)
+{
 	/* force sequence point for newly parsed type_id */
 	return tlst[type_id];
 }

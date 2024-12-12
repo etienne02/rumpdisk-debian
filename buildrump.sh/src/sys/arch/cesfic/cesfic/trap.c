@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.60 2019/11/21 19:23:59 ad Exp $	*/
+/*	$NetBSD: trap.c,v 1.63 2024/01/20 00:15:30 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.60 2019/11/21 19:23:59 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.63 2024/01/20 00:15:30 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_execfmt.h"
@@ -94,8 +94,6 @@ void	dumpwb(int, u_short, u_int, u_int);
 
 static inline void userret(struct lwp *l, struct frame *fp,
 	    u_quad_t oticks, u_int faultaddr, int fromtrap);
-
-int astpending;
 
 const char *trap_type[] = {
 	"Bus error",
@@ -276,7 +274,6 @@ trap(struct frame *fp, int type, unsigned code, unsigned v)
 		type |= T_USER;
 		sticks = p->p_sticks;
 		l->l_md.md_regs = fp->f_regs;
-		LWP_CACHE_CREDS(l, p);
 	}
 	switch (type) {
 
@@ -307,7 +304,10 @@ trap(struct frame *fp, int type, unsigned code, unsigned v)
 			printf("trap during panic!\n");
 #ifdef DEBUG
 			/* XXX should be a machine-dependent hook */
-			printf("(press a key)\n"); (void)cngetc();
+			printf("(press a key)\n");
+			cnpollc(1);
+			(void)cngetc();
+			cnpollc(0);
 #endif
 		}
 		regdump((struct trapframe *)fp, 128);

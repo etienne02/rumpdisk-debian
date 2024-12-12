@@ -1,4 +1,4 @@
-/*	$NetBSD: rmixl_mainbus.c,v 1.6 2021/08/07 16:18:59 thorpej Exp $	*/
+/*	$NetBSD: rmixl_mainbus.c,v 1.8 2022/09/29 07:00:47 skrll Exp $	*/
 
 /*
  * Copyright (c) 1994,1995 Mark Brinicombe.
@@ -42,13 +42,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rmixl_mainbus.c,v 1.6 2021/08/07 16:18:59 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rmixl_mainbus.c,v 1.8 2022/09/29 07:00:47 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/conf.h>
-#include <sys/malloc.h>
 #include <sys/device.h>
 
 #include <evbmips/rmixl/autoconf.h>
@@ -89,7 +88,7 @@ mainbusattach(device_t parent, device_t self, void *aux)
 	mainbus_found = 1;
 
 	/*
-	 * attach mainbus devices 
+	 * attach mainbus devices
 	 */
 	config_search(self, NULL,
 	    CFARGS(.search = mainbus_search));
@@ -121,12 +120,12 @@ mainbus_node_alloc(struct mainbus_softc *sc, int node)
 				return node;
 			}
 		}
-		panic("%s: node mask underflow", __func__);   
+		panic("%s: node mask underflow", __func__);
 	} else {
-		if (node >= 64) 
-			panic("%s: node >= 64", __func__);   
+		if (node >= 64)
+			panic("%s: node >= 64", __func__);
 		if (node < 0)
-			panic("%s: bad node %d", __func__, node);   
+			panic("%s: bad node %d", __func__, node);
 		bit = 1 << node;
 		if ((sc->sc_node_mask & bit) == 0) {
 			sc->sc_node_mask |= bit;

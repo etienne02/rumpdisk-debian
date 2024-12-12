@@ -1,4 +1,4 @@
-/*	$NetBSD: i82365_isasubr.c,v 1.48 2012/10/27 17:18:24 chs Exp $	*/
+/*	$NetBSD: i82365_isasubr.c,v 1.50 2024/09/08 09:36:50 rillig Exp $	*/
 
 /*
  * Copyright (c) 2000 Christian E. Hopps.  All rights reserved.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i82365_isasubr.c,v 1.48 2012/10/27 17:18:24 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i82365_isasubr.c,v 1.50 2024/09/08 09:36:50 rillig Exp $");
 
 #define	PCICISADEBUG
 
@@ -40,7 +40,6 @@ __KERNEL_RCSID(0, "$NetBSD: i82365_isasubr.c,v 1.48 2012/10/27 17:18:24 chs Exp 
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/extent.h>
-#include <sys/malloc.h>
 
 #include <sys/bus.h>
 #include <sys/intr.h>
@@ -100,7 +99,7 @@ int	pcic_isa_intr_alloc_mask = PCIC_ISA_INTR_ALLOC_MASK;
 #ifdef hpcmips
 /*
  * The irq probing doesn't work with current vrisab implementation.
- * The irq is just an key to find matching GPIO port to use and is fixed.
+ * The irq is just a key to find matching GPIO port to use and is fixed.
  */
 #define	PCIC_IRQ_PROBE	0
 #else

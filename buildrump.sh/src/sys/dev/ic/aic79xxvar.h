@@ -1,7 +1,7 @@
-/*	$NetBSD: aic79xxvar.h,v 1.28 2021/08/22 19:56:15 andvar Exp $	*/
+/*	$NetBSD: aic79xxvar.h,v 1.30 2024/02/08 20:11:56 andvar Exp $	*/
 
 /*
- * Core definitions and data structures sharable across OS platforms.
+ * Core definitions and data structures shareable across OS platforms.
  *
  * Copyright (c) 1994-2002 Justin T. Gibbs.
  * Copyright (c) 2000-2002 Adaptec Inc.
@@ -1186,7 +1186,7 @@ struct ahd_softc {
 	uint8_t			  tqinfifonext;
 
 	/*
-	 * Cached verson of the hs_mailbox so we can avoid
+	 * Cached version of the hs_mailbox so we can avoid
 	 * pausing the sequencer during mailbox updates.
 	 */
 	uint8_t			  hs_mailbox;

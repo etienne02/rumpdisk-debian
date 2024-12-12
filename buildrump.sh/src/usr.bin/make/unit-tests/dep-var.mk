@@ -1,17 +1,19 @@
-# $NetBSD: dep-var.mk,v 1.6 2021/04/04 10:13:09 rillig Exp $
+# $NetBSD: dep-var.mk,v 1.12 2024/06/02 15:31:26 rillig Exp $
 #
 # Tests for variable references in dependency declarations.
 #
 # Uh oh, this feels so strange that probably nobody uses it. But it seems to
 # be the only way to reach the lower half of SuffExpandChildren.
 
-# XXX: The -dv log says:
-#	Var_Parse: ${UNDEF1} with VARE_UNDEFERR|VARE_WANTRES
-# but no error message is generated for this line.
-# The variable expression ${UNDEF1} simply expands to an empty string.
+.MAKEFLAGS: -dv
+
+# expect: Var_Parse: ${UNDEF1} (eval-defined)
+# Even though undefined expressions should lead to errors, no error message is
+# generated for this line.  The expression ${UNDEF1} simply expands
+# to an empty string.
 all: ${UNDEF1}
 
-# Using a double dollar in order to circumvent immediate variable expansion
+# Using a double dollar in order to circumvent immediate expression expansion
 # feels like unintended behavior.  At least the manual page says nothing at
 # all about defined or undefined variables in dependency lines.
 #
@@ -20,10 +22,10 @@ all: ${UNDEF1}
 all: $${DEF2} a-$${DEF2}-b
 
 # This variable is not defined at all.
-# XXX: The -dv log says:
-#	Var_Parse: ${UNDEF3} with VARE_UNDEFERR|VARE_WANTRES
+# XXX: The -dv log says later when expanding the sources of 'all':
+#	Var_Parse: ${UNDEF3} (eval-defined)
 # but no error message is generated for this line, just like for UNDEF1.
-# The variable expression ${UNDEF3} simply expands to an empty string.
+# The expression ${UNDEF3} simply expands to an empty string.
 all: $${UNDEF3}
 
 # Try out how many levels of indirection are really expanded in dependency
@@ -61,7 +63,7 @@ INDIRECT_3=	indirect
 UNDEF1=	undef1
 DEF2=	def2
 
-# Cover the code in SuffExpandChildren that deals with malformed variable
+# Cover the code in SuffExpandChildren that deals with malformed
 # expressions.
 #
 # This seems to be an edge case that never happens in practice, and it would
@@ -81,8 +83,14 @@ all: $$$$)
 # Since 2020-09-13, this generates a parse error in lint mode (-dL), but not
 # in normal mode since ParseDependency does not handle any errors after
 # calling Var_Parse.
+# expect: Var_Parse: ${:U\$)}: (eval-defined)
+# expect: Var_Parse: $INDIRECT_2-2-1 $): (parse)
+# expect: Var_Parse: $): (parse)
 undef1 def2 a-def2-b 1-2-$$INDIRECT_2-2-1 ${:U\$)}:
 	@echo ${.TARGET:Q}
 
-# XXX: Why is the exit status still 0, even though Parse_Error is called
-# with PARSE_FATAL in SuffExpandChildren?
+.MAKEFLAGS: -d0
+
+# XXX: The exit status is still 0, even though Parse_Error is called with
+# PARSE_FATAL in SuffExpandChildren.  The exit status is only affected by
+# parse errors when they occur in the parsing phase, see Parse_File.

@@ -1,4 +1,4 @@
-/*	$NetBSD: efiboot.h,v 1.10 2019/09/13 02:19:45 manu Exp $	*/
+/*	$NetBSD: efiboot.h,v 1.12 2023/04/20 00:42:24 manu Exp $	*/
 
 /*-
  * Copyright (c) 2016 Kimihiro Nonaka <nonaka@netbsd.org>
@@ -41,7 +41,6 @@ extern EFI_GUID GraphicsOutputProtocol;
 /* boot.c */
 void boot(void);
 void clearit(void);
-void print_banner(void);
 
 /* efiboot.c */
 extern EFI_HANDLE IH;
@@ -53,7 +52,13 @@ extern enum efi_boot_device_type {
 } efi_bootdp_type;
 extern EFI_LOADED_IMAGE *efi_li;
 extern uintptr_t efi_main_sp;
-extern physaddr_t efi_loadaddr, efi_kernel_start;
+extern physaddr_t efi_loadaddr, efi_kernel_start, efi_load_start;
+extern physaddr_t efi_kernel_reloc;
+extern enum efi_reloc_type {
+	RELOC_DEFAULT,
+	RELOC_NONE,
+	RELOC_ADDR,
+} efi_reloc_type;
 extern u_long efi_kernel_size;
 extern bool efi_cleanuped;
 void efi_cleanup(void);

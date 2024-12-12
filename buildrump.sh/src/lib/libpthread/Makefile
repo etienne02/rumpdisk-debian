@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.96 2019/11/11 22:45:27 joerg Exp $
+#	$NetBSD: Makefile,v 1.99 2024/11/22 15:51:34 riastradh Exp $
 #
 
 NOSANITIZER=	# defined
@@ -17,7 +17,7 @@ ARCHSUBDIR=	${PTHREAD_MACHINE_ARCH}
 ARCHSUBDIR=	${PTHREAD_MACHINE_CPU}
 .elif exists(${.CURDIR}/arch/${MACHINE_ARCH})
 ARCHSUBDIR=	${MACHINE_ARCH}
-.elif exists(${.CURDIR}/arch/${MACHINE_CPU}) 
+.elif exists(${.CURDIR}/arch/${MACHINE_CPU})
 ARCHSUBDIR=	${MACHINE_CPU}
 .else
 .BEGIN:
@@ -32,6 +32,23 @@ INCSDIR=/usr/include
 ARCHDIR=	${.CURDIR}/arch/${ARCHSUBDIR}
 .PATH:	${ARCHDIR}
 
+EXPSYM_SRCS+=	pthread_mi.expsym
+.  if ${MACHINE_ARCH} == "alpha" || ${MACHINE_ARCH} == "hppa"
+# PTHREAD__ASM_RASOPS
+EXPSYM_SRCS+=	pthread_md.expsym
+.  else
+# !PTHREAD__ASM_RASOPS
+# XXX These really shouldn't be exported.
+EXPSYM_SRCS+=	pthread_ras.expsym
+.  endif
+
+LIB_EXPSYM=	pthread.expsym
+pthread.expsym: ${EXPSYM_SRCS}
+	${_MKTARGET_CREATE}
+	LC_ALL=C sort -m ${.ALLSRC} >${.TARGET}.tmp && \
+	${MV} ${.TARGET}.tmp ${.TARGET}
+CLEANFILES+=	pthread.expsym pthread.expsym.tmp
+
 CPPFLAGS+=	-I${ARCHDIR} -I${.CURDIR} -I${.OBJDIR} -D_LIBC -D_REENTRANT
 CPPFLAGS+=	-I${.CURDIR}/../libc/include
 CPPFLAGS+=	-D__LIBPTHREAD_SOURCE__ -D__LIBC_THREAD_STUBS
@@ -45,7 +62,7 @@ CPPFLAGS+=-I${NETBSDSRCDIR}/sys -I${.CURDIR}/../libc
 
 # providing alternative MI implementations for creating an lwp is
 # possible by setting PTHREAD_MAKELWP.  Currently, alternatives are
-# set by the rumprun software stacks (see repo.rumpkernel.org)
+# set by the rumprun software stacks (see https://github.com/rumpkernel/rumprun )
 PTHREAD_MAKELWP?=	pthread_makelwp_netbsd.c
 
 #
@@ -53,7 +70,7 @@ PTHREAD_MAKELWP?=	pthread_makelwp_netbsd.c
 # gets a reference to a symbol in that file.  Otherwise, Unix's stupid static
 # library semantics will end up discarding potentially important objects.
 #
-SRCS=	pthread.c 
+SRCS=	pthread.c
 SRCS+=	pthread_attr.c
 SRCS+=	pthread_barrier.c
 # used by rumprun-posix to work around symbol collisions
@@ -62,7 +79,7 @@ SRCS+=	pthread_cancelstub.c
 .endif
 SRCS+=	pthread_cond.c
 SRCS+=	pthread_getcpuclockid.c
-SRCS+=	pthread_lock.c 
+SRCS+=	pthread_lock.c
 SRCS+=	${PTHREAD_MAKELWP}
 SRCS+=	pthread_misc.c
 SRCS+=	pthread_mutex.c
@@ -195,7 +212,7 @@ MLINKS+=	pthread_mutex.3 pthread_mutex_trylock.3
 MLINKS+=	pthread_mutex.3 pthread_mutex_unlock.3
 MLINKS+=	pthread_mutex.3 pthread_mutex_timedlock.3
 MLINKS+=	pthread_mutex.3	pthread_mutex_getprioceiling.3
-MLINKS+=	pthread_mutex.3	pthread_mutex_setprioceiling.3 
+MLINKS+=	pthread_mutex.3	pthread_mutex_setprioceiling.3
 
 MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_init.3
 MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_destroy.3
@@ -206,7 +223,7 @@ MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_gettype.3
 MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_getprotocol.3
 MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_setprotocol.3
 MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_getprioceiling.3
-MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_setprioceiling.3	
+MLINKS+=	pthread_mutexattr.3 pthread_mutexattr_setprioceiling.3
 
 MLINKS+=	pthread_rwlock.3 pthread_rwlock_init.3
 MLINKS+=	pthread_rwlock.3 pthread_rwlock_destroy.3

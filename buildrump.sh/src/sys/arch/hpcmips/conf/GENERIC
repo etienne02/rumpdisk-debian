@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.245 2021/06/29 10:22:35 nia Exp $
+# $NetBSD: GENERIC,v 1.248 2023/02/12 14:50:39 abs Exp $
 #
 # GENERIC machine description file
 # 
@@ -24,7 +24,7 @@ include 	"arch/hpcmips/conf/std.hpcmips.tx39"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"GENERIC-$Revision: 1.245 $"
+#ident 		"GENERIC-$Revision: 1.248 $"
 
 maxusers	16
 
@@ -77,7 +77,7 @@ options 	USERCONF		# userconf(4) support
 #options	PIPE_SOCKETPAIR		# smaller, but slower pipe(2)
 options 	SYSCTL_INCLUDE_DESCR	# Include sysctl descriptions in kernel
 
-# Filesystem options
+# File systems
 file-system 	FFS		# fast filesystem with user and group quotas
 file-system 	MFS		# memory-based filesystem
 file-system 	NFS		# Sun NFS-compatible filesystem (client)
@@ -95,13 +95,14 @@ file-system	PTYFS		# /dev/pts/N support
 file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
-options 	NFSSERVER	# Sun NFS-compatible filesystem (server)
-options 	WAPBL		# File system journaling support
-#options	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
+# File system options
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 #options 	QUOTA		# legacy UFS quotas
 #options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
 #options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 #options 	GATEWAY		# IP packet forwarding
@@ -666,6 +667,7 @@ pseudo-device	fss			# file system snapshot device
 #pseudo-device	cgd			# cryptographic disks
 pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	drvctl			# user control of drive subsystem
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 pseudo-device	biconsdev	1	# build-in console device
 pseudo-device	wsmux			# mouse & keyboard multiplexor
@@ -696,3 +698,6 @@ pseudo-device	agr			# IEEE 802.3ad link aggregation
 pseudo-device	ksyms			# /dev/ksyms
 
 include "dev/veriexec.config"
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/hpcmips/conf/GENERIC.local"

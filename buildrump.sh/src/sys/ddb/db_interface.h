@@ -1,7 +1,7 @@
-/*	$NetBSD: db_interface.h,v 1.40 2021/04/18 01:28:50 mrg Exp $	*/
+/*	$NetBSD: db_interface.h,v 1.44 2023/11/21 14:35:01 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 1995 The NetBSD Foundation, Inc.
+ * Copyright (c) 1995, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -52,7 +52,7 @@ void		db_show_all_procs(db_expr_t, bool, db_expr_t, const char *);
 void		db_show_all_pools(db_expr_t, bool, db_expr_t, const char *);
 void		db_show_sched_qs(db_expr_t, bool, db_expr_t, const char *);
 
-/* kern/kern_clock.c */
+/* kern/kern_timeout.c */
 void		db_show_callout(db_expr_t, bool, db_expr_t, const char *);
 
 /* kern/subr_log.c */
@@ -80,11 +80,28 @@ void		db_show_all_device(db_expr_t, bool, db_expr_t, const char *);
 /* kern/subr_disk.c, dev/dksubr.c */
 void		db_show_disk(db_expr_t, bool, db_expr_t, const char *);
 
+/* kern/kern_sleepq.c */
+void		db_show_sleepq(db_expr_t, bool, db_expr_t, const char *);
+
+/* kern/kern_condvar.c */
+void		db_show_condvar(db_expr_t, bool, db_expr_t, const char *);
+
+/* kern/sys_select.c */
+void		db_show_selinfo(db_expr_t, bool, db_expr_t, const char *);
+
+#ifndef __HAVE_DB_STACK_TRACE_PRINT_RA
+#define	db_stack_trace_print_ra(ra, have_ra, addr, have_addr, c, m, pr)	      \
+	((void)(ra), (void)(have_ra),					      \
+	    db_stack_trace_print(addr, have_addr, c, m, pr))
+#endif
+
 /* The db_stacktrace_print macro may be overridden by an MD macro */
 #ifndef db_stacktrace_print
 #define	db_stacktrace_print(prfunc) \
-    db_stack_trace_print((db_expr_t)(intptr_t)__builtin_frame_address(0), \
-	true, 65535, "", prfunc)
+	db_stack_trace_print_ra(					      \
+	    (db_expr_t)(intptr_t)__builtin_return_address(0), true,	      \
+	    (db_expr_t)(intptr_t)__builtin_frame_address(0), true,	      \
+	    65535, "", prfunc)
 #endif	/* !db_stacktrace_print */
 
 #define	db_stacktrace()		db_stacktrace_print(printf);

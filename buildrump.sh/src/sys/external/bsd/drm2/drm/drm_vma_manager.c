@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_vma_manager.c,v 1.5 2016/11/19 17:19:59 maya Exp $	*/
+/*	$NetBSD: drm_vma_manager.c,v 1.8 2021/12/19 11:57:27 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_vma_manager.c,v 1.5 2016/11/19 17:19:59 maya Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_vma_manager.c,v 1.8 2021/12/19 11:57:27 riastradh Exp $");
 
 #include <sys/kmem.h>
 #include <sys/rbtree.h>
@@ -88,7 +88,7 @@ static int
 drm_vma_file_compare_key(void *cookie __unused, const void *vf, const void *vk)
 {
 	const struct drm_vma_offset_file *const f = vf;
-	const struct file *const k = vk;
+	const struct drm_file *const k = vk;
 
 	if (f->vof_file < k)
 		return -1;
@@ -233,9 +233,28 @@ drm_vma_offset_lookup_locked(struct drm_vma_offset_manager *mgr,
 	if (node == NULL)
 		return NULL;
 	KASSERT(node->von_startpage <= startpage);
-	if (npages < node->von_npages)
+	if (node->von_npages < npages)
 		return NULL;
 	if (node->von_npages - npages < startpage - node->von_startpage)
+		return NULL;
+
+	return node;
+}
+
+struct drm_vma_offset_node *
+drm_vma_offset_exact_lookup_locked(struct drm_vma_offset_manager *mgr,
+    unsigned long startpage, unsigned long npages)
+{
+	const vmem_addr_t key = startpage;
+	struct drm_vma_offset_node *node;
+
+	KASSERT(rw_lock_held(&mgr->vom_lock));
+
+	node = rb_tree_find_node(&mgr->vom_nodes, &key);
+	if (node == NULL)
+		return NULL;
+	KASSERT(node->von_startpage == startpage);
+	if (node->von_npages != npages)
 		return NULL;
 
 	return node;
@@ -245,26 +264,17 @@ struct drm_vma_offset_node *
 drm_vma_offset_exact_lookup(struct drm_vma_offset_manager *mgr,
     unsigned long startpage, unsigned long npages)
 {
-	const vmem_addr_t key = startpage;
 	struct drm_vma_offset_node *node;
 
 	rw_enter(&mgr->vom_lock, RW_READER);
+	node = drm_vma_offset_exact_lookup_locked(mgr, startpage, npages);
+	rw_exit(&mgr->vom_lock);
 
-	node = rb_tree_find_node(&mgr->vom_nodes, &key);
-	if (node == NULL)
-		goto out;
-	KASSERT(node->von_startpage == startpage);
-	if (node->von_npages != npages) {
-		node = NULL;
-		goto out;
-	}
-
-out:	rw_exit(&mgr->vom_lock);
 	return node;
 }
 
 int
-drm_vma_node_allow(struct drm_vma_offset_node *node, struct file *file)
+drm_vma_node_allow(struct drm_vma_offset_node *node, struct drm_file *file)
 {
 	struct drm_vma_offset_file *new, *old;
 
@@ -284,7 +294,7 @@ drm_vma_node_allow(struct drm_vma_offset_node *node, struct file *file)
 }
 
 void
-drm_vma_node_revoke(struct drm_vma_offset_node *node, struct file *file)
+drm_vma_node_revoke(struct drm_vma_offset_node *node, struct drm_file *file)
 {
 
 	rw_enter(&node->von_lock, RW_WRITER);
@@ -298,7 +308,8 @@ drm_vma_node_revoke(struct drm_vma_offset_node *node, struct file *file)
 }
 
 bool
-drm_vma_node_is_allowed(struct drm_vma_offset_node *node, struct file *file)
+drm_vma_node_is_allowed(struct drm_vma_offset_node *node,
+    struct drm_file *file)
 {
 
 	rw_enter(&node->von_lock, RW_READER);
@@ -310,7 +321,8 @@ drm_vma_node_is_allowed(struct drm_vma_offset_node *node, struct file *file)
 }
 
 int
-drm_vma_node_verify_access(struct drm_vma_offset_node *node, struct file *file)
+drm_vma_node_verify_access(struct drm_vma_offset_node *node,
+    struct drm_file *file)
 {
 
 	if (!drm_vma_node_is_allowed(node, file))

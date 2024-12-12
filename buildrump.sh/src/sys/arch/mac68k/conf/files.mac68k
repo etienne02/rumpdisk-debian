@@ -1,4 +1,4 @@
-#	$NetBSD: files.mac68k,v 1.131 2021/02/26 10:54:12 rin Exp $
+#	$NetBSD: files.mac68k,v 1.134 2024/09/14 21:04:24 nat Exp $
 
 # mac68k-specific configuration info
 
@@ -24,7 +24,7 @@ device	obio { [addr = -1] }
 attach	obio at mainbus
 file	arch/mac68k/obio/obio.c		obio
 
-device	adb { }
+device	adb { }: sysmon_power
 attach	adb at obio
 file	arch/mac68k/dev/adb.c		adb
 file	arch/mac68k/dev/adbsysasm.s
@@ -43,9 +43,15 @@ device	ams: wsmousedev
 attach	ams at adb
 file	arch/mac68k/dev/ams.c		ams needs-flag
 
+# ASC (beeper)
 device	asc
 attach	asc at obio
 file	arch/mac68k/obio/asc.c		asc needs-flag
+
+#ASC audio
+device	ascaudio: audiobus, auconv, mulaw, aurateconv, auvolconv
+attach	ascaudio at obio
+file	arch/mac68k/obio/ascaudio.c	ascaudio needs-flag
 
 device	nubus { }
 attach	nubus at mainbus
@@ -173,6 +179,7 @@ file	arch/m68k/m68k/db_memrw.c		ddb | kgdb
 file	arch/m68k/m68k/fpu.c			compile-with "${M68K_KERN_FPU}"
 file	arch/m68k/m68k/kgdb_machdep.c		kgdb
 file	arch/m68k/m68k/m68k_trap.c
+file	arch/m68k/m68k/mmu_subr.s
 file	arch/m68k/m68k/pmap_motorola.c
 file	arch/m68k/m68k/procfs_machdep.c		procfs
 file	arch/m68k/m68k/sys_machdep.c

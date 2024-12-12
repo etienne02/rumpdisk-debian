@@ -1,4 +1,4 @@
-/*	$NetBSD: vm.c,v 1.191 2020/12/05 19:08:50 chs Exp $	*/
+/*	$NetBSD: vm.c,v 1.197 2023/09/24 09:33:26 martin Exp $	*/
 
 /*
  * Copyright (c) 2007-2011 Antti Kantee.  All Rights Reserved.
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm.c,v 1.191 2020/12/05 19:08:50 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm.c,v 1.197 2023/09/24 09:33:26 martin Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -53,8 +53,22 @@ __KERNEL_RCSID(0, "$NetBSD: vm.c,v 1.191 2020/12/05 19:08:50 chs Exp $");
 #include <sys/null.h>
 #include <sys/vnode.h>
 #include <sys/radixtree.h>
+#include <sys/module.h>
 
 #include <machine/pmap.h>
+
+#if defined(__i386__) || defined(__x86_64__)
+/*
+ * This file abuses the pmap abstraction to create its own statically
+ * allocated struct pmap object, even though it can't do anything
+ * useful with such a thing from userland.  On x86 the struct pmap
+ * definition is private, so we have to go to extra effort to abuse it
+ * there.  This should be fixed -- all of the struct pmap definitions
+ * should be private, and then rump can furnish its own fake struct
+ * pmap without clashing with anything.
+ */
+#include <machine/pmap_private.h>
+#endif
 
 #include <uvm/uvm.h>
 #include <uvm/uvm_ddb.h>
@@ -84,7 +98,6 @@ static struct vm_map kernel_map_store;
 struct vm_map *kernel_map = &kernel_map_store;
 
 static struct vm_map module_map_store;
-extern struct vm_map *module_map;
 
 static struct pmap pmap_kernel;
 struct pmap rump_pmap_local;
@@ -110,7 +123,7 @@ static unsigned long dddlim;		/* 90% of memory limit used */
 
 /*
  * Try to free two pages worth of pages from objects.
- * If this succesfully frees a full page cache page, we'll
+ * If this successfully frees a full page cache page, we'll
  * free the released page plus PAGE_SIZE/sizeof(vm_page).
  */
 #define PAGEDAEMON_OBJCHUNK (2*PAGE_SIZE / sizeof(struct vm_page))
@@ -149,6 +162,10 @@ pgdtor(void *arg, void *obj)
 }
 
 static struct pool_cache pagecache;
+
+/* stub for UVM_OBJ_IS_VNODE */
+struct uvm_pagerops rump_uvm_vnodeops;
+__weak_alias(uvm_vnodeops,rump_uvm_vnodeops);
 
 /*
  * Called with the object locked.  We don't support anons.
@@ -358,11 +375,9 @@ uvm_init(void)
 	uvmexp.pagemask = PAGE_MASK;
 	uvmexp.pageshift = PAGE_SHIFT;
 #else
-#define FAKE_PAGE_SHIFT 12
-	uvmexp.pageshift = FAKE_PAGE_SHIFT;
-	uvmexp.pagesize = 1<<FAKE_PAGE_SHIFT;
-	uvmexp.pagemask = (1<<FAKE_PAGE_SHIFT)-1;
-#undef FAKE_PAGE_SHIFT
+	uvmexp.pagesize = rumpuser_getpagesize();
+	uvmexp.pagemask = uvmexp.pagesize-1;
+	uvmexp.pageshift = ffs(uvmexp.pagesize)-1;
 #endif
 
 	mutex_init(&pagermtx, MUTEX_DEFAULT, IPL_NONE);
@@ -1321,4 +1336,132 @@ rump_hyperfree(void *what, size_t size)
 		atomic_add_long(&curphysmem, -size);
 	}
 	rumpuser_free(what, size);
+}
+
+/*
+ * UBC
+ */
+
+#define PAGERFLAGS (PGO_SYNCIO | PGO_NOBLOCKALLOC | PGO_NOTIMESTAMP)
+
+void
+ubc_zerorange(struct uvm_object *uobj, off_t off, size_t len, int flags)
+{
+	struct vm_page **pgs;
+	int maxpages = MIN(32, round_page(len) >> PAGE_SHIFT);
+	int npages, i;
+
+	if (maxpages == 0)
+		return;
+
+	pgs = kmem_alloc(maxpages * sizeof(pgs), KM_SLEEP);
+	rw_enter(uobj->vmobjlock, RW_WRITER);
+	while (len) {
+		npages = MIN(maxpages, round_page(len) >> PAGE_SHIFT);
+		memset(pgs, 0, npages * sizeof(struct vm_page *));
+		(void)uobj->pgops->pgo_get(uobj, trunc_page(off),
+		    pgs, &npages, 0, VM_PROT_READ | VM_PROT_WRITE,
+		    0, PAGERFLAGS | PGO_PASTEOF);
+		KASSERT(npages > 0);
+
+		rw_enter(uobj->vmobjlock, RW_WRITER);
+		for (i = 0; i < npages; i++) {
+			struct vm_page *pg;
+			uint8_t *start;
+			size_t chunkoff, chunklen;
+
+			pg = pgs[i];
+			if (pg == NULL)
+				break;
+
+			KASSERT(pg->uobject != NULL);
+			KASSERT(uobj->vmobjlock == pg->uobject->vmobjlock);
+
+			chunkoff = off & PAGE_MASK;
+			chunklen = MIN(PAGE_SIZE - chunkoff, len);
+			start = (uint8_t *)pg->uanon + chunkoff;
+
+			memset(start, 0, chunklen);
+			uvm_pagemarkdirty(pg, UVM_PAGE_STATUS_DIRTY);
+
+			off += chunklen;
+			len -= chunklen;
+		}
+		uvm_page_unbusy(pgs, npages);
+	}
+	rw_exit(uobj->vmobjlock);
+	kmem_free(pgs, maxpages * sizeof(pgs));
+}
+
+#define len2npages(off, len)						\
+    ((round_page(off+len) - trunc_page(off)) >> PAGE_SHIFT)
+
+int
+ubc_uiomove(struct uvm_object *uobj, struct uio *uio, vsize_t todo,
+	int advice, int flags)
+{
+	struct vm_page **pgs;
+	int npages = len2npages(uio->uio_offset, todo);
+	size_t pgalloc;
+	int i, rv, pagerflags;
+	vm_prot_t prot;
+
+	pgalloc = npages * sizeof(pgs);
+	pgs = kmem_alloc(pgalloc, KM_SLEEP);
+
+	pagerflags = PAGERFLAGS;
+	if (flags & UBC_WRITE)
+		pagerflags |= PGO_PASTEOF;
+	if (flags & UBC_FAULTBUSY)
+		pagerflags |= PGO_OVERWRITE;
+
+	prot = VM_PROT_READ;
+	if (flags & UBC_WRITE)
+		prot |= VM_PROT_WRITE;
+
+	rw_enter(uobj->vmobjlock, RW_WRITER);
+	do {
+		npages = len2npages(uio->uio_offset, todo);
+		memset(pgs, 0, pgalloc);
+		rv = uobj->pgops->pgo_get(uobj, trunc_page(uio->uio_offset),
+		    pgs, &npages, 0, prot, 0, pagerflags);
+		if (rv)
+			goto out;
+
+		rw_enter(uobj->vmobjlock, RW_WRITER);
+		for (i = 0; i < npages; i++) {
+			struct vm_page *pg;
+			size_t xfersize;
+			off_t pageoff;
+
+			pg = pgs[i];
+			if (pg == NULL)
+				break;
+
+			KASSERT(pg->uobject != NULL);
+			KASSERT(uobj->vmobjlock == pg->uobject->vmobjlock);
+			pageoff = uio->uio_offset & PAGE_MASK;
+
+			xfersize = MIN(MIN(todo, PAGE_SIZE), PAGE_SIZE-pageoff);
+			KASSERT(xfersize > 0);
+			rv = uiomove((uint8_t *)pg->uanon + pageoff,
+			    xfersize, uio);
+			if (rv) {
+				uvm_page_unbusy(pgs, npages);
+				rw_exit(uobj->vmobjlock);
+				goto out;
+			}
+			if (uio->uio_rw == UIO_WRITE) {
+				pg->flags &= ~PG_FAKE;
+				uvm_pagemarkdirty(pg, UVM_PAGE_STATUS_DIRTY);
+			}
+			todo -= xfersize;
+		}
+		uvm_page_unbusy(pgs, npages);
+	} while (todo);
+	rw_exit(uobj->vmobjlock);
+
+ out:
+	kmem_free(pgs, pgalloc);
+	return rv;
 }

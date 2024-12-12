@@ -1,4 +1,4 @@
-/*	$NetBSD: su_pam.c,v 1.21 2018/02/26 00:05:05 htodd Exp $	*/
+/*	$NetBSD: su_pam.c,v 1.24 2023/03/24 16:58:24 kre Exp $	*/
 
 /*
  * Copyright (c) 1988 The Regents of the University of California.
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1988\
 #if 0
 static char sccsid[] = "@(#)su.c	8.3 (Berkeley) 4/2/94";*/
 #else
-__RCSID("$NetBSD: su_pam.c,v 1.21 2018/02/26 00:05:05 htodd Exp $");
+__RCSID("$NetBSD: su_pam.c,v 1.24 2023/03/24 16:58:24 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -204,8 +204,9 @@ main(int argc, char **argv)
 	if ((p = strchr(user, ':')) != NULL) {
 		*p = '\0';
 		gname = ++p;
-	}
-	else
+		if (*gname == '\0')
+			errx(EXIT_FAILURE, "missing 'group' after ':'");
+	} else
 		gname = NULL;
 
 #ifdef ALLOW_EMPTY_USER
@@ -220,7 +221,7 @@ main(int argc, char **argv)
 	/*
 	 * PAM initialization
 	 */
-#define PAM_END(msg) do { func = msg; goto done;} /* NOTREACHED */ while (/*CONSTCOND*/0)
+#define PAM_END(msg) do { func = msg; goto done;} /* NOTREACHED */ while (0)
 
 	if ((pam_err = pam_start("su", user, &pamc, &pamh)) != PAM_SUCCESS) {
 		if (pamh != NULL)
@@ -293,12 +294,12 @@ main(int argc, char **argv)
 #define ERRX_PAM_END(args) do {			\
 	(void)pam_end(pamh, pam_err);		\
 	errx args;				\
-} while (/* CONSTCOND */0)
+} while (0)
 
 #define ERR_PAM_END(args) do {			\
 	(void)pam_end(pamh, pam_err);		\
 	err args;				\
-} while (/* CONSTCOND */0)
+} while (0)
 
 	/* force the usage of specified class */
 	if (class) {

@@ -1,4 +1,4 @@
-/*	$NetBSD: tprof.h,v 1.2 2018/07/13 11:03:36 maxv Exp $	*/
+/*	$NetBSD: tprof.h,v 1.5 2023/04/17 08:37:24 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -29,8 +29,20 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+extern struct tprof_info tprof_info;
+extern int ncpu;
+extern int devfd;
+extern u_int ncounters;
+
+const char *tprof_cycle_event_name(void);
 int tprof_event_init(uint32_t);
 void tprof_event_list(void);
 void tprof_event_lookup(const char *, struct tprof_param *);
 
+int tprof_parse_event(tprof_param_t *, const char *, uint32_t, const char **,
+    char **);
+#define TPROF_PARSE_EVENT_F_ALLOWOPTION	0x00000001
+#define TPROF_PARSE_EVENT_F_ALLOWSCALE	0x00000002
+
 void tprof_analyze(int, char **);
+void tprof_top(int, char **);

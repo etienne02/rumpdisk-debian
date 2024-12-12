@@ -1,4 +1,4 @@
-/*	$NetBSD: if_el.c,v 1.99 2020/01/29 06:21:40 thorpej Exp $	*/
+/*	$NetBSD: if_el.c,v 1.102 2022/09/17 17:15:02 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1994, Matthew E. Kimmel.  Permission is hereby granted
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_el.c,v 1.99 2020/01/29 06:21:40 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_el.c,v 1.102 2022/09/17 17:15:02 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -72,6 +72,7 @@ struct el_softc {
 	struct ethercom sc_ethercom;	/* ethernet common */
 	bus_space_tag_t sc_iot;		/* bus space identifier */
 	bus_space_handle_t sc_ioh;	/* i/o handle */
+	bool sc_txbusy;			/* transmitter is busy */
 
 	krndsource_t rnd_source;
 };
@@ -79,20 +80,20 @@ struct el_softc {
 /*
  * prototypes
  */
-int elintr(void *);
-void elinit(struct el_softc *);
-int elioctl(struct ifnet *, u_long, void *);
-void elstart(struct ifnet *);
-void elwatchdog(struct ifnet *);
-void elreset(struct el_softc *);
-void elstop(struct el_softc *);
-static int el_xmit(struct el_softc *);
-void elread(struct el_softc *, int);
-struct mbuf *elget(struct el_softc *sc, int);
+static int	elintr(void *);
+static void	elinit(struct el_softc *);
+static int	elioctl(struct ifnet *, u_long, void *);
+static void	elstart(struct ifnet *);
+static void	elwatchdog(struct ifnet *);
+static void	elreset(struct el_softc *);
+static void	elstop(struct el_softc *);
+static int	el_xmit(struct el_softc *);
+static void	elread(struct el_softc *, int);
+static struct mbuf *elget(struct el_softc *sc, int);
 static inline void el_hardreset(struct el_softc *);
 
-int elprobe(device_t, cfdata_t, void *);
-void elattach(device_t, device_t, void *);
+static int	elprobe(device_t, cfdata_t, void *);
+static void	elattach(device_t, device_t, void *);
 
 CFATTACH_DECL_NEW(el, sizeof(struct el_softc),
     elprobe, elattach, NULL, NULL);
@@ -103,15 +104,15 @@ CFATTACH_DECL_NEW(el, sizeof(struct el_softc),
  * See if the card is there and at the right place.
  * (XXX - cgd -- needs help)
  */
-int
+static int
 elprobe(device_t parent, cfdata_t match, void *aux)
 {
 	struct isa_attach_args *ia = aux;
 	bus_space_tag_t iot = ia->ia_iot;
 	bus_space_handle_t ioh;
 	int iobase;
-	u_int8_t station_addr[ETHER_ADDR_LEN];
-	u_int8_t i;
+	uint8_t station_addr[ETHER_ADDR_LEN];
+	uint8_t i;
 	int rval;
 
 	rval = 0;
@@ -190,7 +191,7 @@ elprobe(device_t parent, cfdata_t match, void *aux)
  * called, we know that the card exists at the given I/O address.  We still
  * assume that the IRQ given is correct.
  */
-void
+static void
 elattach(device_t parent, device_t self, void *aux)
 {
 	struct el_softc *sc = device_private(self);
@@ -198,8 +199,8 @@ elattach(device_t parent, device_t self, void *aux)
 	bus_space_tag_t iot = ia->ia_iot;
 	bus_space_handle_t ioh;
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
-	u_int8_t myaddr[ETHER_ADDR_LEN];
-	u_int8_t i;
+	uint8_t myaddr[ETHER_ADDR_LEN];
+	uint8_t i;
 
 	sc->sc_dev = self;
 
@@ -260,7 +261,7 @@ elattach(device_t parent, device_t self, void *aux)
 /*
  * Reset interface.
  */
-void
+static void
 elreset(struct el_softc *sc)
 {
 	int s;
@@ -275,7 +276,7 @@ elreset(struct el_softc *sc)
 /*
  * Stop interface.
  */
-void
+static void
 elstop(struct el_softc *sc)
 {
 
@@ -305,7 +306,7 @@ el_hardreset(struct el_softc *sc)
 /*
  * Initialize interface.
  */
-void
+static void
 elinit(struct el_softc *sc)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
@@ -337,7 +338,7 @@ elinit(struct el_softc *sc)
 
 	/* Set flags appropriately. */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 
 	/* And start output. */
 	elstart(ifp);
@@ -348,7 +349,7 @@ elinit(struct el_softc *sc)
  * giving the receiver a chance between datagrams.  Call only from splnet or
  * interrupt level!
  */
-void
+static void
 elstart(struct ifnet *ifp)
 {
 	struct el_softc *sc = ifp->if_softc;
@@ -361,12 +362,12 @@ elstart(struct ifnet *ifp)
 	s = splnet();
 
 	/* Don't do anything if output is active. */
-	if ((ifp->if_flags & IFF_OACTIVE) != 0) {
+	if (sc->sc_txbusy) {
 		splx(s);
 		return;
 	}
 
-	ifp->if_flags |= IFF_OACTIVE;
+	sc->sc_txbusy = true;
 
 	/*
 	 * The main loop.  They warned me against endless loops, but would I
@@ -402,7 +403,7 @@ elstart(struct ifnet *ifp)
 		/* Copy the datagram to the buffer. */
 		for (m = m0; m != 0; m = m->m_next)
 			bus_space_write_multi_1(iot, ioh, EL_BUF,
-			    mtod(m, u_int8_t *), m->m_len);
+			    mtod(m, uint8_t *), m->m_len);
 		for (i = 0;
 		    i < ETHER_MIN_LEN - ETHER_CRC_LEN - m0->m_pkthdr.len; i++)
 			bus_space_write_1(iot, ioh, EL_BUF, 0);
@@ -448,13 +449,13 @@ elstart(struct ifnet *ifp)
 		(void)bus_space_read_1(iot, ioh, EL_AS);
 		bus_space_write_1(iot, ioh, EL_AC, EL_AC_IRQE | EL_AC_RX);
 		splx(s);
-		/* Interrupt here. */
+		/* (Maybe) interrupt here. */
 		s = splnet();
 	}
 
 	(void)bus_space_read_1(iot, ioh, EL_AS);
 	bus_space_write_1(iot, ioh, EL_AC, EL_AC_IRQE | EL_AC_RX);
-	ifp->if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 	splx(s);
 }
 
@@ -492,13 +493,13 @@ el_xmit(struct el_softc *sc)
 /*
  * Controller interrupt.
  */
-int
+static int
 elintr(void *arg)
 {
 	struct el_softc *sc = arg;
 	bus_space_tag_t iot = sc->sc_iot;
 	bus_space_handle_t ioh = sc->sc_ioh;
-	u_int8_t rxstat;
+	uint8_t rxstat;
 	int len;
 
 	DPRINTF(("elintr: "));
@@ -559,7 +560,7 @@ elintr(void *arg)
 /*
  * Pass a packet to the higher levels.
  */
-void
+static void
 elread(struct el_softc *sc, int len)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
@@ -588,7 +589,7 @@ elread(struct el_softc *sc, int len)
  * header stripped.  We copy the data into mbufs.  When full cluster sized
  * units are present we copy into clusters.
  */
-struct mbuf *
+static struct mbuf *
 elget(struct el_softc *sc, int totlen)
 {
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
@@ -617,7 +618,7 @@ elget(struct el_softc *sc, int totlen)
 		}
 
 		m->m_len = len = uimin(totlen, len);
-		bus_space_read_multi_1(iot, ioh, EL_BUF, mtod(m, u_int8_t *), len);
+		bus_space_read_multi_1(iot, ioh, EL_BUF, mtod(m, uint8_t *), len);
 
 		totlen -= len;
 		if (totlen > 0) {
@@ -642,7 +643,7 @@ bad:
 /*
  * Process an ioctl request. This code needs some work - it looks pretty ugly.
  */
-int
+static int
 elioctl(struct ifnet *ifp, u_long cmd, void *data)
 {
 	struct el_softc *sc = ifp->if_softc;
@@ -710,7 +711,7 @@ elioctl(struct ifnet *ifp, u_long cmd, void *data)
 /*
  * Device timeout routine.
  */
-void
+static void
 elwatchdog(struct ifnet *ifp)
 {
 	struct el_softc *sc = ifp->if_softc;

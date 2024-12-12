@@ -1,4 +1,4 @@
-/*	$NetBSD: tls.c,v 1.14 2020/08/20 15:54:11 riastradh Exp $	*/
+/*	$NetBSD: tls.c,v 1.16 2024/11/30 01:04:04 christos Exp $	*/
 
 /*-
  * Copyright (c) 2011 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: tls.c,v 1.14 2020/08/20 15:54:11 riastradh Exp $");
+__RCSID("$NetBSD: tls.c,v 1.16 2024/11/30 01:04:04 christos Exp $");
 
 #include "namespace.h"
 
@@ -51,6 +51,8 @@ __RCSID("$NetBSD: tls.c,v 1.14 2020/08/20 15:54:11 riastradh Exp $");
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <machine/lwp_private.h>
 
 __dso_hidden void	__libc_static_tls_setup(void);
 
@@ -140,6 +142,7 @@ _rtld_tls_free(struct tls_tcb *tcb)
 }
 
 static int __section(".text.startup")
+/*ARGSUSED*/
 __libc_static_tls_setup_cb(struct dl_phdr_info *data, size_t len, void *cookie)
 {
 	const Elf_Phdr *phdr = data->dlpi_phdr;

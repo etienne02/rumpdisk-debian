@@ -1,4 +1,4 @@
-/*	$NetBSD: if_laggproto.h,v 1.3 2021/05/24 06:24:20 yamaguchi Exp $	*/
+/*	$NetBSD: if_laggproto.h,v 1.20 2023/11/28 05:28:37 yamaguchi Exp $	*/
 
 /*
  * Copyright (c) 2021 Internet Initiative Japan Inc.
@@ -26,7 +26,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef	_NET_LAGG_IF_LAGGPROTO_H_
+#ifndef _NET_LAGG_IF_LAGGPROTO_H_
 #define _NET_LAGG_IF_LAGGPROTO_H_
 
 struct lagg_softc;
@@ -67,19 +67,25 @@ struct lagg_port {
 	struct ifnet		*lp_ifp;	/* physical interface */
 	struct lagg_softc	*lp_softc;	/* parent lagg */
 	void			*lp_proto_ctx;
-	bool			 lp_detaching;
+	bool			 lp_ifdetaching;
+	bool			 lp_promisc;
+	void			*lp_linkstate_hook;
+	void			*lp_ifdetach_hook;
 
 	uint32_t		 lp_prio;	/* port priority */
 	uint32_t		 lp_flags;	/* port flags */
 
 	u_char			 lp_iftype;
 	uint8_t			 lp_lladdr[ETHER_ADDR_LEN];
+	int			 lp_eccapenable;
+	uint64_t		 lp_ifcapenable;
+	uint64_t		 lp_mtu;
+
 	int			(*lp_ioctl)(struct ifnet *, u_long, void *);
+	void			(*lp_input)(struct ifnet *, struct mbuf *);
 	int			(*lp_output)(struct ifnet *, struct mbuf *,
 				    const struct sockaddr *,
 				    const struct rtentry *);
-	uint64_t		 lp_ifcapenable;
-	uint64_t		 lp_mtu;
 
 	SIMPLEQ_ENTRY(lagg_port)
 				 lp_entry;
@@ -140,8 +146,14 @@ struct lagg_vlantag {
 struct lagg_softc {
 	kmutex_t		 sc_lock;
 	struct ifmedia		 sc_media;
+	uint64_t		 sc_media_active;
 	u_char			 sc_iftype;
+
+	/* interface link-layer address */
 	uint8_t			 sc_lladdr[ETHER_ADDR_LEN];
+	/* generated random lladdr */
+	uint8_t			 sc_lladdr_rand[ETHER_ADDR_LEN];
+
 	LIST_HEAD(, lagg_mc_entry)
 				 sc_mclist;
 	TAILQ_HEAD(, lagg_vlantag)
@@ -179,7 +191,7 @@ struct lagg_softc {
  *    - Updates of sc_var is serialized by sc_lock
  * - Items in sc_ports is protected by both psref (lp_psref) and
  *   pserialize contained in struct lagg_proto_softc
- *   - details are discribed in if_laggport.c and if_lagg_lacp.c
+ *   - details are described in if_laggport.c and if_lagg_lacp.c
  *   - Updates of items in sc_ports are serialized by sc_lock
  * - an instance referenced by lp_proto_ctx in struct lagg_port is
  *   protected by a lock in struct lagg_proto_softc
@@ -188,8 +200,8 @@ struct lagg_softc {
  * - IFNET_LOCK(sc_if) -> LAGG_LOCK -> ETHER_LOCK(sc_if) -> a lock in
  *   struct lagg_port_softc
  * - IFNET_LOCK(sc_if) -> LAGG_LOCK -> IFNET_LOCK(lp_ifp)
+ * - IFNET_LOCK(lp_ifp) -> a lock in struct lagg_proto_softc
  * - Currently, there is no combination of following locks
- *   - IFNET_LOCK(lp_ifp) and a lock in struct lagg_proto_softc
  *   - IFNET_LOCK(lp_ifp) and ETHER_LOCK(sc_if)
  */
 #define LAGG_LOCK(_sc)		mutex_enter(&(_sc)->sc_lock)
@@ -197,18 +209,17 @@ struct lagg_softc {
 #define LAGG_LOCKED(_sc)	mutex_owned(&(_sc)->sc_lock)
 #define LAGG_CLLADDR(_sc)	CLLADDR((_sc)->sc_if.if_sadl)
 
-#define	LAGG_PORTS_FOREACH(_sc, _lp)	\
+#define LAGG_PORTS_FOREACH(_sc, _lp)	\
     SIMPLEQ_FOREACH((_lp), &(_sc)->sc_ports, lp_entry)
-#define	LAGG_PORTS_FOREACH_SAFE(_sc, _lp, _lptmp)	\
-    SIMPLEQ_FOREACH_SAFE((_lp), &(_sc)->sc_ports, lp_entry, (_lptmp))
+#define LAGG_PORTS_FIRST(_sc)	SIMPLEQ_FIRST(&(_sc)->sc_ports)
 #define LAGG_PORTS_EMPTY(_sc)	SIMPLEQ_EMPTY(&(_sc)->sc_ports)
 #define LAGG_PORT_IOCTL(_lp, _cmd, _data)	\
 	(_lp)->lp_ioctl == NULL ? ENOTTY :	\
 	(_lp)->lp_ioctl((_lp)->lp_ifp, (_cmd), (_data))
 
-
 static inline const void *
-lagg_m_extract(struct mbuf *m, size_t off, size_t reqlen, void *buf)
+lagg_m_extract(struct mbuf *m, size_t off, size_t reqlen, size_t align,
+    void *buf)
 {
 	ssize_t len;
 	const void *rv;
@@ -220,7 +231,8 @@ lagg_m_extract(struct mbuf *m, size_t off, size_t reqlen, void *buf)
 		return NULL;
 	}
 
-	if (m->m_len >= len) {
+	if (m->m_len >= len &&
+	    ((uintptr_t)(mtod(m, uint8_t *) + off) % align) == 0) {
 		rv = mtod(m, uint8_t *) + off;
 	} else {
 		m_copydata(m, off, reqlen, buf);
@@ -252,13 +264,30 @@ lagg_portactive(struct lagg_port *lp)
 	return false;
 }
 
-void		lagg_log(struct lagg_softc *, int, const char *, ...)
-		    __printflike(3, 4);
+static inline bool
+lagg_debug_enable(struct lagg_softc *sc)
+{
+	if (__predict_false(ISSET(sc->sc_if.if_flags, IFF_DEBUG)))
+		return true;
+
+	return false;
+}
+
+#define LAGG_LOG(_sc, _lvl, _fmt, _arg...) do {		\
+	if ((_lvl) == LOG_DEBUG && 			\
+	    !lagg_debug_enable(_sc))			\
+		break;					\
+							\
+	log((_lvl), "%s: ", (_sc)->sc_if.if_xname);	\
+	addlog((_fmt), ##_arg);				\
+} while(0)
+
 void		lagg_port_getref(struct lagg_port *, struct psref *);
 void		lagg_port_putref(struct lagg_port *, struct psref *);
-void		lagg_enqueue(struct lagg_softc *,
+void		lagg_output(struct lagg_softc *,
 		    struct lagg_port *, struct mbuf *);
 uint32_t	lagg_hashmbuf(struct lagg_softc *, struct mbuf *);
+void		lagg_set_linkspeed(struct lagg_softc *, uint64_t);
 
 void		lagg_common_detach(struct lagg_proto_softc *);
 int		lagg_common_allocport(struct lagg_proto_softc *,
@@ -269,12 +298,11 @@ void		lagg_common_startport(struct lagg_proto_softc *,
 		    struct lagg_port *);
 void		lagg_common_stopport(struct lagg_proto_softc *,
 		    struct lagg_port *);
-void		lagg_common_linkstate(struct lagg_proto_softc *,
+void		lagg_common_linkstate_ifnet_locked(struct lagg_proto_softc *,
 		    struct lagg_port *);
 
 int		lagg_none_attach(struct lagg_softc *,
 		    struct lagg_proto_softc **);
-int		lagg_none_up(struct lagg_proto_softc *);
 
 int		lagg_fail_attach(struct lagg_softc *,
 		    struct lagg_proto_softc **);
@@ -311,6 +339,6 @@ void		lacp_protostat(struct lagg_proto_softc *,
 		    struct laggreqproto *);
 void		lacp_portstat(struct lagg_proto_softc *, struct lagg_port *,
 		    struct laggreqport *);
-void		lacp_linkstate(struct lagg_proto_softc *, struct lagg_port *);
+void		lacp_linkstate_ifnet_locked(struct lagg_proto_softc *, struct lagg_port *);
 int		lacp_ioctl(struct lagg_proto_softc *, struct laggreqproto *);
 #endif

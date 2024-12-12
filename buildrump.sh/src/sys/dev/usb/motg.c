@@ -1,4 +1,4 @@
-/*	$NetBSD: motg.c,v 1.37 2021/08/07 16:19:16 thorpej Exp $	*/
+/*	$NetBSD: motg.c,v 1.43 2024/04/05 18:57:10 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1998, 2004, 2011, 2012, 2014 The NetBSD Foundation, Inc.
@@ -7,7 +7,7 @@
  * This code is derived from software contributed to The NetBSD Foundation
  * by Lennart Augustsson (lennart@augustsson.net) at
  * Carlstedt Research & Technology, Jared D. McNeill (jmcneill@invisible.ca),
- * Matthew R. Green (mrg@eterna.com.au), and Manuel Bouyer (bouyer@netbsd.org).
+ * Matthew R. Green (mrg@eterna23.net), and Manuel Bouyer (bouyer@netbsd.org).
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: motg.c,v 1.37 2021/08/07 16:19:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: motg.c,v 1.43 2024/04/05 18:57:10 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -1009,20 +1009,8 @@ motg_root_intr_abort(struct usbd_xfer *xfer)
 usbd_status
 motg_root_intr_transfer(struct usbd_xfer *xfer)
 {
-	struct motg_softc *sc = MOTG_XFER2SC(xfer);
-	usbd_status err;
 
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
-
-	/*
-	 * Pipe isn't running (otherwise err would be USBD_INPROG),
-	 * start first
-	 */
+	/* Pipe isn't running, start first */
 	return motg_root_intr_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 }
 
@@ -1032,23 +1020,20 @@ motg_root_intr_start(struct usbd_xfer *xfer)
 {
 	struct usbd_pipe *pipe = xfer->ux_pipe;
 	struct motg_softc *sc = MOTG_PIPE2SC(pipe);
-	const bool polling = sc->sc_bus.ub_usepolling;
 
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
 	DPRINTFN(MD_ROOT, "xfer=%#jx len=%jd flags=%jd", (uintptr_t)xfer,
 	    xfer->ux_length, xfer->ux_flags, 0);
 
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
 	if (sc->sc_dying)
 		return USBD_IOERROR;
 
-	if (!polling)
-		mutex_enter(&sc->sc_lock);
 	KASSERT(sc->sc_intr_xfer == NULL);
 	sc->sc_intr_xfer = xfer;
 	xfer->ux_status = USBD_IN_PROGRESS;
-	if (!polling)
-		mutex_exit(&sc->sc_lock);
 
 	return USBD_IN_PROGRESS;
 }
@@ -1279,21 +1264,8 @@ motg_setup_endpoint_rx(struct usbd_xfer *xfer)
 static usbd_status
 motg_device_ctrl_transfer(struct usbd_xfer *xfer)
 {
-	struct motg_softc *sc = MOTG_XFER2SC(xfer);
-	usbd_status err;
 
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-	KASSERT(xfer->ux_status == USBD_NOT_STARTED);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
-
-	/*
-	 * Pipe isn't running (otherwise err would be USBD_INPROG),
-	 * so start it first.
-	 */
+	/* Pipe isn't running, so start it first.  */
 	return motg_device_ctrl_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 }
 
@@ -1301,11 +1273,10 @@ static usbd_status
 motg_device_ctrl_start(struct usbd_xfer *xfer)
 {
 	struct motg_softc *sc = MOTG_XFER2SC(xfer);
-	usbd_status err;
-	mutex_enter(&sc->sc_lock);
-	err = motg_device_ctrl_start1(sc);
-	mutex_exit(&sc->sc_lock);
-	return err;
+
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
+	return motg_device_ctrl_start1(sc);
 }
 
 static usbd_status
@@ -1350,8 +1321,8 @@ motg_device_ctrl_start1(struct motg_softc *sc)
 		goto end;
 	}
 	if (xfer->ux_status == USBD_NOT_STARTED) {
-		usbd_xfer_schedule_timeout(xfer);
 		xfer->ux_status = USBD_IN_PROGRESS;
+		usbd_xfer_schedule_timeout(xfer);
 	} else {
 		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 	}
@@ -1731,24 +1702,9 @@ motg_device_ctrl_done(struct usbd_xfer *xfer)
 static usbd_status
 motg_device_data_transfer(struct usbd_xfer *xfer)
 {
-	struct motg_softc *sc = MOTG_XFER2SC(xfer);
-	usbd_status err;
-
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	DPRINTF("xfer %#jx status %jd", (uintptr_t)xfer, xfer->ux_status, 0, 0);
-	err = usb_insert_transfer(xfer);
-	KASSERT(xfer->ux_status == USBD_NOT_STARTED);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
-
-	/*
-	 * Pipe isn't running (otherwise err would be USBD_INPROG),
-	 * so start it first.
-	 */
+	/* Pipe isn't running, so start it first.  */
 	return motg_device_data_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 }
 
@@ -1757,15 +1713,14 @@ motg_device_data_start(struct usbd_xfer *xfer)
 {
 	struct motg_softc *sc = MOTG_XFER2SC(xfer);
 	struct motg_pipe *otgpipe = MOTG_PIPE2MPIPE(xfer->ux_pipe);
-	usbd_status err;
 
 	MOTGHIST_FUNC(); MOTGHIST_CALLED();
 
-	mutex_enter(&sc->sc_lock);
 	DPRINTF("xfer %#jx status %jd", (uintptr_t)xfer, xfer->ux_status, 0, 0);
-	err = motg_device_data_start1(sc, otgpipe->hw_ep);
-	mutex_exit(&sc->sc_lock);
-	return err;
+
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
+	return motg_device_data_start1(sc, otgpipe->hw_ep);
 }
 
 static usbd_status
@@ -1809,8 +1764,8 @@ motg_device_data_start1(struct motg_softc *sc, struct motg_hw_ep *ep)
 		goto end;
 	}
 	if (xfer->ux_status == USBD_NOT_STARTED) {
-		usbd_xfer_schedule_timeout(xfer);
 		xfer->ux_status = USBD_IN_PROGRESS;
+		usbd_xfer_schedule_timeout(xfer);
 	} else {
 		KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 	}
@@ -2262,6 +2217,5 @@ motg_abortx(struct usbd_xfer *xfer)
 		}
 	}
 dying:
-	usb_transfer_complete(xfer);
 	KASSERT(mutex_owned(&sc->sc_lock));
 }

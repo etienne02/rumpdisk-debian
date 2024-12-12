@@ -1,4 +1,4 @@
-#	$NetBSD: GENERIC,v 1.140 2021/04/30 02:24:05 thorpej Exp $
+#	$NetBSD: GENERIC,v 1.144 2023/02/09 14:09:49 abs Exp $
 #
 # Generic Shark configuration.
 #
@@ -7,7 +7,7 @@ include	"arch/shark/conf/std.shark"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident		"GENERIC-$Revision: 1.140 $"
+#ident		"GENERIC-$Revision: 1.144 $"
 
 # estimated number of users
 maxusers	32
@@ -58,14 +58,14 @@ file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
 # File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 #options 	QUOTA		# legacy UFS quotas
 #options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
 #options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 
@@ -270,9 +270,6 @@ joy*		at ofisa?
 #vlpci*		at ofbus?
 #pci*		at vlpci?
 
-# Pull in optional local configuration
-cinclude "arch/shark/conf/GENERIC.local"
-
 #
 # accept filters
 pseudo-device   accf_data		# "dataready" accept filter
@@ -306,8 +303,12 @@ pseudo-device	wsmux			# mouse & keyboard multiplexor
 pseudo-device	wsfont
 pseudo-device	ksyms			# /dev/ksyms
 pseudo-device	putter			# for puffs and pud
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 include "dev/veriexec.config"
 
 options PAX_MPROTECT=0			# PaX mprotect(2) restrictions
 options PAX_ASLR=0			# PaX Address Space Layout Randomization
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/shark/conf/GENERIC.local"

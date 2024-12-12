@@ -1,7 +1,7 @@
-/*	$NetBSD: vfs_cache.c,v 1.150 2021/07/21 06:35:45 skrll Exp $	*/
+/*	$NetBSD: vfs_cache.c,v 1.159 2024/12/07 02:27:38 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 2008, 2019, 2020 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2019, 2020, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -79,10 +79,9 @@
  *	we are not sensible, and use a per-directory data structure to index
  *	names, but the cache otherwise functions the same.
  *
- *	The index is a red-black tree.  There are no special concurrency
- *	requirements placed on it, because it's per-directory and protected
- *	by the namecache's per-directory locks.  It should therefore not be
- *	difficult to experiment with other types of index.
+ *	The index is a red-black tree.  It should not be difficult to
+ *	experiment with other types of index, however note that a tree
+ *	can trivially be made to support lockless lookup.
  *
  *	Each cached name is stored in a struct namecache, along with a
  *	pointer to the associated vnode (nc_vp).  Names longer than a
@@ -90,6 +89,19 @@
  *	occur infrequently, and names shorter than this are stored directly
  *	in struct namecache.  If it is a "negative" entry, (i.e. for a name
  *	that is known NOT to exist) the vnode pointer will be NULL.
+ *
+ *	In practice this implementation is not any slower than the hash
+ *	table that preceeded it and in some cases it significantly
+ *	outperforms the hash table.  Some reasons why this might be:
+ *
+ *	- natural partitioning provided by the file system structure, which
+ *	  the prior implementation discarded (global hash table).
+ *	- worst case tree traversal of O(log n), the hash table could have
+ *	  many collisions.
+ *	- minimized cache misses & total L2/L3 CPU cache footprint; struct
+ *	  namecache and vnode_impl_t are laid out to keep cache footprint
+ *	  minimal in the lookup path; no hash table buckets to cache.
+ *	- minimized number of conditionals & string comparisons.
  *
  *	For a directory with 3 cached names for 3 distinct vnodes, the
  *	various vnodes and namecache structs would be connected like this
@@ -143,7 +155,7 @@
  *	therefore want to make everything simplest in the lookup path.
  *
  *	struct namecache is mostly stable except for list and tree related
- *	entries, changes to which don't affect the cached name or vnode. 
+ *	entries, changes to which don't affect the cached name or vnode.
  *	For changes to name+vnode, entries are purged in preference to
  *	modifying them.
  *
@@ -152,11 +164,11 @@
  *	held.  See definition of "struct namecache" in src/sys/namei.src,
  *	and the definition of "struct vnode" for the particulars.
  *
- *	Per-CPU statistics, and LRU list totals are read unlocked, since
- *	an approximate value is OK.  We maintain 32-bit sized per-CPU
- *	counters and 64-bit global counters under the theory that 32-bit
- *	sized counters are less likely to be hosed by nonatomic increment
- *	(on 32-bit platforms).
+ *	Per-CPU statistics, and LRU list totals are read unlocked, since an
+ *	approximate value is OK.  We maintain 32-bit sized per-CPU counters
+ *	and 64-bit global counters since 32-bit sized counters can be
+ *	observed locklessly while the global counters are protected by a
+ *	mutex.
  *
  *	The lock order is:
  *
@@ -167,14 +179,13 @@
  *				 used during reverse lookup)
  *
  *	3) cache_lru_lock	(LRU list direction, used during reclaim)
- *
- *	4) vp->v_interlock	(what the cache entry points to)
  */
 
-#include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_cache.c,v 1.150 2021/07/21 06:35:45 skrll Exp $");
-
 #define __NAMECACHE_PRIVATE
+
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: vfs_cache.c,v 1.159 2024/12/07 02:27:38 riastradh Exp $");
+
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
 #include "opt_dtrace.h"
@@ -182,6 +193,7 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_cache.c,v 1.150 2021/07/21 06:35:45 skrll Exp $"
 
 #include <sys/param.h>
 #include <sys/types.h>
+
 #include <sys/atomic.h>
 #include <sys/callout.h>
 #include <sys/cpu.h>
@@ -201,6 +213,16 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_cache.c,v 1.150 2021/07/21 06:35:45 skrll Exp $"
 #include <sys/vnode_impl.h>
 
 #include <miscfs/genfs/genfs.h>
+
+/*
+ * Assert that data structure layout hasn't changed unintentionally.
+ */
+#ifdef _LP64
+CTASSERT(sizeof(struct namecache) == 128);
+#else
+CTASSERT(sizeof(struct namecache) == 64);
+#endif
+CTASSERT(NC_NLEN_MASK >= MAXPATHLEN);
 
 static void	cache_activate(struct namecache *);
 static void	cache_update_stats(void *);
@@ -262,7 +284,7 @@ static kmutex_t cache_stat_lock __cacheline_aligned;
  */
 int cache_lru_maxdeact __read_mostly = 2;	/* max # to deactivate */
 int cache_lru_maxscan __read_mostly = 64;	/* max # to scan/reclaim */
-int cache_maxlen __read_mostly = USHRT_MAX;	/* max name length to cache */
+int cache_maxlen __read_mostly = NC_NLEN_MASK;	/* max name length to cache */
 int cache_stat_interval __read_mostly = 300;	/* in seconds */
 
 /*
@@ -292,8 +314,6 @@ static const rb_tree_ops_t cache_rbtree_ops = {
 /*
  * dtrace probes.
  */
-SDT_PROVIDER_DEFINE(vfs);
-
 SDT_PROBE_DEFINE1(vfs, namecache, invalidate, done, "struct vnode *");
 SDT_PROBE_DEFINE1(vfs, namecache, purge, parents, "struct vnode *");
 SDT_PROBE_DEFINE1(vfs, namecache, purge, children, "struct vnode *");
@@ -330,8 +350,8 @@ cache_compare_nodes(void *context, const void *n1, const void *n2)
 	if (nc1->nc_key > nc2->nc_key) {
 		return 1;
 	}
-	KASSERT(nc1->nc_nlen == nc2->nc_nlen);
-	return memcmp(nc1->nc_name, nc2->nc_name, nc1->nc_nlen);
+	KASSERT(NC_NLEN(nc1) == NC_NLEN(nc2));
+	return memcmp(nc1->nc_name, nc2->nc_name, NC_NLEN(nc1));
 }
 
 /*
@@ -339,15 +359,15 @@ cache_compare_nodes(void *context, const void *n1, const void *n2)
  * the key value to try and improve uniqueness, and so that length doesn't
  * need to be compared separately for string comparisons.
  */
-static inline uint64_t
+static uintptr_t
 cache_key(const char *name, size_t nlen)
 {
-	uint64_t key;
+	uintptr_t key;
 
-	KASSERT(nlen <= USHRT_MAX);
+	KASSERT((nlen & ~NC_NLEN_MASK) == 0);
 
 	key = hash32_buf(name, nlen, HASH32_STR_INIT);
-	return (key << 32) | nlen;
+	return (key << NC_NLEN_BITS) | (uintptr_t)nlen;
 }
 
 /*
@@ -360,13 +380,13 @@ cache_remove(struct namecache *ncp, const bool dir2node)
 {
 	struct vnode *vp, *dvp = ncp->nc_dvp;
 	vnode_impl_t *dvi = VNODE_TO_VIMPL(dvp);
+	size_t namelen = NC_NLEN(ncp);
 
 	KASSERT(rw_write_held(&dvi->vi_nc_lock));
-	KASSERT(cache_key(ncp->nc_name, ncp->nc_nlen) == ncp->nc_key);
+	KASSERT(cache_key(ncp->nc_name, namelen) == ncp->nc_key);
 	KASSERT(rb_tree_find_node(&dvi->vi_nc_tree, ncp) == ncp);
 
-	SDT_PROBE(vfs, namecache, invalidate, done, ncp,
-	    0, 0, 0, 0);
+	SDT_PROBE(vfs, namecache, invalidate, done, ncp, 0, 0, 0, 0);
 
 	/*
 	 * Remove from the vnode's list.  This excludes cache_revlookup(),
@@ -393,8 +413,8 @@ cache_remove(struct namecache *ncp, const bool dir2node)
 	mutex_exit(&cache_lru_lock);
 
 	/* Finally, free it. */
-	if (ncp->nc_nlen > NCHNAMLEN) {
-		size_t sz = offsetof(struct namecache, nc_name[ncp->nc_nlen]);
+	if (namelen > NCHNAMLEN) {
+		size_t sz = offsetof(struct namecache, nc_name[namelen]);
 		kmem_free(ncp, sz);
 	} else {
 		pool_cache_put(cache_pool, ncp);
@@ -406,19 +426,21 @@ cache_remove(struct namecache *ncp, const bool dir2node)
  */
 static struct namecache * __noinline
 cache_lookup_entry(struct vnode *dvp, const char *name, size_t namelen,
-    uint64_t key)
+    uintptr_t key)
 {
 	vnode_impl_t *dvi = VNODE_TO_VIMPL(dvp);
 	struct rb_node *node = dvi->vi_nc_tree.rbt_root;
 	struct namecache *ncp;
-	int lrulist, diff;
+	enum cache_lru_id lrulist;
+	int diff;
 
+	KASSERT(namelen <= MAXPATHLEN);
 	KASSERT(rw_lock_held(&dvi->vi_nc_lock));
 
 	/*
 	 * Search the RB tree for the key.  This is an inlined lookup
-	 * tailored for exactly what's needed here (64-bit key and so on)
-	 * that is quite a bit faster than using rb_tree_find_node().
+	 * tailored for exactly what's needed here that turns out to be
+	 * quite a bit faster than using rb_tree_find_node().
 	 *
 	 * For a matching key memcmp() needs to be called once to confirm
 	 * that the correct name has been found.  Very rarely there will be
@@ -432,7 +454,7 @@ cache_lookup_entry(struct vnode *dvp, const char *name, size_t namelen,
 		KASSERT((void *)&ncp->nc_tree == (void *)ncp);
 		KASSERT(ncp->nc_dvp == dvp);
 		if (ncp->nc_key == key) {
-			KASSERT(ncp->nc_nlen == namelen);
+			KASSERT(NC_NLEN(ncp) == namelen);
 			diff = memcmp(ncp->nc_name, name, namelen);
 			if (__predict_true(diff == 0)) {
 				break;
@@ -513,7 +535,7 @@ cache_lookup(struct vnode *dvp, const char *name, size_t namelen,
 	vnode_impl_t *dvi = VNODE_TO_VIMPL(dvp);
 	struct namecache *ncp;
 	struct vnode *vp;
-	uint64_t key;
+	uintptr_t key;
 	int error;
 	bool hit;
 	krw_t op;
@@ -539,7 +561,7 @@ cache_lookup(struct vnode *dvp, const char *name, size_t namelen,
 	/* Could the entry be purged below? */
 	if ((cnflags & ISLASTCN) != 0 &&
 	    ((cnflags & MAKEENTRY) == 0 || nameiop == CREATE)) {
-	    	op = RW_WRITER;
+		op = RW_WRITER;
 	} else {
 		op = RW_READER;
 	}
@@ -566,7 +588,7 @@ cache_lookup(struct vnode *dvp, const char *name, size_t namelen,
 		COUNT(ncs_badhits);
 		return false;
 	}
-	if (ncp->nc_vp == NULL) {
+	if ((vp = ncp->nc_vp) == NULL) {
 		if (iswht_ret != NULL) {
 			/*
 			 * Restore the ISWHITEOUT flag saved earlier.
@@ -594,7 +616,6 @@ cache_lookup(struct vnode *dvp, const char *name, size_t namelen,
 		rw_exit(&dvi->vi_nc_lock);
 		return hit;
 	}
-	vp = ncp->nc_vp;
 	error = vcache_tryvget(vp);
 	rw_exit(&dvi->vi_nc_lock);
 	if (error) {
@@ -640,7 +661,8 @@ cache_lookup_linked(struct vnode *dvp, const char *name, size_t namelen,
 	vnode_impl_t *dvi = VNODE_TO_VIMPL(dvp);
 	struct namecache *ncp;
 	krwlock_t *oldlock, *newlock;
-	uint64_t key;
+	struct vnode *vp;
+	uintptr_t key;
 	int error;
 
 	KASSERT(namelen != cache_mp_nlen || name == cache_mp_name);
@@ -700,11 +722,14 @@ cache_lookup_linked(struct vnode *dvp, const char *name, size_t namelen,
 			}
 			return false;
 		}
-		KASSERT(dvi->vi_nc_uid != VNOVAL && dvi->vi_nc_gid != VNOVAL);
-		error = kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(VEXEC,
-		    dvp->v_type, dvi->vi_nc_mode & ALLPERMS), dvp, NULL,
+		KASSERT(dvi->vi_nc_uid != VNOVAL);
+		KASSERT(dvi->vi_nc_gid != VNOVAL);
+		error = kauth_authorize_vnode(cred,
+		    KAUTH_ACCESS_ACTION(VEXEC,
+			dvp->v_type, dvi->vi_nc_mode & ALLPERMS),
+		    dvp, NULL,
 		    genfs_can_access(dvp, cred, dvi->vi_nc_uid, dvi->vi_nc_gid,
-		    dvi->vi_nc_mode & ALLPERMS, NULL, VEXEC));
+			dvi->vi_nc_mode & ALLPERMS, NULL, VEXEC));
 		if (error != 0) {
 			if (newlock != NULL) {
 				rw_exit(newlock);
@@ -727,9 +752,10 @@ cache_lookup_linked(struct vnode *dvp, const char *name, size_t namelen,
 		    name, namelen, 0, 0);
 		return false;
 	}
-	if (ncp->nc_vp == NULL) {
+	if ((vp = ncp->nc_vp) == NULL) {
 		/* found negative entry; vn is already null from above */
-		KASSERT(namelen != cache_mp_nlen && name != cache_mp_name);
+		KASSERT(namelen != cache_mp_nlen);
+		KASSERT(name != cache_mp_name);
 		COUNT(ncs_neghits);
 	} else {
 		COUNT(ncs_goodhits); /* XXX can be "badhits" */
@@ -748,7 +774,7 @@ cache_lookup_linked(struct vnode *dvp, const char *name, size_t namelen,
 	if (newlock) {
 		*plock = newlock;
 	}
-	*vn_ret = ncp->nc_vp;
+	*vn_ret = vp;
 	return true;
 }
 
@@ -771,8 +797,9 @@ cache_revlookup(struct vnode *vp, struct vnode **dvpp, char **bpp, char *bufp,
 {
 	vnode_impl_t *vi = VNODE_TO_VIMPL(vp);
 	struct namecache *ncp;
+	enum cache_lru_id lrulist;
 	struct vnode *dvp;
-	int error, nlen, lrulist;
+	int error, nlen;
 	char *bp;
 
 	KASSERT(vp != NULL);
@@ -795,27 +822,30 @@ cache_revlookup(struct vnode *vp, struct vnode **dvpp, char **bpp, char *bufp,
 			rw_exit(&vi->vi_nc_listlock);
 			return -1;
 		}
-		KASSERT(vi->vi_nc_uid != VNOVAL && vi->vi_nc_gid != VNOVAL);
-		error = kauth_authorize_vnode(curlwp->l_cred,
+		KASSERT(vi->vi_nc_uid != VNOVAL);
+		KASSERT(vi->vi_nc_gid != VNOVAL);
+		error = kauth_authorize_vnode(kauth_cred_get(),
 		    KAUTH_ACCESS_ACTION(VEXEC, vp->v_type, vi->vi_nc_mode &
-		    ALLPERMS), vp, NULL, genfs_can_access(vp, curlwp->l_cred,
-		    vi->vi_nc_uid, vi->vi_nc_gid, vi->vi_nc_mode & ALLPERMS,
-		    NULL, accmode));
-		    if (error != 0) {
-		    	rw_exit(&vi->vi_nc_listlock);
+			ALLPERMS),
+		    vp, NULL, genfs_can_access(vp, curlwp->l_cred,
+			vi->vi_nc_uid, vi->vi_nc_gid,
+			vi->vi_nc_mode & ALLPERMS,
+			NULL, accmode));
+		if (error != 0) {
+			rw_exit(&vi->vi_nc_listlock);
 			COUNT(ncs_denied);
-			return EACCES;
+			return SET_ERROR(EACCES);
 		}
 	}
 	TAILQ_FOREACH(ncp, &vi->vi_nc_list, nc_list) {
 		KASSERT(ncp->nc_vp == vp);
 		KASSERT(ncp->nc_dvp != NULL);
-		nlen = ncp->nc_nlen;
+		nlen = NC_NLEN(ncp);
 
 		/*
 		 * Ignore mountpoint entries.
 		 */
-		if (ncp->nc_nlen == cache_mp_nlen) {
+		if (nlen == cache_mp_nlen) {
 			continue;
 		}
 
@@ -826,7 +856,7 @@ cache_revlookup(struct vnode *vp, struct vnode **dvpp, char **bpp, char *bufp,
 		if (ncp->nc_name[0] == '.') {
 			if (nlen == 1 ||
 			    (nlen == 2 && ncp->nc_name[1] == '.')) {
-			    	break;
+				break;
 			}
 		}
 
@@ -847,7 +877,7 @@ cache_revlookup(struct vnode *vp, struct vnode **dvpp, char **bpp, char *bufp,
 				rw_exit(&vi->vi_nc_listlock);
 				SDT_PROBE(vfs, namecache, revlookup,
 				    fail, vp, ERANGE, 0, 0, 0);
-				return (ERANGE);
+				return SET_ERROR(ERANGE);
 			}
 			memcpy(bp, ncp->nc_name, nlen);
 			*bpp = bp;
@@ -869,13 +899,13 @@ cache_revlookup(struct vnode *vp, struct vnode **dvpp, char **bpp, char *bufp,
 		SDT_PROBE(vfs, namecache, revlookup, success, vp, dvp,
 		    0, 0, 0);
 		COUNT(ncs_revhits);
-		return (0);
+		return 0;
 	}
 	rw_exit(&vi->vi_nc_listlock);
 	COUNT(ncs_revmiss);
- out:
+out:
 	*dvpp = NULL;
-	return (-1);
+	return -1;
 }
 
 /*
@@ -927,7 +957,6 @@ cache_enter(struct vnode *dvp, struct vnode *vp,
 	ncp->nc_vp = vp;
 	ncp->nc_dvp = dvp;
 	ncp->nc_key = cache_key(name, namelen);
-	ncp->nc_nlen = namelen;
 	ncp->nc_whiteout = ((cnflags & ISWHITEOUT) != 0);
 	memcpy(ncp->nc_name, name, namelen);
 
@@ -939,7 +968,7 @@ cache_enter(struct vnode *dvp, struct vnode *vp,
 	oncp = rb_tree_insert_node(&dvi->vi_nc_tree, ncp);
 	if (oncp != ncp) {
 		KASSERT(oncp->nc_key == ncp->nc_key);
-		KASSERT(oncp->nc_nlen == ncp->nc_nlen);
+		KASSERT(NC_NLEN(oncp) == NC_NLEN(ncp));
 		KASSERT(memcmp(oncp->nc_name, name, namelen) == 0);
 		cache_remove(oncp, true);
 		oncp = rb_tree_insert_node(&dvi->vi_nc_tree, ncp);
@@ -1105,12 +1134,11 @@ nchinit(void)
 void
 cache_cpu_init(struct cpu_info *ci)
 {
-	void *p;
 	size_t sz;
 
-	sz = roundup2(sizeof(struct nchcpu), coherency_unit) + coherency_unit;
-	p = kmem_zalloc(sz, KM_SLEEP);
-	ci->ci_data.cpu_nch = (void *)roundup2((uintptr_t)p, coherency_unit);
+	sz = roundup2(sizeof(struct nchcpu), coherency_unit);
+	ci->ci_data.cpu_nch = kmem_zalloc(sz, KM_SLEEP);
+	KASSERT(((uintptr_t)ci->ci_data.cpu_nch & (coherency_unit - 1)) == 0);
 }
 
 /*
@@ -1230,7 +1258,7 @@ cache_purge_name(struct vnode *dvp, const char *name, size_t namelen)
 {
 	vnode_impl_t *dvi = VNODE_TO_VIMPL(dvp);
 	struct namecache *ncp;
-	uint64_t key;
+	uintptr_t key;
 
 	SDT_PROBE(vfs, namecache, purge, name, name, namelen, 0, 0, 0);
 
@@ -1326,7 +1354,7 @@ cache_deactivate(void)
 	/* If we're nowhere near budget yet, don't bother. */
 	total = cache_lru.count[LRU_ACTIVE] + cache_lru.count[LRU_INACTIVE];
 	if (total < (desiredvnodes >> 1)) {
-	    	return;
+		return;
 	}
 
 	/*
@@ -1371,7 +1399,7 @@ cache_reclaim(void)
 	int toscan;
 
 	/*
-	 * Scan up to a preset maxium number of entries, but no more than
+	 * Scan up to a preset maximum number of entries, but no more than
 	 * 0.8% of the total at once (to allow for very small systems).
 	 *
 	 * On bigger systems, do a larger chunk of work to reduce the number
@@ -1522,7 +1550,7 @@ namecache_print(struct vnode *vp, void (*pr)(const char *, ...))
 	for (id = 0; id < LRU_COUNT; id++) {
 		TAILQ_FOREACH(ncp, &cache_lru.list[id], nc_lru) {
 			if (ncp->nc_vp == vp) {
-				(*pr)("name %.*s\n", ncp->nc_nlen,
+				(*pr)("name %.*s\n", NC_NLEN(ncp),
 				    ncp->nc_name);
 				dvp = ncp->nc_dvp;
 			}
@@ -1535,7 +1563,7 @@ namecache_print(struct vnode *vp, void (*pr)(const char *, ...))
 	for (id = 0; id < LRU_COUNT; id++) {
 		TAILQ_FOREACH(ncp, &cache_lru.list[id], nc_lru) {
 			if (ncp->nc_vp == dvp) {
-				(*pr)("parent %.*s\n", ncp->nc_nlen,
+				(*pr)("parent %.*s\n", NC_NLEN(ncp),
 				    ncp->nc_name);
 			}
 		}

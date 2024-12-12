@@ -1,4 +1,4 @@
-/*	$NetBSD: viewioctl.h,v 1.2 2015/09/07 03:49:45 dholland Exp $	*/
+/*	$NetBSD: viewioctl.h,v 1.4 2023/01/06 10:28:28 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 1994 Christian E. Hopps
@@ -35,7 +35,7 @@
  * simply to map the semantics of a graphics display to
  * the semantics of a character block device.  In other
  * words the graphics system as currently built does not like to be
- * refered to by open/close/ioctl.  This device serves as
+ * referred to by open/close/ioctl.  This device serves as
  * a interface to graphics.
  */
 
@@ -54,6 +54,6 @@ struct view_size {
 #define VIOCSSIZE	_IOW('V', 0x2, struct view_size)
 #define VIOCGSIZE	_IOR('V', 0x3, struct view_size)
 #define VIOCGBMAP	_IOR('V', 0x4, bmap_t)
-#define VIOCSCMAP 	_IOW('V', 0x5, colormap_t)
-#define VIOCGCMAP 	_IOWR('V', 0x6, colormap_t)
+#define VIOCSCMAP	_IOW('V', 0x5, colormap_t)
+#define VIOCGCMAP	_IOWR('V', 0x6, colormap_t)
 

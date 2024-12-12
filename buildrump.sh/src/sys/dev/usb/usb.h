@@ -1,4 +1,4 @@
-/*	$NetBSD: usb.h,v 1.118 2019/08/23 07:17:31 mrg Exp $	*/
+/*	$NetBSD: usb.h,v 1.124 2024/01/20 21:09:28 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -78,7 +78,8 @@ typedef uint8_t uDWord[4];
 #define UGETW(w) ((w)[0] | ((w)[1] << 8))
 #define USETW(w,v) ((w)[0] = (uint8_t)(v), (w)[1] = (uint8_t)((v) >> 8))
 #define USETWD(val) { (uint8_t)(val), (uint8_t)((val) >> 8) }
-#define UGETDW(w) ((w)[0] | ((w)[1] << 8) | ((w)[2] << 16) | ((w)[3] << 24))
+#define UGETDW(w) ((w)[0] | ((w)[1] << 8) | ((w)[2] << 16) |	\
+	    ((uint32_t)(w)[3] << 24))
 #define USETDW(w,v) ((w)[0] = (uint8_t)(v), \
 		     (w)[1] = (uint8_t)((v) >> 8), \
 		     (w)[2] = (uint8_t)((v) >> 16), \
@@ -202,12 +203,18 @@ typedef struct {
 
 #define USB_3_MAX_CTRL_PACKET	512
 
+/*
+ * This is the common header to all USB descriptors defined in the USB
+ * specification.
+ *
+ * DO NOT CHANGE THIS TYPE!
+ */
 typedef struct {
 	uByte		bLength;
 	uByte		bDescriptorType;
-	uByte		bDescriptorSubtype;
 } UPACKED usb_descriptor_t;
-#define USB_DESCRIPTOR_SIZE 3
+#define USB_DESCRIPTOR_SIZE 2
+__CTASSERT(sizeof(usb_descriptor_t) == USB_DESCRIPTOR_SIZE);
 
 typedef struct {
 	uByte		bLength;
@@ -771,7 +778,7 @@ typedef struct {
 /* Allow for marginal (i.e. non-conforming) devices. */
 #define USB_PORT_RESET_DELAY	50  /* ms */
 #define USB_PORT_ROOT_RESET_DELAY 250  /* ms */
-#define USB_PORT_RESET_RECOVERY	250  /* ms */
+#define USB_PORT_RESET_RECOVERY	20  /* ms */
 #define USB_PORT_POWERUP_DELAY	300 /* ms */
 #define USB_SET_ADDRESS_SETTLE	10  /* ms */
 #define USB_RESUME_DELAY	(50*5)  /* ms */
@@ -906,7 +913,7 @@ struct usb_device_info {
 };
 
 /* <=3.0 had this layout of the structure */
-struct usb_device_info_old {
+struct usb_device_info30 {
 	uint8_t		udi_bus;
 	uint8_t		udi_addr;       /* device address */
 	usb_event_cookie_t udi_cookie;
@@ -966,14 +973,14 @@ struct usb_event {
 };
 
 /* old <=3.0 compat event */
-struct usb_event_old {
+struct usb_event30 {
 	int                     ue_type;
 	struct timespec         ue_time;
 	union {
 		struct {
 			int                     ue_bus;
 		} ue_ctrlr;
-		struct usb_device_info_old          ue_device;
+		struct usb_device_info30	ue_device;
 		struct {
 			usb_event_cookie_t      ue_cookie;
 			char                    ue_devname[16];
@@ -981,13 +988,19 @@ struct usb_event_old {
 	} u;
 };
 
+#if 1	/* XXX: remove me, for the benefit of sanitizers */
+#define usb_device_info_old usb_device_info30
+#define usb_event_old usb_event30
+#define USB_DEVICEINFO_OLD USB_DEVICEINFO_30
+#define USB_GET_DEVICEINFO_OLD USB_GET_DEVICEINFO_30
+#endif
 
 /* USB controller */
 #define USB_REQUEST		_IOWR('U', 1, struct usb_ctl_request)
 #define USB_SETDEBUG		_IOW ('U', 2, int)
 #define USB_DISCOVER		_IO  ('U', 3)
 #define USB_DEVICEINFO		_IOWR('U', 4, struct usb_device_info)
-#define USB_DEVICEINFO_OLD	_IOWR('U', 4, struct usb_device_info_old)
+#define USB_DEVICEINFO_30	_IOWR('U', 4, struct usb_device_info30)
 #define USB_DEVICESTATS		_IOR ('U', 5, struct usb_device_stats)
 
 /* Generic HID device */
@@ -1011,7 +1024,7 @@ struct usb_event_old {
 #define USB_GET_STRING_DESC	_IOWR('U', 110, struct usb_string_desc)
 #define USB_DO_REQUEST		_IOWR('U', 111, struct usb_ctl_request)
 #define USB_GET_DEVICEINFO	_IOR ('U', 112, struct usb_device_info)
-#define USB_GET_DEVICEINFO_OLD	_IOR ('U', 112, struct usb_device_info_old)
+#define USB_GET_DEVICEINFO_30	_IOR ('U', 112, struct usb_device_info30)
 #define USB_SET_SHORT_XFER	_IOW ('U', 113, int)
 #define USB_SET_TIMEOUT		_IOW ('U', 114, int)
 #define USB_SET_BULK_RA		_IOW ('U', 115, int)

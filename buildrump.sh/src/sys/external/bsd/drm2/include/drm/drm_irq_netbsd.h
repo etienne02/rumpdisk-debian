@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_irq_netbsd.h,v 1.5 2018/08/27 06:16:01 riastradh Exp $	*/
+/*	$NetBSD: drm_irq_netbsd.h,v 1.7 2022/10/25 23:36:09 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -37,12 +37,13 @@ typedef int irqreturn_t;
 enum irqreturn {
 	IRQ_NONE = 0x0,
 	IRQ_HANDLED = 0x1,
+	IRQ_WAKE_THREAD = 0x2,	/* XXX requires manual workqueue setup */
 };
 
 #define	DRM_IRQ_ARGS	void *arg
 
 #define	IRQF_SHARED	0	/* XXX */
 
-#define	IPL_DRM		IPL_TTY	/* XXX */
+#define	IPL_DRM		IPL_VM	/* XXX */
 
 #endif  /* _DRM_DRM_IRQ_NETBSD_H_ */

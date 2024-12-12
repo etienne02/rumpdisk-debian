@@ -1,4 +1,4 @@
-/*	$NetBSD: touchwin.c,v 1.32 2020/07/03 23:28:51 uwe Exp $	*/
+/*	$NetBSD: touchwin.c,v 1.34 2022/04/12 07:03:04 blymn Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)touchwin.c	8.2 (Berkeley) 5/4/94";
 #else
-__RCSID("$NetBSD: touchwin.c,v 1.32 2020/07/03 23:28:51 uwe Exp $");
+__RCSID("$NetBSD: touchwin.c,v 1.34 2022/04/12 07:03:04 blymn Exp $");
 #endif
 #endif				/* not lint */
 
@@ -67,10 +67,8 @@ is_linetouched(WINDOW *win, int line)
 	if (line > win->maxy)
 		return FALSE;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "is_linetouched: (%p, line %d, dirty %d)\n",
 	    win, line, (win->alines[line]->flags & __ISDIRTY));
-#endif
 	return (win->alines[line]->flags & __ISDIRTY) != 0;
 }
 
@@ -82,9 +80,7 @@ is_linetouched(WINDOW *win, int line)
 int
 touchline(WINDOW *win, int start, int count)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "touchline: (%p, %d, %d)\n", win, start, count);
-#endif
 	return wtouchln(win, start, count, 1);
 }
 
@@ -95,9 +91,7 @@ touchline(WINDOW *win, int start, int count)
  */
 int wredrawln(WINDOW *win, int start, int count)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "wredrawln: (%p, %d, %d)\n", win, start, count);
-#endif
 	return wtouchln(win, start, count, 1);
 }
 
@@ -110,10 +104,8 @@ is_wintouched(WINDOW *win)
 {
 	int y, maxy;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "is_wintouched: (%p, maxy %d)\n", win,
 	    win->maxy);
-#endif
 	maxy = win->maxy;
 	for (y = 0; y < maxy; y++) {
 		if (is_linetouched(win, y) == TRUE)
@@ -130,9 +122,7 @@ is_wintouched(WINDOW *win)
 int
 touchwin(WINDOW *win)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "touchwin: (%p)\n", win);
-#endif
 	return wtouchln(win, 0, win->maxy, 1);
 }
 
@@ -143,9 +133,7 @@ touchwin(WINDOW *win)
 int
 redrawwin(WINDOW *win)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "redrawwin: (%p)\n", win);
-#endif
 	return wtouchln(win, 0, win->maxy, 1);
 }
 
@@ -156,9 +144,7 @@ redrawwin(WINDOW *win)
 int
 untouchwin(WINDOW *win)
 {
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "untouchwin: (%p)\n", win);
-#endif
 	return wtouchln(win, 0, win->maxy, 0);
 }
 
@@ -173,10 +159,8 @@ wtouchln(WINDOW *win, int line, int n, int changed)
 	int	y;
 	__LINE	*wlp;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "wtouchln: (%p) %d, %d, %d\n",
 	    win, line, n, changed);
-#endif
 	if (line < 0 || win->maxy <= line)
 		return ERR;
 	if (n < 0)
@@ -203,17 +187,20 @@ wtouchln(WINDOW *win, int line, int n, int changed)
 	return OK;
 }
 
+/*
+ * Touch all the lines in a window.  If force is set to 1 then screen
+ * update optimisation will disabled to force the change out.
+ */
 int
-__touchwin(WINDOW *win)
+__touchwin(WINDOW *win, int force)
 {
 	int	 y, maxy;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "__touchwin: (%p)\n", win);
-#endif
 	maxy = win->maxy;
 	for (y = 0; y < maxy; y++)
-		__touchline(win, y, 0, (int) win->maxx - 1);
+		_cursesi_touchline_force(win, y, 0, (int) win->maxx - 1,
+		    force);
 	return OK;
 }
 
@@ -235,12 +222,10 @@ static int
 _cursesi_touchline_force(WINDOW *win, int y, int sx, int ex, int force)
 {
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "__touchline: (%p, %d, %d, %d, %d)\n",
 	    win, y, sx, ex, force);
 	__CTRACE(__CTRACE_LINE, "__touchline: first = %d, last = %d\n",
 	    *win->alines[y]->firstchp, *win->alines[y]->lastchp);
-#endif
 	sx += win->ch_off;
 	ex += win->ch_off;
 	win->alines[y]->flags |= __ISDIRTY;
@@ -251,10 +236,8 @@ _cursesi_touchline_force(WINDOW *win, int y, int sx, int ex, int force)
 		*win->alines[y]->firstchp = sx;
 	if (*win->alines[y]->lastchp < ex)
 		*win->alines[y]->lastchp = ex;
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "__touchline: first = %d, last = %d\n",
 	    *win->alines[y]->firstchp, *win->alines[y]->lastchp);
-#endif
 	return OK;
 }
 
@@ -263,7 +246,7 @@ wsyncup(WINDOW *win)
 {
 
 	do {
-		__touchwin(win);
+		__touchwin(win, 0);
 		win = win->orig;
 	} while (win);
 }
@@ -275,7 +258,7 @@ wsyncdown(WINDOW *win)
 
 	while (w) {
 		if (is_wintouched(w)) {
-			__touchwin(win);
+			__touchwin(win, 0);
 			break;
 		}
 		w = w->orig;

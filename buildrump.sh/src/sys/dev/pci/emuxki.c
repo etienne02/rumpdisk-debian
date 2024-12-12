@@ -1,4 +1,4 @@
-/*	$NetBSD: emuxki.c,v 1.71 2021/02/06 05:15:03 isaki Exp $	*/
+/*	$NetBSD: emuxki.c,v 1.79 2024/06/08 21:02:29 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2007 The NetBSD Foundation, Inc.
@@ -38,31 +38,24 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: emuxki.c,v 1.71 2021/02/06 05:15:03 isaki Exp $");
+__KERNEL_RCSID(0, "$NetBSD: emuxki.c,v 1.79 2024/06/08 21:02:29 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
+#include <sys/module.h>
 #include <sys/errno.h>
 #include <sys/systm.h>
 #include <sys/audioio.h>
 #include <sys/mutex.h>
 #include <sys/kmem.h>
-#include <sys/malloc.h>
 #include <sys/fcntl.h>
 
 #include <sys/bus.h>
 #include <sys/intr.h>
 
-#include <dev/audio/audio_if.h>
-
-#include <dev/ic/ac97reg.h>
-#include <dev/ic/ac97var.h>
-
-#include <dev/pci/pcidevs.h>
-#include <dev/pci/pcireg.h>
-#include <dev/pci/pcivar.h>
-
 #include <dev/pci/emuxkireg.h>
+#include <dev/pci/emuxkivar.h>
+#include <dev/pci/emuxki_boards.h>
 
 /* #define EMUXKI_DEBUG 1 */
 #ifdef EMUXKI_DEBUG
@@ -81,109 +74,6 @@ __KERNEL_RCSID(0, "$NetBSD: emuxki.c,v 1.71 2021/02/06 05:15:03 isaki Exp $");
  */
 
 #define EMU_PCI_CBIO		(0x10)
-#define EMU_SUBSYS_APS		(0x40011102)
-
-#define EMU_PTESIZE		(4096)
-#define EMU_MINPTE		(3)
-/*
- * Hardware limit of PTE is 4096 entry but it's too big for single voice.
- * Reasonable candidate is:
- *  48kHz * 2ch * 2byte * 1sec * 3buf/EMU_PTESIZE = 141
- * and then round it up to 2^n.
- */
-#define EMU_MAXPTE		(256)
-#define EMU_NUMCHAN		(64)
-
-/*
- * Internal recording DMA buffer
- */
-/* Recommend the same size as EMU_PTESIZE to be symmetrical for play/rec */
-#define EMU_REC_DMABLKSIZE	(4096)
-/* must be EMU_REC_DMABLKSIZE * 2 */
-#define EMU_REC_DMASIZE		(8192)
-/* must be EMU_RECBS_BUFSIZE_(EMU_REC_DMASIZE) */
-#define EMU_REC_BUFSIZE_RECBS	EMU_RECBS_BUFSIZE_8192
-
-/*
- * DMA memory management
- */
-
-#define EMU_DMA_ALIGN		(4096)
-#define EMU_DMA_NSEGS		(1)
-
-struct dmamem {
-	bus_dma_tag_t		dmat;
-	bus_size_t		size;
-	bus_size_t		align;
-	bus_size_t		bound;
-	bus_dma_segment_t	*segs;
-	int			nsegs;
-	int			rsegs;
-	void *			kaddr;
-	bus_dmamap_t		map;
-};
-
-#define KERNADDR(ptr)		((void *)((ptr)->kaddr))
-/*
- * (ptr)->segs[] is CPU's PA translated by CPU's MMU.
- * (ptr)->map->dm_segs[] is PCI device's PA translated by PCI's MMU.
- */
-#define DMASEGADDR(ptr, segno)	((ptr)->map->dm_segs[segno].ds_addr)
-#define DMAADDR(ptr)		DMASEGADDR(ptr, 0)
-#define DMASIZE(ptr)		((ptr)->size)
-
-struct emuxki_softc {
-	device_t		sc_dev;
-	device_t		sc_audev;
-	enum {
-		EMUXKI_SBLIVE = 0x00,
-		EMUXKI_AUDIGY = 0x01,
-		EMUXKI_AUDIGY2 = 0x02,
-		EMUXKI_LIVE_5_1 = 0x04,
-		EMUXKI_APS = 0x08
-	} sc_type;
-	audio_device_t		sc_audv;	/* for GETDEV */
-
-	/* Autoconfig parameters */
-	bus_space_tag_t		sc_iot;
-	bus_space_handle_t	sc_ioh;
-	bus_addr_t		sc_iob;
-	bus_size_t		sc_ios;
-	pci_chipset_tag_t	sc_pc;		/* PCI tag */
-	bus_dma_tag_t		sc_dmat;
-	void			*sc_ih;		/* interrupt handler */
-	kmutex_t		sc_intr_lock;
-	kmutex_t		sc_lock;
-	kmutex_t		sc_index_lock;
-
-	/* register parameters */
-	struct dmamem		*ptb;		/* page table */
-
-	struct dmamem		*pmem;		/* play memory */
-	void			(*pintr)(void *);
-	void			*pintrarg;
-	audio_params_t		play;
-	int			pframesize;
-	int			pblksize;
-	int			plength;
-	int			poffset;
-
-	struct dmamem		*rmem;		/* rec internal memory */
-	void			(*rintr)(void *);
-	void			*rintrarg;
-	audio_params_t		rec;
-	void			*rptr;		/* rec MI ptr */
-	int			rcurrent;	/* rec software trans count */
-	int			rframesize;
-	int			rblksize;
-	int			rlength;
-	int			roffset;
-
-	/* others */
-
-	struct ac97_host_if	hostif;
-	struct ac97_codec_if	*codecif;
-};
 
 /* blackmagic */
 #define X1(x)		((sc->sc_type & EMUXKI_AUDIGY) ? EMU_A_##x : EMU_##x)
@@ -466,19 +356,17 @@ static int
 emuxki_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct pci_attach_args *pa;
+	pcireg_t reg;
 
 	pa = aux;
-	if (PCI_VENDOR(pa->pa_id) != PCI_VENDOR_CREATIVELABS)
-		return 0;
 
-	switch (PCI_PRODUCT(pa->pa_id)) {
-	case PCI_PRODUCT_CREATIVELABS_SBLIVE:
-	case PCI_PRODUCT_CREATIVELABS_SBLIVE2:
-	case PCI_PRODUCT_CREATIVELABS_AUDIGY:
+	reg = pci_conf_read(pa->pa_pc, pa->pa_tag, PCI_SUBSYS_ID_REG);
+	if (emuxki_board_lookup(PCI_VENDOR(pa->pa_id),
+				PCI_PRODUCT(pa->pa_id), reg,
+				PCI_REVISION(pa->pa_class)) != NULL)
 		return 1;
-	default:
-		return 0;
-	}
+
+	return 0;
 }
 
 static void
@@ -486,6 +374,7 @@ emuxki_attach(device_t parent, device_t self, void *aux)
 {
 	struct emuxki_softc *sc;
 	struct pci_attach_args *pa;
+	const struct emuxki_board *sb;
 	pci_intr_handle_t ih;
 	const char *intrstr;
 	char intrbuf[PCI_INTRSTR_LEN];
@@ -495,7 +384,14 @@ emuxki_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	pa = aux;
 
+	reg = pci_conf_read(pa->pa_pc, pa->pa_tag, PCI_SUBSYS_ID_REG);
+	sb = emuxki_board_lookup(PCI_VENDOR(pa->pa_id),
+				      PCI_PRODUCT(pa->pa_id), reg,
+				      PCI_REVISION(pa->pa_class));
+	KASSERT(sb != NULL);
+
 	pci_aprint_devinfo(pa, "Audio controller");
+	aprint_normal_dev(self, "%s [%s]\n", sb->sb_name, sb->sb_board);
 	DPRINTF("dmat=%p\n", (char *)pa->pa_dmat);
 
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
@@ -503,7 +399,15 @@ emuxki_attach(device_t parent, device_t self, void *aux)
 	mutex_init(&sc->sc_index_lock, MUTEX_DEFAULT, IPL_AUDIO);
 
 	sc->sc_pc   = pa->pa_pc;
-	sc->sc_dmat = pa->pa_dmat;
+
+	/* EMU10K1 can only address 31 bits (2GB) */
+	if (bus_dmatag_subregion(pa->pa_dmat, 0, ((uint32_t)1 << 31) - 1,
+	    &(sc->sc_dmat), BUS_DMA_NOWAIT) != 0) {
+		aprint_error_dev(self,
+		    "WARNING: failed to restrict dma range,"
+		    " falling back to parent bus dma range\n");
+		sc->sc_dmat = pa->pa_dmat;
+	}
 
 	reg = pci_conf_read(pa->pa_pc, pa->pa_tag, PCI_COMMAND_STATUS_REG);
 	reg |= PCI_COMMAND_IO_ENABLE | PCI_COMMAND_MASTER_ENABLE |
@@ -534,22 +438,17 @@ emuxki_attach(device_t parent, device_t self, void *aux)
 	aprint_normal_dev(self, "interrupting at %s\n", intrstr);
 
 	/* XXX it's unknown whether APS is made from Audigy as well */
-	if (PCI_PRODUCT(pa->pa_id) == PCI_PRODUCT_CREATIVELABS_AUDIGY) {
-		sc->sc_type = EMUXKI_AUDIGY;
-		if (PCI_REVISION(pa->pa_class) == 0x04) {
-			sc->sc_type |= EMUXKI_AUDIGY2;
-			strlcpy(sc->sc_audv.name, "Audigy2",
-			    sizeof(sc->sc_audv.name));
-		} else {
-			strlcpy(sc->sc_audv.name, "Audigy",
-			    sizeof(sc->sc_audv.name));
-		}
-	} else if (pci_conf_read(pa->pa_pc, pa->pa_tag,
-	    PCI_SUBSYS_ID_REG) == EMU_SUBSYS_APS) {
-		sc->sc_type = EMUXKI_APS;
+	sc->sc_type = sb->sb_flags;
+	if (sc->sc_type & EMUXKI_AUDIGY2_CA0108) {
+		strlcpy(sc->sc_audv.name, "Audigy2+CA0108",
+		    sizeof(sc->sc_audv.name));
+	} else if (sc->sc_type & EMUXKI_AUDIGY2) {
+		strlcpy(sc->sc_audv.name, "Audigy2", sizeof(sc->sc_audv.name));
+	} else if (sc->sc_type & EMUXKI_AUDIGY) {
+		strlcpy(sc->sc_audv.name, "Audigy", sizeof(sc->sc_audv.name));
+	} else if (sc->sc_type & EMUXKI_APS) {
 		strlcpy(sc->sc_audv.name, "E-mu APS", sizeof(sc->sc_audv.name));
 	} else {
-		sc->sc_type = EMUXKI_SBLIVE;
 		strlcpy(sc->sc_audv.name, "SB Live!", sizeof(sc->sc_audv.name));
 	}
 	snprintf(sc->sc_audv.version, sizeof(sc->sc_audv.version), "0x%02x",
@@ -583,11 +482,12 @@ unmap:
 static int
 emuxki_detach(device_t self, int flags)
 {
-	struct emuxki_softc *sc;
+	struct emuxki_softc *sc = device_private(self);
+	int error;
 
-	sc = device_private(self);
-	if (sc->sc_audev != NULL) /* Test in case audio didn't attach */
-		config_detach(sc->sc_audev, 0);
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
 	/* All voices should be stopped now but add some code here if not */
 	emuxki_writeio_4(sc, EMU_HCFG,
@@ -703,7 +603,27 @@ emuxki_init(struct emuxki_softc *sc)
 	emuxki_write(sc, 0, EMU_SPCS1, spcs);
 	emuxki_write(sc, 0, EMU_SPCS2, spcs);
 
-	if (sc->sc_type & EMUXKI_AUDIGY2) {
+	if (sc->sc_type & EMUXKI_AUDIGY2_CA0108) {
+		/* Setup SRCMulti_I2S SamplingRate */
+		emuxki_write(sc, 0, EMU_A2_SPDIF_SAMPLERATE,
+		    emuxki_read(sc, 0, EMU_A2_SPDIF_SAMPLERATE) & 0xfffff1ff);
+
+		/* Setup SRCSel (Enable SPDIF, I2S SRCMulti) */
+		emuxki_writeptr(sc, EMU_A2_PTR, EMU_A2_DATA, EMU_A2_SRCSEL,
+		    EMU_A2_SRCSEL_ENABLE_SPDIF | EMU_A2_SRCSEL_ENABLE_SRCMULTI);
+
+		/* Setup SRCMulti Input Audio Enable */
+		emuxki_writeptr(sc, EMU_A2_PTR, EMU_A2_DATA,
+		    0x7b0000, 0xff000000);
+
+		/* Setup SPDIF Out Audio Enable
+		 * The Audigy 2 Value has a separate SPDIF out,
+		 * so no need for a mixer switch */
+		emuxki_writeptr(sc, EMU_A2_PTR, EMU_A2_DATA,
+		    0x7a0000, 0xff000000);
+		emuxki_writeio_4(sc, EMU_A_IOCFG,
+		    emuxki_readio_4(sc, EMU_A_IOCFG) & ~0x8); /* clear bit 3 */
+	} else if (sc->sc_type & EMUXKI_AUDIGY2) {
 		emuxki_write(sc, 0, EMU_A2_SPDIF_SAMPLERATE,
 		    EMU_A2_SPDIF_UNKNOWN);
 
@@ -735,10 +655,12 @@ emuxki_init(struct emuxki_softc *sc)
 	    EMU_INTE_VOLDECRENABLE |
 	    EMU_INTE_MUTEENABLE);
 
-	if (sc->sc_type & EMUXKI_AUDIGY2) {
+	if (sc->sc_type & EMUXKI_AUDIGY2_CA0108) {
 		emuxki_writeio_4(sc, EMU_A_IOCFG,
-		    emuxki_readio_4(sc, EMU_A_IOCFG) |
-		        EMU_A_IOCFG_GPOUT0);
+		    0x0060 | emuxki_readio_4(sc, EMU_A_IOCFG));
+	} else if (sc->sc_type & EMUXKI_AUDIGY2) {
+		emuxki_writeio_4(sc, EMU_A_IOCFG,
+		    EMU_A_IOCFG_GPOUT0 | emuxki_readio_4(sc, EMU_A_IOCFG));
 	}
 
 	/* enable AUDIO bit */
@@ -879,7 +801,7 @@ emuxki_play_start(struct emuxki_softc *sc, int ch, uint32_t start, uint32_t end)
 	volume = 32767;
 
 	emuxki_write(sc, ch, EMU_CHAN_DSL,
-	    (0 << 24) |	/* send amound D = 0 */
+	    (0 << 24) |	/* send amount D = 0 */
 	    end);
 
 	emuxki_write(sc, ch, EMU_CHAN_PSST,
@@ -1400,4 +1322,33 @@ emuxki_ac97_flags(void *hdl)
 {
 
 	return AC97_HOST_SWAPPED_CHANNELS;
+}
+
+MODULE(MODULE_CLASS_DRIVER, emuxki, "pci,audio");
+
+#ifdef _MODULE
+#include "ioconf.c"
+#endif
+
+static int
+emuxki_modcmd(modcmd_t cmd, void *opaque)
+{
+	int error = 0;
+
+	switch (cmd) {
+	case MODULE_CMD_INIT:
+#ifdef _MODULE
+		error = config_init_component(cfdriver_ioconf_emuxki,
+		    cfattach_ioconf_emuxki, cfdata_ioconf_emuxki);
+#endif
+		return error;
+	case MODULE_CMD_FINI:
+#ifdef _MODULE
+		error = config_fini_component(cfdriver_ioconf_emuxki,
+		    cfattach_ioconf_emuxki, cfdata_ioconf_emuxki);
+#endif
+		return error;
+	default:
+		return ENOTTY;
+	}
 }

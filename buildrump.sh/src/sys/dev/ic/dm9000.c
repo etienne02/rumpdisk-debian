@@ -1,4 +1,4 @@
-/*	$NetBSD: dm9000.c,v 1.29 2020/06/27 13:34:20 jmcneill Exp $	*/
+/*	$NetBSD: dm9000.c,v 1.38 2024/12/01 20:24:23 andvar Exp $	*/
 
 /*
  * Copyright (c) 2009 Paul Fleischer
@@ -94,7 +94,6 @@
 #include <sys/device.h>
 #include <sys/mbuf.h>
 #include <sys/sockio.h>
-#include <sys/malloc.h>
 #include <sys/errno.h>
 #include <sys/cprng.h>
 #include <sys/rndsource.h>
@@ -219,7 +218,7 @@ dme_attach(struct dme_softc *sc, const uint8_t *notusedanymore)
 	ea = (dict) ? prop_dictionary_get(dict, "mac-address") : NULL;
 	if (ea != NULL) {
 	       /*
-		 * If the MAC address is overriden by a device property,
+		 * If the MAC address is overridden by a device property,
 		 * use that.
 		 */
 		KASSERT(prop_object_type(ea) == PROP_TYPE_DATA);
@@ -228,7 +227,7 @@ dme_attach(struct dme_softc *sc, const uint8_t *notusedanymore)
 		aprint_debug_dev(sc->sc_dev, "got MAC address!\n");
 	} else {
 		/*
-		 * If we did not get an externaly configure address,
+		 * If we did not get an externally configure address,
 		 * try to read one from the current setup, before
 		 * resetting the chip.
 		 */
@@ -245,7 +244,7 @@ dme_attach(struct dme_softc *sc, const uint8_t *notusedanymore)
 			enaddr[5] = machi >> 8;
 		}
 	}
-	/* TODO: perform explicit EEPROM read op if it's availble */
+	/* TODO: perform explicit EEPROM read op if it's available */
 
 	dme_reset(sc);
 
@@ -401,7 +400,6 @@ dme_init(struct ifnet *ifp)
 	sc->txbusy = sc->txready = 0;
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 	callout_schedule(&sc->sc_link_callout, hz);
 
 	return 0;
@@ -448,7 +446,7 @@ dme_set_rcvfilt(struct dme_softc *sc)
 			memset(mchash, 0xff, sizeof(mchash)); /* necessary? */
 			/* accept all mulicast frame */
 			rcr |= DM9000_RCR_ALL;
-			break;
+			goto update;
 		}
 		h = ether_crc32_le(enm->enm_addrlo, ETHER_ADDR_LEN) & 0x3f;
 		/* 3(5:3) and 3(2:0) sampling to have uint8_t[8] */
@@ -591,7 +589,7 @@ dme_stop(struct ifnet *ifp, int disable)
 	mii_down(&sc->sc_mii);
 	callout_stop(&sc->sc_link_callout);
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 }
 
@@ -600,24 +598,23 @@ dme_start(struct ifnet *ifp)
 {
 	struct dme_softc *sc = ifp->if_softc;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING) {
-		printf("No output\n");
+	if ((ifp->if_flags & IFF_RUNNING) == 0) {
 		return;
 	}
-	if (sc->txbusy && sc->txready)
-		panic("DM9000: Internal error, trying to send without"
-		    " any empty queue\n");
-
-	dme_prepare(ifp);
+	if (!sc->txready) {
+		dme_prepare(ifp);
+	}
 	if (sc->txbusy) {
-		/* We need to wait until the current frame has
+		/*
+		 * We need to wait until the current frame has
 		 * been transmitted.
 		 */
-		ifp->if_flags |= IFF_OACTIVE;
 		return;
 	}
-	/* We are ready to transmit right away */
-	dme_transmit(ifp);
+	if (sc->txready) {
+		/* We are ready to transmit right away */
+		dme_transmit(ifp);
+	}
 	dme_prepare(ifp); /* Prepare next one */
 }
 
@@ -629,13 +626,11 @@ dme_prepare(struct ifnet *ifp)
 	uint16_t length;
 	struct mbuf *m;
 
-	if (sc->txready)
-		panic("dme_prepare: Someone called us with txready set\n");
+	KASSERT(!sc->txready);
 
 	IFQ_DEQUEUE(&ifp->if_snd, m);
 	if (m == NULL) {
 		TX_DPRINTF(("dme_prepare: Nothing to transmit\n"));
-		ifp->if_flags &= ~IFF_OACTIVE; /* Clear OACTIVE bit */
 		return; /* Nothing to transmit */
 	}
 
@@ -737,7 +732,7 @@ dme_receive(struct ifnet *ifp)
 			break;
 		}
 	} while (avail == 01);
-	/* frame receieved successfully */
+	/* frame received successfully */
 }
 
 int
@@ -833,7 +828,7 @@ dme_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 			break;
 		error = 0;
 		if (cmd == SIOCSIFCAP)
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		else if (cmd != SIOCADDMULTI && cmd != SIOCDELMULTI)
 			;
 		else if (ifp->if_flags && IFF_RUNNING) {
@@ -918,7 +913,7 @@ pkt_write_2(struct dme_softc *sc, struct mbuf *bufChain)
 					length++;
 				}
 
-				/* Does shift direction depend on endianess? */
+				/* Does shift direction depend on endianness? */
 				left_over_buf = left_over_buf | (b << 8);
 
 				bus_space_write_2(sc->sc_iot, sc->sc_ioh,
@@ -956,7 +951,7 @@ pkt_write_2(struct dme_softc *sc, struct mbuf *bufChain)
 						 to_write % 2));
 					left_over_count = 1;
 					/* XXX: Does this depend on
-					 * the endianess?
+					 * the endianness?
 					 */
 					left_over_buf = *write_ptr;
 

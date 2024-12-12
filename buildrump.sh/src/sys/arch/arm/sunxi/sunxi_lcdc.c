@@ -1,4 +1,4 @@
-/* $NetBSD: sunxi_lcdc.c,v 1.12 2021/01/27 03:10:20 thorpej Exp $ */
+/* $NetBSD: sunxi_lcdc.c,v 1.15 2022/06/28 05:19:03 skrll Exp $ */
 
 /*-
  * Copyright (c) 2019 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,23 +27,24 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunxi_lcdc.c,v 1.12 2021/01/27 03:10:20 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunxi_lcdc.c,v 1.15 2022/06/28 05:19:03 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/intr.h>
-#include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/conf.h>
+#include <sys/systm.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_crtc_helper.h>
-
-#include <dev/fdt/fdtvar.h>
 #include <dev/fdt/fdt_port.h>
+#include <dev/fdt/fdtvar.h>
 
 #include <arm/sunxi/sunxi_drm.h>
+
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_vblank.h>
 
 #define	TCON_GCTL_REG		0x000
 #define	 TCON_GCTL_TCON_EN			__BIT(31)
@@ -108,6 +109,7 @@ enum tcon_type {
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "allwinner,sun8i-h3-tcon-tv",	.value = TYPE_TCON1 },
+	{ .compat = "allwinner,sun8i-v3s-tcon",		.value = TYPE_TCON0 },
 	{ .compat = "allwinner,sun50i-a64-tcon-lcd",	.value = TYPE_TCON0 },
 	{ .compat = "allwinner,sun50i-a64-tcon-tv",	.value = TYPE_TCON1 },
 	DEVICE_COMPAT_EOL
@@ -410,7 +412,7 @@ sunxi_lcdc_ep_activate(device_t dev, struct fdt_endpoint *ep, bool activate)
 	out_ep = fdt_endpoint_get_from_index(&sc->sc_ports, TCON_PORT_OUTPUT, 0);
 	if (out_ep != NULL) {
 		drm_encoder_init(crtc->dev, &sc->sc_encoder.base, &sunxi_lcdc_funcs,
-		    sunxi_lcdc_encoder_mode(out_ep));
+		    sunxi_lcdc_encoder_mode(out_ep), NULL);
 		drm_encoder_helper_add(&sc->sc_encoder.base, &sunxi_lcdc_tcon0_helper_funcs);
 
 		sunxi_lcdc_setup_vblank(sc);
@@ -421,7 +423,7 @@ sunxi_lcdc_ep_activate(device_t dev, struct fdt_endpoint *ep, bool activate)
 	out_ep = fdt_endpoint_get_from_index(&sc->sc_ports, TCON_PORT_OUTPUT, 1);
 	if (out_ep != NULL) {
 		drm_encoder_init(crtc->dev, &sc->sc_encoder.base, &sunxi_lcdc_funcs,
-		    sunxi_lcdc_encoder_mode(out_ep));
+		    sunxi_lcdc_encoder_mode(out_ep), NULL);
 		drm_encoder_helper_add(&sc->sc_encoder.base, &sunxi_lcdc_tcon1_helper_funcs);
 
 		sunxi_lcdc_setup_vblank(sc);

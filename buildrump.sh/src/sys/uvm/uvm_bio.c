@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_bio.c,v 1.126 2021/04/01 06:26:26 simonb Exp $	*/
+/*	$NetBSD: uvm_bio.c,v 1.128 2023/04/09 09:00:56 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1998 Chuck Silvers.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_bio.c,v 1.126 2021/04/01 06:26:26 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_bio.c,v 1.128 2023/04/09 09:00:56 riastradh Exp $");
 
 #include "opt_uvmhist.h"
 #include "opt_ubc.h"
@@ -73,7 +73,7 @@ bool ubc_direct = false;
 #endif
 
 /*
- * local data structues
+ * local data structures
  */
 
 #define UBC_HASH(uobj, offset) 						\
@@ -555,7 +555,9 @@ again:
 	}
 
 	if (flags & UBC_WRITE) {
-		KASSERTMSG(umap->writeoff == 0 && umap->writelen == 0,
+		KASSERTMSG(umap->writeoff == 0,
+		    "ubc_alloc: concurrent writes to uobj %p", uobj);
+		KASSERTMSG(umap->writelen == 0,
 		    "ubc_alloc: concurrent writes to uobj %p", uobj);
 		umap->writeoff = slot_offset;
 		umap->writelen = *lenp;

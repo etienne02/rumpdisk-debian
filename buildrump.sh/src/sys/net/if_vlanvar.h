@@ -1,4 +1,4 @@
-/*	$NetBSD: if_vlanvar.h,v 1.14 2020/09/26 18:38:09 roy Exp $	*/
+/*	$NetBSD: if_vlanvar.h,v 1.17 2022/06/20 08:02:25 yamaguchi Exp $	*/
 
 /*
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -81,9 +81,7 @@ struct vlanreq {
 #define	SIOCGETVLAN	SIOCGIFGENERIC
 
 #ifdef _KERNEL
-void	vlan_input(struct ifnet *, struct mbuf *);
-void	vlan_ifdetach(struct ifnet *);
-void	vlan_link_state_changed(struct ifnet *, int);
+struct mbuf *	vlan_input(struct ifnet *, struct mbuf *);
 
 /*
  * Locking notes:

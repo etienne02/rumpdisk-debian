@@ -1,4 +1,4 @@
-/*	$NetBSD: amdgpu_module.c,v 1.4 2018/08/28 03:35:08 riastradh Exp $	*/
+/*	$NetBSD: amdgpu_module.c,v 1.11 2022/07/23 12:52:09 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: amdgpu_module.c,v 1.4 2018/08/28 03:35:08 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: amdgpu_module.c,v 1.11 2022/07/23 12:52:09 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/module.h>
@@ -39,13 +39,18 @@ __KERNEL_RCSID(0, "$NetBSD: amdgpu_module.c,v 1.4 2018/08/28 03:35:08 riastradh 
 #endif
 #include <sys/systm.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_sysctl.h>
 
+#include <linux/idr.h>
+#include <linux/mutex.h>
+
+#include "amdgpu.h"
 #include "amdgpu_amdkfd.h"
 #include "amdgpu_drv.h"
 
-MODULE(MODULE_CLASS_DRIVER, amdgpu, "drmkms,drmkms_pci"); /* XXX drmkms_i2c, drmkms_ttm */
+MODULE(MODULE_CLASS_DRIVER, amdgpu, "drmkms,drmkms_pci,drmkms_sched,drmkms_ttm"); /* XXX drmkms_i2c */
 
 #ifdef _MODULE
 #include "ioconf.c"
@@ -53,7 +58,10 @@ MODULE(MODULE_CLASS_DRIVER, amdgpu, "drmkms,drmkms_pci"); /* XXX drmkms_i2c, drm
 
 /* XXX Kludge to get these from amdgpu_drv.c.  */
 extern struct drm_driver *const amdgpu_drm_driver;
-extern int amdgpu_max_kms_ioctl;
+extern struct amdgpu_mgpu_info mgpu_info;
+
+/* XXX Kludge to replace DEFINE_IDA in amdgpu_ids.c.  */
+extern struct ida amdgpu_pasid_ida;
 
 struct drm_sysctl_def amdgpu_def = DRM_SYSCTL_INIT();
 
@@ -67,7 +75,15 @@ amdgpu_init(void)
 		return error;
 
 	amdgpu_drm_driver->num_ioctls = amdgpu_max_kms_ioctl;
-	amdgpu_drm_driver->driver_features |= DRIVER_MODESET;
+	amdgpu_drm_driver->driver_features &= ~DRIVER_ATOMIC;
+
+	linux_mutex_init(&mgpu_info.mutex);
+	ida_init(&amdgpu_pasid_ida);
+
+	error = amdgpu_sync_init();
+	KASSERT(error == 0);
+	error = amdgpu_fence_slab_init();
+	KASSERT(error == 0);
 
 #if notyet			/* XXX amdgpu acpi */
 	amdgpu_register_atpx_handler();
@@ -101,6 +117,11 @@ amdgpu_fini(void)
 #if notyet			/* XXX amdgpu acpi */
 	amdgpu_unregister_atpx_handler();
 #endif
+	amdgpu_fence_slab_fini();
+	amdgpu_sync_fini();
+
+	ida_destroy(&amdgpu_pasid_ida);
+	linux_mutex_destroy(&mgpu_info.mutex);
 }
 
 static int

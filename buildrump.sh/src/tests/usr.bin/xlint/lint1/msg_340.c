@@ -1,4 +1,4 @@
-/*	$NetBSD: msg_340.c,v 1.2 2021/07/05 19:53:43 rillig Exp $	*/
+/*	$NetBSD: msg_340.c,v 1.5 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_340.c"
 
 // Test for message: initialization with '[a...b]' is a GCC extension [340]
@@ -7,13 +7,14 @@
  * In strict C mode, GCC extensions are flagged as such.
  */
 
-/* lint1-flags: -Ssw */
+/* lint1-flags: -Sw -X 351 */
 
 int
 example(void)
 {
 	int numbers[] = {
-		[2 ... 3] = 12	/* expect: 340 */
+		/* expect+1: warning: initialization with '[a...b]' is a GCC extension [340] */
+		[2 ... 3] = 12
 	};
 	return numbers[0];
 }

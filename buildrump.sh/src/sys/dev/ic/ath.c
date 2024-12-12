@@ -1,4 +1,4 @@
-/*	$NetBSD: ath.c,v 1.136 2021/08/09 20:49:10 andvar Exp $	*/
+/*	$NetBSD: ath.c,v 1.139 2024/07/05 04:31:50 rin Exp $	*/
 
 /*-
  * Copyright (c) 2002-2005 Sam Leffler, Errno Consulting
@@ -41,7 +41,7 @@
 __FBSDID("$FreeBSD: src/sys/dev/ath/if_ath.c,v 1.104 2005/09/16 10:09:23 ru Exp $");
 #endif
 #ifdef __NetBSD__
-__KERNEL_RCSID(0, "$NetBSD: ath.c,v 1.136 2021/08/09 20:49:10 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ath.c,v 1.139 2024/07/05 04:31:50 rin Exp $");
 #endif
 
 /*
@@ -2746,10 +2746,8 @@ ath_descdma_cleanup(struct ath_softc *sc,
 	bus_dmamem_free(dd->dd_dmat, &dd->dd_dseg, dd->dd_dnseg);
 
 	STAILQ_FOREACH(bf, head, bf_list) {
-		if (bf->bf_m) {
-			m_freem(bf->bf_m);
-			bf->bf_m = NULL;
-		}
+		m_freem(bf->bf_m);
+		bf->bf_m = NULL;
 		if (bf->bf_dmamap != NULL) {
 			bus_dmamap_destroy(sc->sc_dmat, bf->bf_dmamap);
 			bf->bf_dmamap = NULL;
@@ -3150,7 +3148,7 @@ ath_rx_proc(void *arg, int npending)
 				sc->sc_stats.ast_rx_badmic++;
 				/*
 				 * Do minimal work required to hand off
-				 * the 802.11 header for notifcation.
+				 * the 802.11 header for notification.
 				 */
 				/* XXX frag's and qos frames */
 				len = ds->ds_rxstat.rs_datalen;
@@ -5426,7 +5424,7 @@ ath_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 	    }
 
 	case SIOCGATHDIAG:
-		error = kauth_authorize_network(curlwp->l_cred,
+		error = kauth_authorize_network(kauth_cred_get(),
 		    KAUTH_NETWORK_INTERFACE,
 		    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp, KAUTH_ARG(cmd),
 		    NULL);

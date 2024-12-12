@@ -1,5 +1,7 @@
-/*	$NetBSD: decl_struct_member.c,v 1.11 2021/08/25 22:04:52 rillig Exp $	*/
+/*	$NetBSD: decl_struct_member.c,v 1.18 2024/12/01 18:37:54 rillig Exp $	*/
 # 3 "decl_struct_member.c"
+
+/* lint1-extra-flags: -X 351 */
 
 struct multi_attributes {
 	__attribute__((deprecated))
@@ -44,7 +46,8 @@ struct goto {
  * "is_struct_or_union(dcs->d_type->t_tspec)" at cgram.y:846
  */
 struct {
-	char;			/* expect: syntax error 'unnamed member' */
+	/* expect+1: error: syntax error 'unnamed member' [249] */
+	char;
 };
 
 struct cover_notype_struct_declarators {
@@ -52,8 +55,8 @@ struct cover_notype_struct_declarators {
 };
 
 struct cover_notype_struct_declarator_bit_field {
-	const a: 3, : 0, b: 4;
-	const : 0;
+	const a:3, :0, b:4;
+	const:0;
 };
 
 /*
@@ -76,11 +79,15 @@ struct array_of_bit_fields {
  * Before decl.c 1.188 from 2021-06-20, lint ran into a segmentation fault.
  */
 struct {
-	char a(_)0		/* expect: syntax error '0' */
-}
+	/* expect+2: warning: function definition with identifier list is obsolete in C23 [384] */
+	/* expect+1: error: syntax error '0' [249] */
+	char a(_)0
+
 /*
- * FIXME: adding a semicolon here triggers another assertion:
+ * Before cgram.y 1.328 from 2021-07-15, lint ran into an assertion failure
+ * at the closing semicolon:
  *
- * assertion "t == NOTSPEC" failed in end_type at decl.c:774
+ * assertion "t == NO_TSPEC" failed in end_type at decl.c:774
  */
-/* expect+1: cannot recover from previous errors */
+};
+/* expect+1: error: cannot recover from previous errors [224] */

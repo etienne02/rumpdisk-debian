@@ -1,7 +1,7 @@
-/* $NetBSD: trap.c,v 1.47 2021/08/30 23:20:00 jmcneill Exp $ */
+/* $NetBSD: trap.c,v 1.51 2024/02/18 09:03:44 andvar Exp $ */
 
 /*-
- * Copyright (c) 2014 The NetBSD Foundation, Inc.
+ * Copyright (c) 2014, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: trap.c,v 1.47 2021/08/30 23:20:00 jmcneill Exp $");
+__KERNEL_RCSID(1, "$NetBSD: trap.c,v 1.51 2024/02/18 09:03:44 andvar Exp $");
 
 #include "opt_arm_intr_impl.h"
 #include "opt_compat_netbsd32.h"
@@ -43,8 +43,8 @@ __KERNEL_RCSID(1, "$NetBSD: trap.c,v 1.47 2021/08/30 23:20:00 jmcneill Exp $");
 #include <sys/atomic.h>
 #include <sys/cpu.h>
 #include <sys/evcnt.h>
-#ifdef KDB
-#include <sys/kdb.h>
+#ifdef KGDB
+#include <sys/kgdb.h>
 #endif
 #include <sys/proc.h>
 #include <sys/systm.h>
@@ -73,7 +73,7 @@ __KERNEL_RCSID(1, "$NetBSD: trap.c,v 1.47 2021/08/30 23:20:00 jmcneill Exp $");
 
 #include <arm/cpufunc.h>
 
-#ifdef KDB
+#ifdef KGDB
 #include <machine/db_machdep.h>
 #endif
 #ifdef DDB
@@ -274,7 +274,7 @@ trap_el1h_sync(struct trapframe *tf)
 	(CTR_EL0_DIC | CTR_EL0_IDC | CTR_EL0_DMIN_LINE | CTR_EL0_IMIN_LINE)
 uint64_t ctr_el0_usr __read_mostly;
 
-static xcfunc_t
+static void
 configure_cpu_traps0(void *arg1, void *arg2)
 {
 	struct cpu_info * const ci = curcpu();
@@ -307,7 +307,7 @@ configure_cpu_traps0(void *arg1, void *arg2)
 		goto need_ctr_trap;
 #endif
 
-	return 0;
+	return;
 
  need_ctr_trap:
 	evcnt_attach_dynamic(&ci->ci_uct_trap, EVCNT_TYPE_MISC, NULL,
@@ -317,8 +317,6 @@ configure_cpu_traps0(void *arg1, void *arg2)
 	sctlr = reg_sctlr_el1_read();
 	sctlr &= ~SCTLR_UCT;
 	reg_sctlr_el1_write(sctlr);
-
-	return 0;
 }
 
 void
@@ -374,8 +372,7 @@ configure_cpu_traps(void)
 		}
 	}
 
-	where = xc_broadcast(0,
-	    (xcfunc_t)configure_cpu_traps0, NULL, NULL);
+	where = xc_broadcast(0, configure_cpu_traps0, NULL, NULL);
 	xc_wait(where);
 }
 
@@ -525,14 +522,29 @@ cpu_irq(struct trapframe *tf)
 	/* disable trace */
 	reg_mdscr_el1_write(reg_mdscr_el1_read() & ~MDSCR_SS);
 #endif
+
+	/*
+	 * Prevent preemption once we enable traps, until we have
+	 * finished running hard and soft interrupt handlers.  This
+	 * guarantees ci = curcpu() remains stable and we don't
+	 * accidentally try to run its pending soft interrupts on
+	 * another CPU.
+	 */
+	kpreempt_disable();
+
 	/* enable traps */
 	daif_enable(DAIF_D|DAIF_A);
 
+	/* run hard interrupt handlers */
 	ci->ci_intr_depth++;
 	ARM_IRQ_HANDLER(tf);
 	ci->ci_intr_depth--;
 
+	/* run soft interrupt handlers */
 	cpu_dosoftints();
+
+	/* all done, preempt as you please */
+	kpreempt_enable();
 }
 
 void
@@ -552,14 +564,28 @@ cpu_fiq(struct trapframe *tf)
 	/* disable trace */
 	reg_mdscr_el1_write(reg_mdscr_el1_read() & ~MDSCR_SS);
 
+	/*
+	 * Prevent preemption once we enable traps, until we have
+	 * finished running hard and soft interrupt handlers.  This
+	 * guarantees ci = curcpu() remains stable and we don't
+	 * accidentally try to run its pending soft interrupts on
+	 * another CPU.
+	 */
+	kpreempt_disable();
+
 	/* enable traps */
 	daif_enable(DAIF_D|DAIF_A);
 
+	/* run hard interrupt handlers */
 	ci->ci_intr_depth++;
 	ARM_FIQ_HANDLER(tf);
 	ci->ci_intr_depth--;
 
+	/* run soft interrupt handlers */
 	cpu_dosoftints();
+
+	/* all done, preempt as you please */
+	kpreempt_enable();
 }
 
 #ifdef COMPAT_NETBSD32
@@ -1008,8 +1034,8 @@ do_trapsignal1(
 bool
 cpu_intr_p(void)
 {
-	uint64_t ncsw;
 	int idepth;
+	long pctr;
 	lwp_t *l;
 
 #ifdef __HAVE_PIC_FAST_SOFTINTS
@@ -1024,11 +1050,9 @@ cpu_intr_p(void)
 		return false;
 	}
 	do {
-		ncsw = l->l_ncsw;
-		__insn_barrier();
+		pctr = lwp_pctr();
 		idepth = l->l_cpu->ci_intr_depth;
-		__insn_barrier();
-	} while (__predict_false(ncsw != l->l_ncsw));
+	} while (__predict_false(pctr != lwp_pctr()));
 
 	return idepth > 0;
 }

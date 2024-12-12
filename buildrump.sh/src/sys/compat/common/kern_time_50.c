@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_time_50.c,v 1.36 2021/04/03 12:57:21 simonb Exp $	*/
+/*	$NetBSD: kern_time_50.c,v 1.38 2024/01/19 18:39:15 christos Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -29,7 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_time_50.c,v 1.36 2021/04/03 12:57:21 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_time_50.c,v 1.38 2024/01/19 18:39:15 christos Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_compat_netbsd.h"
@@ -226,6 +226,7 @@ compat_50_sys_gettimeofday(struct lwp *l,
 		 * NetBSD has no kernel notion of time zone, so we just
 		 * fake up a timezone struct and return it if demanded.
 		 */
+		memset(&tzfake, 0, sizeof(tzfake));
 		tzfake.tz_minuteswest = 0;
 		tzfake.tz_dsttime = 0;
 		error = copyout(&tzfake, SCARG(uap, tzp), sizeof(tzfake));
@@ -453,17 +454,6 @@ compat_50_sys_mq_timedreceive(struct lwp *l,
 #else
 	return ENOSYS;
 #endif
-}
-
-void
-rusage_to_rusage50(const struct rusage *ru, struct rusage50 *ru50)
-{
-	(void)memcpy(&ru50->ru_first, &ru->ru_first,
-	    (char *)&ru50->ru_last - (char *)&ru50->ru_first +
-	    sizeof(ru50->ru_last));
-	ru50->ru_maxrss = ru->ru_maxrss;
-	timeval_to_timeval50(&ru->ru_utime, &ru50->ru_utime);
-	timeval_to_timeval50(&ru->ru_stime, &ru50->ru_stime);
 }
 
 int

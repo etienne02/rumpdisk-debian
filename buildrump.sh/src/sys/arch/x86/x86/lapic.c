@@ -1,4 +1,4 @@
-/*	$NetBSD: lapic.c,v 1.85 2020/10/27 08:57:11 ryo Exp $	*/
+/*	$NetBSD: lapic.c,v 1.90 2024/02/25 18:27:54 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2000, 2008, 2020 The NetBSD Foundation, Inc.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lapic.c,v 1.85 2020/10/27 08:57:11 ryo Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lapic.c,v 1.90 2024/02/25 18:27:54 andvar Exp $");
 
 #include "acpica.h"
 #include "ioapic.h"
@@ -64,6 +64,7 @@ __KERNEL_RCSID(0, "$NetBSD: lapic.c,v 1.85 2020/10/27 08:57:11 ryo Exp $");
 #include <machine/mpacpi.h>
 #include <machine/mpbiosvar.h>
 #include <machine/pcb.h>
+#include <machine/pmap_private.h>
 #include <machine/specialreg.h>
 #include <machine/segments.h>
 #include <x86/x86/tsc.h>
@@ -98,8 +99,8 @@ void		lapic_clockintr(void *, struct intrframe *);
 
 static void	lapic_delay(unsigned int);
 static uint32_t lapic_gettick(void);
-static void 	lapic_setup_bsp(paddr_t);
-static void 	lapic_map(paddr_t);
+static void	lapic_setup_bsp(paddr_t);
+static void	lapic_map(paddr_t);
 
 static void lapic_hwmask(struct pic *, int);
 static void lapic_hwunmask(struct pic *, int);
@@ -533,7 +534,7 @@ lapic_get_timecount(struct timecounter *tc)
 	 *
 	 * If the current tick is almost the Initial Counter, explicitly
 	 * check for the pending interrupt bit as the interrupt delivery
-	 * could be asynchronious and compensate as well.
+	 * could be asynchronous and compensate as well.
 	 *
 	 * This can't be done without splhigh() as the calling code might
 	 * have masked the clockinterrupt already.
@@ -547,7 +548,7 @@ lapic_get_timecount(struct timecounter *tc)
 		if (lapic_readreg(reg) & (1 << (LAPIC_TIMER_VECTOR % 32))) {
 			cur_timer -= lapic_tval;
 		}
-	} else if (ci->ci_ipending & (1 << LIR_TIMER))
+	} else if (ci->ci_ipending & (1ULL << LIR_TIMER))
 		cur_timer = lapic_gettick() - lapic_tval;
 	cur_timer = ci->ci_lapic_counter - cur_timer;
 	splx(s);
@@ -889,7 +890,7 @@ i82489_ipi(int vec, int target, int dl)
 	result = (i82489_readreg(LAPIC_ICRLO) & LAPIC_DLSTAT_BUSY) ? EBUSY : 0;
 #else
 	/* Don't wait - if it doesn't go, we're in big trouble anyway. */
-        result = 0;
+	result = 0;
 #endif
 	splx(s);
 
@@ -1007,7 +1008,7 @@ lapic_dump(void)
 	APIC_LVT_PRINT(ci, "lint", 1, LAPIC_LVT_LINT1);
 	APIC_LVT_PRINT(ci, "err", 0, LAPIC_LVT_ERR);
 
-#undef APIC_LVT_PRIINT
+#undef APIC_LVT_PRINT
 }
 #else /* XENPV */
 void

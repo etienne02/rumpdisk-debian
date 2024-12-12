@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.37 2020/02/20 08:27:40 skrll Exp $
+#	$NetBSD: genassym.cf,v 1.40 2024/01/09 04:16:27 thorpej Exp $
 
 #
 # Copyright (c) 1982, 1990, 1993
@@ -41,6 +41,7 @@ include <sys/syscall.h>
 include <uvm/uvm.h>
 
 include <machine/cpu.h>
+include <machine/fcode.h>
 include <machine/psl.h>
 include <machine/pcb.h>
 include <machine/pte.h>
@@ -72,6 +73,8 @@ ifdef M68060
 define	M68060			1
 endif
 
+define	M68K_MMU_MOTOROLA	1
+
 # values for fputype
 define	FPU_NONE		FPU_NONE
 define	FPU_68881		FPU_68881
@@ -92,6 +95,12 @@ define	USPACE			USPACE
 define	PAGE_SIZE		PAGE_SIZE
 define	PGSHIFT			PGSHIFT
 define	USRSTACK		USRSTACK
+
+# MMU configuration constants (from pmap.h)
+export	MMU51_SRP_BITS
+export	MMU51_CRP_BITS
+export	MMU51_TCR_BITS
+export	MMU40_TCR_BITS
 
 # lwp & proc fields and values
 define	L_PCB			offsetof(struct lwp, l_addr)

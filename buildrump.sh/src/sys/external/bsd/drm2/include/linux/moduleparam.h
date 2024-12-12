@@ -1,4 +1,4 @@
-/*	$NetBSD: moduleparam.h,v 1.8 2018/08/27 13:57:24 riastradh Exp $	*/
+/*	$NetBSD: moduleparam.h,v 1.11 2021/12/19 12:01:48 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -47,6 +47,12 @@ struct linux_module_param_info {
 #define MTYPE_charp	2
 #define MTYPE_uint	3
 
+/*
+ * In case of accidental cpp expansion, break glass to raise alarm and
+ * reach antizombie chainsaw.
+ */
+#define	MTYPE__Bool	MTYPE_bool
+
 #define	module_param_named(NAME, VAR, TYPE, MODE) \
 static __attribute__((__used__)) struct linux_module_param_info info_ ## NAME = { \
 	.dname = # NAME, \
@@ -60,5 +66,20 @@ __link_set_add_data(linux_module_param_info, info_ ## NAME)
 #define	module_param(VAR, TYPE, MODE)	module_param_named(VAR, VAR, TYPE, MODE)
 #define	module_param_unsafe		module_param
 #define	module_param_named_unsafe	module_param_named
+#define	module_param_string(VAR, TYPE, SIZE, MODE)			      \
+	CTASSERT(1)		/* XXX */
+
+struct linux_module_param_desc {
+	const char *name;
+	const char *description;
+};
+#define	MODULE_PARM_DESC(PARAMETER, DESCRIPTION) \
+static __attribute__((__used__)) \
+const struct linux_module_param_desc PARAMETER ## _desc = { \
+    .name = # PARAMETER, \
+    .description = DESCRIPTION, \
+}; \
+__link_set_add_rodata(linux_module_param_desc, PARAMETER ## _desc)
+
 
 #endif  /* _LINUX_MODULEPARAM_H_ */

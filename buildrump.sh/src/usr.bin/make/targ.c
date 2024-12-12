@@ -1,4 +1,4 @@
-/*	$NetBSD: targ.c,v 1.168 2021/04/03 12:01:00 rillig Exp $	*/
+/*	$NetBSD: targ.c,v 1.184 2024/07/07 09:54:12 rillig Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990, 1993
@@ -78,10 +78,8 @@
  *
  *	Targ_List	Return the list of all targets so far.
  *
- *	GNode_New	Create a new GNode for the passed target
- *			(string). The node is *not* placed in the
- *			hash table, though all its fields are
- *			initialized.
+ *	GNode_New	Create a new GNode with the given name, don't add it
+ *			to allNodes.
  *
  *	Targ_FindNode	Find the node, or return NULL.
  *
@@ -93,9 +91,6 @@
  *	Targ_FindList	Given a list of names, find nodes for all
  *			of them, creating them as necessary.
  *
- *	Targ_Precious	Return true if the target is precious and
- *			should not be removed if we are interrupted.
- *
  *	Targ_Propagate	Propagate information between related nodes.
  *			Should be called after the makefiles are parsed
  *			but before any action is taken.
@@ -103,8 +98,7 @@
  * Debugging:
  *	Targ_PrintGraph
  *			Print out the entire graph, all variables and
- *			statistics for the directory cache. Should print
- *			something for suffixes, too, but...
+ *			statistics for the directory cache.
  */
 
 #include <time.h>
@@ -113,7 +107,7 @@
 #include "dir.h"
 
 /*	"@(#)targ.c	8.2 (Berkeley) 3/19/94"	*/
-MAKE_RCSID("$NetBSD: targ.c,v 1.168 2021/04/03 12:01:00 rillig Exp $");
+MAKE_RCSID("$NetBSD: targ.c,v 1.184 2024/07/07 09:54:12 rillig Exp $");
 
 /*
  * All target nodes that appeared on the left-hand side of one of the
@@ -125,25 +119,31 @@ static HashTable allTargetsByName;
 #ifdef CLEANUP
 static GNodeList allNodes = LST_INIT;
 
-static void GNode_Free(void *);
+static void GNode_Free(GNode *);
 #endif
 
 void
 Targ_Init(void)
 {
 	HashTable_Init(&allTargetsByName);
+	SCOPE_INTERNAL = GNode_New("Internal");
+	SCOPE_GLOBAL = GNode_New("Global");
+	SCOPE_CMDLINE = GNode_New("Command");
 }
 
+#ifdef CLEANUP
 void
 Targ_End(void)
 {
-	Targ_Stats();
-#ifdef CLEANUP
+	GNodeListNode *ln;
+
 	Lst_Done(&allTargets);
 	HashTable_Done(&allTargetsByName);
-	Lst_DoneCall(&allNodes, GNode_Free);
-#endif
+	for (ln = allNodes.first; ln != NULL; ln = ln->next)
+		GNode_Free(ln->datum);
+	Lst_Done(&allNodes);
 }
+#endif
 
 void
 Targ_Stats(void)
@@ -165,17 +165,17 @@ Targ_List(void)
 /*
  * Create a new graph node, but don't register it anywhere.
  *
- * Graph nodes that appear on the left-hand side of a dependency line such
+ * Graph nodes that occur on the left-hand side of a dependency line such
  * as "target: source" are called targets.  XXX: In some cases (like the
- * .ALLTARGETS variable), all nodes are called targets as well, even if they
- * never appear on the left-hand side.  This is a mistake.
+ * .ALLTARGETS variable), other nodes are called targets as well, even if
+ * they never occur on the left-hand side of a dependency line.
  *
  * Typical names for graph nodes are:
- *	"src.c" (an ordinary file)
- *	"clean" (a .PHONY target)
- *	".END" (a special hook target)
- *	"-lm" (a library)
- *	"libc.a(isspace.o)" (an archive member)
+ *	"src.c"		an ordinary file
+ *	"clean"		a .PHONY target
+ *	".END"		a special hook target
+ *	"-lm"		a library
+ *	"libm.a(sin.o)"	an archive member
  */
 GNode *
 GNode_New(const char *name)
@@ -187,7 +187,7 @@ GNode_New(const char *name)
 	gn->uname = NULL;
 	gn->path = NULL;
 	gn->type = name[0] == '-' && name[1] == 'l' ? OP_LIB : OP_NONE;
-	gn->flags = GNF_NONE;
+	memset(&gn->flags, 0, sizeof(gn->flags));
 	gn->made = UNMADE;
 	gn->unmade = 0;
 	gn->mtime = 0;
@@ -207,6 +207,7 @@ GNode_New(const char *name)
 	gn->suffix = NULL;
 	gn->fname = NULL;
 	gn->lineno = 0;
+	gn->exit_status = 0;
 
 #ifdef CLEANUP
 	Lst_Append(&allNodes, gn);
@@ -217,9 +218,9 @@ GNode_New(const char *name)
 
 #ifdef CLEANUP
 static void
-GNode_Free(void *gnp)
+GNode_Free(GNode *gn)
 {
-	GNode *gn = gnp;
+	Var_DeleteAll(gn);
 
 	free(gn->name);
 	free(gn->uname);
@@ -238,20 +239,6 @@ GNode_Free(void *gnp)
 	Lst_Done(&gn->order_succ);
 	Lst_Done(&gn->cohorts);
 
-	/*
-	 * Do not free the variables themselves, even though they are owned
-	 * by this node.
-	 *
-	 * XXX: For the nodes that represent targets or sources (and not
-	 * SCOPE_GLOBAL), it should be safe to free the variables as well,
-	 * since each node manages the memory for all its variables itself.
-	 *
-	 * XXX: The GNodes that are only used as variable scopes (SCOPE_CMD,
-	 * SCOPE_GLOBAL, SCOPE_INTERNAL) are not freed at all (see Var_End,
-	 * where they are not mentioned).  These might be freed at all, if
-	 * their variable values are indeed not used anywhere else (see
-	 * Trace_Init for the only suspicious use).
-	 */
 	HashTable_Done(&gn->vars);
 
 	/*
@@ -309,7 +296,7 @@ Targ_NewInternalNode(const char *name)
 	Lst_Append(&allTargets, gn);
 	DEBUG1(TARG, "Adding \"%s\" to all targets.\n", gn->name);
 	if (doing_depend)
-		gn->flags |= FROM_DEPEND;
+		gn->flags.fromDepend = true;
 	return gn;
 }
 
@@ -344,27 +331,6 @@ Targ_FindList(GNodeList *gns, StringList *names)
 		GNode *gn = Targ_GetNode(name);
 		Lst_Append(gns, gn);
 	}
-}
-
-/* See if the given target is precious. */
-bool
-Targ_Precious(const GNode *gn)
-{
-	/* XXX: Why are '::' targets precious? */
-	return allPrecious || gn->type & (OP_PRECIOUS | OP_DOUBLEDEP);
-}
-
-/*
- * The main target to be made; only for debugging output.
- * See mainNode in parse.c for the definitive source.
- */
-static GNode *mainTarg;
-
-/* Remember the main target to make; only used for debugging. */
-void
-Targ_SetMain(GNode *gn)
-{
-	mainTarg = gn;
 }
 
 static void
@@ -416,36 +382,38 @@ Targ_FmtTime(time_t tm)
 
 /* Print out a type field giving only those attributes the user can set. */
 void
-Targ_PrintType(int type)
+Targ_PrintType(GNodeType type)
 {
-	int tbit;
+	static const struct {
+		GNodeType bit;
+		bool internal;
+		const char name[10];
+	} names[] = {
+		{ OP_MEMBER,	true,	"MEMBER"	},
+		{ OP_LIB,	true,	"LIB"		},
+		{ OP_ARCHV,	true,	"ARCHV"		},
+		{ OP_PHONY,	true,	"PHONY"		},
+		{ OP_NOTMAIN,	false,	"NOTMAIN"	},
+		{ OP_INVISIBLE,	false,	"INVISIBLE"	},
+		{ OP_MADE,	true,	"MADE"		},
+		{ OP_JOIN,	false,	"JOIN"		},
+		{ OP_MAKE,	false,	"MAKE"		},
+		{ OP_SILENT,	false,	"SILENT"	},
+		{ OP_PRECIOUS,	false,	"PRECIOUS"	},
+		{ OP_IGNORE,	false,	"IGNORE"	},
+		{ OP_EXEC,	false,	"EXEC"		},
+		{ OP_USE,	false,	"USE"		},
+		{ OP_USEBEFORE,	false,	"USEBEFORE"	},
+		{ OP_OPTIONAL,	false,	"OPTIONAL"	},
+	};
+	size_t i;
 
-	type &= ~OP_OPMASK;
-
-	while (type != 0) {
-		tbit = 1 << (ffs(type) - 1);
-		type &= ~tbit;
-
-		switch (tbit) {
-#define PRINTBIT(bit, attr) case bit: debug_printf(" " attr); break
-#define PRINTDBIT(bit, attr) case bit: DEBUG0(TARG, " " attr); break
-		PRINTBIT(OP_OPTIONAL, ".OPTIONAL");
-		PRINTBIT(OP_USE, ".USE");
-		PRINTBIT(OP_EXEC, ".EXEC");
-		PRINTBIT(OP_IGNORE, ".IGNORE");
-		PRINTBIT(OP_PRECIOUS, ".PRECIOUS");
-		PRINTBIT(OP_SILENT, ".SILENT");
-		PRINTBIT(OP_MAKE, ".MAKE");
-		PRINTBIT(OP_JOIN, ".JOIN");
-		PRINTBIT(OP_INVISIBLE, ".INVISIBLE");
-		PRINTBIT(OP_NOTMAIN, ".NOTMAIN");
-		PRINTDBIT(OP_LIB, ".LIB");
-		PRINTDBIT(OP_MEMBER, ".MEMBER");
-		PRINTDBIT(OP_ARCHV, ".ARCHV");
-		PRINTDBIT(OP_MADE, ".MADE");
-		PRINTDBIT(OP_PHONY, ".PHONY");
-#undef PRINTBIT
-#undef PRINTDBIT
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		if (type & names[i].bit) {
+			if (names[i].internal)
+				DEBUG1(TARG, " .%s", names[i].name);
+			else
+				debug_printf(" .%s", names[i].name);
 		}
 	}
 }
@@ -480,20 +448,34 @@ GNode_OpName(const GNode *gn)
 	return "";
 }
 
+static bool
+GNodeFlags_IsNone(GNodeFlags flags)
+{
+	return !flags.remake
+	       && !flags.childMade
+	       && !flags.force
+	       && !flags.doneWait
+	       && !flags.doneOrder
+	       && !flags.fromDepend
+	       && !flags.doneAllsrc
+	       && !flags.cycle
+	       && !flags.doneCycle;
+}
+
 /* Print the contents of a node. */
 void
 Targ_PrintNode(GNode *gn, int pass)
 {
 	debug_printf("# %s%s", gn->name, gn->cohort_num);
 	GNode_FprintDetails(opts.debug_file, ", ", gn, "\n");
-	if (gn->flags == 0)
+	if (GNodeFlags_IsNone(gn->flags))
 		return;
 
 	if (!GNode_IsTarget(gn))
 		return;
 
 	debug_printf("#\n");
-	if (gn == mainTarg)
+	if (gn == mainNode)
 		debug_printf("# *** MAIN TARGET ***\n");
 
 	if (pass >= 2) {
@@ -541,7 +523,6 @@ Targ_PrintNodes(GNodeList *gnodes, int pass)
 		Targ_PrintNode(ln->datum, pass);
 }
 
-/* Print only those targets that are just a source. */
 static void
 PrintOnlySources(void)
 {
@@ -611,7 +592,7 @@ Targ_Propagate(void)
 		for (cln = gn->cohorts.first; cln != NULL; cln = cln->next) {
 			GNode *cohort = cln->datum;
 
-			cohort->type |= type & ~OP_OPMASK;
+			cohort->type |= type & (unsigned)~OP_OPMASK;
 		}
 	}
 }

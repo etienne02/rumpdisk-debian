@@ -1,4 +1,4 @@
-/*	$NetBSD: if_le_ledma.c,v 1.36 2019/04/25 10:44:53 msaitoh Exp $	*/
+/*	$NetBSD: if_le_ledma.c,v 1.38 2022/09/25 18:03:04 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_le_ledma.c,v 1.36 2019/04/25 10:44:53 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_le_ledma.c,v 1.38 2022/09/25 18:03:04 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -41,7 +41,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_le_ledma.c,v 1.36 2019/04/25 10:44:53 msaitoh Exp
 #include <sys/syslog.h>
 #include <sys/socket.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 
 #include <net/if.h>
 #include <net/if_ether.h>
@@ -360,24 +359,21 @@ leattach_ledma(device_t parent, device_t self, void *aux)
 	if ((error = bus_dmamem_alloc(dmatag, MEMSIZE, 0, LEDMA_BOUNDARY,
 	    &seg, 1, &rseg, BUS_DMA_NOWAIT)) != 0) {
 		aprint_error(": DMA buffer alloc error %d\n",error);
-		return;
+		goto bad_destroy;
 	}
 
 	/* Map DMA buffer into kernel space */
 	if ((error = bus_dmamem_map(dmatag, &seg, rseg, MEMSIZE,
 	    (void **)&sc->sc_mem, BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error(": DMA buffer map error %d\n", error);
-		bus_dmamem_free(dmatag, &seg, rseg);
-		return;
+		goto bad_free;
 	}
 
 	/* Load DMA buffer */
 	if ((error = bus_dmamap_load(dmatag, lesc->sc_dmamap, sc->sc_mem,
 	    MEMSIZE, NULL, BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error(": DMA buffer map load error %d\n", error);
-		bus_dmamem_free(dmatag, &seg, rseg);
-		bus_dmamem_unmap(dmatag, sc->sc_mem, MEMSIZE);
-		return;
+		goto bad_unmap;
 	}
 
 	lesc->sc_laddr = lesc->sc_dmamap->dm_segs[0].ds_addr;
@@ -414,4 +410,13 @@ leattach_ledma(device_t parent, device_t self, void *aux)
 
 	/* now initialize DMA */
 	lehwreset(sc);
+
+	return;
+
+ bad_unmap:
+	bus_dmamem_unmap(dmatag, sc->sc_mem, MEMSIZE);
+ bad_free:
+	bus_dmamem_free(dmatag, &seg, rseg);
+ bad_destroy:
+	bus_dmamap_destroy(dmatag, lesc->sc_dmamap);
 }

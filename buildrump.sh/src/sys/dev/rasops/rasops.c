@@ -1,4 +1,4 @@
-/*	 $NetBSD: rasops.c,v 1.123 2020/07/02 07:49:44 rin Exp $	*/
+/*	 $NetBSD: rasops.c,v 1.128 2022/05/15 16:43:39 uwe Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rasops.c,v 1.123 2020/07/02 07:49:44 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rasops.c,v 1.128 2022/05/15 16:43:39 uwe Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_rasops.h"
@@ -264,6 +264,8 @@ rasops_init(struct rasops_info *ri, int wantrows, int wantcols)
 			flags |= WSFONT_FIND_ALPHA;
 		if ((ri->ri_flg & RI_PREFER_ALPHA) != 0)
 			flags |= WSFONT_PREFER_ALPHA;
+		if ((ri->ri_flg & RI_PREFER_WIDEFONT) != 0)
+			flags |= WSFONT_PREFER_WIDE;
 		cookie = wsfont_find(NULL,
 			ri->ri_width / wantcols,
 			0,
@@ -376,11 +378,12 @@ rasops_reconfig(struct rasops_info *ri, int wantrows, int wantcols)
 				rasops_make_box_chars_32(ri);
 				break;
 			default:
-				aprint_error(
+				kmem_free(ri->ri_optfont.data, len);
+				ri->ri_optfont.data = NULL;
+				aprint_verbose(
 				    "%s: font stride assumptions botched",
 				    __func__);
-				splx(s);
-				return -1;
+				break;
 			}
 		}
 	} else
@@ -593,13 +596,13 @@ rasops_mapchar(void *cookie, int c, u_int *cp)
 
 	KASSERT(ri->ri_font != NULL);
 
-	if ((c = wsfont_map_unichar(ri->ri_font, c)) < 0 ||
-	    !CHAR_IN_FONT(c, ri->ri_font)) {
+	int glyph = wsfont_map_unichar(ri->ri_font, c);
+	if (glyph < 0 || !CHAR_IN_FONT(glyph, PICK_FONT(ri, glyph))) {
 		*cp = ' ';
 		return 0;
 	}
 
-	*cp = c;
+	*cp = glyph;
 	return 5;
 }
 
@@ -1192,6 +1195,11 @@ rasops_make_box_chars_16(struct rasops_info *ri)
 	vert_mask = 0xc000U >> ((ri->ri_font->fontwidth >> 1) - 1);
 	hmask_left = 0xff00U << (8 - (ri->ri_font->fontwidth >> 1));
 	hmask_right = hmask_left >> ((ri->ri_font->fontwidth + 1) >> 1);
+
+	vert_mask = htobe16(vert_mask);
+	hmask_left = htobe16(hmask_left);
+	hmask_right = htobe16(hmask_right);
+
 	mid = (ri->ri_font->fontheight + 1) >> 1;
 
 	/* 0x00 would be empty anyway so don't bother */
@@ -1231,6 +1239,7 @@ rasops_make_box_chars_8(struct rasops_info *ri)
 	vert_mask = 0xc0U >> ((ri->ri_font->fontwidth >> 1) - 1);
 	hmask_left = 0xf0U << (4 - (ri->ri_font->fontwidth >> 1));
 	hmask_right = hmask_left >> ((ri->ri_font->fontwidth + 1) >> 1);
+
 	mid = (ri->ri_font->fontheight + 1) >> 1;
 
 	/* 0x00 would be empty anyway so don't bother */
@@ -1270,6 +1279,11 @@ rasops_make_box_chars_32(struct rasops_info *ri)
 	vert_mask = 0xc0000000U >> ((ri->ri_font->fontwidth >> 1) - 1);
 	hmask_left = 0xffff0000U << (16 - (ri->ri_font->fontwidth >> 1));
 	hmask_right = hmask_left >> ((ri->ri_font->fontwidth + 1) >> 1);
+
+	vert_mask = htobe32(vert_mask);
+	hmask_left = htobe32(hmask_left);
+	hmask_right = htobe32(hmask_right);
+
 	mid = (ri->ri_font->fontheight + 1) >> 1;
 
 	/* 0x00 would be empty anyway so don't bother */

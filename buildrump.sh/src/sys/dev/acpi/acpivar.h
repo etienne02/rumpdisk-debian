@@ -1,4 +1,4 @@
-/*	$NetBSD: acpivar.h,v 1.87 2021/08/07 18:39:40 jmcneill Exp $	*/
+/*	$NetBSD: acpivar.h,v 1.92 2024/12/09 22:10:25 jmcneill Exp $	*/
 
 /*
  * Copyright 2001 Wasabi Systems, Inc.
@@ -135,6 +135,10 @@ struct acpi_devnode {
 	bus_dma_tag_t		 ad_dmat;	/* Bus DMA tag for device */
 	bus_dma_tag_t		 ad_dmat64;	/* Bus DMA tag for device (64-bit) */
 
+	device_t		ad_gpiodev;	/* GPIO controller device */
+	int			(*ad_gpio_translate)(void *, ACPI_RESOURCE_GPIO *, void **);
+	void			*ad_gpio_priv;	/* private data for translate */
+
 	SIMPLEQ_ENTRY(acpi_devnode)	ad_list;
 	SIMPLEQ_ENTRY(acpi_devnode)	ad_child_list;
 	SIMPLEQ_HEAD(, acpi_devnode)	ad_child_head;
@@ -176,7 +180,14 @@ struct acpi_softc {
 	struct sysmon_pswitch	 sc_smpsw_power;
 	struct sysmon_pswitch	 sc_smpsw_sleep;
 
-	SIMPLEQ_HEAD(, acpi_devnode)	ad_head;
+	SIMPLEQ_HEAD(, acpi_devnode)	sc_head;
+
+	/*
+	 * Move this section to the other pseudo-bus child pointers
+	 * after pullup -- putting it here avoids potential ABI
+	 * compatibility issues with kernel modules.
+	 */
+	device_t		 sc_apei;	/* apei(4) pseudo-bus */
 };
 
 /*
@@ -198,7 +209,9 @@ struct acpi_attach_args {
 /* ACPI driver matching scores. */
 #define	ACPI_MATCHSCORE_HID		100	/* matched _HID */
 #define	ACPI_MATCHSCORE_CID_MAX		49
-#define	ACPI_MATCHSCORE_CID		10	/* matched _CID */
+#define	ACPI_MATCHSCORE_CID		10	/* matched _CID or _DSD
+						 * "compatible"
+						 */
 #define	ACPI_MATCHSCORE_CLS		1	/* matched _CLS */
 
 /*

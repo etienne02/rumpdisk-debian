@@ -1,4 +1,4 @@
-/*	$NetBSD: if_cdce.c,v 1.72 2020/05/15 19:28:10 maxv Exp $ */
+/*	$NetBSD: if_cdce.c,v 1.82 2024/07/06 07:09:22 mlelstv Exp $ */
 
 /*
  * Copyright (c) 1997, 1998, 1999, 2000-2003 Bill Paul <wpaul@windriver.com>
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_cdce.c,v 1.72 2020/05/15 19:28:10 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_cdce.c,v 1.82 2024/07/06 07:09:22 mlelstv Exp $");
 
 #include <sys/param.h>
 
@@ -82,12 +82,10 @@ static void	cdce_uno_rx_loop(struct usbnet *, struct usbnet_chain *,
 				 uint32_t);
 static unsigned	cdce_uno_tx_prepare(struct usbnet *, struct mbuf *,
 				    struct usbnet_chain *);
-static int	cdce_uno_init(struct ifnet *);
 
 static const struct usbnet_ops cdce_ops = {
 	.uno_tx_prepare = cdce_uno_tx_prepare,
 	.uno_rx_loop = cdce_uno_rx_loop,
-	.uno_init = cdce_uno_init,
 };
 
 static int
@@ -250,36 +248,18 @@ cdce_attach(device_t parent, device_t self, void *aux)
 		un->un_eaddr[5] = (uint8_t)(device_unit(un->un_dev));
 	}
 
-	usbnet_attach(un, "cdcedet");
+	usbnet_attach(un);
 	usbnet_attach_ifp(un, IFF_SIMPLEX | IFF_BROADCAST | IFF_MULTICAST,
             0, NULL);
-}
 
-static int
-cdce_uno_init(struct ifnet *ifp)
-{
-	struct usbnet		*un = ifp->if_softc;
-	int rv;
-
-	usbnet_lock_core(un);
-	if (usbnet_isdying(un))
-		rv = EIO;
-	else {
-		usbnet_stop(un, ifp, 1);
-		rv = usbnet_init_rx_tx(un);
-		usbnet_set_link(un, rv == 0);
-	}
-	usbnet_unlock_core(un);
-
-	return rv;
+	/* XXX There is no link state, pretend we are always on */
+	if_link_state_change(usbnet_ifp(un), LINK_STATE_UP);
 }
 
 static void
 cdce_uno_rx_loop(struct usbnet * un, struct usbnet_chain *c, uint32_t total_len)
 {
 	struct ifnet		*ifp = usbnet_ifp(un);
-
-	usbnet_isowned_rx(un);
 
 	/* Strip off CRC added by Zaurus, if present */
 	if (un->un_flags & CDCE_ZAURUS && total_len > 4)

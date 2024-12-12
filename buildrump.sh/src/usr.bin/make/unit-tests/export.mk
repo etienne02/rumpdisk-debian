@@ -1,4 +1,4 @@
-# $NetBSD: export.mk,v 1.10 2020/10/24 08:50:17 rillig Exp $
+# $NetBSD: export.mk,v 1.12 2022/09/09 18:36:15 sjg Exp $
 
 UT_TEST=	export
 UT_FOO=		foo${BAR}
@@ -40,7 +40,7 @@ BAR=	bar is ${UT_FU}
 
 .MAKE.EXPORTED+=	UT_ZOO UT_TEST
 
-FILTER_CMD?=	egrep -v '^(MAKEFLAGS|MALLOC_OPTIONS|PATH|PWD|SHLVL|_|&)='
+FILTER_CMD?=	${EGREP} -v '^(MAKEFLAGS|MALLOC_.*|PATH|PWD|SHLVL|_|&)='
 
 all:
 	@env | ${FILTER_CMD} | sort

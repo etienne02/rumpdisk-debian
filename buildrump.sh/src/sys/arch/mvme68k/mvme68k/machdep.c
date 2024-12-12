@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.158 2020/06/11 19:20:44 ad Exp $	*/
+/*	$NetBSD: machdep.c,v 1.165 2024/03/05 14:15:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,13 +39,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2020/06/11 19:20:44 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.165 2024/03/05 14:15:33 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_m060sp.h"
 #include "opt_modular.h"
 #include "opt_panicbutton.h"
 #include "opt_m68k_arch.h"
+#include "opt_mvmeconf.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -56,7 +57,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.158 2020/06/11 19:20:44 ad Exp $");
 #include <sys/reboot.h>
 #include <sys/conf.h>
 #include <sys/file.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <sys/ioctl.h>
@@ -326,7 +326,7 @@ mvme147_init(void)
 int	get_cpuspeed(void);
 
 /*
- * MVME-1[67]x specific initializaion.
+ * MVME-1[67]x specific initialization.
  */
 void
 mvme1xx_init(void)
@@ -631,11 +631,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */
@@ -654,7 +649,9 @@ cpu_reboot(int howto, char *bootstr)
 #if defined(PANICWAIT) && !defined(DDB)
 	if ((howto & RB_HALT) == 0 && panicstr) {
 		printf("hit any key to reboot...\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 		printf("\n");
 	}
 #endif
@@ -957,41 +954,7 @@ dumpsys(void)
 void
 initcpu(void)
 {
-#if defined(M68060)
-	extern void *vectab[256];
-#if defined(M060SP)
-	extern uint8_t I_CALL_TOP[];
-	extern uint8_t FP_CALL_TOP[];
-#else
-	extern uint8_t illinst;
-#endif
-	extern uint8_t fpfault;
-#endif
-
-#if defined(M68060)
-	if (cputype == CPU_68060) {
-#if defined(M060SP)
-		/* integer support */
-		vectab[61] = &I_CALL_TOP[128 + 0x00];
-
-		/* floating point support */
-		vectab[11] = &FP_CALL_TOP[128 + 0x30];
-		vectab[55] = &FP_CALL_TOP[128 + 0x38];
-		vectab[60] = &FP_CALL_TOP[128 + 0x40];
-
-		vectab[54] = &FP_CALL_TOP[128 + 0x00];
-		vectab[52] = &FP_CALL_TOP[128 + 0x08];
-		vectab[53] = &FP_CALL_TOP[128 + 0x10];
-		vectab[51] = &FP_CALL_TOP[128 + 0x18];
-		vectab[50] = &FP_CALL_TOP[128 + 0x20];
-		vectab[49] = &FP_CALL_TOP[128 + 0x28];
-#else
-		vectab[61] = &illinst;
-#endif
-		vectab[48] = &fpfault;
-	}
-	DCIS();
-#endif
+	/* Nothing to do. */
 }
 
 void
@@ -1061,17 +1024,6 @@ module_init_md(void)
 {
 }
 #endif
-
-const uint16_t ipl2psl_table[NIPL] = {
-	[IPL_NONE]       = PSL_S | PSL_IPL0,
-	[IPL_SOFTCLOCK]  = PSL_S | PSL_IPL1,
-	[IPL_SOFTBIO]    = PSL_S | PSL_IPL1,
-	[IPL_SOFTNET]    = PSL_S | PSL_IPL1,
-	[IPL_SOFTSERIAL] = PSL_S | PSL_IPL1,
-	[IPL_VM]         = PSL_S | PSL_IPL3,
-	[IPL_SCHED]      = PSL_S | PSL_IPL7,
-	[IPL_HIGH]       = PSL_S | PSL_IPL7,
-};
 
 int
 mm_md_physacc(paddr_t pa, vm_prot_t prot)

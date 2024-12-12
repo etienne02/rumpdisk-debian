@@ -1,4 +1,4 @@
-.\"	$NetBSD: popen.3,v 1.21 2017/02/21 19:53:20 abhinav Exp $
+.\"	$NetBSD: popen.3,v 1.25 2022/12/04 11:25:08 uwe Exp $
 .\"
 .\" Copyright (c) 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -29,7 +29,7 @@
 .\"
 .\"     @(#)popen.3	8.2 (Berkeley) 5/3/95
 .\"
-.Dd January 19, 2015
+.Dd September 11, 2021
 .Dt POPEN 3
 .Os
 .Sh NAME
@@ -136,7 +136,7 @@ The
 function waits for the associated process to terminate
 and returns the exit status of the command
 as returned by
-.Fn wait4 .
+.Xr wait4 2 .
 .Sh RETURN VALUES
 The
 .Fn popen
@@ -163,7 +163,7 @@ command, if
 has already been
 .Dq pclosed ,
 setting errno to
-.Dv ESRCH
+.Er ESRCH ,
 or if
 .Xr wait4 2
 returns an error, preserving the errno returned by
@@ -174,6 +174,7 @@ returns an error, preserving the errno returned by
 .Xr fork 2 ,
 .Xr pipe 2 ,
 .Xr socketpair 2 ,
+.Xr vfork 2 ,
 .Xr wait4 2 ,
 .Xr fclose 3 ,
 .Xr fflush 3 ,
@@ -195,6 +196,11 @@ and a
 .Fn pclose
 function appeared in
 .At v7 .
+.Pp
+The
+.Fn popenve
+function first appeared in
+.Nx 8 .
 .Sh BUGS
 Since the standard input of a command opened for reading
 shares its seek offset with the process that called
@@ -209,7 +215,7 @@ before
 .Fn popen .
 .Pp
 Failure to execute the shell
-is indistinguishable from the shell's failure to execute command,
+is indistinguishable from the shell's failure to execute the command,
 or an immediate exit of the command.
 The only hint is an exit status of 127.
 .Pp
@@ -220,8 +226,3 @@ always calls
 .Xr sh 1 ,
 never calls
 .Xr csh 1 .
-.Pp
-The
-.Fn popenve
-function first appeared in
-.Nx 8 .

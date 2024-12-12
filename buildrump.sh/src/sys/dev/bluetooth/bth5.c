@@ -1,4 +1,4 @@
-/*	$NetBSD: bth5.c,v 1.6 2019/11/16 22:06:49 mlelstv Exp $	*/
+/*	$NetBSD: bth5.c,v 1.9 2024/07/05 04:31:50 rin Exp $	*/
 /*
  * Copyright (c) 2017 Nathanial Sloss <nathanialsloss@yahoo.com.au>
  * All rights reserved.
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bth5.c,v 1.6 2019/11/16 22:06:49 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bth5.c,v 1.9 2024/07/05 04:31:50 rin Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -392,8 +392,6 @@ bth5open(dev_t device __unused, struct tty *tp)
 		}
 	}
 
-	KASSERT(tp->t_oproc != NULL);
-
 	cfdata = malloc(sizeof(struct cfdata), M_DEVBUF, M_WAITOK);
 	for (unit = 0; unit < bthfive_cd.cd_ndevs; unit++)
 		if (device_lookup(&bthfive_cd, unit) == NULL)
@@ -413,11 +411,11 @@ bth5open(dev_t device __unused, struct tty *tp)
 	}
 	sc = device_private(dev);
 
-	mutex_spin_enter(&tty_lock);
+	ttylock(tp);
 	tp->t_sc = sc;
 	sc->sc_tp = tp;
 	ttyflush(tp, FREAD | FWRITE);
-	mutex_spin_exit(&tty_lock);
+	ttyunlock(tp);
 
 	splx(s);
 
@@ -446,9 +444,9 @@ bth5close(struct tty *tp, int flag __unused)
 	MBUFQ_DRAIN(&sc->sc_dgq);
 	bth5_sequencing_reset(sc);
 
-	mutex_spin_enter(&tty_lock);
+	ttylock(tp);
 	ttyflush(tp, FREAD | FWRITE);
-	mutex_spin_exit(&tty_lock);	/* XXX */
+	ttyunlock(tp);	/* XXX */
 	ttyldisc_release(tp->t_linesw);
 	tp->t_linesw = ttyldisc_default();
 	if (sc != NULL) {
@@ -633,7 +631,7 @@ bth5_slip_transmit(struct tty *tp)
 
 	sc->sc_stats.byte_tx += count;
 
-	if (tp->t_outq.c_cc != 0)
+	if (tp->t_outq.c_cc != 0 && tp->t_oproc != NULL)
 		(*tp->t_oproc)(tp);
 
 	return 0;
@@ -1741,15 +1739,11 @@ bth5_disable(device_t self)
 
 	s = spltty();
 
-	if (sc->sc_rxp) {
-		m_freem(sc->sc_rxp);
-		sc->sc_rxp = NULL;
-	}
+	m_freem(sc->sc_rxp);
+	sc->sc_rxp = NULL;
 
-	if (sc->sc_txp) {
-		m_freem(sc->sc_txp);
-		sc->sc_txp = NULL;
-	}
+	m_freem(sc->sc_txp);
+	sc->sc_txp = NULL;
 
 	MBUFQ_DRAIN(&sc->sc_cmdq);
 	MBUFQ_DRAIN(&sc->sc_aclq);

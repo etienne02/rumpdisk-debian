@@ -1,4 +1,4 @@
-/* $NetBSD: xenbus_probe.c,v 1.58 2021/08/07 16:19:08 thorpej Exp $ */
+/* $NetBSD: xenbus_probe.c,v 1.60 2023/10/17 11:52:45 bouyer Exp $ */
 /******************************************************************************
  * Talks to Xen Store to figure out what devices we have.
  *
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xenbus_probe.c,v 1.58 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xenbus_probe.c,v 1.60 2023/10/17 11:52:45 bouyer Exp $");
 
 #if 0
 #define DPRINTK(fmt, args...) \
@@ -247,8 +247,7 @@ otherend_changed(struct xenbus_watch *watch,
 
 	/* Protect us against watches firing on old details when the otherend
 	   details change, say immediately after a resume. */
-	if (!xdev->xbusd_otherend ||
-	    strncmp(xdev->xbusd_otherend, vec[XS_WATCH_PATH],
+	if (strncmp(xdev->xbusd_otherend, vec[XS_WATCH_PATH],
 		    strlen(xdev->xbusd_otherend))) {
 		DPRINTK("Ignoring watch at %s", vec[XS_WATCH_PATH]);
 		return;
@@ -723,7 +722,7 @@ xenbus_probe_init(void *unused)
 
 		DELAY(1000);
 #else /* DOM0OPS */
-		kthread_exit(0); /* can't get a working xenstore in this case */
+		panic("dom0 support not compiled in");
 #endif /* DOM0OPS */
 	}
 

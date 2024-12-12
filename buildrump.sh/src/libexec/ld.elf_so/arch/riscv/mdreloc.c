@@ -1,4 +1,4 @@
-/*	$NetBSD: mdreloc.c,v 1.5 2019/04/15 19:13:03 maya Exp $	*/
+/*	$NetBSD: mdreloc.c,v 1.11 2024/12/01 09:27:12 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -31,12 +31,23 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: mdreloc.c,v 1.5 2019/04/15 19:13:03 maya Exp $");
+__RCSID("$NetBSD: mdreloc.c,v 1.11 2024/12/01 09:27:12 skrll Exp $");
 #endif /* not lint */
+
+/*
+ * RISC-V ELF relocations.
+ *
+ * Reference:
+ *
+ *	[RISCVELF] RISC-V ELF Specification, 2024-07-17.
+ *	https://github.com/riscv-non-isa/riscv-elf-psabi-doc/blob/9fec6080d15e7f009c9e714d1e9b8dd7177b0b67/riscv-elf.adoc
+ */
 
 #include <sys/types.h>
 #include <sys/endian.h>
 #include <sys/tls.h>
+
+#include <machine/lwp_private.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -84,7 +95,7 @@ _rtld_relocate_nonplt_self(Elf_Dyn *dynp, Elf_Addr relocbase)
 			rdbg(("RELATIVE/L(%p) -> %p in <self>",
 			    where, (void *)val));
 			break;
-		}
+		    }
 
 		case R_TYPE(NONE):
 			break;
@@ -113,6 +124,7 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 		case R_TYPESZ(ADDR):
 		case R_TYPESZ(TLS_DTPMOD):
 		case R_TYPESZ(TLS_DTPREL):
+		case R_TYPESZ(TLS_TPREL):
 			symnum = ELF_R_SYM(rela->r_info);
 			if (last_symnum != symnum) {
 				last_symnum = symnum;
@@ -131,63 +143,97 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 			break;
 
 		case R_TYPE(RELATIVE): {
-			symnum = ELF_R_SYM(rela->r_info);
-			def = obj->symtab + symnum;
-
-			Elf_Addr val = (Elf_Addr)obj->relocbase + rela->r_addend;
+			const Elf_Addr val = (Elf_Addr)obj->relocbase +
+			    rela->r_addend;
 
 			rdbg(("RELATIVE(%p) -> %p (%s) in %s",
 			    where, (void *)val,
-			    obj->strtab + def->st_name, obj->path));
+			    obj->strtab +
+				obj->symtab[ELF_R_SYM(rela->r_info)].st_name,
+			    obj->path));
 
 			*where = val;
 			break;
-		}
+		    }
 
 		case R_TYPESZ(ADDR): {
-			Elf_Addr val = (Elf_Addr)defobj->relocbase + rela->r_addend;
+			const Elf_Addr val = (Elf_Addr)defobj->relocbase +
+			    def->st_value + rela->r_addend;
+
+			rdbg(("ADDR(%p) -> %p (%s) in %s%s",
+			    where, (void *)val,
+			    obj->strtab +
+				obj->symtab[ELF_R_SYM(rela->r_info)].st_name,
+			    obj->path,
+			    def == &_rtld_sym_zero ? " (symzero)" : ""));
 
 			*where = val;
-			rdbg(("ADDR %s in %s --> %p in %s",
-			    obj->strtab + obj->symtab[r_symndx].st_name,
-			    obj->path, (void *)val, defobj->path));
 			break;
-		}
+		    }
+
+		case R_TYPE(COPY):
+			/*
+			 * These are deferred until all other relocations have
+			 * been done.  All we do here is make sure that the
+			 * COPY relocation is not in a shared library.  They
+			 * are allowed only in executable files.
+			 */
+			if (obj->isdynamic) {
+				_rtld_error("%s: Unexpected R_COPY relocation"
+				    " in shared library", obj->path);
+				return -1;
+			}
+			rdbg(("COPY (avoid in main)"));
+			break;
 
 		case R_TYPESZ(TLS_DTPMOD): {
-			Elf_Addr val = (Elf_Addr)defobj->tlsindex + rela->r_addend;
+			const Elf_Addr val = (Elf_Addr)defobj->tlsindex;
+
+			rdbg(("TLS_DTPMOD(%p) -> %p (%s) in %s",
+			    where, (void *)val,
+			    obj->strtab +
+				obj->symtab[ELF_R_SYM(rela->r_info)].st_name,
+			    obj->path));
 
 			*where = val;
-			rdbg(("DTPMOD %s in %s --> %p in %s",
-			    obj->strtab + obj->symtab[r_symndx].st_name,
-			    obj->path, (void *)val, defobj->path));
 			break;
-		}
+		    }
 
 		case R_TYPESZ(TLS_DTPREL): {
-			Elf_Addr old = *where;
-			Elf_Addr val = old;
+			const Elf_Addr val = (Elf_Addr)(def->st_value +
+			    rela->r_addend - TLS_DTV_OFFSET);
 
-			if (!defobj->tls_done && _rtld_tls_offset_allocate(obj))
+			rdbg(("TLS_DTPREL(%p) -> %p (%s) in %s",
+			    where, (void *)val,
+			    obj->strtab +
+				obj->symtab[ELF_R_SYM(rela->r_info)].st_name,
+			    defobj->path));
+
+			*where = val;
+			break;
+		    }
+
+		case R_TYPESZ(TLS_TPREL):
+			if (!defobj->tls_static &&
+			    _rtld_tls_offset_allocate(__UNCONST(defobj)))
 				return -1;
 
-			val = (Elf_Addr)def->st_value - TLS_DTV_OFFSET;
-			*where = val;
+			*where = (Elf_Addr)(def->st_value + defobj->tlsoffset +
+			    rela->r_addend);
 
-			rdbg(("DTPREL %s in %s --> %p in %s",
-			    obj->strtab + obj->symtab[r_symndx].st_name,
-			    obj->path, (void *)val, defobj->path));
+			rdbg(("TLS_TPREL %s in %s --> %p in %s",
+			    obj->strtab +
+				obj->symtab[ELF_R_SYM(rela->r_info)].st_name,
+			    obj->path, (void *)*where, defobj->path));
 			break;
-		}
 
 		default:
 			rdbg(("sym = %lu, type = %lu, offset = %p, "
-			    "addend = %p, contents = %p, symbol = %s",
+			    "addend = %p, contents = %p",
 			    (u_long)ELF_R_SYM(rela->r_info),
 			    (u_long)ELF_R_TYPE(rela->r_info),
 			    (void *)rela->r_offset, (void *)rela->r_addend,
-			    (void *)load_ptr(where, sizeof(Elf_Addr)),
-			    obj->strtab + obj->symtab[r_symndx].st_name));
+			    (void *)*where));
 			_rtld_error("%s: Unsupported relocation type %ld "
 			    "in non-PLT relocations",
 			    obj->path, (u_long)r_type);
@@ -201,20 +247,37 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 int
 _rtld_relocate_plt_lazy(Obj_Entry *obj)
 {
-	/* PLT fixups were done above in the GOT relocation. */
+
+	if (!obj->relocbase)
+		return 0;
+
+	for (const Elf_Rela *rela = obj->pltrela; rela < obj->pltrelalim; rela++) {
+		Elf_Addr *where = (Elf_Addr *)(obj->relocbase + rela->r_offset);
+		switch (ELF_R_TYPE(rela->r_info)) {
+		case R_TYPE(JMP_SLOT):
+			/* Just relocate the GOT slots pointing into the PLT */
+			*where += (Elf_Addr)obj->relocbase;
+			rdbg(("fixup !main in %s --> %p", obj->path, (void *)*where));
+			break;
+		default:
+			rdbg(("not yet... %d", (int)ELF_R_TYPE(rela->r_info) ));
+		}
+	}
+
 	return 0;
 }
 
 static int
-_rtld_relocate_plt_object(const Obj_Entry *obj, const Elf_Rel *rel,
+_rtld_relocate_plt_object(const Obj_Entry *obj, const Elf_Rela *rela,
     Elf_Addr *tp)
 {
+	Elf_Addr * const where = (Elf_Addr *)(obj->relocbase + rela->r_offset);
 	const Obj_Entry *defobj;
 	Elf_Addr new_value;
 
-        assert(ELF_R_TYPE(rel->r_info) == R_TYPE(JMP_SLOT));
+        assert(ELF_R_TYPE(rela->r_info) == R_TYPE(JMP_SLOT));
 
-	const Elf_Sym *def = _rtld_find_plt_symdef(ELF_R_SYM(rel->r_info),
+	const Elf_Sym *def = _rtld_find_plt_symdef(ELF_R_SYM(rela->r_info),
 	    obj, &defobj, tp != NULL);
 	if (__predict_false(def == NULL))
 		return -1;
@@ -228,37 +291,40 @@ _rtld_relocate_plt_object(const Obj_Entry *obj, const Elf_Rel *rel,
 	} else {
 		new_value = (Elf_Addr)(defobj->relocbase + def->st_value);
 	}
-	rdbg(("bind now/fixup in %s --> new=%p",
-	    defobj->strtab + def->st_name, (void *)new_value));
-	*(Elf_Addr *)(obj->relocbase + rel->r_offset) = new_value;
-
+	rdbg(("bind now/fixup in %s --> old=%p new=%p",
+	    defobj->strtab + def->st_name, (void *)*where,
+	    (void *)new_value));
+	if (*where != new_value)
+		*where = new_value;
 	if (tp)
 		*tp = new_value;
+
 	return 0;
 }
 
 void *
-_rtld_bind(const Obj_Entry *obj, Elf_Word reloff)
+_rtld_bind(const Obj_Entry *obj, Elf_Word gotoff)
 {
-	const Elf_Rel *pltrel = (const Elf_Rel *)(obj->pltrel + reloff);
-	Elf_Addr new_value;
-	int err;
+	const Elf_Addr relidx = (gotoff / sizeof(Elf_Addr));
+	const Elf_Rela *pltrela = obj->pltrela + relidx;
+
+	Elf_Addr new_value = 0;
 
 	_rtld_shared_enter();
-	err = _rtld_relocate_plt_object(obj, pltrel, &new_value);
+	const int err = _rtld_relocate_plt_object(obj, pltrela, &new_value);
 	if (err)
 		_rtld_die();
 	_rtld_shared_exit();
 
-	return (caddr_t)new_value;
+	return (void *)new_value;
 }
 
 int
 _rtld_relocate_plt_objects(const Obj_Entry *obj)
 {
-	
-	for (const Elf_Rel *rel = obj->pltrel; rel < obj->pltrellim; rel++) {
-		if (_rtld_relocate_plt_object(obj, rel, NULL) < 0)
+
+	for (const Elf_Rela *rela = obj->pltrela; rela < obj->pltrelalim; rela++) {
+		if (_rtld_relocate_plt_object(obj, rela, NULL) < 0)
 			return -1;
 	}
 

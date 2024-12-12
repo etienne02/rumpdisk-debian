@@ -1,4 +1,4 @@
-$NetBSD: HPMMU.notes,v 1.5 2002/02/11 10:44:39 wiz Exp $
+$NetBSD: HPMMU.notes,v 1.7 2024/05/14 19:00:43 andvar Exp $
 
 Overview:
 --------
@@ -28,7 +28,7 @@ Overview:
 	is used with 16 Kbytes of cache on 320 systems and 32 Kbytes on
 	350 systems.  Each cache entry can contain instructions or data,
 	from either user or supervisor space.  Separate valid bits are
-	kept for user and supervisor entries, allowing for descriminatory
+	kept for user and supervisor entries, allowing for discriminatory
 	flushing of the cache.
 
 	MMU translation and cache-miss detection are done in parallel.
@@ -82,7 +82,7 @@ Hardware registers:
 		bit 13: If 1, indicates a protection fault (write to RO page)
 		bit 6:	MC68881 enable.  Tied to chip enable line.
 			(set this bit to enable)
-		bit 5:	MC68020 instruction cache enable.  Tied to Insruction
+		bit 5:	MC68020 instruction cache enable.  Tied to Instruction
 			cache disable line.  (set this bit to enable)
 		bit 3:	If 1, indicates an MMU related bus error occurred.
 			Bits 13-15 are now valid.

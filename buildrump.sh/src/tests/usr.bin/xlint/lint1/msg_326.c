@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_326.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_326.c,v 1.5 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_326.c"
 
-// Test for message: %s attribute ignored for %s [326]
+// Test for message: attribute '%s' ignored for '%s' [326]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+/* expect+1: warning: attribute 'packed' ignored for 'int' [326] */
+int variable __packed;

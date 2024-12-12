@@ -1,7 +1,19 @@
-/*	$NetBSD: msg_058.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_058.c,v 1.6 2024/12/01 18:37:54 rillig Exp $	*/
 # 3 "msg_058.c"
 
-// Test for message: type does not match prototype: %s [58]
+// Test for message: type of '%s' does not match prototype [58]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+int function(int, char, const char *);
+
+int
+/* expect+1: warning: function definition with identifier list is obsolete in C23 [384] */
+function(i, dbl, str)
+	int i;
+	double dbl;
+	const char *str;
+/* expect+1: error: type of 'dbl' does not match prototype [58] */
+{
+	return i + (int)dbl + str[0];
+}

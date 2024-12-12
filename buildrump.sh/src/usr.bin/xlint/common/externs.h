@@ -1,4 +1,4 @@
-/*	$NetBSD: externs.h,v 1.21 2021/08/31 17:22:24 rillig Exp $	*/
+/*	$NetBSD: externs.h,v 1.37 2024/12/08 17:12:00 rillig Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Jochen Pohl
@@ -14,7 +14,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -32,40 +32,38 @@
  */
 
 /*
- * inittyp.c
- */
-extern	void	inittyp(void);
-
-/*
  * tyname.c
  */
-extern	const char *type_name(const type_t *);
-extern	const	char *tspec_name(tspec_t);
+#if IS_LINT1 || IS_LINT2
+const char *type_name(const type_t *);
+const char *tspec_name(tspec_t);
+#endif
+#if IS_LINT1
+void buf_init(buffer *);
+void buf_add_char(buffer *, char);
+void buf_add(buffer *, const char *);
+#endif
 
 /*
  * mem.c
  */
-extern	size_t	mem_block_size(void);
-extern	void	*xmalloc(size_t);
-extern	void	*xcalloc(size_t, size_t);
-extern	void	*xrealloc(void *, size_t);
-extern	char	*xstrdup(const char *);
-extern  char	*xasprintf(const char *, ...) __printflike(1, 2);
+#if IS_LINT1 || IS_LINT2
+void *xmalloc(size_t);
+void *xcalloc(size_t, size_t);
+#endif
+void *xrealloc(void *, size_t);
+char *xstrdup(const char *);
+char *xasprintf(const char *, ...) __printflike(1, 2);
 
 /*
  * emit.c
  */
-#if defined(IS_LINT1) || defined(IS_LINT2)
-extern	ob_t	ob;
-
-extern	void	outopen(const char *);
-extern	void	outclose(void);
-extern	void	outclr(void);
-extern	void	outchar(int);
-extern	void	outqchar(int);
-extern	void	outstrg(const char *);
-extern	void	outint(int);
-#define outname(a)	outname1(__FILE__, __LINE__, a);
-extern	void	outname1(const char *, size_t, const char *);
-extern	void	outsrc(const char *);
+#if IS_LINT1 || IS_LINT2
+void outopen(const char *);
+void outclose(void);
+void outchar(char);
+void outstrg(const char *);
+void outint(int);
+void outname(const char *);
+void outsrc(const char *);
 #endif

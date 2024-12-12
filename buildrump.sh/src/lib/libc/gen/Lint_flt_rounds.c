@@ -1,13 +1,13 @@
-/* $NetBSD: Lint_flt_rounds.c,v 1.3 2012/06/24 15:26:03 christos Exp $ */
+/* $NetBSD: Lint_flt_rounds.c,v 1.5 2024/12/01 16:16:56 rillig Exp $ */
 
 /*
  * This file placed in the public domain.
  * Chris Demetriou, November 5, 1997.
  */
+#include <float.h>
 
-/*ARGSUSED*/
 int
 __flt_rounds(void)
 {
-	return (0);
+	return 0;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: hpcfb.c,v 1.63 2021/08/07 16:19:11 thorpej Exp $	*/
+/*	$NetBSD: hpcfb.c,v 1.66 2024/02/29 22:01:57 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1999
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hpcfb.c,v 1.63 2021/08/07 16:19:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hpcfb.c,v 1.66 2024/02/29 22:01:57 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_hpcfb.h"
@@ -516,7 +516,7 @@ hpcfb_cmap_reorder(struct hpcfb_fbconf *fbconf, struct hpcfb_devconfig *dc)
 	int i, j, bg, fg, tmp;
 
 	/*
-	 * Set forground and background so that the screen
+	 * Set foreground and background so that the screen
 	 * looks black on white.
 	 * Normally, black = 00 and white = ff.
 	 * HPCFB_ACCESS_REVERSE means black = ff and white = 00.
@@ -563,10 +563,6 @@ hpcfb_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 
 	DPRINTF(("hpcfb_ioctl(cmd=0x%lx)\n", cmd));
 	switch (cmd) {
-	case WSKBDIO_BELL:
-		return (0);
-		break;
-
 	case WSDISPLAYIO_GTYPE:
 		*(u_int *)data = WSDISPLAY_TYPE_HPCFB;
 		return (0);
@@ -699,7 +695,7 @@ hpcfb_refresh_screen(struct hpcfb_softc *sc)
 	struct hpcfb_devconfig *dc = sc->sc_dc;
 	int x, y;
 
-	DPRINTF(("hpcfb_refres_screen()\n"));
+	DPRINTF(("hpcfb_refresh_screen()\n"));
 	if (dc == NULL)
 		return;
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu_exec.c,v 1.68 2021/05/23 23:24:45 mrg Exp $	*/
+/*	$NetBSD: cpu_exec.c,v 1.70 2022/09/29 07:00:46 skrll Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu_exec.c,v 1.68 2021/05/23 23:24:45 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu_exec.c,v 1.70 2022/09/29 07:00:46 skrll Exp $");
 
 #include "opt_compat_netbsd.h"
 #include "opt_compat_ultrix.h"
@@ -44,7 +44,6 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_exec.c,v 1.68 2021/05/23 23:24:45 mrg Exp $");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/malloc.h>
 #include <sys/vnode.h>
 #include <sys/exec.h>
 #include <sys/namei.h>
@@ -201,7 +200,7 @@ coredump_elf32_setup(struct lwp *l, void *eh0)
 		eh->e_flags |= EF_MIPS_ABI2;
 		break;
 	case _MIPS_BSD_API_O32:
-		eh->e_flags |= EF_MIPS_ABI_O32; 
+		eh->e_flags |= EF_MIPS_ABI_O32;
 		break;
 	}
 }

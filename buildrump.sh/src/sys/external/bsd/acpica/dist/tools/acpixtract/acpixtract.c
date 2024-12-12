@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -78,6 +78,7 @@ AxExtractTables (
     int                     Status = 0;
     unsigned int            State = AX_STATE_FIND_HEADER;
 
+    memset (UpperSignature, 0, sizeof(UpperSignature));
 
     /* Open input in text mode, output is in binary mode */
 
@@ -104,7 +105,7 @@ AxExtractTables (
         AxNormalizeSignature (UpperSignature);
         Instances = AxCountTableInstances (InputPathname, UpperSignature);
 
-        if (Instances < MinimumInstances)
+        if (Instances < MinimumInstances || MinimumInstances == AX_OPTIONAL_TABLES)
         {
             printf ("Table [%s] was not found in %s\n",
                 UpperSignature, InputPathname);
@@ -453,7 +454,7 @@ AxListAllTables (
     FILE                    *InputFile;
     unsigned char           Header[48];
     UINT32                  ByteCount = 0;
-    UINT32                  ThisLineByteCount;
+    INT32                   ThisLineByteCount;
     unsigned int            State = AX_STATE_FIND_HEADER;
 
 

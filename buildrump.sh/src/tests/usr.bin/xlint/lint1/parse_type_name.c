@@ -1,10 +1,12 @@
-/*	$NetBSD: parse_type_name.c,v 1.7 2021/07/25 22:03:42 rillig Exp $	*/
+/*	$NetBSD: parse_type_name.c,v 1.12 2023/08/26 10:43:53 rillig Exp $	*/
 # 3 "parse_type_name.c"
 
 /*
  * Test parsing of the grammar rule 'type_name', which among others appears
  * in the expression 'sizeof(type_name)'.
  */
+
+/* lint1-extra-flags: -X 351 */
 
 void sink(unsigned long);
 
@@ -48,7 +50,7 @@ cover_abstract_declarator(void)
 	sink(sizeof(int **[3]));
 
 	/* cover 'T_TYPEOF cast_expression' */
-	/* expect+1: error: cannot take size/alignment of function [144] */
+	/* expect+1: error: cannot take size/alignment of function type 'function(int) returning int' [144] */
 	sink(sizeof(int(typeof(12345))));
 }
 
@@ -79,8 +81,11 @@ cover_direct_abstract_declarator(void)
 	sink(sizeof(int[3][5][8]));
 
 	/* cover 'abstract_decl_param_list asm_or_symbolrename_opt' */
+	/* expect+1: error: cannot take size/alignment of function type 'function(double) returning int' [144] */
 	sink(sizeof(int(double)));
+	/* expect+1: error: cannot take size/alignment of function type 'function(double) returning int' [144] */
 	sink(sizeof(int(double) __asm("anything")));
+	/* expect+1: error: cannot take size/alignment of function type 'function(double) returning int' [144] */
 	sink(sizeof(int(double) __symbolrename(alias)));
 
 	/* cover 'direct_abstract_declarator abstract_decl_param_list asm_or_symbolrename_opt' */
@@ -114,15 +119,15 @@ cover_abstract_decl_param_list(void)
 	sink(sizeof(void (*)(void) __attribute__(()) __attribute__(())));
 
 	/* cover 'abstract_decl_lparen error T_RPAREN type_attribute_opt' */
-	/* expect+1: syntax error 'goto' [249] */
+	/* expect+1: error: syntax error 'goto' [249] */
 	sink(sizeof(void (*)(goto)));
-	/* expect+1: syntax error 'goto' [249] */
+	/* expect+1: error: syntax error 'goto' [249] */
 	sink(sizeof(void (*)(goto) __attribute__(())));
 	/*
 	 * XXX: The grammar allows only a single type_attribute_opt.
 	 * All following __attribute__ come from direct_abstract_declarator.
 	 */
-	/* expect+1: syntax error 'goto' [249] */
+	/* expect+1: error: syntax error 'goto' [249] */
 	sink(sizeof(void (*)(goto) __attribute__(()) __attribute__(())));
 }
 
@@ -136,7 +141,7 @@ cover_vararg_parameter_type_list(void)
 	sink(sizeof(void (*)(double, ...)));
 
 	/* cover 'T_ELLIPSIS' */
-	/* expect+1: warning: ANSI C requires formal parameter before '...' [84] */
+	/* expect+1: warning: C90 to C17 require formal parameter before '...' [84] */
 	sink(sizeof(void (*)(...)));
 }
 

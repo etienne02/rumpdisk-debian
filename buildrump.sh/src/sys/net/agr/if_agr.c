@@ -1,4 +1,4 @@
-/*	$NetBSD: if_agr.c,v 1.52 2021/08/02 12:56:25 andvar Exp $	*/
+/*	$NetBSD: if_agr.c,v 1.57 2024/06/29 12:11:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c)2005 YAMAMOTO Takashi,
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_agr.c,v 1.52 2021/08/02 12:56:25 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_agr.c,v 1.57 2024/06/29 12:11:12 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -151,7 +151,7 @@ agr_input(struct ifnet *ifp_port, struct mbuf *m)
 	struct agr_port *port;
 	struct ifnet *ifp;
 
-	port = ifp_port->if_agrprivate;
+	port = ifp_port->if_lagg;
 	KASSERT(port);
 	ifp = port->port_agrifp;
 	if ((port->port_flags & AGRPORT_COLLECTING) == 0) {
@@ -167,10 +167,12 @@ agr_input(struct ifnet *ifp_port, struct mbuf *m)
 	 * see if the device performed the decapsulation and
 	 * provided us with the tag.
 	 */
-	if (ec->ec_nvlans && vlan_has_tag(m)) {
-		MODULE_HOOK_CALL_VOID(if_vlan_vlan_input_hook, (ifp, m),
-		    m_freem(m));
-		return;
+	if (ec->ec_nvlans && vlan_has_tag(m) &&
+	    EVL_VLANOFTAG(vlan_get_tag(m)) != 0) {
+		MODULE_HOOK_CALL(if_vlan_vlan_input_hook, (ifp, m),
+		    m, m);
+		if (m == NULL)
+			return;
 	}
 
 	if_percpuq_enqueue(ifp->if_percpuq, m);
@@ -234,7 +236,7 @@ agrport_ioctl(struct agr_port *port, u_long cmd, void *arg)
 {
 	struct ifnet *ifp = port->port_ifp;
 
-	KASSERT(ifp->if_agrprivate == (void *)port);
+	KASSERT(ifp->if_lagg == (void *)port);
 	KASSERT(ifp->if_ioctl == agr_ioctl_filter);
 
 	return (*port->port_ioctl)(ifp, cmd, arg);
@@ -396,20 +398,18 @@ agr_start(struct ifnet *ifp)
 
 			error = agr_xmit_frame(port->port_ifp, m);
 			if (error) {
-				if_statinc_ref(nsr, if_oerrors);
+				if_statinc_ref(ifp, nsr, if_oerrors);
 			} else {
-				if_statinc_ref(nsr, if_opackets);
+				if_statinc_ref(ifp, nsr, if_opackets);
 			}
 		} else {
 			m_freem(m);
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 		}
 		IF_STAT_PUTREF(ifp);
 	}
 
 	AGR_UNLOCK(sc);
-
-	ifp->if_flags &= ~IFF_OACTIVE;
 }
 
 static int
@@ -542,7 +542,7 @@ agr_addport(struct ifnet *ifp, struct ifnet *ifp_port)
 		goto out;
 	}
 
-	if (ifp_port->if_agrprivate) {
+	if (ifp_port->if_lagg) {
 		error = EBUSY;
 		goto out;
 	}
@@ -623,7 +623,7 @@ agr_addport(struct ifnet *ifp, struct ifnet *ifp_port)
 	AGR_LOCK(sc);
 
 	port->port_ifp = ifp_port;
-	ifp_port->if_agrprivate = port;
+	ifp_port->if_lagg = port;
 	port->port_agrifp = ifp;
 	TAILQ_INSERT_TAIL(&sc->sc_ports, port, port_q);
 	sc->sc_nports++;
@@ -686,12 +686,12 @@ agr_remport(struct ifnet *ifp, struct ifnet *ifp_port)
 	struct agr_port *port;
 	int error = 0;
 
-	if (ifp_port->if_agrprivate == NULL) {
+	if (ifp_port->if_lagg == NULL) {
 		error = ENOENT;
 		return error;
 	}
 
-	port = ifp_port->if_agrprivate;
+	port = ifp_port->if_lagg;
 	if (port->port_agrifp != ifp) {
 		error = EINVAL;
 		return error;
@@ -759,7 +759,7 @@ agrport_cleanup(struct agr_softc *sc, struct agr_port *port)
 		memcpy(LLADDR(ifp_port->if_sadl), port->port_origlladdr,
 		    ifp_port->if_addrlen);
 		if (ifp_port->if_init != NULL) {
-			error = (*ifp_port->if_init)(ifp_port);
+			error = if_init(ifp_port);
 		}
 #else
 		union {
@@ -786,7 +786,7 @@ agrport_cleanup(struct agr_softc *sc, struct agr_port *port)
 
 	AGR_LOCK(sc);
 	if ((port->port_flags & AGRPORT_ATTACHED)) {
-		ifp_port->if_agrprivate = NULL;
+		ifp_port->if_lagg = NULL;
 
 		TAILQ_REMOVE(&sc->sc_ports, port, port_q);
 		sc->sc_nports--;
@@ -823,7 +823,7 @@ agr_ioctl_multi(struct ifnet *ifp, u_long cmd, struct ifreq *ifr)
 static int
 agr_ioctl_filter(struct ifnet *ifp, u_long cmd, void *arg)
 {
-	struct agr_port *port = ifp->if_agrprivate;
+	struct agr_port *port = ifp->if_lagg;
 	int error;
 
 	KASSERT(port);

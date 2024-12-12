@@ -1,4 +1,4 @@
-/*	$NetBSD: pwcache.c,v 1.32 2018/11/08 06:43:52 msaitoh Exp $	*/
+/*	$NetBSD: pwcache.c,v 1.35 2024/05/12 10:58:58 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1992 Keith Muller.
@@ -74,7 +74,7 @@
 #if 0
 static char sccsid[] = "@(#)cache.c	8.1 (Berkeley) 5/31/93";
 #else
-__RCSID("$NetBSD: pwcache.c,v 1.32 2018/11/08 06:43:52 msaitoh Exp $");
+__RCSID("$NetBSD: pwcache.c,v 1.35 2024/05/12 10:58:58 rillig Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -364,7 +364,7 @@ group_from_gid(gid_t gid, int noname)
 	if ((gr = (*_pwcache_getgrgid)(gid)) == NULL) {
 		/*
 		 * no match for this gid in the local group file, put in
-		 * a string that is the gid in numberic format
+		 * a string that is the gid in numeric format
 		 */
 		if (ptr == NULL)
 			return (NULL);
@@ -524,7 +524,7 @@ gid_from_group(const char *name, gid_t *gid)
 			arr = NULL;			\
 		}					\
 		fail = 0;				\
-	} while (/* CONSTCOND */0);
+	} while (0)
 
 int
 pwcache_userdb(

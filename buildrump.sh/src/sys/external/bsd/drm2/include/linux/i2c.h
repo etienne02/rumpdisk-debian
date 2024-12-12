@@ -1,4 +1,4 @@
-/*	$NetBSD: i2c.h,v 1.8 2015/03/05 17:29:18 riastradh Exp $	*/
+/*	$NetBSD: i2c.h,v 1.14 2021/12/19 11:49:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2015 The NetBSD Foundation, Inc.
@@ -40,6 +40,8 @@
 #include <dev/i2c/i2cvar.h>
 
 #include <linux/pm.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
 
 struct i2c_adapter;
 struct i2c_algorithm;
@@ -53,11 +55,13 @@ struct i2c_msg;
 #define	I2C_M_RD		0x01 /* xfer is read, not write */
 #define	I2C_M_NOSTART		0x02 /* don't initiate xfer */
 #define	I2C_M_TEN		0x04 /* 10-bit chip address */
+#define	I2C_M_STOP		0x08 /* send stop after msg */
 
 /*
  * I2C_CLASS_*: i2c_adapter classes
  */
 #define	I2C_CLASS_DDC	0x01
+#define	I2C_CLASS_SPD	0x02
 
 /*
  * I2C_FUNC_*: i2c_adapter functionality bits
@@ -87,6 +91,7 @@ struct i2c_adapter {
 	char		 		name[I2C_NAME_SIZE];
 	const struct i2c_algorithm	*algo;
 	void				*algo_data;
+	const struct i2c_lock_operations *lock_ops;
 	int				retries;
 	struct module			*owner;
 	unsigned int			class; /* I2C_CLASS_* */
@@ -104,6 +109,15 @@ struct i2c_algorithm {
 	int		(*master_xfer)(struct i2c_adapter *, struct i2c_msg *,
 			    int);
 	uint32_t	(*functionality)(struct i2c_adapter *);
+};
+
+/*
+ * struct i2c_lock_operations: i2c bus lock operations.
+ */
+struct i2c_lock_operations {
+	void	(*lock_bus)(struct i2c_adapter *, unsigned);
+	int	(*trylock_bus)(struct i2c_adapter *, unsigned);
+	void	(*unlock_bus)(struct i2c_adapter *, unsigned);
 };
 
 /*
@@ -185,6 +199,7 @@ i2c_set_adapdata(struct i2c_adapter *adapter, void *data)
 }
 
 /* XXX Make the nm output a little more greppable...  */
+#define	__i2c_transfer		linux___i2c_transfer
 #define	i2c_master_recv		linux_i2c_master_recv
 #define	i2c_master_send		linux_i2c_master_send
 #define	i2c_new_device		linux_i2c_new_device
@@ -195,6 +210,7 @@ int	i2c_master_send(const struct i2c_client *, const char *, int);
 int	i2c_master_recv(const struct i2c_client *, char *, int);
 struct i2c_client *
 	i2c_new_device(struct i2c_adapter *, const struct i2c_board_info *);
+int	__i2c_transfer(struct i2c_adapter *, struct i2c_msg *, int);
 int	i2c_transfer(struct i2c_adapter *, struct i2c_msg *, int);
 void	i2c_unregister_device(struct i2c_client *);
 

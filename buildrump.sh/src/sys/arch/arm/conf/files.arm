@@ -1,4 +1,4 @@
-#	$NetBSD: files.arm,v 1.165 2021/08/06 19:38:53 jmcneill Exp $
+#	$NetBSD: files.arm,v 1.168 2023/04/20 08:28:03 skrll Exp $
 
 # temporary define to allow easy moving to ../arch/arm/arm32
 defflag				ARM32
@@ -109,7 +109,6 @@ file	arch/arm/arm/psci.c			psci
 file	arch/arm/arm/psci_arm.S			psci
 
 # EFI support
-defflag	opt_efi.h		EFI_RUNTIME
 file	arch/arm/arm/efi_runtime.c		efi_runtime
 
 # New PMAP options
@@ -208,8 +207,13 @@ file	arch/arm/arm/procfs_machdep.c		procfs
 file	arch/arm/arm/sig_machdep.c
 file	arch/arm/arm/sigcode.S
 file	arch/arm/arm/syscall.c
+file	arch/arm/arm/trap.c
 file	arch/arm/arm/undefined.c
 file	arch/arm/arm/vectors.S			arm32
+
+# EFI runtime (machdep)
+file	arch/arm/arm/efi_machdep.c		efi_runtime
+
 
 # files common to arm32 implementations
 file	arch/arm/arm32/arm32_machdep.c		arm32
@@ -231,6 +235,7 @@ file	kern/kern_cctr.c			arm11
 file	arch/arm/arm32/arm11_pmc.c		arm11_pmc
 file	arch/arm/arm32/cortex_pmc.c		cortex_pmc
 file	arch/arm/arm32/arm32_tlb.c		(cpu_armv7 | cpu_arm11) & (!arm11_compat_mmu & !cpu_pre_armv6)
+file	uvm/pmap/pmap_devmap.c
 file	uvm/pmap/pmap_tlb.c			(cpu_armv7 | cpu_arm11) & (!arm11_compat_mmu & !cpu_pre_armv6)
 
 # generic pmap files for arm32 implementations

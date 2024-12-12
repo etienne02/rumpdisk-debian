@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -266,6 +266,17 @@ ACPI_RSDUMP_INFO        AcpiRsDumpPinFunction[10] =
     {ACPI_RSD_SHORTLISTX,ACPI_RSD_OFFSET (PinFunction.VendorData),          "VendorData",               NULL},
 };
 
+ACPI_RSDUMP_INFO        AcpiRsDumpClockInput[7] =
+{
+    {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpClockInput),         "ClockInput",            NULL},
+    {ACPI_RSD_UINT8,    ACPI_RSD_OFFSET (ClockInput.RevisionId),            "RevisionId",            NULL},
+    {ACPI_RSD_UINT32,   ACPI_RSD_OFFSET (ClockInput.FrequencyNumerator),    "FrequencyNumerator",    NULL},
+    {ACPI_RSD_UINT32,   ACPI_RSD_OFFSET (ClockInput.FrequencyDivisor),      "FrequencyDivisor",      NULL},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (ClockInput.Scale),                 "Scale",                 AcpiGbl_ClockInputScale},
+    {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (ClockInput.Mode),                  "Mode",                  AcpiGbl_ClockInputMode},
+    {ACPI_RSD_SOURCE,   ACPI_RSD_OFFSET (ClockInput.ResourceSource),        "ResourceSource",        NULL},
+};
+
 ACPI_RSDUMP_INFO        AcpiRsDumpPinConfig[11] =
 {
     {ACPI_RSD_TITLE,    ACPI_RSD_TABLE_SIZE (AcpiRsDumpPinConfig),          "PinConfig",                NULL},
@@ -410,20 +421,18 @@ ACPI_RSDUMP_INFO        AcpiRsDumpGeneralFlags[5] =
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Address.MaxAddressFixed),          "Max Relocatability",       AcpiGbl_MaxDecode}
 };
 
-static const char *AcpiGbl_MemoryRange[] = { "Memory Range" };
 ACPI_RSDUMP_INFO        AcpiRsDumpMemoryFlags[5] =
 {
-    {ACPI_RSD_LITERAL,  ACPI_RSD_TABLE_SIZE (AcpiRsDumpMemoryFlags),        "Resource Type",            AcpiGbl_MemoryRange},
+    {ACPI_RSD_LITERAL,  ACPI_RSD_TABLE_SIZE (AcpiRsDumpMemoryFlags),        "Resource Type",            __UNCONST("Memory Range")},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Address.Info.Mem.WriteProtect),    "Write Protect",            AcpiGbl_RwDecode},
     {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Address.Info.Mem.Caching),         "Caching",                  AcpiGbl_MemDecode},
     {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Address.Info.Mem.RangeType),       "Range Type",               AcpiGbl_MtpDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Address.Info.Mem.Translation),     "Translation",              AcpiGbl_TtpDecode}
 };
 
-static const char *AcpiGbl_IORange[] = { "I/O Range" };
 ACPI_RSDUMP_INFO        AcpiRsDumpIoFlags[4] =
 {
-    {ACPI_RSD_LITERAL,  ACPI_RSD_TABLE_SIZE (AcpiRsDumpIoFlags),            "Resource Type",            AcpiGbl_IORange },
+    {ACPI_RSD_LITERAL,  ACPI_RSD_TABLE_SIZE (AcpiRsDumpIoFlags),            "Resource Type",            __UNCONST("I/O Range")},
     {ACPI_RSD_2BITFLAG, ACPI_RSD_OFFSET (Address.Info.Io.RangeType),        "Range Type",               AcpiGbl_RngDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Address.Info.Io.Translation),      "Translation",              AcpiGbl_TtpDecode},
     {ACPI_RSD_1BITFLAG, ACPI_RSD_OFFSET (Address.Info.Io.TranslationType),  "Translation Type",         AcpiGbl_TrsDecode}

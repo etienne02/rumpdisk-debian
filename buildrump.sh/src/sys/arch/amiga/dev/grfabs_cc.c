@@ -1,4 +1,4 @@
-/*	$NetBSD: grfabs_cc.c,v 1.36 2021/08/17 22:00:27 andvar Exp $ */
+/*	$NetBSD: grfabs_cc.c,v 1.39 2023/07/12 05:16:42 mlelstv Exp $ */
 
 /*
  * Copyright (c) 1994 Christian E. Hopps
@@ -38,12 +38,13 @@
 #include "opt_amigaccgrf.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: grfabs_cc.c,v 1.36 2021/08/17 22:00:27 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: grfabs_cc.c,v 1.39 2023/07/12 05:16:42 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/errno.h>
 #include <sys/queue.h>
+#include <sys/intr.h>
 
 #include <amiga/amiga/custom.h>
 #include <amiga/amiga/cc.h>
@@ -169,7 +170,7 @@ cc_init_monitor(void)
 	/* turn sprite DMA off. we don't support them yet. */
 	custom.dmacon = DMAF_SPRITE;
 
-	/* makre sure sprite data registers are clear as well */
+	/* make sure sprite data registers are clear as well */
 	custom.spr[0].data = 0;
 	custom.spr[0].datb = 0;
 
@@ -930,7 +931,7 @@ display_hires_view(view_t *v)
 			int     d = 0;
 
 			/* XXX anyone know the equality properties of
-			 * intermixed logial AND's */
+			 * intermixed logical AND's */
 			/* XXX and arithmetic operators? */
 			while (((ddfstart & 0xfffc) + ddfwidth - d) > 0xd8) {
 				d++;

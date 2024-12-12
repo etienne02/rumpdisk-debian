@@ -1,4 +1,4 @@
-/* $NetBSD: types.h,v 1.18 2021/03/24 05:00:24 simonb Exp $ */
+/* $NetBSD: types.h,v 1.21 2022/11/03 09:04:56 skrll Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -34,6 +34,10 @@
 
 #ifdef __aarch64__
 
+#ifdef _KERNEL_OPT
+#include "opt_pmap.h"
+#endif
+
 #include <sys/cdefs.h>
 #include <sys/featuretest.h>
 #include <arm/int_types.h>
@@ -59,7 +63,7 @@ typedef __uint32_t register32_t;
 #define PRIxREGISTER	PRIx64
 #define PRIxREGISTER32	PRIx32
 
-typedef unsigned short	tlb_asid_t;
+typedef unsigned int	tlb_asid_t;
 
 #if defined(_KERNEL)
 #define LBL_X19	0
@@ -97,7 +101,6 @@ typedef __uint64_t __register_t;
 #define __HAVE_COMMON___TLS_GET_ADDR
 #define __HAVE_CPU_COUNTER
 #define __HAVE_CPU_DATA_FIRST
-#define __HAVE_CPU_MAXPROC
 #define __HAVE_FAST_SOFTINTS
 #define __HAVE_MINIMAL_EMUL
 #define __HAVE_MM_MD_DIRECT_MAPPED_PHYS
@@ -116,6 +119,11 @@ typedef __uint64_t __register_t;
 
 #if defined(_KERNEL)
 #define __HAVE_RAS
+#endif
+
+#if defined(PMAP_MI)
+/* XXX temporary */
+#define __HAVE_UNLOCKED_PMAP
 #endif
 
 #elif defined(__arm__)

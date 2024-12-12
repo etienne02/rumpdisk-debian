@@ -1,4 +1,4 @@
-/*	$NetBSD: t_tcp.c,v 1.11 2019/10/26 23:08:27 christos Exp $	*/
+/*	$NetBSD: t_tcp.c,v 1.13 2024/08/23 07:13:50 rin Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -37,7 +37,7 @@
 
 #include <sys/cdefs.h>
 #ifdef __RCSID
-__RCSID("$Id: t_tcp.c,v 1.11 2019/10/26 23:08:27 christos Exp $");
+__RCSID("$Id: t_tcp.c,v 1.13 2024/08/23 07:13:50 rin Exp $");
 #endif
 
 /* Example code. Should block; does with accept not accept4_. */
@@ -139,15 +139,14 @@ accept_test(sa_family_t sfamily, sa_family_t cfamily,
 		FAIL("socket");
 
 	if (sfamily == AF_INET6 && cfamily == AF_INET) {
-		ss = bs;
-		sin6 = (void *)&ss;
+		in_port_t port = ((struct sockaddr_in6 *)&bs)->sin6_port;
 		sin = (void *)&bs;
 		addrlen = sizeof(*sin);
 #ifdef BSD4_4
 		sin->sin_len = sizeof(*sin);
 #endif
 		sin->sin_family = AF_INET;
-		sin->sin_port = sin6->sin6_port;
+		sin->sin_port = port;
 		sin->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	}
 
@@ -160,6 +159,10 @@ accept_test(sa_family_t sfamily, sa_family_t cfamily,
 	if (ok != -1 || errno != EINPROGRESS)
 		FAIL("expected connect to fail");
 #endif
+
+	/* XXX avoid race between connect(2) and accept(2). */
+	sleep(1);
+
 	if (useaccept) {
 		acpt = accept(srvr, NULL, NULL);
 	} else {

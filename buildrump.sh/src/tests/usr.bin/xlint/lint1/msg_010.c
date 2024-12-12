@@ -1,20 +1,25 @@
-/*	$NetBSD: msg_010.c,v 1.4 2021/01/18 17:43:44 rillig Exp $	*/
+/*	$NetBSD: msg_010.c,v 1.7 2023/07/13 19:59:08 rillig Exp $	*/
 # 3 "msg_010.c"
 
 // Test for message: duplicate '%s' [10]
 
-inline inline void		/* expect: [10] */
+/* lint1-extra-flags: -X 351 */
+
+/* expect+1: warning: duplicate 'inline' [10] */
+inline inline void
 double_inline(void)
 {
 }
 
-const const int			/* expect: [10] */
+/* expect+1: warning: duplicate 'const' [10] */
+const const int
 double_const(void)
 {
 	return 0;
 }
 
-volatile volatile int		/* expect: [10] */
+/* expect+1: warning: duplicate 'volatile' [10] */
+volatile volatile int
 double_volatile(void)
 {
 	return 0;
@@ -29,8 +34,9 @@ restrict_pointer(const int *restrict p)
 _Thread_local int thread_local_int;
 _Thread_local int *pointer_to_thread_local;
 
+/* expect+2: error: only 'register' is valid as storage class in parameter [9] */
 int
-thread_local_parameter(_Thread_local int i) /* caught by the compiler */
+thread_local_parameter(_Thread_local int i)
 {
 	return i;
 }

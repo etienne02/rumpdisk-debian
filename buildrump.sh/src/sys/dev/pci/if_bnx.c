@@ -1,4 +1,4 @@
-/*	$NetBSD: if_bnx.c,v 1.109 2021/08/13 20:26:07 andvar Exp $	*/
+/*	$NetBSD: if_bnx.c,v 1.116 2024/11/10 11:44:23 mlelstv Exp $	*/
 /*	$OpenBSD: if_bnx.c,v 1.101 2013/03/28 17:21:44 brad Exp $	*/
 
 /*-
@@ -35,7 +35,7 @@
 #if 0
 __FBSDID("$FreeBSD: src/sys/dev/bce/if_bce.c,v 1.3 2006/04/13 14:12:26 ru Exp $");
 #endif
-__KERNEL_RCSID(0, "$NetBSD: if_bnx.c,v 1.109 2021/08/13 20:26:07 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_bnx.c,v 1.116 2024/11/10 11:44:23 mlelstv Exp $");
 
 /*
  * The following controllers are supported by this driver:
@@ -216,12 +216,12 @@ static struct flash_spec flash_table[] =
 	{0x19000002, 0x5b808201, 0x000500db, 0x03840253, 0xaf020406,
 	 NONBUFFERED_FLAGS, ST_MICRO_FLASH_PAGE_BITS, ST_MICRO_FLASH_PAGE_SIZE,
 	 ST_MICRO_FLASH_BYTE_ADDR_MASK, ST_MICRO_FLASH_BASE_TOTAL_SIZE*2,
-	 "Entry 0101: ST M45PE10 (128kB non-bufferred)"},
+	 "Entry 0101: ST M45PE10 (128kB non-buffered)"},
 	/* Entry 0110: ST M45PE20 (non-buffered flash)*/
 	{0x15000001, 0x57808201, 0x000500db, 0x03840253, 0xaf020406,
 	 NONBUFFERED_FLAGS, ST_MICRO_FLASH_PAGE_BITS, ST_MICRO_FLASH_PAGE_SIZE,
 	 ST_MICRO_FLASH_BYTE_ADDR_MASK, ST_MICRO_FLASH_BASE_TOTAL_SIZE*4,
-	 "Entry 0110: ST M45PE20 (256kB non-bufferred)"},
+	 "Entry 0110: ST M45PE20 (256kB non-buffered)"},
 	/* Saifun SA25F005 (non-buffered flash) */
 	/* strap, cfg1, & write1 need updates */
 	{0x1d000003, 0x5f808201, 0x00050081, 0x03840253, 0xaf020406,
@@ -640,7 +640,7 @@ bnx_attach(device_t parent, device_t self, void *aux)
 	/*
 	 * Configure byte swap and enable indirect register access.
 	 * Rely on CPU to do target byte swapping on big endian systems.
-	 * Access to registers outside of PCI configurtion space are not
+	 * Access to registers outside of PCI configuration space are not
 	 * valid until this is done.
 	 */
 	pci_conf_write(pa->pa_pc, pa->pa_tag, BNX_PCICFG_MISC_CONFIG,
@@ -1409,7 +1409,7 @@ bnx_release_nvram_lock(struct bnx_softc *sc)
 	}
 
 	if (j >= NVRAM_TIMEOUT_COUNT) {
-		DBPRINT(sc, BNX_WARN, "Timeout reeasing NVRAM lock!\n");
+		DBPRINT(sc, BNX_WARN, "Timeout releasing NVRAM lock!\n");
 		return EBUSY;
 	}
 
@@ -4023,6 +4023,7 @@ bnx_get_buf(struct bnx_softc *sc, uint16_t *prod,
 			rc = ENOBUFS;
 			goto bnx_get_buf_exit;
 		}
+		MCLAIM(m_new, &sc->bnx_ec.ec_rx_mowner);
 
 		DBRUNIF(1, sc->rx_mbuf_alloc++);
 
@@ -4701,7 +4702,7 @@ bnx_rx_intr(struct bnx_softc *sc)
 
 				if_statinc(ifp, if_ierrors);
 
-				/* Try and reuse the exisitng mbuf. */
+				/* Try and reuse the existing mbuf. */
 				if (bnx_add_buf(sc, m, &sw_prod,
 				    &sw_chain_prod, &sw_prod_bseq)) {
 					DBRUNIF(1, bnx_breakpoint(sc));
@@ -5094,13 +5095,13 @@ bnx_mgmt_init_exit:
 	DBPRINT(sc, BNX_VERBOSE_RESET, "Exiting %s()\n", __func__);
 }
 
-/****************************************************************************/
-/* Encapsultes an mbuf cluster into the tx_bd chain structure and makes the */
-/* memory visible to the controller.                                        */
-/*                                                                          */
-/* Returns:                                                                 */
-/*   0 for success, positive value for failure.                             */
-/****************************************************************************/
+/*****************************************************************************/
+/* Encapsulates an mbuf cluster into the tx_bd chain structure and makes the */
+/* memory visible to the controller.                                         */
+/*                                                                           */
+/* Returns:                                                                  */
+/*   0 for success, positive value for failure.                              */
+/*****************************************************************************/
 int
 bnx_tx_encap(struct bnx_softc *sc, struct mbuf *m)
 {
@@ -5586,7 +5587,7 @@ bnx_iff(struct bnx_softc *sc)
 
 	/*
 	 * ASF/IPMI/UMP firmware requires that VLAN tag stripping
-	 * be enbled.
+	 * be enabled.
 	 */
 	if (!(sc->bnx_flags & BNX_MFW_ENABLE_FLAG))
 		rx_mode |= BNX_EMAC_RX_MODE_KEEP_VLAN_TAG;
@@ -5647,7 +5648,7 @@ allmulti:
 		REG_WR(sc, BNX_EMAC_RX_MODE, rx_mode);
 	}
 
-	/* Disable and clear the exisitng sort before enabling a new sort. */
+	/* Disable and clear the existing sort before enabling a new sort. */
 	REG_WR(sc, BNX_RPM_SORT_USER0, 0x0);
 	REG_WR(sc, BNX_RPM_SORT_USER0, sort_mode);
 	REG_WR(sc, BNX_RPM_SORT_USER0, sort_mode | BNX_RPM_SORT_USER0_ENA);
@@ -5667,7 +5668,7 @@ bnx_stats_update(struct bnx_softc *sc)
 	struct statistics_block	*stats;
 
 	DBPRINT(sc, BNX_EXCESSIVE, "Entering %s()\n", __func__);
-	bus_dmamap_sync(sc->bnx_dmatag, sc->status_map, 0, BNX_STATUS_BLK_SZ,
+	bus_dmamap_sync(sc->bnx_dmatag, sc->stats_map, 0, BNX_STATS_BLK_SZ,
 	    BUS_DMASYNC_POSTREAD);
 
 	stats = (struct statistics_block *)sc->stats_block;
@@ -5680,7 +5681,8 @@ bnx_stats_update(struct bnx_softc *sc)
 	 * hardware statistics.
 	 */
 	value = (u_long)stats->stat_EtherStatsCollisions;
-	if_statadd_ref(nsr, if_collisions, value - sc->if_stat_collisions);
+	if_statadd_ref(ifp, nsr, if_collisions,
+	    value - sc->if_stat_collisions);
 	sc->if_stat_collisions = value;
 
 	value = (u_long)stats->stat_EtherStatsUndersizePkts +
@@ -5688,14 +5690,14 @@ bnx_stats_update(struct bnx_softc *sc)
 	    (u_long)stats->stat_IfInMBUFDiscards +
 	    (u_long)stats->stat_Dot3StatsAlignmentErrors +
 	    (u_long)stats->stat_Dot3StatsFCSErrors;
-	if_statadd_ref(nsr, if_ierrors, value - sc->if_stat_ierrors);
+	if_statadd_ref(ifp, nsr, if_ierrors, value - sc->if_stat_ierrors);
 	sc->if_stat_ierrors = value;
 
 	value = (u_long)
 	    stats->stat_emac_tx_stat_dot3statsinternalmactransmiterrors +
 	    (u_long)stats->stat_Dot3StatsExcessiveCollisions +
 	    (u_long)stats->stat_Dot3StatsLateCollisions;
-	if_statadd_ref(nsr, if_oerrors, value - sc->if_stat_oerrors);
+	if_statadd_ref(ifp, nsr, if_oerrors, value - sc->if_stat_oerrors);
 	sc->if_stat_oerrors = value;
 
 	/*
@@ -5705,7 +5707,7 @@ bnx_stats_update(struct bnx_softc *sc)
 	 */
 	if (!(BNX_CHIP_NUM(sc) == BNX_CHIP_NUM_5706) &&
 	    !(BNX_CHIP_ID(sc) == BNX_CHIP_ID_5708_A0)) {
-		if_statadd_ref(nsr, if_oerrors,
+		if_statadd_ref(ifp, nsr, if_oerrors,
 		    (u_long) stats->stat_Dot3StatsCarrierSenseErrors);
 	}
 
@@ -6257,7 +6259,7 @@ void
 bnx_dump_stats_block(struct bnx_softc *sc)
 {
 	struct statistics_block	*sblk;
-	bus_dmamap_sync(sc->bnx_dmatag, sc->status_map, 0, BNX_STATUS_BLK_SZ,
+	bus_dmamap_sync(sc->bnx_dmatag, sc->stats_map, 0, BNX_STATS_BLK_SZ,
 	    BUS_DMASYNC_POSTREAD);
 
 	sblk = sc->stats_block;

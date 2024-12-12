@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.174 2021/03/10 19:45:41 macallan Exp $	*/
+/*	$NetBSD: machdep.c,v 1.177 2024/06/11 04:47:04 rin Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.174 2021/03/10 19:45:41 macallan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.177 2024/06/11 04:47:04 rin Exp $");
 
 #include "opt_compat_netbsd.h"
 #include "opt_ddb.h"
@@ -228,12 +228,11 @@ cpu_reboot(int howto, char *what)
 	if (!cold && !(howto & RB_NOSYNC) && !syncing) {
 		syncing = 1;
 		vfs_shutdown();		/* sync */
-		resettodr();		/* set wall clock */
 	}
 
 #ifdef MULTIPROCESSOR
 	/* Halt other CPU */
-	cpu_send_ipi(IPI_DST_NOTME, IPI_HALT);
+	cpu_halt_others();
 	delay(100000);	/* XXX */
 #endif
 
@@ -421,7 +420,7 @@ copy_disp_props(device_t dev, int node, prop_dictionary_t dict)
 	if (have_backlight && ofw_quiesce) {
 		aprint_debug(
 		    "OFW has been quiesced - disabling backlight callbacks\n");
-		have_palette = 0;
+		have_backlight = 0;
 	}
 
 	if (have_backlight) {

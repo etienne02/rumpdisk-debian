@@ -1,4 +1,4 @@
-/*	$NetBSD: genfb_pci.c,v 1.40 2021/08/07 16:19:14 thorpej Exp $ */
+/*	$NetBSD: genfb_pci.c,v 1.45 2022/10/02 02:37:27 rin Exp $ */
 
 /*-
  * Copyright (c) 2007 Michael Lorenz
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: genfb_pci.c,v 1.40 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: genfb_pci.c,v 1.45 2022/10/02 02:37:27 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -102,12 +102,13 @@ pci_genfb_attach(device_t parent, device_t self, void *aux)
 	struct genfb_ops ops = zero_ops;
 	pcireg_t rom;
 	int idx, bar, type;
+	bool skip;
 
 	pci_aprint_devinfo(pa, NULL);
 
 	sc->sc_gen.sc_dev = self;
 	sc->sc_memt = pa->pa_memt;
-	sc->sc_iot = pa->pa_iot;	
+	sc->sc_iot = pa->pa_iot;
 	sc->sc_pc = pa->pa_pc;
 	sc->sc_pcitag = pa->pa_tag;
 	sc->sc_want_wsfb = 0;
@@ -151,20 +152,26 @@ pci_genfb_attach(device_t parent, device_t self, void *aux)
 
 	/* mmap()able bus ranges */
 	idx = 0;
-	bar = PCI_MAPREG_START;
-	while (bar <= PCI_MAPREG_ROM) {
+	skip = false;
+	for (bar = PCI_MAPREG_START; bar <= PCI_MAPREG_ROM; bar += 4) {
 
-		sc->sc_bars[(bar - PCI_MAPREG_START) >> 2] = rom =
-		    pci_conf_read(sc->sc_pc, sc->sc_pcitag, bar);
-
-		if ((bar >= PCI_MAPREG_END && bar < PCI_MAPREG_ROM) ||
+		rom = pci_conf_read(sc->sc_pc, sc->sc_pcitag, bar);
+		if ((bar == PCI_MAPREG_ROM) && (rom != 0)) {
+			rom |= PCI_MAPREG_ROM_ENABLE;
+			pci_conf_write(sc->sc_pc, sc->sc_pcitag, bar, rom);
+		}
+		sc->sc_bars[(bar - PCI_MAPREG_START) >> 2] = rom;
+		if (skip || (bar >= PCI_MAPREG_END && bar < PCI_MAPREG_ROM) ||
 		    pci_mapreg_probe(sc->sc_pc, sc->sc_pcitag, bar, &type)
 		    == 0) {
-			/* skip unimplemented and non-BAR registers */
-			bar += 4;
+			/*
+			 * skip unimplemented, non-BAR registers, or
+			 * higher words of 64-bit BARs.
+			 */
+			skip = false;
 			continue;
 		}
-		if (PCI_MAPREG_TYPE(type) == PCI_MAPREG_TYPE_MEM || 
+		if (PCI_MAPREG_TYPE(type) == PCI_MAPREG_TYPE_MEM ||
 		    PCI_MAPREG_TYPE(type) == PCI_MAPREG_TYPE_ROM) {
 			pci_mapreg_info(sc->sc_pc, sc->sc_pcitag, bar, type,
 			    &sc->sc_ranges[idx].offset,
@@ -172,18 +179,12 @@ pci_genfb_attach(device_t parent, device_t self, void *aux)
 			    &sc->sc_ranges[idx].flags);
 			idx++;
 		}
-		if ((bar == PCI_MAPREG_ROM) && (rom != 0)) {
-			pci_conf_write(sc->sc_pc, sc->sc_pcitag, bar, rom |
-			    PCI_MAPREG_ROM_ENABLE);
-		}
 		if (PCI_MAPREG_TYPE(type) == PCI_MAPREG_TYPE_MEM &&
 		    PCI_MAPREG_MEM_TYPE(type) == PCI_MAPREG_MEM_TYPE_64BIT)
-			bar += 8;
-		else
-			bar += 4;
+			skip = true;
 	}
 
-	sc->sc_ranges_used = idx;			    
+	sc->sc_ranges_used = idx;
 
 	ops.genfb_ioctl = pci_genfb_ioctl;
 	ops.genfb_mmap = pci_genfb_mmap;
@@ -211,6 +212,8 @@ pci_genfb_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
     struct lwp *l)
 {
 	struct pci_genfb_softc *sc = v;
+	size_t i;
+	int new_mode;
 
 	switch (cmd) {
 	case WSDISPLAYIO_GTYPE:
@@ -227,15 +230,12 @@ pci_genfb_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 		return wsdisplayio_busid_pci(sc->sc_gen.sc_dev, sc->sc_pc,
 		    sc->sc_pcitag, data);
 
-	case WSDISPLAYIO_SMODE: {
-		int new_mode = *(int*)data, i;
+	case WSDISPLAYIO_SMODE:
+		new_mode = *(int *)data;
 		if (new_mode == WSDISPLAYIO_MODE_EMUL) {
-			for (i = 0; i < 9; i++)
-				pci_conf_write(sc->sc_pc,
-				     sc->sc_pcitag,
-				     0x10 + (i << 2),
-				     sc->sc_bars[i]);
-		}
+			for (i = 0; i < __arraycount(sc->sc_bars); i++)
+				pci_conf_write(sc->sc_pc, sc->sc_pcitag,
+				    PCI_BAR(i), sc->sc_bars[i]);
 		}
 		return 0;
 	}
@@ -319,7 +319,7 @@ pci_genfb_mmap(void *v, void *vs, off_t offset, int prot)
 	if ((offset >= PCI_MAGIC_IO_RANGE) &&
 	    (offset < PCI_MAGIC_IO_RANGE + 0x10000)) {
 		return bus_space_mmap(sc->sc_iot, offset - PCI_MAGIC_IO_RANGE,
-		    0, prot, BUS_SPACE_MAP_LINEAR);	
+		    0, prot, BUS_SPACE_MAP_LINEAR);
 	}
 #endif
 

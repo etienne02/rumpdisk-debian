@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.252 2020/05/05 21:22:48 ad Exp $	*/
+/*	$NetBSD: machdep.c,v 1.255 2024/03/05 14:15:28 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -50,7 +50,7 @@
 #include "empm.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.252 2020/05/05 21:22:48 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.255 2024/03/05 14:15:28 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -62,7 +62,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.252 2020/05/05 21:22:48 ad Exp $");
 #include <sys/reboot.h>
 #include <sys/conf.h>
 #include <sys/file.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <sys/vnode.h>
@@ -132,7 +131,7 @@ void ser_outintr(void);
 void fdintr(int);
 #endif
 
-volatile unsigned int interrupt_depth = 0;
+volatile unsigned int intr_depth = 0;
 
 struct vm_map *phys_map = NULL;
 
@@ -395,11 +394,6 @@ bootsync(void)
 	if (waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 }
 
@@ -1121,7 +1115,7 @@ bool
 cpu_intr_p(void)
 {
 
-	return interrupt_depth != 0;
+	return intr_depth != 0;
 }
 
 #if defined(DEBUG) && !defined(PANICBUTTON)

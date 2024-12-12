@@ -26,7 +26,7 @@
 
 #ifdef _KERNEL
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: npf_params.c,v 1.3 2020/05/30 14:16:56 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: npf_params.c,v 1.6 2023/02/12 13:21:28 kardel Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -56,7 +56,7 @@ npf_param_general_register(npf_t *npf)
 		{
 			"ip4.reassembly",
 			&npf->ip4_reassembly,
-			.default_val = 0, // false
+			.default_val = 1, // true - host requirements
 			.min = 0, .max = 1
 		},
 		{
@@ -69,13 +69,30 @@ npf_param_general_register(npf_t *npf)
 	npf_param_register(npf, param_map, __arraycount(param_map));
 }
 
+static uintptr_t
+npf_param_thmap_alloc(size_t len)
+{
+	return (uintptr_t)kmem_alloc(len, KM_SLEEP);
+}
+
+static void
+npf_param_thmap_free(uintptr_t addr, size_t len)  
+{
+        kmem_free((void *)addr, len);
+} 
+
+static const thmap_ops_t npf_param_thmap_ops = {
+        .alloc = npf_param_thmap_alloc,
+        .free = npf_param_thmap_free
+};
+
 void
 npf_param_init(npf_t *npf)
 {
 	npf_paraminfo_t *paraminfo;
 
 	paraminfo = kmem_zalloc(sizeof(npf_paraminfo_t), KM_SLEEP);
-	paraminfo->map = thmap_create(0, NULL, THMAP_NOCOPY);
+	paraminfo->map = thmap_create(0, &npf_param_thmap_ops, THMAP_NOCOPY);
 	npf->paraminfo = paraminfo;
 
 	/* Register some general parameters. */
@@ -184,7 +201,9 @@ npf_param_register(npf_t *npf, npf_param_t *params, unsigned count)
 		void *ret __diagused;
 
 		ret = thmap_put(pinfo->map, name, strlen(name), param);
-		KASSERT(ret == param);
+		KASSERTMSG(ret == param,
+		    "parameter insertion failed: ret=%p, param=%p",
+		    ret, param);
 
 		/* Assign the default value. */
 		KASSERT(param->default_val >= param->min);

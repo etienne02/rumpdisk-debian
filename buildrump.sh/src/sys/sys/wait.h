@@ -1,4 +1,4 @@
-/*	$NetBSD: wait.h,v 1.36 2018/07/03 22:38:33 kamil Exp $	*/
+/*	$NetBSD: wait.h,v 1.38 2022/08/07 11:06:19 andvar Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993, 1994
@@ -41,7 +41,7 @@
 #include <sys/idtype.h>
 
 /*
- * This file holds definitions relevent to the wait4 system call
+ * This file holds definitions relevant to the wait4 system call
  * and the alternate interfaces that use it (wait, wait3, waitpid).
  */
 
@@ -101,7 +101,7 @@
  *	(changing their status to have been already waited for).
  */
 #define	WNOHANG		0x00000001	/* don't hang in wait */
-#define	WSTOPPED	0x00000002	/* include stopped/untraceed children */
+#define	WSTOPPED	0x00000002	/* include stopped/untraced children */
 #define	WUNTRACED	WSTOPPED	/* the original name for WSTOPPED */
 #define	WCONTINUED	0x00000010	/* include continued processes */
 #define	WEXITED		0x00000020	/* Wait for exited processes. */

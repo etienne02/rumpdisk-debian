@@ -1,4 +1,4 @@
-/*	$NetBSD: icmp6.c,v 1.250 2021/02/19 14:52:00 christos Exp $	*/
+/*	$NetBSD: icmp6.c,v 1.258 2024/07/05 04:31:54 rin Exp $	*/
 /*	$KAME: icmp6.c,v 1.217 2001/06/20 15:03:29 jinmei Exp $	*/
 
 /*
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: icmp6.c,v 1.250 2021/02/19 14:52:00 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: icmp6.c,v 1.258 2024/07/05 04:31:54 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_compat_netbsd.h"
@@ -90,6 +90,7 @@ __KERNEL_RCSID(0, "$NetBSD: icmp6.c,v 1.250 2021/02/19 14:52:00 christos Exp $")
 #include <net/nd.h>
 
 #include <netinet/in.h>
+#include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/ip6.h>
 #include <netinet/wqinput.h>
@@ -151,6 +152,8 @@ static int icmp6errpps_count = 0;
 static struct timeval icmp6errppslim_last;
 extern int icmp6_nodeinfo;
 
+bool icmp6_dynamic_rt_msg = false;
+
 /*
  * List of callbacks to notify when Path MTU changes are made.
  */
@@ -180,6 +183,8 @@ static int icmp6_redirect_lowat = -1;
 
 /* Protect mtudisc and redirect stuffs */
 static kmutex_t icmp6_mtx __cacheline_aligned;
+
+static bool icmp6_reflect_pmtu = false;
 
 static void icmp6_errcount(u_int, int, int);
 static int icmp6_rip6_input(struct mbuf **, int);
@@ -689,9 +694,10 @@ _icmp6_input(struct mbuf *m, int off, int proto)
 		nicmp6->icmp6_type = ICMP6_ECHO_REPLY;
 		nicmp6->icmp6_code = 0;
 		if (n) {
-			uint64_t *icmp6s = ICMP6_STAT_GETREF();
-			icmp6s[ICMP6_STAT_REFLECT]++;
-			icmp6s[ICMP6_STAT_OUTHIST + ICMP6_ECHO_REPLY]++;
+			net_stat_ref_t icmp6s = ICMP6_STAT_GETREF();
+			_NET_STATINC_REF(icmp6s, ICMP6_STAT_REFLECT);
+			_NET_STATINC_REF(icmp6s,
+			    ICMP6_STAT_OUTHIST + ICMP6_ECHO_REPLY);
 			ICMP6_STAT_PUTREF();
 			icmp6_reflect(n, off);
 		}
@@ -802,9 +808,10 @@ _icmp6_input(struct mbuf *m, int off, int proto)
 			nicmp6->icmp6_code = 0;
 		}
 		if (n) {
-			uint64_t *icmp6s = ICMP6_STAT_GETREF();
-			icmp6s[ICMP6_STAT_REFLECT]++;
-			icmp6s[ICMP6_STAT_OUTHIST + ICMP6_WRUREPLY]++;
+			net_stat_ref_t icmp6s = ICMP6_STAT_GETREF();
+			_NET_STATINC_REF(icmp6s, ICMP6_STAT_REFLECT);
+			_NET_STATINC_REF(icmp6s,
+			    ICMP6_STAT_OUTHIST + ICMP6_WRUREPLY);
 			ICMP6_STAT_PUTREF();
 			icmp6_reflect(n, sizeof(struct ip6_hdr));
 		}
@@ -1508,8 +1515,7 @@ ni6_input(struct mbuf *m, int off)
 bad:
 	if_put(ifp, &psref);
 	m_freem(m);
-	if (n)
-		m_freem(n);
+	m_freem(n);
 	return NULL;
 }
 
@@ -1623,8 +1629,7 @@ ni6_nametodns(const char *name, int namelen, int old)
 	/* NOTREACHED */
 
 fail:
-	if (m)
-		m_freem(m);
+	m_freem(m);
 	return NULL;
 }
 
@@ -1935,9 +1940,8 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 {
 	struct mbuf *m = *mp;
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-	struct inpcb_hdr *inph;
-	struct in6pcb *in6p;
-	struct in6pcb *last = NULL;
+	struct inpcb *inp;
+	struct inpcb *last = NULL;
 	struct sockaddr_in6 rip6src;
 	struct icmp6_hdr *icmp6;
 	struct mbuf *n, *opts = NULL;
@@ -1958,21 +1962,20 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 		return IPPROTO_DONE;
 	}
 
-	TAILQ_FOREACH(inph, &raw6cbtable.inpt_queue, inph_queue) {
-		in6p = (struct in6pcb *)inph;
-		if (in6p->in6p_af != AF_INET6)
+	TAILQ_FOREACH(inp, &raw6cbtable.inpt_queue, inp_queue) {
+		if (inp->inp_af != AF_INET6)
 			continue;
-		if (in6p->in6p_ip6.ip6_nxt != IPPROTO_ICMPV6)
+		if (in6p_ip6(inp).ip6_nxt != IPPROTO_ICMPV6)
 			continue;
-		if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_laddr) &&
-		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_laddr, &ip6->ip6_dst))
+		if (!IN6_IS_ADDR_UNSPECIFIED(&in6p_laddr(inp)) &&
+		    !IN6_ARE_ADDR_EQUAL(&in6p_laddr(inp), &ip6->ip6_dst))
 			continue;
-		if (!IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr) &&
-		    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &ip6->ip6_src))
+		if (!IN6_IS_ADDR_UNSPECIFIED(&in6p_faddr(inp)) &&
+		    !IN6_ARE_ADDR_EQUAL(&in6p_faddr(inp), &ip6->ip6_src))
 			continue;
-		if (in6p->in6p_icmp6filt &&
+		if (in6p_icmp6filt(inp) &&
 		    ICMP6_FILTER_WILLBLOCK(icmp6->icmp6_type,
-		    in6p->in6p_icmp6filt))
+		    in6p_icmp6filt(inp)))
 			continue;
 
 		if (last == NULL) {
@@ -1984,23 +1987,23 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 		}
 #endif
 		else if ((n = m_copypacket(m, M_DONTWAIT)) != NULL) {
-			if (last->in6p_flags & IN6P_CONTROLOPTS)
+			if (last->inp_flags & IN6P_CONTROLOPTS ||
+			    SOOPT_TIMESTAMP(last->inp_socket->so_options))
 				ip6_savecontrol(last, &opts, ip6, n);
 			/* strip intermediate headers */
 			m_adj(n, off);
-			if (sbappendaddr(&last->in6p_socket->so_rcv,
+			if (sbappendaddr(&last->inp_socket->so_rcv,
 			    sin6tosa(&rip6src), n, opts) == 0) {
-				soroverflow(last->in6p_socket);
+				soroverflow(last->inp_socket);
 				m_freem(n);
-				if (opts)
-					m_freem(opts);
+				m_freem(opts);
 			} else {
-				sorwakeup(last->in6p_socket);
+				sorwakeup(last->inp_socket);
 			}
 			opts = NULL;
 		}
 
-		last = in6p;
+		last = inp;
 	}
 
 #ifdef IPSEC
@@ -2011,18 +2014,18 @@ icmp6_rip6_input(struct mbuf **mp, int off)
 	} else
 #endif
 	if (last) {
-		if (last->in6p_flags & IN6P_CONTROLOPTS)
+		if (last->inp_flags & IN6P_CONTROLOPTS ||
+		    SOOPT_TIMESTAMP(last->inp_socket->so_options))
 			ip6_savecontrol(last, &opts, ip6, m);
 		/* strip intermediate headers */
 		m_adj(m, off);
-		if (sbappendaddr(&last->in6p_socket->so_rcv,
+		if (sbappendaddr(&last->inp_socket->so_rcv,
 		    sin6tosa(&rip6src), m, opts) == 0) {
-			soroverflow(last->in6p_socket);
+			soroverflow(last->inp_socket);
 			m_freem(m);
-			if (opts)
-				m_freem(opts);
+			m_freem(opts);
 		} else {
-			sorwakeup(last->in6p_socket);
+			sorwakeup(last->inp_socket);
 		}
 	} else {
 		m_freem(m);
@@ -2058,6 +2061,7 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	struct ifnet *rcvif;
 	int s;
 	bool ip6_src_filled = false;
+	int flags;
 
 	/* too short to reflect */
 	if (off < sizeof(struct ip6_hdr)) {
@@ -2202,12 +2206,14 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	m->m_flags &= ~(M_BCAST|M_MCAST);
 
 	/*
+	 * Note for icmp6_reflect_pmtu == false
 	 * To avoid a "too big" situation at an intermediate router
 	 * and the path MTU discovery process, specify the IPV6_MINMTU flag.
 	 * Note that only echo and node information replies are affected,
 	 * since the length of ICMP6 errors is limited to the minimum MTU.
 	 */
-	if (ip6_output(m, NULL, NULL, IPV6_MINMTU, NULL, NULL, &outif) != 0 &&
+	flags = icmp6_reflect_pmtu ? 0 : IPV6_MINMTU;
+	if (ip6_output(m, NULL, NULL, flags, NULL, NULL, &outif) != 0 &&
 	    outif)
 		icmp6_ifstat_inc(outif, ifs6_out_error);
 	if (outif)
@@ -2693,10 +2699,8 @@ nolladdropt:
 		m0 = NULL;
 	}
 noredhdropt:
-	if (m0) {
-		m_freem(m0);
-		m0 = NULL;
-	}
+	m_freem(m0);
+	m0 = NULL;
 
 	/* XXX: clear embedded link IDs in the inner header */
 	in6_clearscope(&sip6->ip6_src);
@@ -2721,10 +2725,8 @@ noredhdropt:
 	return;
 
 fail:
-	if (m)
-		m_freem(m);
-	if (m0)
-		m_freem(m0);
+	m_freem(m);
+	m_freem(m0);
 }
 
 /*
@@ -2734,7 +2736,7 @@ int
 icmp6_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 {
 	int error = 0;
-	struct in6pcb *in6p = sotoin6pcb(so);
+	struct inpcb *inp = sotoinpcb(so);
 
 	if (sopt->sopt_level != IPPROTO_ICMPV6)
 		return rip6_ctloutput(op, so, sopt);
@@ -2749,7 +2751,7 @@ icmp6_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 			error = sockopt_get(sopt, &fil, sizeof(fil));
 			if (error)
 				break;
-			memcpy(in6p->in6p_icmp6filt, &fil,
+			memcpy(in6p_icmp6filt(inp), &fil,
 			    sizeof(struct icmp6_filter));
 			error = 0;
 			break;
@@ -2765,11 +2767,11 @@ icmp6_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 		switch (sopt->sopt_name) {
 		case ICMP6_FILTER:
 		    {
-			if (in6p->in6p_icmp6filt == NULL) {
+			if (in6p_icmp6filt(inp) == NULL) {
 				error = EINVAL;
 				break;
 			}
-			error = sockopt_set(sopt, in6p->in6p_icmp6filt,
+			error = sockopt_set(sopt, in6p_icmp6filt(inp),
 			    sizeof(struct icmp6_filter));
 			break;
 		    }
@@ -2833,6 +2835,7 @@ icmp6_mtudisc_clone(struct sockaddr *dst)
 			return NULL;
 		}
 		nrt->rt_rmx = rt->rt_rmx;
+		rt_newmsg_dynamic(RTM_ADD, nrt);
 		rt_unref(rt);
 		rt = nrt;
 	}
@@ -2862,6 +2865,7 @@ icmp6_mtudisc_timeout(struct rtentry *rt, struct rttimer *r)
 	    (RTF_DYNAMIC | RTF_HOST)) {
 		rtrequest(RTM_DELETE, rt_getkey(rt),
 		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &retrt);
+		rt_newmsg_dynamic(RTM_DELETE, retrt);
 		rt_unref(rt);
 		rt_free(retrt);
 	} else {
@@ -2882,30 +2886,11 @@ icmp6_redirect_timeout(struct rtentry *rt, struct rttimer *r)
 	    (RTF_GATEWAY | RTF_DYNAMIC | RTF_HOST)) {
 		rtrequest(RTM_DELETE, rt_getkey(rt),
 		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &retrt);
+		rt_newmsg_dynamic(RTM_DELETE, retrt);
 		rt_unref(rt);
 		rt_free(retrt);
 	}
 }
-
-#ifdef COMPAT_90
-/*
- * sysctl helper routine for the net.inet6.icmp6.nd6 nodes.  silly?
- */
-static int
-sysctl_net_inet6_icmp6_nd6(SYSCTLFN_ARGS)
-{
-	(void)&name;
-	(void)&l;
-	(void)&oname;
-
-	if (namelen != 0)
-		return (EINVAL);
-
-	return (nd6_sysctl(rnode->sysctl_num, oldp, oldlenp,
-	    /*XXXUNCONST*/
-	    __UNCONST(newp), newlen));
-}
-#endif
 
 static int
 sysctl_net_inet6_icmp6_stats(SYSCTLFN_ARGS)
@@ -3089,22 +3074,20 @@ sysctl_net_inet6_icmp6_setup(struct sysctllog **clog)
 		       NULL, 0, &nd6_debug, 0,
 		       CTL_NET, PF_INET6, IPPROTO_ICMPV6,
 		       ICMPV6CTL_ND6_DEBUG, CTL_EOL);
-#ifdef COMPAT_90
 	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT,
-		       CTLTYPE_STRUCT, "nd6_drlist",
-		       SYSCTL_DESCR("Default router list"),
-		       sysctl_net_inet6_icmp6_nd6, 0, NULL, 0,
+		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
+		       CTLTYPE_BOOL, "reflect_pmtu",
+		       SYSCTL_DESCR("Use path MTU Discovery for icmpv6 reflect"),
+		       NULL, 0, &icmp6_reflect_pmtu, 0,
 		       CTL_NET, PF_INET6, IPPROTO_ICMPV6,
-		       OICMPV6CTL_ND6_DRLIST, CTL_EOL);
+		       ICMPV6CTL_REFLECT_PMTU, CTL_EOL);
 	sysctl_createv(clog, 0, NULL, NULL,
-		       CTLFLAG_PERMANENT,
-		       CTLTYPE_STRUCT, "nd6_prlist",
-		       SYSCTL_DESCR("Prefix list"),
-		       sysctl_net_inet6_icmp6_nd6, 0, NULL, 0,
+		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
+		       CTLTYPE_BOOL, "dynamic_rt_msg",
+		       SYSCTL_DESCR("Send routing message for RTF_DYNAMIC"),
+		       NULL, 0, &icmp6_dynamic_rt_msg, 0,
 		       CTL_NET, PF_INET6, IPPROTO_ICMPV6,
-		       OICMPV6CTL_ND6_PRLIST, CTL_EOL);
-#endif
+		       ICMPV6CTL_DYNAMIC_RT_MSG, CTL_EOL);
 }
 
 void

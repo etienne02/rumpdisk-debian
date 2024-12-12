@@ -1,4 +1,4 @@
-/* $NetBSD: linux32_signal.h,v 1.3 2011/11/18 04:08:56 christos Exp $ */
+/* $NetBSD: linux32_signal.h,v 1.6 2021/11/27 21:15:07 ryo Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -34,9 +34,18 @@
 #define _LINUX32_SIGNAL_H_
 
 #include <compat/linux32/common/linux32_siginfo.h>
-#ifdef __amd64__
+#if defined(__aarch64__)
+#include <compat/linux32/arch/aarch64/linux32_signal.h>
+#elif defined(__amd64__)
 #include <compat/linux32/arch/amd64/linux32_signal.h>
+#else
+#error Undefined linux32_signal.h machine type.
 #endif
+
+typedef struct {
+	linux32_sigsetp_t ss;
+	netbsd32_size_t ss_len;
+} linux32_sized_sigset_t;
 
 void linux32_to_native_sigset(sigset_t *, const linux32_sigset_t *);
 void native_to_linux32_sigset(linux32_sigset_t *, const sigset_t *);
@@ -47,7 +56,7 @@ void linux32_to_native_sigaction(struct sigaction *,
 void native_to_linux32_sigaction(struct linux32_sigaction *, 
 	const struct sigaction *);
 void native_to_linux32_sigaltstack(struct linux32_sigaltstack *,
-    const struct sigaltstack *);
+    const stack_t *);
 void native_to_linux32_old_sigset(linux32_old_sigset_t *, const sigset_t *);
 void linux32_old_extra_to_native_sigset(sigset_t *,
     const linux32_old_sigset_t *, const unsigned long *);

@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.46 2019/11/21 19:24:01 ad Exp $	*/
+/*	$NetBSD: trap.c,v 1.49 2024/01/20 00:15:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1990, 1993
@@ -78,7 +78,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.46 2019/11/21 19:24:01 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.49 2024/01/20 00:15:33 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_execfmt.h"
@@ -106,13 +106,13 @@ __KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.46 2019/11/21 19:24:01 ad Exp $");
 
 #include <machine/cpu.h>
 #include <machine/endian.h>
+#include <machine/fcode.h>
 #include <machine/pcb.h>
 #include <machine/psl.h>
 #include <machine/trap.h>
 #include <machine/reg.h>
 #include <machine/promlib.h>
 
-#include <sun2/sun2/fc.h>
 #include <sun2/sun2/machdep.h>
 
 #ifdef DDB
@@ -137,7 +137,7 @@ void straytrap(struct trapframe);
 
 static void userret(struct lwp *, struct trapframe *, u_quad_t);
 
-int astpending;
+volatile int astpending;
 
 const char *trap_type[] = {
 	"Bus error",
@@ -263,7 +263,6 @@ trap(struct trapframe *tf, int type, u_int code, u_int v)
 		type |= T_USER;
 		sticks = p->p_sticks;
 		l->l_md.md_regs = tf->tf_regs;
-		LWP_CACHE_CREDS(l, p);
 	} else {
 		sticks = 0;
 		/* XXX: Detect trap recursion? */

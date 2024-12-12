@@ -1,5 +1,5 @@
 /*	$KAME: sctp.h,v 1.18 2005/03/06 16:04:16 itojun Exp $	*/
-/*	$NetBSD: sctp.h,v 1.3 2019/06/03 06:04:21 msaitoh Exp $ */
+/*	$NetBSD: sctp.h,v 1.6 2024/03/17 21:48:01 andvar Exp $ */
 
 #ifndef _NETINET_SCTP_H_
 #define _NETINET_SCTP_H_
@@ -98,7 +98,7 @@ struct sctp_paramhdr {
  * shared for send resources amongst all associations. The default
  * for the UDP model is that is SS_NBIO is set. Which means all associations
  * have a separate send limit BUT they will NOT ever BLOCK instead
- * you will get an error back EAGAIN if you try to send to much. If
+ * you will get an error back EAGAIN if you try to send too much. If
  * you want the blocking symantics you set this option at the cost
  * of sharing one socket send buffer size amongst all associations.
  * Peeled off sockets turn this option off and block... but since both TCP and
@@ -107,7 +107,7 @@ struct sctp_paramhdr {
  * peeled off UDP model, but we do allow you to do so. You just use
  * the normal syscall to toggle SS_NBIO the way you want.
  */
-/* Blocking I/O is controled by the SS_NBIO flag on the
+/* Blocking I/O is controlled by the SS_NBIO flag on the
  * socket state so_state field.
  */
 #define SCTP_GET_SNDBUF_USE		0x0000000f
@@ -146,8 +146,8 @@ struct sctp_paramhdr {
 #define SCTP_PEER_PUBLIC_KEY            0x00000100 /* get the peers public key */
 #define SCTP_MY_PUBLIC_KEY              0x00000101 /* get/set my endpoints public key */
 #define SCTP_SET_AUTH_SECRET            0x00000102 /* get/set my shared secret */
-#define SCTP_SET_AUTH_CHUNKS            0x00000103/* specify what chunks you want
-						    * the system may have additional requirments
+#define SCTP_SET_AUTH_CHUNKS            0x00000103 /* specify what chunks you want
+						     * the system may have additional requirements
 						     * as well. I.e. probably ASCONF/ASCONF-ACK no matter
 						     * if you want it or not.
 						     */
@@ -193,7 +193,7 @@ struct sctp_paramhdr {
 #define SCTP_ERROR_ILLEGAL_ASCONF_ACK	0x0103
 
 /*
- * error cause parameters (user visisble)
+ * error cause parameters (user visible)
  */
 struct sctp_error_cause {
 	u_int16_t code;

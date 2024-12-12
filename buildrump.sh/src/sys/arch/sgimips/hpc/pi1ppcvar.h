@@ -1,4 +1,4 @@
-/* $NetBSD: pi1ppcvar.h,v 1.6 2011/07/01 18:53:47 dyoung Exp $ */
+/* $NetBSD: pi1ppcvar.h,v 1.8 2024/08/13 16:23:48 andvar Exp $ */
 
 /*-
  * Copyright (c) 2001 Alcove - Nicolas Souchu
@@ -43,7 +43,7 @@
 /* Maximum time to wait for device response */
 #define MAXBUSYWAIT	(5 * (hz))
 
-/* Poll interval when wating for device to become ready */
+/* Poll interval when waiting for device to become ready */
 #define PI1PPC_POLL	((hz)/10)
 
 /* Diagnostic and verbose printing macros */
@@ -197,8 +197,8 @@ struct pi1ppc_softc {
 	uint8_t sc_fifo;	/* FIFO size */
 
 	/* Indicates number of PWords in FIFO queues that generate interrupt */
-	uint8_t sc_wthr;	/* writeIntrThresold */
-	uint8_t sc_rthr;	/* readIntrThresold */
+	uint8_t sc_wthr;	/* writeIntrThreshold */
+	uint8_t sc_rthr;	/* readIntrThreshold */
 };
 
 #ifdef _KERNEL

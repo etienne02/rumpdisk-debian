@@ -1,4 +1,4 @@
-/*	$NetBSD: ahcisata_pci.c,v 1.58 2020/12/28 20:01:46 jmcneill Exp $	*/
+/*	$NetBSD: ahcisata_pci.c,v 1.71 2023/10/10 16:46:56 abs Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ahcisata_pci.c,v 1.58 2020/12/28 20:01:46 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ahcisata_pci.c,v 1.71 2023/10/10 16:46:56 abs Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ahcisata_pci.h"
@@ -198,11 +198,13 @@ static const struct ahci_pci_quirk ahci_pci_quirks[] = {
 	    AHCI_PCI_QUIRK_FORCE },
 	{ PCI_VENDOR_ASMEDIA, PCI_PRODUCT_ASMEDIA_ASM1061_12,
 	    AHCI_PCI_QUIRK_FORCE },
+	{ PCI_VENDOR_ASMEDIA, PCI_PRODUCT_ASMEDIA_ASM1062_JMB575,
+	    AHCI_PCI_QUIRK_FORCE },
 	{ PCI_VENDOR_AMD, PCI_PRODUCT_AMD_HUDSON_SATA,
 	    AHCI_PCI_QUIRK_FORCE },
-	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_82801JI_SATA_AHCI,
-	    AHCI_QUIRK_BADPMP },
 	{ PCI_VENDOR_AMD, PCI_PRODUCT_AMD_HUDSON_SATA_AHCI,
+	    AHCI_QUIRK_BADPMP },
+	{ PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_82801JI_SATA_AHCI,
 	    AHCI_QUIRK_BADPMP },
 };
 
@@ -345,7 +347,7 @@ ahci_pci_intr_establish(struct ahci_softc *sc, int port)
 			if (port == vec) {
 				/* Print error once */
 				aprint_error_dev(self,
-				    "port %d independant interrupt vector not "
+				    "port %d independent interrupt vector not "
 				    "available, sharing with further ports",
 				    port);
 			}
@@ -366,7 +368,7 @@ ahci_pci_intr_establish(struct ahci_softc *sc, int port)
 	    sizeof(intrbuf));
 	psc->sc_ih[vec] = pci_intr_establish_xname(psc->sc_pc,
 	    psc->sc_pihp[vec], IPL_BIO, intr_handler, intr_arg, intr_xname);
-	if (psc->sc_ih == NULL) {
+	if (psc->sc_ih[vec] == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
 			aprint_error(" at %s", intrstr);

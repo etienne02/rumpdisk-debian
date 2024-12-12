@@ -1,4 +1,4 @@
-/*	$NetBSD: chfs_vnops.c,v 1.45 2021/07/18 23:56:14 dholland Exp $	*/
+/*	$NetBSD: chfs_vnops.c,v 1.48 2022/03/27 16:24:58 christos Exp $	*/
 
 /*-
  * Copyright (c) 2010 Department of Software Engineering,
@@ -158,7 +158,7 @@ chfs_lookup(void *v)
 	}
 	/* Store the result of this lookup in the cache.  Avoid this if the
 	 * request was for creation, as it does not improve timings on
-	 * emprical tests. */
+	 * empirical tests. */
 	if (cnp->cn_nameiop != CREATE && (cnp->cn_flags & ISDOTDOT) == 0) {
 		cache_enter(dvp, *vpp, cnp->cn_nameptr, cnp->cn_namelen,
 			    cnp->cn_flags);
@@ -206,7 +206,6 @@ chfs_create(void *v)
 		return error;
 	}
 
-	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
 	return 0;
 }
 /* --------------------------------------------------------------------- */
@@ -773,7 +772,6 @@ chfs_write(void *v)
 	off_t osize, origoff, oldoff, preallocoff, endallocoff, nsize;
 	int blkoffset, error, flags, ioflag, resid;
 	int aflag;
-	int extended=0;
 	vsize_t bytelen;
 	bool async;
 	struct ufsmount *ump;
@@ -946,7 +944,6 @@ chfs_write(void *v)
 
 		if (vp->v_size < newoff) {
 			uvm_vnp_setsize(vp, newoff);
-			extended = 1;
 		}
 
 		if (error)
@@ -988,8 +985,6 @@ out:
 				ip->mode &= ~ISGID;
 		}
 	}
-	if (resid > uio->uio_resid)
-		VN_KNOTE(vp, NOTE_WRITE | (extended ? NOTE_EXTEND : 0));
 	if (error) {
 		(void) UFS_TRUNCATE(vp, osize, ioflag & IO_SYNC, ap->a_cred);
 		uio->uio_offset -= resid - uio->uio_resid;
@@ -1038,9 +1033,15 @@ chfs_fsync(void *v)
 int
 chfs_remove(void *v)
 {
-	struct vnode *dvp = ((struct vop_remove_v2_args *) v)->a_dvp;
-	struct vnode *vp = ((struct vop_remove_v2_args *) v)->a_vp;
-	struct componentname *cnp = (((struct vop_remove_v2_args *) v)->a_cnp);
+	struct vop_remove_v3_args /* {
+		struct vnode *a_dvp;
+		struct vnode *a_vp;
+		struct componentname *a_cnp;
+		nlink_t ctx_vp_new_nlink;
+	} */ *ap = v;
+	struct vnode *dvp = ap->a_dvp;
+	struct vnode *vp = ap->a_vp;
+	struct componentname *cnp = ap->a_cnp;
 	dbg("remove\n");
 
 	KASSERT(VOP_ISLOCKED(dvp));
@@ -1060,6 +1061,9 @@ chfs_remove(void *v)
 
 	error = chfs_do_unlink(ip,
 	    parent, cnp->cn_nameptr, cnp->cn_namelen);
+	if (error == 0) {
+		ap->ctx_vp_new_nlink = ip->chvc->nlink;
+	}
 
 out:
 	vput(vp);
@@ -1077,32 +1081,36 @@ chfs_link(void *v)
 	struct componentname *cnp = ((struct vop_link_v2_args *) v)->a_cnp;
 
 	struct chfs_inode *ip, *parent;
-	int error = 0;
+	int error, abrt = 1;
 
 	if (vp->v_type == VDIR) {
-		VOP_ABORTOP(dvp, cnp);
 		error = EISDIR;
 		goto out;
 	}
 	if (dvp->v_mount != vp->v_mount) {
-		VOP_ABORTOP(dvp, cnp);
 		error = EXDEV;
 		goto out;
 	}
-	if (dvp != vp && (error = vn_lock(vp, LK_EXCLUSIVE))) {
-		VOP_ABORTOP(dvp, cnp);
+	if (dvp != vp && (error = vn_lock(vp, LK_EXCLUSIVE)))
 		goto out;
-	}
+
+	error = kauth_authorize_vnode(cnp->cn_cred, KAUTH_VNODE_ADD_LINK, vp,
+	    dvp, 0);
+	if (error)
+		goto out;
 
 	parent = VTOI(dvp);
 	ip = VTOI(vp);
 
+	abrt = 0;
 	error = chfs_do_link(ip,
 	    parent, cnp->cn_nameptr, cnp->cn_namelen, ip->ch_type);
 
 	if (dvp != vp)
 		VOP_UNLOCK(vp);
 out:
+	if (abrt)
+		VOP_ABORTOP(dvp, cnp);
 	return error;
 }
 
@@ -1111,12 +1119,21 @@ out:
 int
 chfs_rename(void *v)
 {
-	struct vnode *fdvp = ((struct vop_rename_args *) v)->a_fdvp;
-	struct vnode *fvp = ((struct vop_rename_args *) v)->a_fvp;
-	struct componentname *fcnp = ((struct vop_rename_args *) v)->a_fcnp;
-	struct vnode *tdvp = ((struct vop_rename_args *) v)->a_tdvp;
-	struct vnode *tvp = ((struct vop_rename_args *) v)->a_tvp;
-	struct componentname *tcnp = ((struct vop_rename_args *) v)->a_tcnp;
+	struct vop_rename_args /* {
+		const struct vnodeop_desc *a_desc;
+		struct vnode *a_fdvp;
+		struct vnode *a_fvp;
+		struct componentname *a_fcnp;
+		struct vnode *a_tdvp;
+		struct vnode *a_tvp;
+		struct componentname *a_tcnp;
+	} */ *ap = v;
+	struct vnode *fdvp = ap->a_fdvp;
+	struct vnode *fvp = ap->a_fvp;
+	struct componentname *fcnp = ap->a_fcnp;
+	struct vnode *tdvp = ap->a_tdvp;
+	struct vnode *tvp = ap->a_tvp;
+	struct componentname *tcnp = ap->a_tcnp;
 
 	struct chfs_inode *oldparent, *old;
 	struct chfs_inode *newparent;
@@ -1262,7 +1279,6 @@ chfs_symlink(void *v)
 	err = chfs_makeinode(IFLNK | vap->va_mode, dvp, vpp, cnp, VLNK);
 	if (err)
 		return (err);
-	VN_KNOTE(dvp, NOTE_WRITE);
 	vp = *vpp;
 	len = strlen(target);
 	ip = VTOI(vp);

@@ -1,4 +1,4 @@
-/*	$NetBSD: once.h,v 1.7 2019/03/19 08:16:51 ryo Exp $	*/
+/*	$NetBSD: once.h,v 1.9 2023/09/09 00:15:09 riastradh Exp $	*/
 
 /*-
  * Copyright (c)2005 YAMAMOTO Takashi,

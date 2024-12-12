@@ -1,4 +1,4 @@
-/*	$NetBSD: fpu_explode.c,v 1.9 2020/06/27 04:24:08 rin Exp $ */
+/*	$NetBSD: fpu_explode.c,v 1.14 2022/09/07 06:51:58 rin Exp $ */
 
 /*
  * Copyright (c) 1992, 1993
@@ -46,7 +46,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fpu_explode.c,v 1.9 2020/06/27 04:24:08 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fpu_explode.c,v 1.14 2022/09/07 06:51:58 rin Exp $");
 
 #include <sys/types.h>
 #include <sys/systm.h>
@@ -59,6 +59,11 @@ __KERNEL_RCSID(0, "$NetBSD: fpu_explode.c,v 1.9 2020/06/27 04:24:08 rin Exp $");
 #include <powerpc/fpu/fpu_arith.h>
 #include <powerpc/fpu/fpu_emu.h>
 #include <powerpc/fpu/fpu_extern.h>
+
+static int fpu_itof(struct fpn *, u_int);
+static int fpu_xtof(struct fpn *, uint64_t);
+static int fpu_stof(struct fpn *, u_int);
+static int fpu_dtof(struct fpn *, u_int, u_int);
 
 /*
  * N.B.: in all of the following, we assume the FP format is
@@ -82,11 +87,11 @@ __KERNEL_RCSID(0, "$NetBSD: fpu_explode.c,v 1.9 2020/06/27 04:24:08 rin Exp $");
 /*
  * int -> fpn.
  */
-int
-fpu_itof(struct fpn *fp, u_int i)
+static int
+fpu_itof(struct fpn *fp, u_int lo)
 {
 
-	if (i == 0)
+	if (lo == 0)
 		return (FPC_ZERO);
 	/*
 	 * The value FP_1 represents 2^FP_LG, so set the exponent
@@ -95,7 +100,7 @@ fpu_itof(struct fpn *fp, u_int i)
 	 * fpu_norm()'s handling of `supernormals'; see fpu_subr.c.
 	 */
 	fp->fp_exp = FP_LG;
-	fp->fp_mant[0] = (int)i < 0 ? -i : i;
+	fp->fp_mant[0] = (int)lo < 0 ? -lo : lo;
 	fp->fp_mant[1] = 0;
 	fp->fp_mant[2] = 0;
 	fp->fp_mant[3] = 0;
@@ -106,8 +111,8 @@ fpu_itof(struct fpn *fp, u_int i)
 /*
  * 64-bit int -> fpn.
  */
-int
-fpu_xtof(struct fpn *fp, u_int64_t i)
+static int
+fpu_xtof(struct fpn *fp, uint64_t i)
 {
 
 	if (i == 0)
@@ -165,15 +170,15 @@ fpu_xtof(struct fpn *fp, u_int64_t i)
  * We assume a single occupies at most (64-FP_LG) bits in the internal
  * format: i.e., needs at most fp_mant[0] and fp_mant[1].
  */
-int
-fpu_stof(struct fpn *fp, u_int i)
+static int
+fpu_stof(struct fpn *fp, u_int hi)
 {
 	int exp;
 	u_int frac, f0, f1;
 #define SNG_SHIFT (SNG_FRACBITS - FP_LG)
 
-	exp = (i >> (32 - 1 - SNG_EXPBITS)) & mask(SNG_EXPBITS);
-	frac = i & mask(SNG_FRACBITS);
+	exp = (hi >> (32 - 1 - SNG_EXPBITS)) & mask(SNG_EXPBITS);
+	frac = hi & mask(SNG_FRACBITS);
 	f0 = frac >> SNG_SHIFT;
 	f1 = frac << (32 - SNG_SHIFT);
 	FP_TOF(exp, SNG_EXP_BIAS, frac, f0, f1, 0, 0);
@@ -183,19 +188,19 @@ fpu_stof(struct fpn *fp, u_int i)
  * 64-bit double -> fpn.
  * We assume this uses at most (96-FP_LG) bits.
  */
-int
-fpu_dtof(struct fpn *fp, u_int i, u_int j)
+static int
+fpu_dtof(struct fpn *fp, u_int hi, u_int lo)
 {
 	int exp;
 	u_int frac, f0, f1, f2;
 #define DBL_SHIFT (DBL_FRACBITS - 32 - FP_LG)
 
-	exp = (i >> (32 - 1 - DBL_EXPBITS)) & mask(DBL_EXPBITS);
-	frac = i & mask(DBL_FRACBITS - 32);
+	exp = (hi >> (32 - 1 - DBL_EXPBITS)) & mask(DBL_EXPBITS);
+	frac = hi & mask(DBL_FRACBITS - 32);
 	f0 = frac >> DBL_SHIFT;
-	f1 = (frac << (32 - DBL_SHIFT)) | (j >> DBL_SHIFT);
-	f2 = j << (32 - DBL_SHIFT);
-	frac |= j;
+	f1 = (frac << (32 - DBL_SHIFT)) | (lo >> DBL_SHIFT);
+	f2 = lo << (32 - DBL_SHIFT);
+	frac |= lo;
 	FP_TOF(exp, DBL_EXP_BIAS, frac, f0, f1, f2, 0);
 }
 
@@ -206,40 +211,39 @@ fpu_dtof(struct fpn *fp, u_int i, u_int j)
  * operations are performed.)
  */
 void
-fpu_explode(struct fpemu *fe, struct fpn *fp, int type, int reg)
+fpu_explode(struct fpemu *fe, struct fpn *fp, int type, uint64_t i)
 {
-	u_int s, *space;
-	u_int64_t l, *xspace;
+	u_int hi, lo;
+	int class;
 
-	xspace = (u_int64_t *)&fe->fe_fpstate->fpreg[reg];
-	l = xspace[0];
-	space = (u_int *)&fe->fe_fpstate->fpreg[reg];
-	s = space[0];
-	fp->fp_sign = s >> 31;
+	hi = (u_int)(i >> 32);
+	lo = (u_int)i;
+	fp->fp_sign = hi >> 31;
 	fp->fp_sticky = 0;
 	switch (type) {
 
 	case FTYPE_LNG:
-		s = fpu_xtof(fp, l);
+		class = fpu_xtof(fp, i);
 		break;
 
 	case FTYPE_INT:
-		s = fpu_itof(fp, space[1]);
+		fp->fp_sign = lo >> 31;
+		class = fpu_itof(fp, lo);
 		break;
 
 	case FTYPE_SNG:
-		s = fpu_stof(fp, s);
+		class = fpu_stof(fp, hi);
 		break;
 
 	case FTYPE_DBL:
-		s = fpu_dtof(fp, s, space[1]);
+		class = fpu_dtof(fp, hi, lo);
 		break;
 
 	default:
 		panic("fpu_explode: invalid type %d", type);
 	}
 
-	if (s == FPC_QNAN && (fp->fp_mant[0] & FP_QUIETBIT) == 0) {
+	if (class == FPC_QNAN && (fp->fp_mant[0] & FP_QUIETBIT) == 0) {
 		/*
 		 * Input is a signalling NaN.  All operations that return
 		 * an input NaN operand put it through a ``NaN conversion'',
@@ -249,13 +253,8 @@ fpu_explode(struct fpemu *fe, struct fpn *fp, int type, int reg)
 		 */
 		fp->fp_mant[0] |= FP_QUIETBIT;
 		fe->fe_cx = FPSCR_VXSNAN;	/* assert invalid operand */
-		s = FPC_SNAN;
+		class = FPC_SNAN;
 	}
-	fp->fp_class = s;
-	DPRINTF(FPE_REG, ("fpu_explode: %%%c%d => ", (type == FTYPE_LNG) ? 'x' :
-		((type == FTYPE_INT) ? 'i' : 
-			((type == FTYPE_SNG) ? 's' :
-				((type == FTYPE_DBL) ? 'd' : '?'))),
-		reg));
+	fp->fp_class = class;
 	DUMPFPN(FPE_REG, fp);
 }

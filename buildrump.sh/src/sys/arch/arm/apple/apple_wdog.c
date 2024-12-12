@@ -1,4 +1,4 @@
-/* $NetBSD: apple_wdog.c,v 1.1 2021/08/30 23:26:26 jmcneill Exp $ */
+/* $NetBSD: apple_wdog.c,v 1.3 2022/04/05 05:04:04 skrll Exp $ */
 
 /*-
  * Copyright (c) 2021 Jared McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: apple_wdog.c,v 1.1 2021/08/30 23:26:26 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: apple_wdog.c,v 1.3 2022/04/05 05:04:04 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -46,6 +46,7 @@ __KERNEL_RCSID(0, "$NetBSD: apple_wdog.c,v 1.1 2021/08/30 23:26:26 jmcneill Exp 
 #define	 WDOG_SYS_CTL_ENABLE	__BIT(2)
 
 static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "apple,wdt" },
 	{ .compat = "apple,reboot-v0" },
 	DEVICE_COMPAT_EOL
 };
@@ -99,8 +100,7 @@ apple_wdog_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dev = self;
 	sc->sc_bst = faa->faa_bst;
-	if (bus_space_map(sc->sc_bst, addr, size,
-	    _ARM_BUS_SPACE_MAP_STRONGLY_ORDERED, &sc->sc_bsh) != 0) {
+	if (bus_space_map(sc->sc_bst, addr, size, 0, &sc->sc_bsh) != 0) {
 		aprint_error(": couldn't map registers\n");
 		return;
 	}

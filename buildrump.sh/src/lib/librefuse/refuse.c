@@ -1,4 +1,4 @@
-/*	$NetBSD: refuse.c,v 1.101 2019/09/23 12:00:57 christos Exp $	*/
+/*	$NetBSD: refuse.c,v 1.114 2022/01/22 08:09:39 pho Exp $	*/
 
 /*
  * Copyright © 2007 Alistair Crooks.  All rights reserved.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if !defined(lint)
-__RCSID("$NetBSD: refuse.c,v 1.101 2019/09/23 12:00:57 christos Exp $");
+__RCSID("$NetBSD: refuse.c,v 1.114 2022/01/22 08:09:39 pho Exp $");
 #endif /* !lint */
 
 #include <sys/types.h>
@@ -39,10 +39,11 @@ __RCSID("$NetBSD: refuse.c,v 1.101 2019/09/23 12:00:57 christos Exp $");
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
-#include <fuse.h>
-#include <fuse_lowlevel.h>
+#include <fuse_internal.h>
 #include <fuse_opt.h>
 #include <paths.h>
+#include <puffs.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,26 +67,6 @@ static struct fuse_opt refuse_opts[] = {
 	REFUSE_OPT("debug"    , debug , 1),
 	REFUSE_OPT("fsname=%s", fsname, 0),
 	FUSE_OPT_END
-};
-
-/* this is the private fuse structure */
-struct fuse {
-	struct puffs_usermount	*pu;
-	int			dead;
-	struct fuse_operations	op;		/* switch table of operations */
-	int			compat;		/* compat level -
-						 * not used in puffs_fuse */
-	struct node		**name_table;
-	size_t			name_table_size;
-	struct node		**id_table;
-	size_t			id_table_size;
-	fuse_ino_t		ctr;
-	unsigned int		generation;
-	unsigned int		hidectr;
-	pthread_mutex_t		lock;
-	pthread_rwlock_t	tree_lock;
-	void			*user_data;
-	int			intr_installed;
 };
 
 struct puffs_fuse_dirh {
@@ -206,6 +187,19 @@ create_context_key(void)
 #endif
 }
 
+/* struct fuse_context is potentially reused among different
+ * invocations of fuse_new() / fuse_destroy() pair. Clear its content
+ * on fuse_destroy() so that no dangling pointers remain in the
+ * context. */
+static void
+clear_context(void)
+{
+	struct fuse_context	*ctx;
+
+	ctx = fuse_get_context();
+	memset(ctx, 0, sizeof(*ctx));
+}
+
 static void
 delete_context_key(void)
 {   
@@ -285,7 +279,7 @@ fill_dirbuf(struct puffs_fuse_dirh *dh, const char *name, ino_t dino,
 /* XXX: I have no idea how "off" is supposed to be used */
 static int
 puffs_fuse_fill_dir(void *buf, const char *name,
-	const struct stat *stbuf, off_t off)
+	const struct stat *stbuf, off_t off, enum fuse_fill_dir_flags flags)
 {
 	struct puffs_fuse_dirh *deh = buf;
 	ino_t dino;
@@ -295,7 +289,7 @@ puffs_fuse_fill_dir(void *buf, const char *name,
 		dtype = DT_UNKNOWN;
 		dino = fakeino++;
 	} else {
-		dtype = puffs_vtype2dt(puffs_mode2vt(stbuf->st_mode));
+		dtype = (uint8_t)puffs_vtype2dt(puffs_mode2vt(stbuf->st_mode));
 		dino = stbuf->st_ino;
 
 		/*
@@ -311,39 +305,19 @@ puffs_fuse_fill_dir(void *buf, const char *name,
 	return fill_dirbuf(deh, name, dino, dtype);
 }
 
-static int
-puffs_fuse_dirfil(fuse_dirh_t h, const char *name, int type, ino_t ino)
-{
-	ino_t dino;
-	int dtype;
-
-	if ((dtype = type) == 0) {
-		dtype = DT_UNKNOWN;
-	}
-
-	dino = (ino) ? ino : fakeino++;
-
-	return fill_dirbuf(h, name, dino, dtype);
-}
-
-#define FUSE_ERR_UNLINK(fuse, file) if (fuse->op.unlink) fuse->op.unlink(file)
-#define FUSE_ERR_RMDIR(fuse, dir) if (fuse->op.rmdir) fuse->op.rmdir(dir)
-
 /* ARGSUSED1 */
 static int
 fuse_getattr(struct fuse *fuse, struct puffs_node *pn, const char *path,
 	struct vattr *va)
 {
+	struct refusenode	*rn = pn->pn_data;
+	struct fuse_file_info	*fi = rn->opencount > 0 ? &rn->file_info : NULL;
 	struct stat		 st;
 	int			ret;
 
-	if (fuse->op.getattr == NULL) {
-		return ENOSYS;
-	}
-
 	/* wrap up return code */
 	memset(&st, 0, sizeof(st));
-	ret = (*fuse->op.getattr)(path, &st);
+	ret = fuse_fs_getattr_v30(fuse->fs, path, &st, fi);
 
 	if (ret == 0) {
 		if (st.st_blksize == 0)
@@ -360,6 +334,7 @@ fuse_setattr(struct fuse *fuse, struct puffs_node *pn, const char *path,
 	const struct vattr *va)
 {
 	struct refusenode	*rn = pn->pn_data;
+	struct fuse_file_info	*fi = rn->opencount > 0 ? &rn->file_info : NULL;
 	mode_t			mode;
 	uid_t			uid;
 	gid_t			gid;
@@ -372,66 +347,31 @@ fuse_setattr(struct fuse *fuse, struct puffs_node *pn, const char *path,
 	gid = va->va_gid;
 
 	if (mode != (mode_t)PUFFS_VNOVAL) {
-		ret = 0;
-
-		if (fuse->op.chmod == NULL) {
-			error = -ENOSYS;
-		} else {
-			ret = fuse->op.chmod(path, mode);
-			if (ret)
-				error = ret;
-		}
+		ret = fuse_fs_chmod_v30(fuse->fs, path, mode, fi);
+		if (ret)
+			error = ret;
 	}
 	if (uid != (uid_t)PUFFS_VNOVAL || gid != (gid_t)PUFFS_VNOVAL) {
-		ret = 0;
-
-		if (fuse->op.chown == NULL) {
-			error = -ENOSYS;
-		} else {
-			ret = fuse->op.chown(path, uid, gid);
-			if (ret)
-				error = ret;
-		}
+		ret = fuse_fs_chown_v30(fuse->fs, path, uid, gid, fi);
+		if (ret)
+			error = ret;
 	}
 	if (va->va_atime.tv_sec != (time_t)PUFFS_VNOVAL
-	    || va->va_mtime.tv_sec != (long)PUFFS_VNOVAL) {
-		ret = 0;
+		|| va->va_mtime.tv_sec != (long)PUFFS_VNOVAL) {
 
-		if (fuse->op.utimens) {
-			struct timespec tv[2];
+		struct timespec	tv[2];
 
-			tv[0].tv_sec = va->va_atime.tv_sec;
-			tv[0].tv_nsec = va->va_atime.tv_nsec;
-			tv[1].tv_sec = va->va_mtime.tv_sec;
-			tv[1].tv_nsec = va->va_mtime.tv_nsec;
+		tv[0].tv_sec	= va->va_atime.tv_sec;
+		tv[0].tv_nsec	= va->va_atime.tv_nsec;
+		tv[1].tv_sec	= va->va_mtime.tv_sec;
+		tv[1].tv_nsec	= va->va_mtime.tv_nsec;
 
-			ret = fuse->op.utimens(path, tv);
-		} else if (fuse->op.utime) {
-			struct utimbuf timbuf;
-
-			timbuf.actime = va->va_atime.tv_sec;
-			timbuf.modtime = va->va_mtime.tv_sec;
-
-			ret = fuse->op.utime(path, &timbuf);
-		} else {
-			error = -ENOSYS;
-		}
-
+		ret = fuse_fs_utimens_v30(fuse->fs, path, tv, fi);
 		if (ret)
 			error = ret;
 	}
 	if (va->va_size != (u_quad_t)PUFFS_VNOVAL) {
-		ret = 0;
-
-		if (fuse->op.truncate) {
-			ret = fuse->op.truncate(path, (off_t)va->va_size);
-		} else if (fuse->op.ftruncate) {
-			ret = fuse->op.ftruncate(path, (off_t)va->va_size,
-			    &rn->file_info);
-		} else {
-			error = -ENOSYS;
-		}
-
+		ret = fuse_fs_truncate_v30(fuse->fs, path, (off_t)va->va_size, fi);
 		if (ret)
 			error = ret;
 	}
@@ -458,9 +398,9 @@ fuse_newnode(struct puffs_usermount *pu, const char *path,
 	pn = newrn(pu);
 	if (pn == NULL) {
 		if (va->va_type == VDIR) {
-			FUSE_ERR_RMDIR(fuse, path);
+			fuse_fs_rmdir(fuse->fs, path);
 		} else {
-			FUSE_ERR_UNLINK(fuse, path);
+			fuse_fs_unlink(fuse->fs, path);
 		}
 		return ENOMEM;
 	}
@@ -498,8 +438,7 @@ puffs_fuse_node_lookup(struct puffs_usermount *pu, void *opc,
 
 	set_fuse_context_uid_gid(pcn->pcn_cred);
 
-	ret = fuse->op.getattr(path, &st);
-
+	ret = fuse_fs_getattr_v30(fuse->fs, path, &st, NULL);
 	if (ret != 0) {
 		return -ret;
 	}
@@ -551,21 +490,18 @@ puffs_fuse_node_readlink(struct puffs_usermount *pu, void *opc,
 	int			ret;
 
 	fuse = puffs_getspecific(pu);
-	if (fuse->op.readlink == NULL) {
-		return ENOSYS;
-	}
 
 	set_fuse_context_uid_gid(cred);
 
 	/* wrap up return code */
-	ret = (*fuse->op.readlink)(path, linkname, *linklen);
+	ret = fuse_fs_readlink(fuse->fs, path, linkname, *linklen);
 
 	if (ret == 0) {
 		p = memchr(linkname, '\0', *linklen);
 		if (!p)
 			return EINVAL;
 
-		*linklen = p - linkname;
+		*linklen = (size_t)(p - linkname);
 	}
 
 	return -ret;
@@ -584,15 +520,12 @@ puffs_fuse_node_mknod(struct puffs_usermount *pu, void *opc,
 	int			ret;
 
 	fuse = puffs_getspecific(pu);
-	if (fuse->op.mknod == NULL) {
-		return ENOSYS;
-	}
 
 	set_fuse_context_uid_gid(pcn->pcn_cred);
 
 	/* wrap up return code */
 	mode = puffs_addvtype2mode(va->va_mode, va->va_type);
-	ret = (*fuse->op.mknod)(path, mode, va->va_rdev);
+	ret = fuse_fs_mknod(fuse->fs, path, mode, va->va_rdev);
 
 	if (ret == 0) {
 		ret = fuse_newnode(pu, path, va, NULL, pni, NULL);
@@ -617,12 +550,8 @@ puffs_fuse_node_mkdir(struct puffs_usermount *pu, void *opc,
 
 	set_fuse_context_uid_gid(pcn->pcn_cred);
 
-	if (fuse->op.mkdir == NULL) {
-		return ENOSYS;
-	}
-
 	/* wrap up return code */
-	ret = (*fuse->op.mkdir)(path, mode);
+	ret = fuse_fs_mkdir(fuse->fs, path, mode);
 
 	if (ret == 0) {
 		ret = fuse_newnode(pu, path, va, NULL, pni, NULL);
@@ -656,41 +585,37 @@ puffs_fuse_node_create(struct puffs_usermount *pu, void *opc,
 	set_fuse_context_uid_gid(pcn->pcn_cred);
 
 	memset(&fi, 0, sizeof(fi));
+	/* In puffs "create" and "open" are two separate operations
+	 * with atomicity achieved by locking the parent vnode. In
+	 * fuse, on the other hand, "create" is actually a
+	 * create-and-open-atomically and the open flags (O_RDWR,
+	 * O_APPEND, ...) are passed via fi.flags. So the only way to
+	 * emulate the fuse semantics is to open the file with dummy
+	 * flags and then immediately close it.
+	 *
+	 * You might think that we could simply use fuse->op.mknod all
+	 * the time but no, that's not possible because most file
+	 * systems nowadays expect op.mknod to be called only for
+	 * non-regular files and many don't even support it. */
 	created = 0;
-	if (fuse->op.create) {
-		/* In puffs "create" and "open" are two separate operations
-		 * with atomicity achieved by locking the parent vnode. In
-		 * fuse, on the other hand, "create" is actually a
-		 * create-and-open-atomically and the open flags (O_RDWR,
-		 * O_APPEND, ...) are passed via fi.flags. So the only way to
-		 * emulate the fuse semantics is to open the file with dummy
-		 * flags and then immediately close it.
-		 *
-		 * You might think that we could simply use fuse->op.mknod all
-		 * the time but no, that's not possible because most file
-		 * systems nowadays expect op.mknod to be called only for
-		 * non-regular files and many don't even support it. */
-		fi.flags = O_WRONLY | O_CREAT | O_EXCL;
-		ret = fuse->op.create(path, mode | S_IFREG, &fi);
-		if (ret == 0)
-			created = 1;
-
-	} else if (fuse->op.mknod) {
-		ret = fuse->op.mknod(path, mode | S_IFREG, 0);
-
-	} else {
-		ret = -ENOSYS;
+	fi.flags = O_WRONLY | O_CREAT | O_EXCL;
+	ret = fuse_fs_create(fuse->fs, path, mode | S_IFREG, &fi);
+	if (ret == 0) {
+		created = 1;
+	}
+	else if (ret == -ENOSYS) {
+		ret = fuse_fs_mknod(fuse->fs, path, mode | S_IFREG, 0);
 	}
 
 	if (ret == 0) {
 		ret = fuse_newnode(pu, path, va, &fi, pni, &pn);
 
 		/* sweet..  create also open the file */
-		if (created && fuse->op.release) {
+		if (created) {
 			struct refusenode *rn = pn->pn_data;
 			/* The return value of op.release is expected to be
 			 * discarded. */
-			(void)fuse->op.release(path, &rn->file_info);
+			(void)fuse_fs_release(fuse->fs, path, &rn->file_info);
 		}
 	}
 
@@ -712,12 +637,8 @@ puffs_fuse_node_remove(struct puffs_usermount *pu, void *opc, void *targ,
 
 	set_fuse_context_uid_gid(pcn->pcn_cred);
 
-	if (fuse->op.unlink == NULL) {
-		return ENOSYS;
-	}
-
 	/* wrap up return code */
-	ret = (*fuse->op.unlink)(path);
+	ret = fuse_fs_unlink(fuse->fs, path);
 
 	return -ret;
 }
@@ -737,12 +658,8 @@ puffs_fuse_node_rmdir(struct puffs_usermount *pu, void *opc, void *targ,
 
 	set_fuse_context_uid_gid(pcn->pcn_cred);
 
-	if (fuse->op.rmdir == NULL) {
-		return ENOSYS;
-	}
-
 	/* wrap up return code */
-	ret = (*fuse->op.rmdir)(path);
+	ret = fuse_fs_rmdir(fuse->fs, path);
 
 	return -ret;
 }
@@ -762,12 +679,8 @@ puffs_fuse_node_symlink(struct puffs_usermount *pu, void *opc,
 
 	set_fuse_context_uid_gid(pcn_src->pcn_cred);
 
-	if (fuse->op.symlink == NULL) {
-		return ENOSYS;
-	}
-
 	/* wrap up return code */
-	ret = fuse->op.symlink(link_target, path);
+	ret = fuse_fs_symlink(fuse->fs, link_target, path);
 
 	if (ret == 0) {
 		ret = fuse_newnode(pu, path, va, NULL, pni, NULL);
@@ -792,14 +705,7 @@ puffs_fuse_node_rename(struct puffs_usermount *pu, void *opc, void *src,
 
 	set_fuse_context_uid_gid(pcn_targ->pcn_cred);
 
-	if (fuse->op.rename == NULL) {
-		return ENOSYS;
-	}
-
-	ret = fuse->op.rename(path_src, path_dest);
-
-	if (ret == 0) {
-	}
+	ret = fuse_fs_rename_v30(fuse->fs, path_src, path_dest, 0);
 
 	return -ret;
 }
@@ -818,12 +724,8 @@ puffs_fuse_node_link(struct puffs_usermount *pu, void *opc, void *targ,
 
 	set_fuse_context_uid_gid(pcn->pcn_cred);
 
-	if (fuse->op.link == NULL) {
-		return ENOSYS;
-	}
-
 	/* wrap up return code */
-	ret = (*fuse->op.link)(PNPATH(pn), PCNPATH(pcn));
+	ret = fuse_fs_link(fuse->fs, PNPATH(pn), PCNPATH(pcn));
 
 	return -ret;
 }
@@ -849,6 +751,19 @@ puffs_fuse_node_setattr(struct puffs_usermount *pu, void *opc,
 	return fuse_setattr(fuse, pn, path, va);
 }
 
+static int
+puffs_fuse_node_pathconf(struct puffs_usermount *pu, void *opc,
+	int name, __register_t *retval)
+{
+	/* Returning EINVAL for pathconf(2) means that this filesystem
+	 * does not support an association of the given name with the
+	 * file. This is necessary because the default error code
+	 * returned by the puffs kernel module (ENOTSUPP) is not
+	 * suitable for an errno from pathconf(2), and "ls -l"
+	 * complains about it. */
+	return EINVAL;
+}
+
 /* ARGSUSED2 */
 static int
 puffs_fuse_node_open(struct puffs_usermount *pu, void *opc, int mode,
@@ -859,6 +774,7 @@ puffs_fuse_node_open(struct puffs_usermount *pu, void *opc, int mode,
 	struct fuse_file_info	*fi = &rn->file_info;
 	struct fuse		*fuse;
 	const char		*path = PNPATH(pn);
+	int			ret;
 
 	fuse = puffs_getspecific(pu);
 
@@ -874,17 +790,17 @@ puffs_fuse_node_open(struct puffs_usermount *pu, void *opc, int mode,
 	fi->flags = (mode & ~(O_CREAT | O_EXCL | O_TRUNC)) - 1;
 
 	if (pn->pn_va.va_type == VDIR) {
-		if (fuse->op.opendir)
-			fuse->op.opendir(path, fi);
+		ret = fuse_fs_opendir(fuse->fs, path, fi);
 	} else {
-		if (fuse->op.open)
-			fuse->op.open(path, fi);
+		ret = fuse_fs_open(fuse->fs, path, fi);
 	}
 
-	rn->flags |= RN_OPEN;
-	rn->opencount++;
+	if (ret == 0) {
+		rn->flags |= RN_OPEN;
+		rn->opencount++;
+	}
 
-	return 0;
+	return -ret;
 }
 
 /* ARGSUSED2 */
@@ -907,11 +823,9 @@ puffs_fuse_node_close(struct puffs_usermount *pu, void *opc, int fflag,
 
 	if (rn->flags & RN_OPEN) {
 		if (pn->pn_va.va_type == VDIR) {
-			if (fuse->op.releasedir)
-				ret = fuse->op.releasedir(path, fi);
+			ret = fuse_fs_releasedir(fuse->fs, path, fi);
 		} else {
-			if (fuse->op.release)
-				ret = fuse->op.release(path, fi);
+			ret = fuse_fs_release(fuse->fs, path, fi);
 		}
 	}
 	rn->flags &= ~RN_OPEN;
@@ -935,25 +849,22 @@ puffs_fuse_node_read(struct puffs_usermount *pu, void *opc, uint8_t *buf,
 	int			ret;
 
 	fuse = puffs_getspecific(pu);
-	if (fuse->op.read == NULL) {
-		return ENOSYS;
-	}
 
 	set_fuse_context_uid_gid(pcr);
 
 	maxread = *resid;
-	if (maxread > pn->pn_va.va_size - offset) {
+	if (maxread > (size_t)((off_t)pn->pn_va.va_size - offset)) {
 		/*LINTED*/
-		maxread = pn->pn_va.va_size - offset;
+		maxread = (size_t)((off_t)pn->pn_va.va_size - offset);
 	}
 	if (maxread == 0)
 		return 0;
 
-	ret = (*fuse->op.read)(path, (char *)buf, maxread, offset,
-	    &rn->file_info);
+	ret = fuse_fs_read(fuse->fs, path, (char *)buf, maxread, offset,
+			   &rn->file_info);
 
 	if (ret > 0) {
-		*resid -= ret;
+		*resid -= (size_t)ret;
 		ret = 0;
 	}
 
@@ -974,22 +885,19 @@ puffs_fuse_node_write(struct puffs_usermount *pu, void *opc, uint8_t *buf,
 	int			ret;
 
 	fuse = puffs_getspecific(pu);
-	if (fuse->op.write == NULL) {
-		return ENOSYS;
-	}
 
 	set_fuse_context_uid_gid(pcr);
 
 	if (ioflag & PUFFS_IO_APPEND)
-		offset = pn->pn_va.va_size;
+		offset = (off_t)pn->pn_va.va_size;
 
-	ret = (*fuse->op.write)(path, (char *)buf, *resid, offset,
-	    &rn->file_info);
+	ret = fuse_fs_write(fuse->fs, path, (char *)buf, *resid, offset,
+			    &rn->file_info);
 
 	if (ret >= 0) {
 		if ((uint64_t)(offset + ret) > pn->pn_va.va_size)
-			pn->pn_va.va_size = offset + ret;
-		*resid -= ret;
+			pn->pn_va.va_size = (u_quad_t)(offset + ret);
+		*resid -= (size_t)ret;
 		ret = (*resid == 0) ? 0 : ENOSPC;
 	} else {
 		ret = -ret;
@@ -1015,9 +923,6 @@ puffs_fuse_node_readdir(struct puffs_usermount *pu, void *opc,
 	int			ret;
 
 	fuse = puffs_getspecific(pu);
-	if (fuse->op.readdir == NULL && fuse->op.getdir == NULL) {
-		return ENOSYS;
-	}
 
 	set_fuse_context_uid_gid(pcr);
 
@@ -1035,11 +940,10 @@ puffs_fuse_node_readdir(struct puffs_usermount *pu, void *opc,
 		free(dirh->dbuf);
 		memset(dirh, 0, sizeof(struct puffs_fuse_dirh));
 
-		if (fuse->op.readdir)
-			ret = fuse->op.readdir(path, dirh, puffs_fuse_fill_dir,
-			    0, &rn->file_info);
-		else
-			ret = fuse->op.getdir(path, dirh, puffs_fuse_dirfil);
+		ret = fuse_fs_readdir_v30(
+			fuse->fs, path, dirh, puffs_fuse_fill_dir,
+			0, &rn->file_info, (enum fuse_readdir_flags)0);
+
 		if (ret)
 			return -ret;
 	}
@@ -1056,7 +960,7 @@ puffs_fuse_node_readdir(struct puffs_usermount *pu, void *opc,
 			break;
 
 		memcpy(dent, fromdent, _DIRENT_SIZE(fromdent));
-		*readoff += _DIRENT_SIZE(fromdent);
+		*readoff += (off_t)_DIRENT_SIZE(fromdent);
 		*reslen -= _DIRENT_SIZE(fromdent);
 
 		dent = _DIRENT_NEXT(dent);
@@ -1082,10 +986,7 @@ puffs_fuse_fs_unmount(struct puffs_usermount *pu, int flags)
 	struct fuse		*fuse;
 
 	fuse = puffs_getspecific(pu);
-	if (fuse->op.destroy == NULL) {
-		return 0;
-	}
-	(*fuse->op.destroy)(fuse);
+	fuse_fs_destroy(fuse->fs);
         return 0;
 }
 
@@ -1106,102 +1007,128 @@ puffs_fuse_fs_statvfs(struct puffs_usermount *pu, struct puffs_statvfs *svfsb)
 	int			ret;
 	struct statvfs		sb;
 
+	/* fuse_fs_statfs() is special: it returns 0 even if the
+	 * filesystem doesn't support statfs. So clear the struct
+	 * before calling it. */
+	memset(&sb, 0, sizeof(sb));
+
 	fuse = puffs_getspecific(pu);
-	if (fuse->op.statfs == NULL) {
-		if ((ret = statvfs(PNPATH(puffs_getroot(pu)), &sb)) == -1) {
-			return errno;
-		}
-	} else {
-		ret = fuse->op.statfs(PNPATH(puffs_getroot(pu)), &sb);
-	}
-	statvfs_to_puffs_statvfs(&sb, svfsb);
+	ret = fuse_fs_statfs(fuse->fs, PNPATH(puffs_getroot(pu)), &sb);
+
+	if (ret == 0)
+		statvfs_to_puffs_statvfs(&sb, svfsb);
 
         return -ret;
 }
 
-
 /* End of puffs_fuse operations */
-/* ARGSUSED3 */
-int
-fuse_main_real(int argc, char **argv, const struct fuse_operations *ops,
-	size_t size, void *user_data)
+
+struct fuse *
+__fuse_setup(int argc, char* argv[],
+	     const void* op, int op_version, void* user_data,
+	     struct fuse_cmdline_opts* opts)
 {
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+	struct fuse *fuse = NULL;
+
+	/* parse low-level options */
+	if (fuse_parse_cmdline_v30(&args, opts) != 0)
+		return NULL;
+
+	if (opts->show_version) {
+		fuse_lowlevel_version();
+		goto free_args;
+	}
+
+	if (opts->show_help) {
+		switch (opts->show_help) {
+		case REFUSE_SHOW_HELP_FULL:
+			if (args.argv[0] != NULL && args.argv[0][0] != '\0') {
+				/* argv[0] being empty means that the application doesn't
+				 * want us to print the usage string.
+				 */
+				printf("Usage: %s [options] mountpoint\n\n", args.argv[0]);
+			}
+			break;
+		case REFUSE_SHOW_HELP_NO_HEADER:
+			break;
+		}
+		fuse_cmdline_help();
+		goto free_args;
+	}
+
+	if (opts->mountpoint == NULL) {
+		fprintf(stderr, "fuse: no mountpoint specified\n");
+		goto free_args;
+	}
+
+	if (opts->debug) {
+		if (fuse_opt_add_arg(&args, "-odebug") != 0)
+			goto free_args;
+	}
+
+	fuse = __fuse_new(&args, op, op_version, user_data);
+	if (fuse == NULL)
+		goto free_args;
+
+	if (fuse_daemonize(opts->foreground) != 0)
+		goto destroy;
+
+	if (fuse_mount_v30(fuse, opts->mountpoint) != 0)
+		goto destroy;
+
+	if (__fuse_set_signal_handlers(fuse) != 0) {
+		warn("%s: Failed to set signal handlers", __func__);
+		goto destroy;
+	}
+
+	goto done;
+
+destroy:
+	fuse_destroy_v30(fuse);
+	fuse = NULL;
+free_args:
+	free(opts->mountpoint);
+done:
+	fuse_opt_free_args(&args);
+	return fuse;
+}
+
+void
+__fuse_teardown(struct fuse* fuse)
+{
+	if (__fuse_remove_signal_handlers(fuse) != 0)
+		warn("%s: Failed to restore signal handlers", __func__);
+
+	fuse_unmount_v30(fuse);
+}
+
+/* ARGSUSED3 */
+int
+__fuse_main(int argc, char **argv, const void *op,
+	int op_version, void *user_data)
+{
 	struct fuse_cmdline_opts opts;
 	struct fuse *fuse;
 	int rv;
 
-	/* parse low-level options */
-	if (fuse_parse_cmdline(&args, &opts) == -1) {
-		return 1;
-	}
-
-	if (opts.show_version) {
-		fuse_lowlevel_version();
-		rv = 0;
-		goto free_args;
-	}
-
-	if (opts.show_help) {
-		if (args.argv[0] != NULL && args.argv[0][0] != '\0') {
-			/* argv[0] being empty means that the application doesn't
-			 * want us to print the usage string.
-			 */
-			printf("Usage: %s [options] mountpoint\n\n", args.argv[0]);
-		}
-		fuse_cmdline_help();
-		rv = 0;
-		goto free_args;
-	}
-
-	if (opts.mountpoint == NULL) {
-		fprintf(stderr, "fuse: no mountpoint specified\n");
-		rv = 1;
-		goto free_args;
-	}
-
-	if (opts.debug) {
-		if (fuse_opt_add_arg(&args, "-odebug") == -1) {
-			rv = 1;
-			goto free_args;
-		}
-	}
-
-	fuse = fuse_new(&args, ops, size, user_data);
-	if (fuse == NULL) {
-		rv = 1;
-		goto free_args;
-	}
-
-	if (!opts.foreground) {
-		if (fuse_daemonize(fuse) == -1) {
-			rv = 1;
-			goto destroy;
-		}
-	}
-
-	if (fuse_mount(fuse, opts.mountpoint) == -1) {
-		rv = 1;
-		goto destroy;
-	}
+	fuse = __fuse_setup(argc, argv, op, op_version, user_data, &opts);
+	if (fuse == NULL)
+		return -1;
 
 	rv = fuse_loop(fuse);
 
-	fuse_unmount(fuse);
-destroy:
-	fuse_destroy(fuse);
-free_args:
+	__fuse_teardown(fuse);
+
 	free(opts.mountpoint);
-	fuse_opt_free_args(&args);
 	return rv;
 }
 
-int fuse_mount(struct fuse *fuse, const char *mountpoint)
+int __fuse_mount(struct fuse *fuse, const char *mountpoint)
 {
 	struct puffs_pathobj	*po_root;
 	struct puffs_node	*pn_root;
 	struct refusenode	*rn_root;
-	struct stat		 st;
 	struct puffs_statvfs	 svfsb;
 
 	pn_root = newrn(fuse->pu);
@@ -1219,10 +1146,11 @@ int fuse_mount(struct fuse *fuse, const char *mountpoint)
 	puffs_vattr_null(&pn_root->pn_va);
 	pn_root->pn_va.va_type = VDIR;
 	pn_root->pn_va.va_mode = 0755;
-	if (fuse->op.getattr)
-		if (fuse->op.getattr(po_root->po_path, &st) == 0)
-			puffs_stat2vattr(&pn_root->pn_va, &st);
-	assert(pn_root->pn_va.va_type == VDIR);
+	/* It might be tempting to call op.getattr("/") here to
+	 * populate pn_root->pa_va, but that would mean invoking an
+	 * operation callback without initializing the filesystem. We
+	 * cannot call op.init() either, because that is supposed to
+	 * be called right before entering the main loop. */
 
 	puffs_set_prepost(fuse->pu, set_fuse_context_pid, NULL);
 
@@ -1234,33 +1162,43 @@ int fuse_mount(struct fuse *fuse, const char *mountpoint)
 	return 0;
 }
 
-int fuse_daemonize(struct fuse *fuse)
+int fuse_daemonize(int foreground)
 {
-	return puffs_daemon(fuse->pu, 0, 0);
+	/* There is an impedance mismatch here: FUSE wants to
+	 * daemonize the process without any contexts but puffs wants
+	 * one. */
+	struct fuse *fuse = fuse_get_context()->fuse;
+
+	if (!fuse)
+		/* FUSE would probably allow this, but we cannot. */
+		errx(EXIT_FAILURE,
+		     "%s: librefuse doesn't allow calling"
+		     " this function before fuse_new().", __func__);
+
+	if (!foreground)
+		return puffs_daemon(fuse->pu, 0, 0);
+
+	return 0;
 }
 
-/* ARGSUSED1 */
 struct fuse *
-fuse_new(struct fuse_args *args,
-	const struct fuse_operations *ops, size_t size, void *userdata)
+__fuse_new(struct fuse_args *args, const void *op, int op_version, void* user_data)
 {
 	struct refuse_config	config;
 	struct puffs_usermount	*pu;
 	struct fuse_context	*fusectx;
 	struct puffs_ops	*pops;
 	struct fuse		*fuse;
-	int			puffs_flags;
+	uint32_t		puffs_flags;
 
 	/* parse refuse options */
+	memset(&config, 0, sizeof(config));
 	if (fuse_opt_parse(args, &config, refuse_opts, NULL) == -1)
 		return NULL;
 
 	if ((fuse = calloc(1, sizeof(*fuse))) == NULL) {
 		err(EXIT_FAILURE, "fuse_new");
 	}
-
-	/* copy fuse ops to their own structure */
-	(void) memcpy(&fuse->op, ops, sizeof(fuse->op));
 
 	/* grab the pthread context key */
 	if (!create_context_key()) {
@@ -1269,15 +1207,15 @@ fuse_new(struct fuse_args *args,
 		return NULL;
 	}
 
+	/* Create the base filesystem layer. */
+	fuse->fs = __fuse_fs_new(op, op_version, user_data);
+
 	fusectx = fuse_get_context();
 	fusectx->fuse = fuse;
 	fusectx->uid = 0;
 	fusectx->gid = 0;
 	fusectx->pid = 0;
-	fusectx->private_data = userdata;
-
-	if (fuse->op.init != NULL)
-		fusectx->private_data = fuse->op.init(NULL); /* XXX */
+	fusectx->private_data = user_data;
 
 	/* initialise the puffs operations structure */
         PUFFSOP_INIT(pops);
@@ -1293,6 +1231,7 @@ fuse_new(struct fuse_args *args,
         PUFFSOP_SET(pops, puffs_fuse, node, lookup);
         PUFFSOP_SET(pops, puffs_fuse, node, getattr);
         PUFFSOP_SET(pops, puffs_fuse, node, setattr);
+	PUFFSOP_SET(pops, puffs_fuse, node, pathconf);
         PUFFSOP_SET(pops, puffs_fuse, node, readdir);
         PUFFSOP_SET(pops, puffs_fuse, node, readlink);
         PUFFSOP_SET(pops, puffs_fuse, node, mknod);
@@ -1328,11 +1267,30 @@ fuse_new(struct fuse_args *args,
 int
 fuse_loop(struct fuse *fuse)
 {
+	struct fuse_conn_info conn;
+	struct fuse_config cfg;
+
+	/* struct fuse_conn_info is a part of the FUSE API so we must
+	 * expose it to users, but we currently don't use them at
+	 * all. The same goes for struct fuse_config. */
+	memset(&conn, 0, sizeof(conn));
+	memset(&cfg, 0, sizeof(cfg));
+
+	fuse_fs_init_v30(fuse->fs, &conn, &cfg);
+
 	return puffs_mainloop(fuse->pu);
 }
 
+int
+__fuse_loop_mt(struct fuse *fuse,
+	       struct fuse_loop_config *config __attribute__((__unused__)))
+{
+	/* TODO: Implement a proper multi-threaded loop. */
+	return fuse_loop(fuse);
+}
+
 void
-fuse_destroy(struct fuse *fuse)
+__fuse_destroy(struct fuse *fuse)
 {
 
 	/*
@@ -1340,6 +1298,7 @@ fuse_destroy(struct fuse *fuse)
 	 * threads exist
 	 */
 
+	clear_context();
 	delete_context_key();
 	/* XXXXXX: missing stuff */
 	free(fuse);
@@ -1358,9 +1317,8 @@ fuse_exit(struct fuse *fuse)
  * XXX: obviously not the most perfect of functions, but needs some
  * puffs tweaking for a better tomorrow
  */
-/*ARGSUSED*/
 void
-fuse_unmount(struct fuse* fuse)
+__fuse_unmount(struct fuse *fuse)
 {
 	/* XXX: puffs_exit() is WRONG */
 	if (fuse->dead == 0)
@@ -1368,16 +1326,74 @@ fuse_unmount(struct fuse* fuse)
 	fuse->dead = 1;
 }
 
-/*ARGSUSED*/
 void
-fuse_unmount_compat22(const char *mp)
+fuse_lib_help(struct fuse_args *args __attribute__((__unused__)))
 {
+	fuse_cmdline_help();
+}
 
-	return;
+int
+fuse_interrupted(void)
+{
+	/* ReFUSE doesn't support request interruption at the
+	 * moment. */
+	return 0;
+}
+
+int
+fuse_invalidate_path(struct fuse *fuse __attribute__((__unused__)),
+		     const char *path __attribute__((__unused__)))
+{
+    /* ReFUSE doesn't cache anything at the moment. No need to do
+     * anything. */
+    return -ENOENT;
 }
 
 int
 fuse_version(void)
 {
-	return FUSE_VERSION;
+	return _REFUSE_VERSION_;
+}
+
+const char *
+fuse_pkgversion(void)
+{
+	return "ReFUSE " ___STRING(_REFUSE_MAJOR_VERSION_)
+		"." ___STRING(_REFUSE_MINOR_VERSION_);
+}
+
+int
+fuse_getgroups(int size, gid_t list[])
+{
+	/* XXX: In order to implement this, we need to save a pointer
+	 * to struct puffs_cred in struct fuse upon entering a puffs
+	 * callback, and set it back to NULL upon leaving it. Then we
+	 * can use puffs_cred_getgroups(3) here. */
+	return -ENOSYS;
+}
+
+int
+fuse_start_cleanup_thread(struct fuse *fuse)
+{
+	/* XXX: ReFUSE doesn't support -oremember at the moment. */
+	return 0;
+}
+
+void
+fuse_stop_cleanup_thread(struct fuse *fuse) {
+	/* XXX: ReFUSE doesn't support -oremember at the moment. */
+}
+
+int
+fuse_clean_cache(struct fuse *fuse) {
+	/* XXX: ReFUSE doesn't support -oremember at the moment. */
+	return 3600;
+}
+
+/* This is a legacy function that has been removed from the FUSE API,
+ * but is defined here because it needs to access refuse_opts. */
+int
+fuse_is_lib_option(const char *opt)
+{
+	return fuse_opt_match(refuse_opts, opt);
 }

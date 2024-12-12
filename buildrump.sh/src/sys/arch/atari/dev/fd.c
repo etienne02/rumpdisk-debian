@@ -1,4 +1,4 @@
-/*	$NetBSD: fd.c,v 1.89 2021/08/07 16:18:46 thorpej Exp $	*/
+/*	$NetBSD: fd.c,v 1.99 2024/07/20 20:36:33 andvar Exp $	*/
 
 /*
  * Copyright (c) 1995 Leo Weppelman.
@@ -44,13 +44,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.89 2021/08/07 16:18:46 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.99 2024/07/20 20:36:33 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/buf.h>
 #include <sys/bufq.h>
 #include <sys/proc.h>
@@ -183,8 +182,8 @@ struct fd_types {
 
 /*
  * This is set only once at attach time. The value is determined by reading
- * the configuration switches and is one of the FLP_TYPE_*'s. 
- * This is simular to the way Atari handles the _FLP cookie.
+ * the configuration switches and is one of the FLP_TYPE_*'s.
+ * This is similar to the way Atari handles the _FLP cookie.
  */
 static short	def_type = 0;		/* Reflects config-switches	*/
 
@@ -193,12 +192,12 @@ static short	def_type = 0;		/* Reflects config-switches	*/
 
 typedef void	(*FPV)(void *);
 
-dev_type_open(fdopen);
-dev_type_close(fdclose);
-dev_type_read(fdread);
-dev_type_write(fdwrite);
-dev_type_ioctl(fdioctl);
-dev_type_strategy(fdstrategy);
+static dev_type_open(fdopen);
+static dev_type_close(fdclose);
+static dev_type_read(fdread);
+static dev_type_write(fdwrite);
+static dev_type_ioctl(fdioctl);
+static dev_type_strategy(fdstrategy);
 
 /*
  * Private drive functions....
@@ -324,7 +323,7 @@ fdcattach(device_t parent, device_t self, void *aux)
 	int i, nfound, first_found;
 
 	nfound = first_found = 0;
-	printf("\n");
+	aprint_normal("\n");
 	fddeselect();
 	for (i = 0; i < NR_DRIVES; i++) {
 
@@ -372,7 +371,7 @@ fdcprint(void *aux, const char *pnp)
 
 	if (pnp != NULL)
 		aprint_normal("fd%d at %s:", (int)aux, pnp);
-	
+
 	return UNCONF;
 }
 
@@ -424,7 +423,7 @@ fdattach(device_t parent, device_t self, void *aux)
 	disk_attach(&sc->dkdev);
 }
 
-int
+static int
 fdioctl(dev_t dev, u_long cmd, void * addr, int flag, struct lwp *l)
 {
 	struct fd_softc *sc;
@@ -465,14 +464,14 @@ fdioctl(dev_t dev, u_long cmd, void * addr, int flag, struct lwp *l)
  *	partition 0: 360Kb
  *	partition 1: 780Kb
  */
-int
+static int
 fdopen(dev_t dev, int flags, int devtype, struct lwp *l)
 {
 	struct fd_softc	*sc;
 	int s;
 
 #ifdef FLP_DEBUG
-	printf("fdopen dev=0x%x\n", dev);
+	printf("fdopen dev=0x%llx\n", dev);
 #endif
 
 	if (FLP_TYPE(dev) >= NR_TYPES)
@@ -555,7 +554,7 @@ fdopen(dev_t dev, int flags, int devtype, struct lwp *l)
 		 * floppy (eq. the same partition).
 		 */
 		if (sc->density != fdtypes[DISKPART(dev)].density)
-			return ENXIO;	/* XXX temporarely out of business */
+			return ENXIO;	/* XXX temporarily out of business */
 	}
 	fdgetdisklabel(sc, dev);
 #ifdef FLP_DEBUG
@@ -564,7 +563,7 @@ fdopen(dev_t dev, int flags, int devtype, struct lwp *l)
 	return 0;
 }
 
-int
+static int
 fdclose(dev_t dev, int flags, int devtype, struct lwp *l)
 {
 	struct fd_softc	*sc;
@@ -580,7 +579,7 @@ fdclose(dev_t dev, int flags, int devtype, struct lwp *l)
 	return 0;
 }
 
-void
+static void
 fdstrategy(struct buf *bp)
 {
 	struct fd_softc *sc;
@@ -590,7 +589,7 @@ fdstrategy(struct buf *bp)
 	sc = device_lookup_private(&fd_cd, DISKUNIT(bp->b_dev));
 
 #ifdef FLP_DEBUG
-	printf("fdstrategy: %p, b_bcount: %ld\n", bp, bp->b_bcount);
+	printf("fdstrategy: %p, b_bcount: %d\n", bp, bp->b_bcount);
 #endif
 
 	/*
@@ -618,7 +617,7 @@ fdstrategy(struct buf *bp)
 			bp->b_error = EINVAL;
 			goto done;
 		}
-		/* Trucate it */
+		/* Truncate it */
 		if (bp->b_flags & B_RAW)
 			bp->b_bcount = sz << DEV_BSHIFT;
 		else
@@ -648,14 +647,14 @@ done:
 	biodone(bp);
 }
 
-int
+static int
 fdread(dev_t dev, struct uio *uio, int flags)
 {
 
 	return physio(fdstrategy, NULL, dev, B_READ, fdminphys, uio);
 }
 
-int
+static int
 fdwrite(dev_t dev, struct uio *uio, int flags)
 {
 
@@ -1153,7 +1152,7 @@ fdmotoroff(struct fd_softc *sc)
 	int s;
 
 	/*
-	 * Get at harware interrupt level
+	 * Get at hardware interrupt level
 	 */
 	s = splbio();
 
@@ -1213,13 +1212,13 @@ fdminphys(struct buf *bp)
 	tsz  = sc->nsectors * sc->nheads * SECTOR_SIZE;
 
 #ifdef FLP_DEBUG
-	printf("fdminphys: before %ld", bp->b_bcount);
+	printf("fdminphys: before %d", bp->b_bcount);
 #endif
 
 	bp->b_bcount = uimin(bp->b_bcount, tsz - toff);
 
 #ifdef FLP_DEBUG
-	printf(" after %ld\n", bp->b_bcount);
+	printf(" after %d\n", bp->b_bcount);
 #endif
 
 	minphys(bp);
@@ -1255,7 +1254,7 @@ fdmoff(struct fd_softc *fdsoftc)
 }
 
 /*
- * Used to find out wich drives are actually connected. We do this by issuing
+ * Used to find out which drives are actually connected. We do this by issuing
  * is 'RESTORE' command and check if the 'track-0' bit is set. This also works
  * if the drive is present but no floppy is inserted.
  */
@@ -1302,7 +1301,7 @@ fdgetdefaultlabel(struct fd_softc *sc, struct disklabel *lp, int part)
 	lp->d_secperunit  = sc->nblocks;
 
 	lp->d_type        = DKTYPE_FLOPPY;
-	lp->d_rpm         = 300; 	/* good guess I suppose.	*/
+	lp->d_rpm         = 300;	/* good guess I suppose.	*/
 	lp->d_interleave  = 1;		/* FIXME: is this OK?		*/
 	lp->d_bbsize      = 0;
 	lp->d_sbsize      = 0;

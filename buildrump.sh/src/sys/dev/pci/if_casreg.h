@@ -1,4 +1,4 @@
-/*	$NetBSD: if_casreg.h,v 1.4 2021/08/17 22:00:31 andvar Exp $ */
+/*	$NetBSD: if_casreg.h,v 1.6 2022/05/28 10:36:23 andvar Exp $ */
 /*	$OpenBSD: if_casreg.h,v 1.10 2008/05/31 22:49:03 kettenis Exp $	*/
 
 /*
@@ -254,7 +254,7 @@
 #define	CAS_RX_PAGE_SIZE_SZ	0x00000003	/* Page size */
 #define	CAS_RX_PAGE_SIZE_COUNT	0x00007800	/* MTU buffers per page */
 #define	CAS_RX_PAGE_SIZE_STRIDE	0x18000000	/* MTU buffer separation */
-#define	CAS_RX_PAGE_SIZE_FBOFF	0xc0000000	/* Firts byte offset */
+#define	CAS_RX_PAGE_SIZE_FBOFF	0xc0000000	/* First byte offset */
 
 #define	CAS_RX_PAGE_SIZE_COUNT_SHIFT	11
 #define	CAS_RX_PAGE_SIZE_STRIDE_SHIFT	27
@@ -339,7 +339,7 @@
 #define	CAS_MAC_RX_CRC_ERR_CNT	0x61c4
 #define	CAS_MAC_RX_CODE_VIOL	0x61c8
 #define	CAS_MAC_RANDOM_SEED	0x61cc
-#define	CAS_MAC_MAC_STATE	0x61d0		/* MAC sstate machine reg */
+#define	CAS_MAC_MAC_STATE	0x61d0		/* MAC state machine reg */
 
 /* CAS_MAC_SEND_PAUSE_CMD register bits */
 #define	CAS_MAC_PAUSE_CMD_TIME	0x0000ffff
@@ -448,8 +448,8 @@
 #define	CAS_MIF_CONFIG_POLL_ENA	0x00000002	/* poll enable */
 #define	CAS_MIF_CONFIG_BB_ENA	0x00000004	/* bit bang enable */
 #define	CAS_MIF_CONFIG_REG_ADR	0x000000f8	/* poll register address */
-#define	CAS_MIF_CONFIG_MDI0	0x00000100	/* MDIO_0 Data/MDIO_0 atached */
-#define	CAS_MIF_CONFIG_MDI1	0x00000200	/* MDIO_1 Data/MDIO_1 atached */
+#define	CAS_MIF_CONFIG_MDI0	0x00000100	/* MDIO_0 Data/MDIO_0 attached */
+#define	CAS_MIF_CONFIG_MDI1	0x00000200	/* MDIO_1 Data/MDIO_1 attached */
 #define	CAS_MIF_CONFIG_PHY_ADR	0x00007c00	/* poll PHY address */
 /* MDI0 is onboard transceiver MID1 is external, PHYAD for both is 0 */
 

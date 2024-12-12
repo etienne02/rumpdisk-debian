@@ -1,4 +1,4 @@
-/*	$NetBSD: if_umb.c,v 1.20 2021/06/16 00:21:19 riastradh Exp $ */
+/*	$NetBSD: if_umb.c,v 1.26 2024/07/05 04:31:52 rin Exp $ */
 /*	$OpenBSD: if_umb.c,v 1.20 2018/09/10 17:00:45 gerhard Exp $ */
 
 /*
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_umb.c,v 1.20 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_umb.c,v 1.26 2024/07/05 04:31:52 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -297,6 +297,7 @@ umb_attach(device_t parent, device_t self, void *aux)
 	usbd_status status;
 	usbd_desc_iter_t iter;
 	const usb_descriptor_t *desc;
+	const usb_cdc_descriptor_t *csdesc;
 	int	 v;
 	const usb_cdc_union_descriptor_t *ud;
 	const struct mbim_descriptor *md;
@@ -335,6 +336,8 @@ umb_attach(device_t parent, device_t self, void *aux)
 	usb_desc_iter_init(sc->sc_udev, &iter);
 	while ((desc = usb_desc_iter_next(&iter))) {
 		if (desc->bDescriptorType == UDESC_INTERFACE_ASSOC) {
+			if (desc->bLength < sizeof(*ad))
+				continue;
 			ad = (const usb_interface_assoc_descriptor_t *)desc;
 			if (ad->bFirstInterface == uiaa->uiaa_ifaceno &&
 			    ad->bInterfaceCount > 1)
@@ -342,6 +345,8 @@ umb_attach(device_t parent, device_t self, void *aux)
 			continue;
 		}
 		if (desc->bDescriptorType == UDESC_INTERFACE) {
+			if (desc->bLength < sizeof(*id))
+				continue;
 			id = (const usb_interface_descriptor_t *)desc;
 			current_ifaceno = id->bInterfaceNumber;
 			continue;
@@ -350,12 +355,19 @@ umb_attach(device_t parent, device_t self, void *aux)
 			continue;
 		if (desc->bDescriptorType != UDESC_CS_INTERFACE)
 			continue;
-		switch (desc->bDescriptorSubtype) {
+		if (desc->bLength < sizeof(*csdesc))
+			continue;
+		csdesc = (const usb_cdc_descriptor_t *)desc;
+		switch (csdesc->bDescriptorSubtype) {
 		case UDESCSUB_CDC_UNION:
+			if (desc->bLength < sizeof(*ud))
+				continue;
 			ud = (const usb_cdc_union_descriptor_t *)desc;
 			data_ifaceno = ud->bSlaveInterface[0];
 			break;
 		case UDESCSUB_MBIM:
+			if (desc->bLength < sizeof(*md))
+				continue;
 			md = (const struct mbim_descriptor *)desc;
 			v = UGETW(md->bcdMBIMVersion);
 			sc->sc_ver_maj = MBIM_VER_MAJOR(v);
@@ -681,10 +693,8 @@ umb_free_xfers(struct umb_softc *sc)
 		sc->sc_tx_xfer = NULL;
 		sc->sc_tx_buf = NULL;
 	}
-	if (sc->sc_tx_m) {
-		m_freem(sc->sc_tx_m);
-		sc->sc_tx_m = NULL;
-	}
+	m_freem(sc->sc_tx_m);
+	sc->sc_tx_m = NULL;
 }
 
 Static int
@@ -773,7 +783,7 @@ umb_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		usb_add_task(sc->sc_udev, &sc->sc_umb_task, USB_TASKQ_DRIVER);
 		break;
 	case SIOCGUMBINFO:
-		error = kauth_authorize_network(curlwp->l_cred,
+		error = kauth_authorize_network(kauth_cred_get(),
 		    KAUTH_NETWORK_INTERFACE,
 		    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp, KAUTH_ARG(cmd),
 		    NULL);
@@ -783,7 +793,7 @@ umb_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		    sizeof(sc->sc_info));
 		break;
 	case SIOCSUMBPARAM:
-		error = kauth_authorize_network(curlwp->l_cred,
+		error = kauth_authorize_network(kauth_cred_get(),
 		    KAUTH_NETWORK_INTERFACE,
 		    KAUTH_REQ_NETWORK_INTERFACE_SETPRIV, ifp, KAUTH_ARG(cmd),
 		    NULL);
@@ -1730,7 +1740,8 @@ umb_decode_ip_configuration(struct umb_softc *sc, void *data, int len)
 		sin->sin_family = AF_INET;
 		sin->sin_len = sizeof(ifra.ifra_dstaddr);
 		off = le32toh(ic->ipv4_gwoffs);
-		sin->sin_addr.s_addr = *((uint32_t *)((char *)data + off));
+		memcpy(&sin->sin_addr.s_addr, (const char *)data + off,
+		    sizeof(sin->sin_addr.s_addr));
 
 		sin = (struct sockaddr_in *)&ifra.ifra_mask;
 		sin->sin_family = AF_INET;
@@ -1759,7 +1770,7 @@ umb_decode_ip_configuration(struct umb_softc *sc, void *data, int len)
 		while (n-- > 0) {
 			if (off + sizeof(uint32_t) > len)
 				break;
-			val = *((uint32_t *)((char *)data + off));
+			memcpy(&val, (const char *)data + off, sizeof(val));
 			if (i < UMB_MAX_DNSSRV)
 				sc->sc_info.ipv4dns[i++] = val;
 			off += sizeof(uint32_t);
@@ -2048,17 +2059,10 @@ fail:
 Static usbd_status
 umb_send_encap_command(struct umb_softc *sc, void *data, int len)
 {
-	struct usbd_xfer *xfer;
 	usb_device_request_t req;
-	char *buf;
 
 	if (len > sc->sc_ctrl_len)
 		return USBD_INVAL;
-
-	if (usbd_create_xfer(sc->sc_udev->ud_pipe0, len, 0, 0, &xfer) != 0)
-		return USBD_NOMEM;
-	buf = usbd_get_buffer(xfer);
-	memcpy(buf, data, len);
 
 	/* XXX FIXME: if (total len > sc->sc_ctrl_len) => must fragment */
 	req.bmRequestType = UT_WRITE_CLASS_INTERFACE;
@@ -2067,7 +2071,7 @@ umb_send_encap_command(struct umb_softc *sc, void *data, int len)
 	USETW(req.wIndex, sc->sc_ctrl_ifaceno);
 	USETW(req.wLength, len);
 	DELAY(umb_delay);
-	return usbd_request_async(sc->sc_udev, xfer, &req, NULL, NULL);
+	return usbd_do_request(sc->sc_udev, &req, data);
 }
 
 Static int

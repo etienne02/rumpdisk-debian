@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.831 2020/07/14 00:45:52 yamaguchi Exp $	*/
+/*	$NetBSD: machdep.c,v 1.842 2024/06/27 23:58:46 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1996, 1997, 1998, 2000, 2004, 2006, 2008, 2009, 2017
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.831 2020/07/14 00:45:52 yamaguchi Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.842 2024/06/27 23:58:46 riastradh Exp $");
 
 #include "opt_beep.h"
 #include "opt_compat_freebsd.h"
@@ -106,6 +106,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.831 2020/07/14 00:45:52 yamaguchi Exp 
 #include <sys/ras.h>
 #include <sys/ksyms.h>
 #include <sys/device.h>
+#include <sys/timevar.h>
 
 #ifdef KGDB
 #include <sys/kgdb.h>
@@ -134,8 +135,10 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.831 2020/07/14 00:45:52 yamaguchi Exp 
 #include <machine/specialreg.h>
 #include <machine/bootinfo.h>
 #include <machine/mtrr.h>
+#include <machine/pmap_private.h>
 #include <x86/x86/tsc.h>
 
+#include <x86/bootspace.h>
 #include <x86/fpu.h>
 #include <x86/dbregs.h>
 #include <x86/machdep.h>
@@ -151,6 +154,8 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.831 2020/07/14 00:45:52 yamaguchi Exp 
 #include <dev/isa/isareg.h>
 #include <machine/isa_machdep.h>
 #include <dev/ic/i8042reg.h>
+
+#include <ddb/db_active.h>
 
 #ifdef DDB
 #include <machine/db_machdep.h>
@@ -247,8 +252,6 @@ void init386(paddr_t);
 void initgdt(union descriptor *);
 
 static void i386_proc0_pcb_ldt_init(void);
-
-extern int time_adjusted;
 
 int *esym;
 int *eblob;
@@ -751,23 +754,16 @@ cpu_reboot(int howto, char *bootstr)
 			syncdone = true;
 			/* XXX used to force unmount as well, here */
 			vfs_sync_all(curlwp);
-			/*
-			 * If we've been adjusting the clock, the todr
-			 * will be out of synch; adjust it now.
-			 *
-			 * XXX used to do this after unmounting all
-			 * filesystems with vfs_shutdown().
-			 */
-			if (time_adjusted != 0)
-				resettodr();
 		}
 
 		while (vfs_unmountall1(curlwp, false, false) ||
 		       config_detach_all(boothowto) ||
 		       vfs_unmount_forceone(curlwp))
 			;	/* do nothing */
-	} else
-		suspendsched();
+	} else {
+		if (!db_active)
+			suspendsched();
+	}
 
 	pmf_system_shutdown(boothowto);
 
@@ -964,6 +960,41 @@ cpu_init_idt(struct cpu_info *ci)
 	lidt(&region);
 }
 
+/*
+ * initgdt(tgdt)
+ *
+ *	Initialize a temporary Global Descriptor Table (GDT) using
+ *	storage space at tgdt.
+ *
+ *	1. Set up segment descriptors for our purposes, including a
+ *	   CPU-local segment descriptor pointing at &cpu_info_primary.
+ *
+ *	2. Load the address into the Global Descriptor Table Register.
+ *
+ *	3. Set up segment selectors for all the segment registers using
+ *	   it so that %fs-relative addressing works for the CPU-local
+ *	   data.
+ *
+ *	After this put, CPUVAR(...), curcpu(), and curlwp will work.
+ *
+ *	Eventually the kernel will switch to a second temporary GDT
+ *	allocated with pmap_bootstrap_valloc in pmap_bootstrap, and
+ *	then to permanent GDT allocated with uvm_km(9) in gdt_init.
+ *	But the first temporary GDT is needed now to get us going with
+ *	early access to curcpu() and curlwp before we enter kernel
+ *	main.
+ *
+ *	XXX The purpose of each of the segment descriptors should be
+ *	written down somewhere in a single place that can be cross-
+ *	referenced.
+ *
+ *	References:
+ *
+ *	- Intel 64 and IA-32 Architectures Software Developer's Manual,
+ *	  Volume 3: System Programming Guide, Order Number 325384,
+ *	  April 2022, Sec. 3.5.1 `Segment Descriptor Tables',
+ *	  pp. 3-14 through 3-16.
+ */
 void
 initgdt(union descriptor *tgdt)
 {
@@ -1160,8 +1191,15 @@ init386(paddr_t first_avail)
 	uvm_lwp_setuarea(&lwp0, lwp0uarea);
 
 	cpu_probe(&cpu_info_primary);
+
+	/*
+	 * Initialize the no-execute bit on cpu0, if supported.
+	 *
+	 * Note: The call to cpu_init_msrs for secondary CPUs happens
+	 * in cpu_hatch.
+	 */
 	cpu_init_msrs(&cpu_info_primary, true);
-	cpu_rng_init();
+
 #ifndef XENPV
 	cpu_speculation_init(&cpu_info_primary);
 #endif
@@ -1252,6 +1290,22 @@ init386(paddr_t first_avail)
 	 */
 	pmap_bootstrap((vaddr_t)atdevbase + IOM_SIZE);
 
+	/*
+	 * Initialize RNG to get entropy ASAP either from CPU
+	 * RDRAND/RDSEED or from seed on disk.  Constraints:
+	 *
+	 * - Must happen after cpu_init_msrs so that curcpu() and
+	 *   curlwp work.
+	 *
+	 * - Must happen after consinit so we have the opportunity to
+	 *   print useful feedback.
+	 *
+	 * - On KASLR kernels, must happen after pmap_bootstrap because
+	 *   x86_rndseed requires access to the direct map.
+	 */
+	cpu_rng_init();
+	x86_rndseed();
+
 #ifndef XENPV
 	/* Initialize the memory clusters. */
 	init_x86_clusters();
@@ -1319,7 +1373,25 @@ init386(paddr_t first_avail)
 	idt_vec_init_cpu_md(iv, cpu_index(&cpu_info_primary));
 	idt = (idt_descriptor_t *)iv->iv_idt;
 
-#ifndef XENPV	
+#ifndef XENPV
+	/*
+	 * Switch from the initial temporary GDT that was allocated on
+	 * the stack by our caller, start.  That temporary GDT will be
+	 * popped off the stack when init386 returns before start calls
+	 * main, so we need to use a second temporary GDT allocated in
+	 * pmap_bootstrap with pmap_bootstrap_valloc/palloc to make
+	 * sure at least the CPU-local data area, used by CPUVAR(...),
+	 * curcpu(), and curlwp via %fs-relative addressing, will
+	 * continue to work.
+	 *
+	 * Later, in gdt_init via cpu_startup, we will finally allocate
+	 * a permanent GDT with uvm_km(9).
+	 *
+	 * The content of the second temporary GDT is the same as the
+	 * content of the initial GDT, initialized in initgdt, except
+	 * for the address of the LDT, which is also that we are also
+	 * switching to a new temporary LDT at a new address.
+	 */
 	tgdt = gdtstore;
 	gdtstore = (union descriptor *)gdt_vaddr;
 	ldtstore = (union descriptor *)ldt_vaddr;
@@ -1377,10 +1449,22 @@ init386(paddr_t first_avail)
 	    GSEL(GCODE_SEL, SEL_KPL));
 
 #ifndef XENPV
+	/*
+	 * Activate the second temporary GDT, allocated in
+	 * pmap_bootstrap with pmap_bootstrap_valloc/palloc, and
+	 * initialized with the content of the initial temporary GDT in
+	 * initgdt, plus an updated LDT.
+	 *
+	 * This ensures the %fs-relative addressing for the CPU-local
+	 * area used by CPUVAR(...), curcpu(), and curlwp will continue
+	 * to work after init386 returns and the initial temporary GDT
+	 * is popped off, before we call main and later create a
+	 * permanent GDT in gdt_init via cpu_startup.
+	 */
 	setregion(&region, gdtstore, NGDT * sizeof(gdtstore[0]) - 1);
 	lgdt(&region);
 #endif
-	
+
 	lldt(GSEL(GLDT_SEL, SEL_KPL));
 	cpu_init_idt(&cpu_info_primary);
 
@@ -1408,6 +1492,8 @@ init386(paddr_t first_avail)
 #endif
 
 #ifdef XENPV
+	extern int tmpstk;
+	cpu_info_primary.ci_intrstack = &tmpstk;
 	events_default_setup();
 #else
 	intr_default_setup();

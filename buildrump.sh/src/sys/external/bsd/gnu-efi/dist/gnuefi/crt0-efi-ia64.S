@@ -1,4 +1,4 @@
-/*	$NetBSD: crt0-efi-ia64.S,v 1.1.1.1 2014/04/01 16:16:08 jakllsch Exp $	*/
+/*	$NetBSD: crt0-efi-ia64.S,v 1.1.1.2 2021/09/30 18:50:09 jmcneill Exp $	*/
 
 /* crt0-efi-ia64.S - IA-64 EFI startup code.
    Copyright (C) 1999 Hewlett-Packard Co.
@@ -84,6 +84,6 @@ _start_plabel:
 
 	.section .reloc, "a"
 	data4	_start_plabel				// Page RVA
-	data4	12					// Block Size (2*4+2*2)
+	data4	12					// Block Size (2*4+2*2), must be aligned by 32 Bits
 	data2	(IMAGE_REL_BASED_DIR64<<12) +  0	// reloc for plabel's entry point
 	data2	(IMAGE_REL_BASED_DIR64<<12) +  8	// reloc for plabel's global pointer

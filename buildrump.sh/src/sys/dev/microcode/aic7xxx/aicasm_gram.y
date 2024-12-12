@@ -1,5 +1,5 @@
 %{
-/*	$NetBSD: aicasm_gram.y,v 1.7 2020/06/27 16:48:01 jdolecek Exp $	*/
+/*	$NetBSD: aicasm_gram.y,v 1.9 2021/10/25 07:40:29 ryo Exp $	*/
 
 /*
  * Parser for the Aic7xxx SCSI Host adapter sequencer assembler.
@@ -62,7 +62,6 @@
 #include "aicasm_symbol.h"
 #include "aicasm_insformat.h"
 
-int yylineno;
 char *yyfilename;
 char stock_prefix[] = "aic_";
 char *prefix = stock_prefix;
@@ -1757,7 +1756,7 @@ format_3_instr(int opcode, symbol_ref_t *src,
 	instr = seq_alloc();
 	f3_instr = &instr->format.format3;
 	if (address->symbol == NULL) {
-		/* 'dot' referrence.  Use the current instruction pointer */
+		/* 'dot' reference.  Use the current instruction pointer */
 		addr = instruction_ptr + address->offset;
 	} else if (address->symbol->type == UNINITIALIZED) {
 		/* forward reference */

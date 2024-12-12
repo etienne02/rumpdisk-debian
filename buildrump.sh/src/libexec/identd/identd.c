@@ -1,4 +1,4 @@
-/* $NetBSD: identd.c,v 1.36 2016/12/10 22:08:13 christos Exp $ */
+/* $NetBSD: identd.c,v 1.38 2021/12/05 05:03:05 msaitoh Exp $ */
 
 /*
  * identd.c - TCP/IP Ident protocol server.
@@ -8,7 +8,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: identd.c,v 1.36 2016/12/10 22:08:13 christos Exp $");
+__RCSID("$NetBSD: identd.c,v 1.38 2021/12/05 05:03:05 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/socket.h>
@@ -441,7 +441,7 @@ idhandle(int fd, const char *charset, const char *fmt, const char *osname,
 			    forward(fd, (struct sockaddr *)&nat_addr,
 			    nat_lport, fport, lport)) {
 				maybe_syslog(LOG_INFO,
-				    "Succesfully forwarded the request to %s",
+				    "Successfully forwarded the request to %s",
 				    gethost((struct sockaddr *)&nat_addr));
 				return 0;
 			}
@@ -513,7 +513,7 @@ idhandle(int fd, const char *charset, const char *fmt, const char *osname,
 		return 0;
 	}
 
-	/* Return numberic user ID? */
+	/* Return numeric user ID? */
 	if (nflag)
 		(void)snprintf(idbuf, sizeof(idbuf), "%u", uid);
 	else
@@ -796,7 +796,7 @@ sysctl_proxy_getuid(struct sockaddr_storage *ss, struct sockaddr *proxy,
 	return rc;
 }
 
-/* Forward ident queries. Returns 1 when succesful, or zero if not. */
+/* Forward ident queries. Returns 1 when successful, or zero if not. */
 static int
 forward(int fd, struct sockaddr *nat_addr, int nat_lport, int fport, int lport)
 {

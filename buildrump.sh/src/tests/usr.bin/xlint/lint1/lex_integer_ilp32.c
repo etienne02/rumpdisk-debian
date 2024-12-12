@@ -1,4 +1,4 @@
-/*	$NetBSD: lex_integer_ilp32.c,v 1.3 2021/08/21 11:50:57 rillig Exp $	*/
+/*	$NetBSD: lex_integer_ilp32.c,v 1.9 2024/01/28 06:57:41 rillig Exp $	*/
 # 3 "lex_integer_ilp32.c"
 
 /*
@@ -8,6 +8,7 @@
  */
 
 /* lint1-only-if: ilp32 */
+/* lint1-extra-flags: -X 351 */
 
 void sinki(int);
 void sinku(unsigned int);
@@ -22,13 +23,11 @@ test_signed_int(void)
 
 	sinki(2147483647);
 
-	/* expect+1: 'unsigned long' to 'int' is out of range, arg #1 [295] */
+	/* expect+1: warning: conversion of 'long long' to 'int' is out of range, arg #1 [295] */
 	sinki(2147483648);
 
 	sinki(-2147483647);
 
-	/* expect+2: ANSI C treats constant as unsigned, op - [218] */
-	/* expect+1: 'unsigned long' to 'int' is out of range, arg #1 [295] */
 	sinki(-2147483648);
 }
 
@@ -37,8 +36,12 @@ test_unsigned_int(void)
 {
 	sinku(0);
 
+	sinku(2147483647);
+	sinku(2147483648);
+
+	sinku(2147483648U);
 	sinku(4294967295U);
 
-	/* expect+1: integer constant out of range [252] */
+	/* expect+1: warning: conversion of 'unsigned long long' to 'unsigned int' is out of range, arg #1 [295] */
 	sinku(4294967296U);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_wmvar.h,v 1.47 2020/10/30 06:29:47 msaitoh Exp $	*/
+/*	$NetBSD: if_wmvar.h,v 1.51 2023/10/11 15:05:26 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002, 2003, 2004 Wasabi Systems, Inc.
@@ -37,32 +37,32 @@
 
 /*******************************************************************************
 
-  Copyright (c) 2001-2005, Intel Corporation 
+  Copyright (c) 2001-2005, Intel Corporation
   All rights reserved.
-  
-  Redistribution and use in source and binary forms, with or without 
+
+  Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
-  
-   1. Redistributions of source code must retain the above copyright notice, 
+
+   1. Redistributions of source code must retain the above copyright notice,
       this list of conditions and the following disclaimer.
-  
-   2. Redistributions in binary form must reproduce the above copyright 
-      notice, this list of conditions and the following disclaimer in the 
+
+   2. Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
       documentation and/or other materials provided with the distribution.
-  
-   3. Neither the name of the Intel Corporation nor the names of its 
-      contributors may be used to endorse or promote products derived from 
+
+   3. Neither the name of the Intel Corporation nor the names of its
+      contributors may be used to endorse or promote products derived from
       this software without specific prior written permission.
-  
+
   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
-  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
-  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
-  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
-  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
-  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
-  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
-  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) 
+  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
   POSSIBILITY OF SUCH DAMAGE.
 
@@ -100,6 +100,7 @@
 #define	WM_F_SFP		0x10000000 /* SFP */
 #define	WM_F_MAS		0x20000000 /* Media Auto Sense */
 #define	WM_F_CRC_STRIP		0x40000000 /* CRC strip */
+#define	WM_F_DELAY_LINKUP	0x80000000 /* delay LINK_STATE_UP */
 
 #define WM_FLAGS "\20" \
 	"\1" "HAS_MII"	"\2" "LOCK_EECD" "\3" "_B02"	"\4" "_B03"	\
@@ -109,7 +110,7 @@
 	"\21" "NEWQUEUE" "\22" "ASF_FIRM" "\23" "ARC_SUBSYS" "\24" "AMT" \
 	"\25" "MANAGE"	"\26" "WOL"	"\27" "EEE"	"\30" "ATTACHED" \
 	"\31" "MDIC_WA"	"\32" "PCS_DIS_AUTONEGO" "\33" "PLLWA" "\34" "CLSEMWA" \
-	"\35" "SFP"	"\36" "MAS"	"\37" "CRC_STRIP"
+	"\35" "SFP"	"\36" "MAS"	"\37" "CRC_STRIP" "\40" "DELAY_LINKUP"
 
 /*
  * Variations of Intel gigabit Ethernet controller:
@@ -162,6 +163,7 @@ typedef enum {
 	WM_T_PCH_LPT,			/* PCH "Lynx Point" LAN (I217, I218) */
 	WM_T_PCH_SPT,			/* PCH "Sunrise Point" LAN (I219) */
 	WM_T_PCH_CNP,			/* (I219) */
+	WM_T_PCH_TGP			/* (I219) */
 } wm_chip_type;
 
 /*
@@ -212,5 +214,8 @@ typedef enum {
 #define	WM_ICH8_LAN_INIT_TIMEOUT 1500
 #define	WM_MDIO_OWNERSHIP_TIMEOUT 10
 #define	WM_MAX_PLL_TRIES	5
+
+/* For 80003, ICHs and PCHs */
+#define	WM_IS_ICHPCH(x)	((x)->sc_type >= WM_T_80003)
 
 #endif /* _DEV_PCI_IF_WMVAR_H_ */

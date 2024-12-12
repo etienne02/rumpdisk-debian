@@ -1,7 +1,8 @@
-/*	$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $	*/
+/*	$NetBSD: jemalloc.c,v 1.64 2023/12/13 23:53:50 mrg Exp $	*/
 
 /*-
  * Copyright (C) 2006,2007 Jason Evans <jasone@FreeBSD.org>.
+ * Copyright (C) 2023 Andrew Doran <ad@NetBSD.org>.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -97,13 +98,6 @@
 
 /* LINTLIBRARY */
 
-#ifdef __NetBSD__
-#  define xutrace(a, b)		utrace("malloc", (a), (b))
-#  define __DECONST(x, y)	((x)__UNCONST(y))
-#else
-#  define xutrace(a, b)		utrace((a), (b))
-#endif	/* __NetBSD__ */
-
 /*
  * MALLOC_PRODUCTION disables assertions and statistics gathering.  It also
  * defaults the A and J runtime options to off.  These settings are appropriate
@@ -116,34 +110,18 @@
 #endif
 
 #include <sys/cdefs.h>
-/* __FBSDID("$FreeBSD: src/lib/libc/stdlib/malloc.c,v 1.147 2007/06/15 22:00:16 jasone Exp $"); */ 
-__RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
+/* __FBSDID("$FreeBSD: src/lib/libc/stdlib/malloc.c,v 1.147 2007/06/15 22:00:16 jasone Exp $"); */
+__RCSID("$NetBSD: jemalloc.c,v 1.64 2023/12/13 23:53:50 mrg Exp $");
 
-#ifdef __FreeBSD__
-#include "libc_private.h"
-#ifdef MALLOC_DEBUG
-#  define _LOCK_DEBUG
-#endif
-#include "spinlock.h"
-#endif
 #include "namespace.h"
 #include <sys/mman.h>
 #include <sys/param.h>
-#ifdef __FreeBSD__
-#include <sys/stddef.h>
-#endif
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
-#include <sys/tree.h>
+#include <sys/rbtree.h>
 #include <sys/uio.h>
 #include <sys/ktrace.h> /* Must come after several other sys/ includes. */
-
-#ifdef __FreeBSD__
-#include <machine/atomic.h>
-#include <machine/cpufunc.h>
-#include <machine/vmparam.h>
-#endif
 
 #include <errno.h>
 #include <limits.h>
@@ -157,18 +135,12 @@ __RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
+#include <malloc.h>
 
-#ifdef __NetBSD__
-#  include <reentrant.h>
-#  include "extern.h"
+#include <reentrant.h>
+#include "extern.h"
 
 #define STRERROR_R(a, b, c)	strerror_r_ss(a, b, c);
-#endif
-
-#ifdef __FreeBSD__
-#define STRERROR_R(a, b, c)	strerror_r(a, b, c);
-#include "un-namespace.h"
-#endif
 
 /* MALLOC_STATS enables statistics calculation. */
 #ifndef MALLOC_PRODUCTION
@@ -190,6 +162,27 @@ __RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
    /* Disable inlining to make debugging easier. */
 #  define inline
 #endif
+
+/*
+ * Compare two pointers of 64/32 bit width and produce a ternary 32-bit
+ * indicator without using conditionals that maintains the expected
+ * ordering: [negative, equal, positive].
+ *
+ * XXX it depends on twos complement arithemetic.
+ * XXX maybe should be a built-in for rbtree?
+ */
+static inline int
+ptrcmp(const void *pa, const void *pb)
+{
+#ifdef _LP64
+	const uintptr_t a = (uintptr_t)pa, b = (uintptr_t)pb;
+	const uintptr_t diff = a - b;
+	assert(((a | b) & 1) == 0);
+	return (int)(diff >> 32) | ((unsigned)diff >> 1);
+#else
+	return (intptr_t)pa - (intptr_t)pb;
+#endif
+}
 
 /* Size of stack-allocated buffer passed to strerror_r(). */
 #define	STRERROR_BUF		64
@@ -260,7 +253,6 @@ __RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
 #  define QUANTUM_2POW_MIN	4
 #  define SIZEOF_PTR_2POW	2
 #  define USE_BRK
-#  define NO_TLS
 #endif
 #ifdef __sh__
 #  define QUANTUM_2POW_MIN	4
@@ -271,11 +263,8 @@ __RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
 #  define QUANTUM_2POW_MIN	4
 #  define SIZEOF_PTR_2POW	2
 #  define USE_BRK
-#  ifdef __mc68010__
-#    define NO_TLS
-#  endif
 #endif
-#if defined(__mips__) || defined(__riscv__)
+#if defined(__mips__)
 #  ifdef _LP64
 #    define SIZEOF_PTR_2POW	3
 #    define TINY_MIN_2POW	3
@@ -284,16 +273,23 @@ __RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
 #  endif
 #  define QUANTUM_2POW_MIN	4
 #  define USE_BRK
-#  if defined(__mips__)
-#    define NO_TLS
-#  endif
 #endif
-#ifdef __hppa__                                                                                                                                         
-#  define QUANTUM_2POW_MIN	4                                                                                                                        
+#if defined(__riscv__)
+#  ifdef _LP64
+#    define SIZEOF_PTR_2POW	3
+#    define TINY_MIN_2POW	3
+#  else
+#    define SIZEOF_PTR_2POW	2
+#  endif
+#  define QUANTUM_2POW_MIN	4
+#  define USE_BRK
+#endif
+#ifdef __hppa__
+#  define QUANTUM_2POW_MIN	4
 #  define TINY_MIN_2POW		4
-#  define SIZEOF_PTR_2POW	2                                                                                                                        
-#  define USE_BRK                                                                                                                                       
-#endif           
+#  define SIZEOF_PTR_2POW	2
+#  define USE_BRK
+#endif
 
 #define	SIZEOF_PTR		(1 << SIZEOF_PTR_2POW)
 
@@ -356,21 +352,6 @@ __RCSID("$NetBSD: jemalloc.c,v 1.54 2021/08/30 13:12:16 christos Exp $");
 
 /******************************************************************************/
 
-#ifdef __FreeBSD__
-/*
- * Mutexes based on spinlocks.  We can't use normal pthread mutexes, because
- * they require malloc()ed memory.
- */
-typedef struct {
-	spinlock_t	lock;
-} malloc_mutex_t;
-
-/* Set to true once the allocator has been initialized. */
-static bool malloc_initialized = false;
-
-/* Used to avoid initialization races. */
-static malloc_mutex_t init_lock = {_SPINLOCK_INITIALIZER};
-#else
 #define	malloc_mutex_t	mutex_t
 
 /* Set to true once the allocator has been initialized. */
@@ -379,7 +360,6 @@ static bool malloc_initialized = false;
 #ifdef _REENTRANT
 /* Used to avoid initialization races. */
 static mutex_t init_lock = MUTEX_INITIALIZER;
-#endif
 #endif
 
 /******************************************************************************/
@@ -455,7 +435,7 @@ struct chunk_stats_s {
 typedef struct chunk_node_s chunk_node_t;
 struct chunk_node_s {
 	/* Linkage for the chunk tree. */
-	RB_ENTRY(chunk_node_s) link;
+	rb_node_t link;
 
 	/*
 	 * Pointer to the chunk that this tree node is responsible for.  In some
@@ -469,7 +449,14 @@ struct chunk_node_s {
 	size_t	size;
 };
 typedef struct chunk_tree_s chunk_tree_t;
-RB_HEAD(chunk_tree_s, chunk_node_s);
+
+static int chunk_comp(void *, const void *, const void *);
+
+static const rb_tree_ops_t chunk_tree_ops = {
+	.rbto_compare_nodes = chunk_comp,
+	.rbto_compare_key = chunk_comp,
+	.rbto_node_offset = offsetof(struct chunk_node_s, link),
+};
 
 /******************************************************************************/
 /*
@@ -498,11 +485,11 @@ struct arena_chunk_map_s {
 /* Arena chunk header. */
 typedef struct arena_chunk_s arena_chunk_t;
 struct arena_chunk_s {
+	/* Linkage for the arena's chunk tree. */
+	rb_node_t link;
+
 	/* Arena that owns the chunk. */
 	arena_t *arena;
-
-	/* Linkage for the arena's chunk tree. */
-	RB_ENTRY(arena_chunk_s) link;
 
 	/*
 	 * Number of pages in use.  This is maintained in order to make
@@ -533,12 +520,19 @@ struct arena_chunk_s {
 	arena_chunk_map_t map[1]; /* Dynamically sized. */
 };
 typedef struct arena_chunk_tree_s arena_chunk_tree_t;
-RB_HEAD(arena_chunk_tree_s, arena_chunk_s);
+
+static int arena_chunk_comp(void *, const void *, const void *);
+
+static const rb_tree_ops_t arena_chunk_tree_ops = {
+	.rbto_compare_nodes = arena_chunk_comp,
+	.rbto_compare_key = arena_chunk_comp,
+	.rbto_node_offset = offsetof(struct arena_chunk_s, link),
+};
 
 typedef struct arena_run_s arena_run_t;
 struct arena_run_s {
 	/* Linkage for run trees. */
-	RB_ENTRY(arena_run_s) link;
+	rb_node_t	link;
 
 #ifdef MALLOC_DEBUG
 	uint32_t	magic;
@@ -558,7 +552,14 @@ struct arena_run_s {
 	unsigned	regs_mask[1]; /* Dynamically sized. */
 };
 typedef struct arena_run_tree_s arena_run_tree_t;
-RB_HEAD(arena_run_tree_s, arena_run_s);
+
+static int arena_run_comp(void *, const void *, const void *);
+
+static const rb_tree_ops_t arena_run_tree_ops = {
+	.rbto_compare_nodes = arena_run_comp,
+	.rbto_compare_key = arena_run_comp,
+	.rbto_node_offset = offsetof(struct arena_run_s, link),
+};
 
 struct arena_bin_s {
 	/*
@@ -574,7 +575,7 @@ struct arena_bin_s {
 	 * objects packed well, and it can also help reduce the number of
 	 * almost-empty chunks.
 	 */
-	arena_run_tree_t runs;
+	rb_tree_t	runs;
 
 	/* Size of regions in a run for this bin's size class. */
 	size_t		reg_size;
@@ -613,7 +614,7 @@ struct arena_s {
 	/*
 	 * Tree of chunks this arena manages.
 	 */
-	arena_chunk_tree_t	chunks;
+	rb_tree_t	chunks;
 
 	/*
 	 * In order to avoid rapid chunk allocation/deallocation when an arena
@@ -696,7 +697,7 @@ static malloc_mutex_t	chunks_mtx;
 #endif
 
 /* Tree of chunks that are stand-alone huge allocations. */
-static chunk_tree_t	huge;
+static rb_tree_t	huge;
 
 #ifdef USE_BRK
 /*
@@ -730,7 +731,7 @@ static size_t		huge_allocated;
  * Tree of chunks that were previously allocated.  This is used when allocating
  * chunks, in an attempt to re-use address space.
  */
-static chunk_tree_t	old_chunks;
+static rb_tree_t	old_chunks;
 
 /****************************/
 /*
@@ -763,70 +764,9 @@ static size_t		base_mapped;
  * arenas array are necessarily used; arenas are created lazily as needed.
  */
 static arena_t		**arenas;
-static unsigned		narenas;
-static unsigned		next_arena;
 #ifdef _REENTRANT
 static malloc_mutex_t	arenas_mtx; /* Protects arenas initialization. */
 #endif
-
-/*
- * Map of pthread_self() --> arenas[???], used for selecting an arena to use
- * for allocations.
- */
-#ifndef NO_TLS
-static __attribute__((tls_model("initial-exec")))
-__thread arena_t	**arenas_map;
-#else
-static arena_t	**arenas_map;
-#endif
-
-#if !defined(NO_TLS) || !defined(_REENTRANT)
-# define	get_arenas_map()	(arenas_map)
-# define	set_arenas_map(x)	(arenas_map = x)
-#else /* NO_TLS && _REENTRANT */
-
-static thread_key_t arenas_map_key = -1;
-
-static inline arena_t **
-get_arenas_map(void)
-{
-	if (!__isthreaded)
-		return arenas_map;
-
-	if (arenas_map_key == -1) {
-		(void)thr_keycreate(&arenas_map_key, NULL);
-		if (arenas_map != NULL) {
-			thr_setspecific(arenas_map_key, arenas_map);
-			arenas_map = NULL;
-		}
-	}
-
-	return thr_getspecific(arenas_map_key);
-}
-
-static __inline void
-set_arenas_map(arena_t **a)
-{
-	if (!__isthreaded) {
-		arenas_map = a;
-		return;
-	}
-
-	if (arenas_map_key == -1) {
-#ifndef NO_TLS
-		(void)thr_keycreate(&arenas_map_key, NULL);
-#endif
-		if (arenas_map != NULL) {
-			_DIAGASSERT(arenas_map == a);
-			arenas_map = NULL;
-		}
-	}
-
-#ifndef NO_TLS
-	thr_setspecific(arenas_map_key, a);
-#endif
-}
-#endif /* NO_TLS && _REENTRANT */
 
 #ifdef MALLOC_STATS
 /* Chunk statistics. */
@@ -855,7 +795,6 @@ static bool	opt_utrace = false;
 static bool	opt_sysv = false;
 static bool	opt_xmalloc = false;
 static bool	opt_zero = false;
-static int32_t	opt_narenas_lshift = 0;
 
 typedef struct {
 	void	*p;
@@ -863,13 +802,18 @@ typedef struct {
 	void	*r;
 } malloc_utrace_t;
 
+/* Sprinkle branch hints for the compiler and CPU. */
+#define	OPT(a)		__predict_false(opt_##a)
+#define	NOT_OPT(a)	__predict_true(!opt_##a)
+
+/* Trace malloc/free for ktrace/kdump. */
 #define	UTRACE(a, b, c)							\
-	if (opt_utrace) {						\
+	if (OPT(utrace)) {						\
 		malloc_utrace_t ut;					\
 		ut.p = a;						\
 		ut.s = b;						\
 		ut.r = c;						\
-		xutrace(&ut, sizeof(ut));				\
+		utrace("malloc", &ut, sizeof(ut));			\
 	}
 
 /******************************************************************************/
@@ -909,8 +853,8 @@ static void	*arena_palloc(arena_t *arena, size_t alignment, size_t size,
 static size_t	arena_salloc(const void *ptr);
 static void	*arena_ralloc(void *ptr, size_t size, size_t oldsize);
 static void	arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr);
-static bool	arena_new(arena_t *arena);
-static arena_t	*arenas_extend(unsigned ind);
+static void	arena_new(arena_t *arena);
+static arena_t	*arenas_extend(void);
 static void	*huge_malloc(size_t size);
 static void	*huge_palloc(size_t alignment, size_t size);
 static void	*huge_ralloc(void *ptr, size_t size, size_t oldsize);
@@ -932,35 +876,9 @@ static bool	malloc_init_hard(void);
  * Begin mutex.
  */
 
-#ifdef __NetBSD__
 #define	malloc_mutex_init(m)	mutex_init(m, NULL)
 #define	malloc_mutex_lock(m)	mutex_lock(m)
 #define	malloc_mutex_unlock(m)	mutex_unlock(m)
-#else	/* __NetBSD__ */
-static inline void
-malloc_mutex_init(malloc_mutex_t *a_mutex)
-{
-	static const spinlock_t lock = _SPINLOCK_INITIALIZER;
-
-	a_mutex->lock = lock;
-}
-
-static inline void
-malloc_mutex_lock(malloc_mutex_t *a_mutex)
-{
-
-	if (__isthreaded)
-		_SPINLOCK(&a_mutex->lock);
-}
-
-static inline void
-malloc_mutex_unlock(malloc_mutex_t *a_mutex)
-{
-
-	if (__isthreaded)
-		_SPINUNLOCK(&a_mutex->lock);
-}
-#endif	/* __NetBSD__ */
 
 /*
  * End mutex.
@@ -1205,8 +1123,8 @@ base_chunk_node_dealloc(chunk_node_t *node)
 static void
 stats_print(arena_t *arena)
 {
-	unsigned i;
-	int gap_start;
+	const unsigned minusone = (unsigned)-1;
+	unsigned i, gap_start;
 
 	malloc_printf(
 	    "          allocated/mapped            nmalloc      ndalloc\n");
@@ -1225,12 +1143,12 @@ stats_print(arena_t *arena)
 
 	malloc_printf("bins:     bin   size regs pgs  requests   newruns"
 	    "    reruns maxruns curruns\n");
-	for (i = 0, gap_start = -1; i < ntbins + nqbins + nsbins; i++) {
+	for (i = 0, gap_start = minusone; i < ntbins + nqbins + nsbins; i++) {
 		if (arena->bins[i].stats.nrequests == 0) {
-			if (gap_start == -1)
+			if (gap_start == minusone)
 				gap_start = i;
 		} else {
-			if (gap_start != -1) {
+			if (gap_start != minusone) {
 				if (i > gap_start + 1) {
 					/* Gap of more than one size class. */
 					malloc_printf("[%u..%u]\n",
@@ -1239,7 +1157,7 @@ stats_print(arena_t *arena)
 					/* Gap of one size class. */
 					malloc_printf("[%u]\n", gap_start);
 				}
-				gap_start = -1;
+				gap_start = minusone;
 			}
 			malloc_printf(
 			    "%13u %1s %4u %4u %3u %9llu %9llu"
@@ -1256,7 +1174,7 @@ stats_print(arena_t *arena)
 			    arena->bins[i].stats.curruns);
 		}
 	}
-	if (gap_start != -1) {
+	if (gap_start != minusone) {
 		if (i > gap_start + 1) {
 			/* Gap of more than one size class. */
 			malloc_printf("[%u..%u]\n", gap_start, i - 1);
@@ -1276,23 +1194,16 @@ stats_print(arena_t *arena)
  * Begin chunk management functions.
  */
 
-static inline int
-chunk_comp(chunk_node_t *a, chunk_node_t *b)
+static int
+chunk_comp(void *context, const void *va, const void *vb)
 {
+	const chunk_node_t *a = va, *b = vb;
 
 	assert(a != NULL);
 	assert(b != NULL);
 
-	if ((uintptr_t)a->chunk < (uintptr_t)b->chunk)
-		return (-1);
-	else if (a->chunk == b->chunk)
-		return (0);
-	else
-		return (1);
+	return ptrcmp(a->chunk, b->chunk);
 }
-
-/* Generate red-black tree code for chunks. */
-RB_GENERATE_STATIC(chunk_tree_s, chunk_node_s, link, chunk_comp)
 
 static void *
 pages_map_align(void *addr, size_t size, int align)
@@ -1319,7 +1230,7 @@ pages_map_align(void *addr, size_t size, int align)
 			STRERROR_R(errno, buf, sizeof(buf));
 			_malloc_message(getprogname(),
 			    ": (malloc) Error in munmap(): ", buf, "\n");
-			if (opt_abort)
+			if (OPT(abort))
 				abort();
 		}
 		ret = NULL;
@@ -1347,7 +1258,7 @@ pages_unmap(void *addr, size_t size)
 		STRERROR_R(errno, buf, sizeof(buf));
 		_malloc_message(getprogname(),
 		    ": (malloc) Error in munmap(): ", buf, "\n");
-		if (opt_abort)
+		if (OPT(abort))
 			abort();
 	}
 }
@@ -1369,16 +1280,16 @@ chunk_alloc(size_t size)
 		 * to use them.
 		 */
 
-		tchunk = RB_MIN(chunk_tree_s, &old_chunks);
+		tchunk = RB_TREE_MIN(&old_chunks);
 		while (tchunk != NULL) {
 			/* Found an address range.  Try to recycle it. */
 
 			chunk = tchunk->chunk;
 			delchunk = tchunk;
-			tchunk = RB_NEXT(chunk_tree_s, &old_chunks, delchunk);
+			tchunk = RB_TREE_NEXT(&old_chunks, delchunk);
 
 			/* Remove delchunk from the tree. */
-			RB_REMOVE(chunk_tree_s, &old_chunks, delchunk);
+			rb_tree_remove_node(&old_chunks, delchunk);
 			base_chunk_node_dealloc(delchunk);
 
 #ifdef USE_BRK
@@ -1460,13 +1371,13 @@ RETURN:
 		 * memory we just allocated.
 		 */
 		key.chunk = ret;
-		tchunk = RB_NFIND(chunk_tree_s, &old_chunks, &key);
+		tchunk = rb_tree_find_node_geq(&old_chunks, &key);
 		while (tchunk != NULL
 		    && (uintptr_t)tchunk->chunk >= (uintptr_t)ret
 		    && (uintptr_t)tchunk->chunk < (uintptr_t)ret + size) {
 			delchunk = tchunk;
-			tchunk = RB_NEXT(chunk_tree_s, &old_chunks, delchunk);
-			RB_REMOVE(chunk_tree_s, &old_chunks, delchunk);
+			tchunk = RB_TREE_NEXT(&old_chunks, delchunk);
+			rb_tree_remove_node(&old_chunks, delchunk);
 			base_chunk_node_dealloc(delchunk);
 		}
 
@@ -1543,7 +1454,7 @@ chunk_dealloc(void *chunk, size_t size)
 				node->chunk = (void *)((uintptr_t)chunk
 				    + (uintptr_t)offset);
 				node->size = chunksize;
-				RB_INSERT(chunk_tree_s, &old_chunks, node);
+				rb_tree_insert_node(&old_chunks, node);
 			}
 		}
 	} else {
@@ -1562,7 +1473,7 @@ chunk_dealloc(void *chunk, size_t size)
 			if (node != NULL) {
 				node->chunk = (void *)(uintptr_t)chunk;
 				node->size = chunksize;
-				RB_INSERT(chunk_tree_s, &old_chunks, node);
+				rb_tree_insert_node(&old_chunks, node);
 			}
 		}
 #ifdef USE_BRK
@@ -1584,96 +1495,59 @@ chunk_dealloc(void *chunk, size_t size)
  */
 
 /*
- * Choose an arena based on a per-thread and (optimistically) per-CPU value.
- *
- * We maintain at least one block of arenas.  Usually there are more.
- * The blocks are $ncpu arenas in size.  Whole blocks are 'hashed'
- * amongst threads.  To accomplish this, next_arena advances only in
- * ncpu steps.
+ * Choose a per-CPU arena.
  */
 static __noinline arena_t *
 choose_arena_hard(void)
 {
-	unsigned i, curcpu;
-	arena_t **map;
 
-	/* Initialize the current block of arenas and advance to next. */
+	assert(arenas[0] != NULL);
+
 	malloc_mutex_lock(&arenas_mtx);
-	assert(next_arena % ncpus == 0);
-	assert(narenas % ncpus == 0);
-	map = &arenas[next_arena];
-	set_arenas_map(map);
-	for (i = 0; i < ncpus; i++) {
-		if (arenas[next_arena] == NULL)
-			arenas_extend(next_arena);
-		next_arena = (next_arena + 1) % narenas;
-	}
+	for (unsigned i = 1; i < ncpus; i++)
+		if (arenas[i] == NULL)
+			arenas[i] = arenas_extend();
 	malloc_mutex_unlock(&arenas_mtx);
 
-	/*
-	 * If we were unable to allocate an arena above, then default to
-	 * the first arena, which is always present.
-	 */
-	curcpu = thr_curcpu();
-	if (map[curcpu] != NULL)
-		return map[curcpu];
-	return arenas[0];
+	return arenas[thr_curcpu()];
 }
 
 static inline arena_t *
 choose_arena(void)
 {
-	unsigned curcpu;
-	arena_t **map;
+	arena_t *arena;
 
-	map = get_arenas_map();
-	curcpu = thr_curcpu();
-	if (__predict_true(map != NULL && map[curcpu] != NULL))
-		return map[curcpu];
+	/* NB: when libpthread is absent, thr_curcpu() always returns zero. */
+	arena = arenas[thr_curcpu()];
+	if (__predict_true(arena != NULL))
+		return arena;
 
-        return choose_arena_hard();
+	return choose_arena_hard();
 }
 
-static inline int
-arena_chunk_comp(arena_chunk_t *a, arena_chunk_t *b)
+static int
+arena_chunk_comp(void *context, const void *va, const void *vb)
+{
+	const arena_chunk_t *a = va, *b = vb;
+	int diff;
+
+	assert(a != NULL);
+	assert(b != NULL);
+
+	if ((diff = a->max_frun_npages - b->max_frun_npages) != 0)
+		return diff;
+	return ptrcmp(a, b);
+}
+
+static int
+arena_run_comp(void *context, const void *a, const void *b)
 {
 
 	assert(a != NULL);
 	assert(b != NULL);
 
-	if (a->max_frun_npages < b->max_frun_npages)
-		return -1;
-	if (a->max_frun_npages > b->max_frun_npages)
-		return 1;
-
-	if ((uintptr_t)a < (uintptr_t)b)
-		return (-1);
-	else if (a == b)
-		return (0);
-	else
-		return (1);
+	return ptrcmp(a, b);
 }
-
-/* Generate red-black tree code for arena chunks. */
-RB_GENERATE_STATIC(arena_chunk_tree_s, arena_chunk_s, link, arena_chunk_comp)
-
-static inline int
-arena_run_comp(arena_run_t *a, arena_run_t *b)
-{
-
-	assert(a != NULL);
-	assert(b != NULL);
-
-	if ((uintptr_t)a < (uintptr_t)b)
-		return (-1);
-	else if (a == b)
-		return (0);
-	else
-		return (1);
-}
-
-/* Generate red-black tree code for arena runs. */
-RB_GENERATE_STATIC(arena_run_tree_s, arena_run_s, link, arena_run_comp)
 
 static inline void *
 arena_run_reg_alloc(arena_run_t *run, arena_bin_t *bin)
@@ -1812,8 +1686,8 @@ arena_run_reg_dalloc(arena_run_t *run, arena_bin_t *bin, void *ptr, size_t size)
 			 */
 			regind = (unsigned)(diff / size);
 		}
-	} else if (size <= ((sizeof(size_invs) / sizeof(unsigned))
-	    << QUANTUM_2POW_MIN) + 2) {
+	} else if (size <= (((sizeof(size_invs) / sizeof(unsigned)) + 2)
+	    << QUANTUM_2POW_MIN)) {
 		regind = size_invs[(size >> QUANTUM_2POW_MIN) - 3] * diff;
 		regind >>= SIZE_INV_SHIFT;
 	} else {
@@ -1882,7 +1756,7 @@ arena_chunk_alloc(arena_t *arena)
 		chunk = arena->spare;
 		arena->spare = NULL;
 
-		RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
+		rb_tree_insert_node(&arena->chunks, chunk);
 	} else {
 		chunk = (arena_chunk_t *)chunk_alloc(chunksize);
 		if (chunk == NULL)
@@ -1913,7 +1787,7 @@ arena_chunk_alloc(arena_t *arena)
 		    arena_chunk_header_npages;
 		chunk->map[chunk_npages - 1].pos = POS_FREE;
 
-		RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
+		rb_tree_insert_node(&arena->chunks, chunk);
 	}
 
 	return (chunk);
@@ -1927,9 +1801,9 @@ arena_chunk_dealloc(arena_t *arena, arena_chunk_t *chunk)
 	 * Remove chunk from the chunk tree, regardless of whether this chunk
 	 * will be cached, so that the arena does not use it.
 	 */
-	RB_REMOVE(arena_chunk_tree_s, &chunk->arena->chunks, chunk);
+	rb_tree_remove_node(&chunk->arena->chunks, chunk);
 
-	if (opt_hint == false) {
+	if (NOT_OPT(hint)) {
 		if (arena->spare != NULL) {
 			chunk_dealloc((void *)arena->spare, chunksize);
 #ifdef MALLOC_STATS
@@ -1949,7 +1823,7 @@ arena_chunk_dealloc(arena_t *arena, arena_chunk_t *chunk)
 static arena_run_t *
 arena_run_alloc(arena_t *arena, size_t size)
 {
-	arena_chunk_t *chunk, *chunk_tmp;
+	arena_chunk_t *chunk;
 	arena_run_t *run;
 	unsigned need_npages;
 
@@ -1965,19 +1839,21 @@ arena_run_alloc(arena_t *arena, size_t size)
 	need_npages = (unsigned)(size >> pagesize_2pow);
 	/* LINTED */
 	for (;;) {
-		chunk_tmp = RB_ROOT(&arena->chunks);
+		rb_node_t *node = arena->chunks.rbt_root;
 		chunk = NULL;
-		while (chunk_tmp) {
+		while (!RB_SENTINEL_P(node)) {
+			assert(offsetof(struct arena_chunk_s, link) == 0);
+			arena_chunk_t *chunk_tmp = (arena_chunk_t *)node;
 			if (chunk_tmp->max_frun_npages == need_npages) {
 				chunk = chunk_tmp;
 				break;
 			}
 			if (chunk_tmp->max_frun_npages < need_npages) {
-				chunk_tmp = RB_RIGHT(chunk_tmp, link);
+				node = node->rb_nodes[1];
 				continue;
 			}
 			chunk = chunk_tmp;
-			chunk_tmp = RB_LEFT(chunk, link);
+			node = node->rb_nodes[0];
 		}
 		if (chunk == NULL)
 			break;
@@ -2024,9 +1900,9 @@ arena_run_alloc(arena_t *arena, size_t size)
 			 * chunk->min_frun_ind was already reset above (if
 			 * necessary).
 			 */
-			RB_REMOVE(arena_chunk_tree_s, &arena->chunks, chunk);
+			rb_tree_remove_node(&arena->chunks, chunk);
 			chunk->max_frun_npages = max_frun_npages;
-			RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
+			rb_tree_insert_node(&arena->chunks, chunk);
 		}
 	}
 
@@ -2071,7 +1947,7 @@ arena_run_dalloc(arena_t *arena, arena_run_t *run, size_t size)
 	 * Tell the kernel that we don't need the data in this run, but only if
 	 * requested via runtime configuration.
 	 */
-	if (opt_hint)
+	if (OPT(hint))
 		madvise(run, size, MADV_FREE);
 
 	/* Try to coalesce with neighboring runs. */
@@ -2110,9 +1986,9 @@ arena_run_dalloc(arena_t *arena, arena_run_t *run, size_t size)
 	}
 
 	if (chunk->map[run_ind].npages > chunk->max_frun_npages) {
-		RB_REMOVE(arena_chunk_tree_s, &arena->chunks, chunk);
+		rb_tree_remove_node(&arena->chunks, chunk);
 		chunk->max_frun_npages = chunk->map[run_ind].npages;
-		RB_INSERT(arena_chunk_tree_s, &arena->chunks, chunk);
+		rb_tree_insert_node(&arena->chunks, chunk);
 	}
 	if (run_ind < chunk->min_frun_ind)
 		chunk->min_frun_ind = run_ind;
@@ -2129,9 +2005,9 @@ arena_bin_nonfull_run_get(arena_t *arena, arena_bin_t *bin)
 	unsigned i, remainder;
 
 	/* Look for a usable run. */
-	if ((run = RB_MIN(arena_run_tree_s, &bin->runs)) != NULL) {
+	if ((run = RB_TREE_MIN(&bin->runs)) != NULL) {
 		/* run is guaranteed to have available space. */
-		RB_REMOVE(arena_run_tree_s, &bin->runs, run);
+		rb_tree_remove_node(&bin->runs, run);
 #ifdef MALLOC_STATS
 		bin->stats.reruns++;
 #endif
@@ -2362,9 +2238,9 @@ arena_malloc(arena_t *arena, size_t size)
 
 	malloc_mutex_unlock(&arena->mtx);
 
-	if (opt_junk)
+	if (OPT(junk))
 		memset(ret, 0xa5, size);
-	else if (opt_zero)
+	else if (OPT(zero))
 		memset(ret, 0, size);
 	return (ret);
 }
@@ -2462,9 +2338,9 @@ arena_palloc(arena_t *arena, size_t alignment, size_t size, size_t alloc_size)
 #endif
 	malloc_mutex_unlock(&arena->mtx);
 
-	if (opt_junk)
+	if (OPT(junk))
 		memset(ret, 0xa5, size);
-	else if (opt_zero)
+	else if (OPT(zero))
 		memset(ret, 0, size);
 	return (ret);
 }
@@ -2547,9 +2423,9 @@ arena_ralloc(void *ptr, size_t size, size_t oldsize)
 	idalloc(ptr);
 	return (ret);
 IN_PLACE:
-	if (opt_junk && size < oldsize)
+	if (OPT(junk) && size < oldsize)
 		memset((void *)((uintptr_t)ptr + size), 0x5a, oldsize - size);
-	else if (opt_zero && size > oldsize)
+	else if (OPT(zero) && size > oldsize)
 		memset((void *)((uintptr_t)ptr + oldsize), 0, size - oldsize);
 	return (ptr);
 }
@@ -2585,7 +2461,7 @@ arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr)
 		bin = run->bin;
 		size = bin->reg_size;
 
-		if (opt_junk)
+		if (OPT(junk))
 			memset(ptr, 0x5a, size);
 
 		malloc_mutex_lock(&arena->mtx);
@@ -2603,7 +2479,7 @@ arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr)
 				 * never gets inserted into the non-full runs
 				 * tree.
 				 */
-				RB_REMOVE(arena_run_tree_s, &bin->runs, run);
+				rb_tree_remove_node(&bin->runs, run);
 			}
 #ifdef MALLOC_DEBUG
 			run->magic = 0;
@@ -2623,12 +2499,11 @@ arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr)
 				/* Switch runcur. */
 				if (bin->runcur->nfree > 0) {
 					/* Insert runcur. */
-					RB_INSERT(arena_run_tree_s, &bin->runs,
-					    bin->runcur);
+					rb_tree_insert_node(&bin->runs, bin->runcur);
 				}
 				bin->runcur = run;
 			} else {
-				RB_INSERT(arena_run_tree_s, &bin->runs, run);
+				rb_tree_insert_node(&bin->runs, run);
 			}
 		}
 #ifdef MALLOC_STATS
@@ -2641,7 +2516,7 @@ arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr)
 		size = mapelm->npages << pagesize_2pow;
 		assert((((uintptr_t)ptr) & pagesize_mask) == 0);
 
-		if (opt_junk)
+		if (OPT(junk))
 			memset(ptr, 0x5a, size);
 
 		malloc_mutex_lock(&arena->mtx);
@@ -2655,7 +2530,7 @@ arena_dalloc(arena_t *arena, arena_chunk_t *chunk, void *ptr)
 	malloc_mutex_unlock(&arena->mtx);
 }
 
-static bool
+static void
 arena_new(arena_t *arena)
 {
 	unsigned i;
@@ -2669,7 +2544,7 @@ arena_new(arena_t *arena)
 #endif
 
 	/* Initialize chunks. */
-	RB_INIT(&arena->chunks);
+	rb_tree_init(&arena->chunks, &arena_chunk_tree_ops);
 	arena->spare = NULL;
 
 	/* Initialize bins. */
@@ -2679,7 +2554,7 @@ arena_new(arena_t *arena)
 	for (i = 0; i < ntbins; i++) {
 		bin = &arena->bins[i];
 		bin->runcur = NULL;
-		RB_INIT(&bin->runs);
+		rb_tree_init(&bin->runs, &arena_run_tree_ops);
 
 		bin->reg_size = (1 << (TINY_MIN_2POW + i));
 		prev_run_size = arena_bin_run_size_calc(bin, prev_run_size);
@@ -2693,7 +2568,7 @@ arena_new(arena_t *arena)
 	for (; i < ntbins + nqbins; i++) {
 		bin = &arena->bins[i];
 		bin->runcur = NULL;
-		RB_INIT(&bin->runs);
+		rb_tree_init(&bin->runs, &arena_run_tree_ops);
 
 		bin->reg_size = quantum * (i - ntbins + 1);
 /*
@@ -2710,7 +2585,7 @@ arena_new(arena_t *arena)
 	for (; i < ntbins + nqbins + nsbins; i++) {
 		bin = &arena->bins[i];
 		bin->runcur = NULL;
-		RB_INIT(&bin->runs);
+		rb_tree_init(&bin->runs, &arena_run_tree_ops);
 
 		bin->reg_size = (small_max << (i - (ntbins + nqbins) + 1));
 
@@ -2724,21 +2599,19 @@ arena_new(arena_t *arena)
 #ifdef MALLOC_DEBUG
 	arena->magic = ARENA_MAGIC;
 #endif
-
-	return (false);
 }
 
 /* Create a new arena and insert it into the arenas array at index ind. */
 static arena_t *
-arenas_extend(unsigned ind)
+arenas_extend(void)
 {
 	arena_t *ret;
 
 	/* Allocate enough space for trailing bins. */
 	ret = (arena_t *)base_alloc(sizeof(arena_t)
 	    + (sizeof(arena_bin_t) * (ntbins + nqbins + nsbins - 1)));
-	if (ret != NULL && arena_new(ret) == false) {
-		arenas[ind] = ret;
+	if (ret != NULL) {
+		arena_new(ret);
 		return (ret);
 	}
 	/* Only reached if there is an OOM error. */
@@ -2751,7 +2624,7 @@ arenas_extend(unsigned ind)
 	 */
 	_malloc_message(getprogname(),
 	    ": (malloc) Error initializing arena\n", "", "");
-	if (opt_abort)
+	if (OPT(abort))
 		abort();
 
 	return (arenas[0]);
@@ -2796,16 +2669,16 @@ huge_malloc(size_t size)
 	node->size = csize;
 
 	malloc_mutex_lock(&chunks_mtx);
-	RB_INSERT(chunk_tree_s, &huge, node);
+	rb_tree_insert_node(&huge, node);
 #ifdef MALLOC_STATS
 	huge_nmalloc++;
 	huge_allocated += csize;
 #endif
 	malloc_mutex_unlock(&chunks_mtx);
 
-	if (opt_junk)
+	if (OPT(junk))
 		memset(ret, 0xa5, csize);
-	else if (opt_zero)
+	else if (OPT(zero))
 		memset(ret, 0, csize);
 
 	return (ret);
@@ -2876,16 +2749,16 @@ huge_palloc(size_t alignment, size_t size)
 	node->size = chunk_size;
 
 	malloc_mutex_lock(&chunks_mtx);
-	RB_INSERT(chunk_tree_s, &huge, node);
+	rb_tree_insert_node(&huge, node);
 #ifdef MALLOC_STATS
 	huge_nmalloc++;
 	huge_allocated += chunk_size;
 #endif
 	malloc_mutex_unlock(&chunks_mtx);
 
-	if (opt_junk)
+	if (OPT(junk))
 		memset(ret, 0xa5, chunk_size);
-	else if (opt_zero)
+	else if (OPT(zero))
 		memset(ret, 0, chunk_size);
 
 	return (ret);
@@ -2899,10 +2772,10 @@ huge_ralloc(void *ptr, size_t size, size_t oldsize)
 	/* Avoid moving the allocation if the size class would not change. */
 	if (oldsize > arena_maxclass &&
 	    CHUNK_CEILING(size) == CHUNK_CEILING(oldsize)) {
-		if (opt_junk && size < oldsize) {
+		if (OPT(junk) && size < oldsize) {
 			memset((void *)((uintptr_t)ptr + size), 0x5a, oldsize
 			    - size);
-		} else if (opt_zero && size > oldsize) {
+		} else if (OPT(zero) && size > oldsize) {
 			memset((void *)((uintptr_t)ptr + oldsize), 0, size
 			    - oldsize);
 		}
@@ -2935,12 +2808,12 @@ huge_ralloc(void *ptr, size_t size, size_t oldsize)
 		 * tree before we acquire the mutex lock again.
 		 */
 		malloc_mutex_lock(&chunks_mtx);
-		key.chunk = __DECONST(void *, ptr);
-		node = RB_FIND(chunk_tree_s, &huge, &key);
+		key.chunk = __UNCONST(ptr);
+		node = rb_tree_find_node(&huge, &key);
 		assert(node != NULL);
 		assert(node->chunk == ptr);
 		assert(node->size == oldcsize);
-		RB_REMOVE(chunk_tree_s, &huge, node);
+		rb_tree_remove_node(&huge, node);
 		malloc_mutex_unlock(&chunks_mtx);
 
 		newptr = mremap(ptr, oldcsize, NULL, newcsize,
@@ -2948,7 +2821,7 @@ huge_ralloc(void *ptr, size_t size, size_t oldsize)
 		if (newptr == MAP_FAILED) {
 			/* We still own the old region. */
 			malloc_mutex_lock(&chunks_mtx);
-			RB_INSERT(chunk_tree_s, &huge, node);
+			rb_tree_insert_node(&huge, node);
 			malloc_mutex_unlock(&chunks_mtx);
 		} else {
 			assert(CHUNK_ADDR2BASE(newptr) == newptr);
@@ -2957,7 +2830,7 @@ huge_ralloc(void *ptr, size_t size, size_t oldsize)
 			malloc_mutex_lock(&chunks_mtx);
 			node->size = newcsize;
 			node->chunk = newptr;
-			RB_INSERT(chunk_tree_s, &huge, node);
+			rb_tree_insert_node(&huge, node);
 #ifdef MALLOC_STATS
 			huge_nralloc++;
 			huge_allocated += newcsize - oldcsize;
@@ -2975,10 +2848,10 @@ huge_ralloc(void *ptr, size_t size, size_t oldsize)
 #endif
 			malloc_mutex_unlock(&chunks_mtx);
 
-			if (opt_junk && size < oldsize) {
+			if (OPT(junk) && size < oldsize) {
 				memset((void *)((uintptr_t)newptr + size), 0x5a,
 				    newcsize - size);
-			} else if (opt_zero && size > oldsize) {
+			} else if (OPT(zero) && size > oldsize) {
 				memset((void *)((uintptr_t)newptr + oldsize), 0,
 				    size - oldsize);
 			}
@@ -3020,10 +2893,10 @@ huge_dalloc(void *ptr)
 
 	/* Extract from tree of huge allocations. */
 	key.chunk = ptr;
-	node = RB_FIND(chunk_tree_s, &huge, &key);
+	node = rb_tree_find_node(&huge, &key);
 	assert(node != NULL);
 	assert(node->chunk == ptr);
-	RB_REMOVE(chunk_tree_s, &huge, node);
+	rb_tree_remove_node(&huge, node);
 
 #ifdef MALLOC_STATS
 	huge_ndalloc++;
@@ -3034,7 +2907,7 @@ huge_dalloc(void *ptr)
 
 	/* Unmap chunk. */
 #ifdef USE_BRK
-	if (opt_junk)
+	if (OPT(junk))
 		memset(node->chunk, 0x5a, node->size);
 #endif
 	chunk_dealloc(node->chunk, node->size);
@@ -3173,7 +3046,7 @@ icalloc(size_t size)
 		if (ret == NULL)
 			return (NULL);
 
-		if (opt_junk)
+		if (OPT(junk))
 			memset(ret, 0, size);
 #ifdef USE_BRK
 		else if ((uintptr_t)ret >= (uintptr_t)brk_base
@@ -3212,8 +3085,8 @@ isalloc(const void *ptr)
 		malloc_mutex_lock(&chunks_mtx);
 
 		/* Extract from tree of huge allocations. */
-		key.chunk = __DECONST(void *, ptr);
-		node = RB_FIND(chunk_tree_s, &huge, &key);
+		key.chunk = __UNCONST(ptr);
+		node = rb_tree_find_node(&huge, &key);
 		assert(node != NULL);
 
 		ret = node->size;
@@ -3262,7 +3135,7 @@ static void
 malloc_print_stats(void)
 {
 
-	if (opt_print_stats) {
+	if (OPT(print_stats)) {
 		char s[UMAX2S_BUFSIZE];
 		_malloc_message("___ Begin malloc statistics ___\n", "", "",
 		    "");
@@ -3277,13 +3150,12 @@ malloc_print_stats(void)
 		    opt_abort ? "A" : "a",
 		    opt_junk ? "J" : "j",
 		    opt_hint ? "H" : "h");
-		_malloc_message(opt_utrace ? "PU" : "Pu",
+		_malloc_message(OPT(utrace) ? "PU" : "Pu",
 		    opt_sysv ? "V" : "v",
 		    opt_xmalloc ? "X" : "x",
 		    opt_zero ? "Z\n" : "z\n");
 
 		_malloc_message("CPUs: ", size_t2s(ncpus, s), "\n", "");
-		_malloc_message("Max arenas: ", size_t2s(narenas, s), "\n", "");
 		_malloc_message("Pointer size: ", size_t2s(sizeof(void *), s),
 		    "\n", "");
 		_malloc_message("Quantum size: ", size_t2s(quantum, s), "\n", "");
@@ -3303,7 +3175,7 @@ malloc_print_stats(void)
 			/* Calculate and print allocated/mapped stats. */
 
 			/* arenas. */
-			for (i = 0, allocated = 0; i < narenas; i++) {
+			for (i = 0, allocated = 0; i < ncpus; i++) {
 				if (arenas[i] != NULL) {
 					malloc_mutex_lock(&arenas[i]->mtx);
 					allocated +=
@@ -3352,7 +3224,7 @@ malloc_print_stats(void)
 			    huge_allocated);
 
 			/* Print stats for each arena. */
-			for (i = 0; i < narenas; i++) {
+			for (i = 0; i < ncpus; i++) {
 				arena = arenas[i];
 				if (arena != NULL) {
 					malloc_printf(
@@ -3369,15 +3241,14 @@ malloc_print_stats(void)
 }
 
 /*
- * FreeBSD's pthreads implementation calls malloc(3), so the malloc
- * implementation has to take pains to avoid infinite recursion during
- * initialization.
+ * libpthread might call malloc(3), so the malloc implementation has to take
+ * pains to avoid infinite recursion during initialization.
  */
 static inline bool
 malloc_init(void)
 {
 
-	if (malloc_initialized == false)
+	if (__predict_false(malloc_initialized == false))
 		return (malloc_init_hard());
 
 	return (false);
@@ -3421,7 +3292,7 @@ malloc_init_hard(void)
 	{
 		long result;
 
-		result = sysconf(_SC_PAGESIZE);
+		result = getpagesize();
 		assert(result != -1);
 		pagesize = (unsigned) result;
 
@@ -3439,7 +3310,7 @@ malloc_init_hard(void)
 		switch (i) {
 		case 0:
 			if ((linklen = readlink("/etc/malloc.conf", buf,
-						sizeof(buf) - 1)) != -1) {
+			    sizeof(buf) - 1)) != -1) {
 				/*
 				 * Use the contents of the "/etc/malloc.conf"
 				 * symbolic link's name.
@@ -3468,10 +3339,10 @@ malloc_init_hard(void)
 			break;
 		case 2:
 			if (_malloc_options != NULL) {
-			    /*
-			     * Use options that were compiled into the program.
-			     */
-			    opts = _malloc_options;
+				/*
+				 * Use options that were compiled into the program.
+				 */
+				opts = _malloc_options;
 			} else {
 				/* No configuration specified. */
 				buf[0] = '\0';
@@ -3517,12 +3388,6 @@ malloc_init_hard(void)
 				if (opt_chunk_2pow + 1 <
 				    (int)(sizeof(size_t) << 3))
 					opt_chunk_2pow++;
-				break;
-			case 'n':
-				opt_narenas_lshift--;
-				break;
-			case 'N':
-				opt_narenas_lshift++;
 				break;
 			case 'p':
 				opt_print_stats = false;
@@ -3572,7 +3437,7 @@ malloc_init_hard(void)
 				break;
 			default: {
 				char cbuf[2];
-				
+
 				cbuf[0] = opts[j];
 				cbuf[1] = '\0';
 				_malloc_message(getprogname(),
@@ -3585,7 +3450,7 @@ malloc_init_hard(void)
 	errno = serrno;
 
 	/* Take care to call atexit() only once. */
-	if (opt_print_stats) {
+	if (OPT(print_stats)) {
 		/* Print statistics at exit. */
 		atexit(malloc_print_stats);
 	}
@@ -3593,13 +3458,13 @@ malloc_init_hard(void)
 	/* Set variables according to the value of opt_small_max_2pow. */
 	if (opt_small_max_2pow < opt_quantum_2pow)
 		opt_small_max_2pow = opt_quantum_2pow;
-	small_max = (1 << opt_small_max_2pow);
+	small_max = (1U << opt_small_max_2pow);
 
 	/* Set bin-related variables. */
 	bin_maxclass = (pagesize >> 1);
 	assert(opt_quantum_2pow >= TINY_MIN_2POW);
 	ntbins = (unsigned)(opt_quantum_2pow - TINY_MIN_2POW);
-	assert(ntbins <= opt_quantum_2pow);
+	assert(ntbins <= (unsigned)opt_quantum_2pow);
 	nqbins = (unsigned)(small_max >> opt_quantum_2pow);
 	nsbins = (unsigned)(pagesize_2pow - opt_small_max_2pow - 1);
 
@@ -3643,7 +3508,7 @@ malloc_init_hard(void)
 
 	/* Initialize chunks data. */
 	malloc_mutex_init(&chunks_mtx);
-	RB_INIT(&huge);
+	rb_tree_init(&huge, &chunk_tree_ops);
 #ifdef USE_BRK
 	malloc_mutex_init(&brk_mtx);
 	brk_base = sbrk(0);
@@ -3656,7 +3521,7 @@ malloc_init_hard(void)
 	huge_nralloc = 0;
 	huge_allocated = 0;
 #endif
-	RB_INIT(&old_chunks);
+	rb_tree_init(&old_chunks, &chunk_tree_ops);
 
 	/* Initialize base allocation data structures. */
 #ifdef MALLOC_STATS
@@ -3673,37 +3538,8 @@ malloc_init_hard(void)
 	base_chunk_nodes = NULL;
 	malloc_mutex_init(&base_mtx);
 
-	if (ncpus > 1) {
-		/*
-		 * For SMP systems, create four times as many arenas as there
-		 * are CPUs by default.
-		 */
-		opt_narenas_lshift += 2;
-	}
-
-	/* Determine how many arenas to use. */
-	narenas = ncpus;
-	if (opt_narenas_lshift > 0) {
-		if ((narenas << opt_narenas_lshift) > narenas)
-			narenas <<= opt_narenas_lshift;
-		/*
-		 * Make sure not to exceed the limits of what base_malloc()
-		 * can handle.
-		 */
-		if (narenas * sizeof(arena_t *) > chunksize)
-			narenas = (unsigned)(chunksize / sizeof(arena_t *));
-	} else if (opt_narenas_lshift < 0) {
-		if ((narenas << opt_narenas_lshift) < narenas)
-			narenas <<= opt_narenas_lshift;
-		/* Make sure there is at least one arena. */
-		if (narenas == 0)
-			narenas = 1;
-	}
-
-	next_arena = 0;
-
 	/* Allocate and initialize arenas. */
-	arenas = (arena_t **)base_alloc(sizeof(arena_t *) * narenas);
+	arenas = (arena_t **)base_alloc(sizeof(arena_t *) * ncpus);
 	if (arenas == NULL) {
 		malloc_mutex_unlock(&init_lock);
 		return (true);
@@ -3712,14 +3548,13 @@ malloc_init_hard(void)
 	 * Zero the array.  In practice, this should always be pre-zeroed,
 	 * since it was just mmap()ed, but let's be sure.
 	 */
-	memset(arenas, 0, sizeof(arena_t *) * narenas);
+	memset(arenas, 0, sizeof(arena_t *) * ncpus);
 
 	/*
 	 * Initialize one arena here.  The rest are lazily created in
 	 * arena_choose_hard().
 	 */
-	arenas_extend(0);
-	if (arenas[0] == NULL) {
+	if ((arenas[0] = arenas_extend()) == NULL) {
 		malloc_mutex_unlock(&init_lock);
 		return (true);
 	}
@@ -3744,13 +3579,13 @@ malloc(size_t size)
 {
 	void *ret;
 
-	if (malloc_init()) {
+	if (__predict_false(malloc_init())) {
 		ret = NULL;
 		goto RETURN;
 	}
 
-	if (size == 0) {
-		if (opt_sysv == false)
+	if (__predict_false(size == 0)) {
+		if (NOT_OPT(sysv)) 
 			size = 1;
 		else {
 			ret = NULL;
@@ -3761,8 +3596,8 @@ malloc(size_t size)
 	ret = imalloc(size);
 
 RETURN:
-	if (ret == NULL) {
-		if (opt_xmalloc) {
+	if (__predict_false(ret == NULL)) {
+		if (OPT(xmalloc)) {
 			_malloc_message(getprogname(),
 			    ": (malloc) Error in malloc(): out of memory\n", "",
 			    "");
@@ -3781,13 +3616,13 @@ posix_memalign(void **memptr, size_t alignment, size_t size)
 	int ret;
 	void *result;
 
-	if (malloc_init())
+	if (__predict_false(malloc_init()))
 		result = NULL;
 	else {
 		/* Make sure that alignment is a large enough power of 2. */
 		if (((alignment - 1) & alignment) != 0
 		    || alignment < sizeof(void *)) {
-			if (opt_xmalloc) {
+			if (OPT(xmalloc)) {
 				_malloc_message(getprogname(),
 				    ": (malloc) Error in posix_memalign(): "
 				    "invalid alignment\n", "", "");
@@ -3798,11 +3633,20 @@ posix_memalign(void **memptr, size_t alignment, size_t size)
 			goto RETURN;
 		}
 
+		if (size == 0) {
+			if (NOT_OPT(sysv))
+				size = 1;
+			else {
+				result = NULL;
+				ret = 0;
+				goto RETURN;
+			}
+		}
 		result = ipalloc(alignment, size);
 	}
 
-	if (result == NULL) {
-		if (opt_xmalloc) {
+	if (__predict_false(result == NULL)) {
+		if (OPT(xmalloc)) {
 			_malloc_message(getprogname(),
 			": (malloc) Error in posix_memalign(): out of memory\n",
 			"", "");
@@ -3826,15 +3670,15 @@ calloc(size_t num, size_t size)
 	void *ret;
 	size_t num_size;
 
-	if (malloc_init()) {
+	if (__predict_false(malloc_init())) {
 		num_size = 0;
 		ret = NULL;
 		goto RETURN;
 	}
 
 	num_size = num * size;
-	if (num_size == 0) {
-		if ((opt_sysv == false) && ((num == 0) || (size == 0)))
+	if (__predict_false(num_size == 0)) {
+		if (NOT_OPT(sysv) && ((num == 0) || (size == 0)))
 			num_size = 1;
 		else {
 			ret = NULL;
@@ -3856,8 +3700,8 @@ calloc(size_t num, size_t size)
 	ret = icalloc(num_size);
 
 RETURN:
-	if (ret == NULL) {
-		if (opt_xmalloc) {
+	if (__predict_false(ret == NULL)) {
+		if (OPT(xmalloc)) {
 			_malloc_message(getprogname(),
 			    ": (malloc) Error in calloc(): out of memory\n", "",
 			    "");
@@ -3875,8 +3719,8 @@ realloc(void *ptr, size_t size)
 {
 	void *ret;
 
-	if (size == 0) {
-		if (opt_sysv == false)
+	if (__predict_false(size == 0)) {
+		if (NOT_OPT(sysv))
 			size = 1;
 		else {
 			if (ptr != NULL)
@@ -3886,13 +3730,13 @@ realloc(void *ptr, size_t size)
 		}
 	}
 
-	if (ptr != NULL) {
+	if (__predict_true(ptr != NULL)) {
 		assert(malloc_initialized);
 
 		ret = iralloc(ptr, size);
 
-		if (ret == NULL) {
-			if (opt_xmalloc) {
+		if (__predict_false(ret == NULL)) {
+			if (OPT(xmalloc)) {
 				_malloc_message(getprogname(),
 				    ": (malloc) Error in realloc(): out of "
 				    "memory\n", "", "");
@@ -3901,13 +3745,13 @@ realloc(void *ptr, size_t size)
 			errno = ENOMEM;
 		}
 	} else {
-		if (malloc_init())
+		if (__predict_false(malloc_init()))
 			ret = NULL;
 		else
 			ret = imalloc(size);
 
-		if (ret == NULL) {
-			if (opt_xmalloc) {
+		if (__predict_false(ret == NULL)) {
+			if (OPT(xmalloc)) {
 				_malloc_message(getprogname(),
 				    ": (malloc) Error in realloc(): out of "
 				    "memory\n", "", "");
@@ -3927,7 +3771,7 @@ free(void *ptr)
 {
 
 	UTRACE(ptr, 0, 0);
-	if (ptr != NULL) {
+	if (__predict_true(ptr != NULL)) {
 		assert(malloc_initialized);
 
 		idalloc(ptr);
@@ -3941,7 +3785,6 @@ free(void *ptr)
 /*
  * Begin non-standard functions.
  */
-#ifndef __NetBSD__
 size_t
 malloc_usable_size(const void *ptr)
 {
@@ -3950,7 +3793,6 @@ malloc_usable_size(const void *ptr)
 
 	return (isalloc(ptr));
 }
-#endif
 
 /*
  * End non-standard functions.
@@ -3971,7 +3813,7 @@ _malloc_prefork(void)
 	/* Acquire all mutexes in a safe order. */
 	malloc_mutex_lock(&init_lock);
 	malloc_mutex_lock(&arenas_mtx);
-	for (i = 0; i < narenas; i++) {
+	for (i = 0; i < ncpus; i++) {
 		if (arenas[i] != NULL)
 			malloc_mutex_lock(&arenas[i]->mtx);
 	}
@@ -3994,7 +3836,7 @@ _malloc_postfork(void)
 	malloc_mutex_unlock(&base_mtx);
 	malloc_mutex_unlock(&chunks_mtx);
 
-	for (i = narenas; i-- > 0; ) {
+	for (i = ncpus; i-- > 0; ) {
 		if (arenas[i] != NULL)
 			malloc_mutex_unlock(&arenas[i]->mtx);
 	}
@@ -4014,7 +3856,7 @@ _malloc_postfork_child(void)
 	malloc_mutex_init(&base_mtx);
 	malloc_mutex_init(&chunks_mtx);
 
-	for (i = narenas; i-- > 0; ) {
+	for (i = ncpus; i-- > 0; ) {
 		if (arenas[i] != NULL)
 			malloc_mutex_init(&arenas[i]->mtx);
 	}

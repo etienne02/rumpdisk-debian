@@ -1,4 +1,4 @@
-/*	$NetBSD: bmd.c,v 1.25 2016/07/07 06:55:39 msaitoh Exp $	*/
+/*	$NetBSD: bmd.c,v 1.28 2024/01/07 07:58:33 isaki Exp $	*/
 
 /*
  * Copyright (c) 2002 Tetsuya Isaki. All rights reserved.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bmd.c,v 1.25 2016/07/07 06:55:39 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bmd.c,v 1.28 2024/01/07 07:58:33 isaki Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -49,6 +49,8 @@ __KERNEL_RCSID(0, "$NetBSD: bmd.c,v 1.25 2016/07/07 06:55:39 msaitoh Exp $");
 #include <machine/cpu.h>
 
 #include <arch/x68k/dev/intiovar.h>
+
+#include "ioconf.h"
 
 #define BMD_ADDR1	(0xece3f0)
 #define BMD_ADDR2	(0xecebf0)
@@ -90,8 +92,6 @@ struct bmd_softc {
 static int  bmd_match(device_t, cfdata_t, void *);
 static void bmd_attach(device_t, device_t, void *);
 static int  bmd_getdisklabel(struct bmd_softc *, dev_t);
-
-extern struct cfdriver bmd_cd;
 
 CFATTACH_DECL_NEW(bmd, sizeof(struct bmd_softc),
 	bmd_match, bmd_attach, NULL, NULL);
@@ -152,7 +152,7 @@ bmd_match(device_t parent, cfdata_t cf, void *aux)
 		return (0);
 
 	/* Check CTRL addr */
- 	if (badaddr((void *)IIOV(ia->ia_addr)))
+	if (badaddr((void *)IIOV(ia->ia_addr)))
 		return (0);
 
 	ia->ia_size = 2;
@@ -232,7 +232,7 @@ bmdopen(dev_t dev, int oflags, int devtype, struct lwp *l)
 {
 	struct bmd_softc *sc;
 
-	DPRINTF(("%s%d\n", __func__, unit));
+	DPRINTF(("%s%d\n", __func__, BMD_UNIT(dev)));
 
 	sc = device_lookup_private(&bmd_cd, BMD_UNIT(dev));
 	if (sc == NULL)
@@ -291,7 +291,7 @@ bmdstrategy(struct buf *bp)
 		goto done;
 	}
 
-	DPRINTF(("bmdstrategy: %s blkno %d bcount %ld:",
+	DPRINTF(("bmdstrategy: %s blkno %" PRIx64 " bcount %d:",
 		(bp->b_flags & B_READ) ? "read " : "write",
 		bp->b_blkno, bp->b_bcount));
 

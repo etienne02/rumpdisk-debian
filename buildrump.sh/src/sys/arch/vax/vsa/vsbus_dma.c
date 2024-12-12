@@ -1,4 +1,4 @@
-/* $NetBSD: vsbus_dma.c,v 1.16 2010/12/14 23:31:17 matt Exp $ */
+/* $NetBSD: vsbus_dma.c,v 1.18 2023/12/20 15:34:46 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vsbus_dma.c,v 1.16 2010/12/14 23:31:17 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vsbus_dma.c,v 1.18 2023/12/20 15:34:46 thorpej Exp $");
 
 #define _VAX_BUS_DMA_PRIVATE
 
@@ -39,7 +39,6 @@ __KERNEL_RCSID(0, "$NetBSD: vsbus_dma.c,v 1.16 2010/12/14 23:31:17 matt Exp $");
 #include <sys/systm.h>
 #include <sys/bus.h>
 #include <sys/cpu.h>
-#include <sys/malloc.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -127,7 +126,7 @@ vsbus_dma_init(struct vsbus_softc *sc, unsigned ptecnt)
 			    "hw sgmap: error=%d", error);
 		}
 		memset(pte, 0, mapsize);
-		*(int *) (sc->sc_vsregs + 8) = segs->ds_addr;	/* set MAP BASE 0x2008008 */
+		*(volatile int *) (sc->sc_vsregs + 8) = segs->ds_addr;	/* set MAP BASE 0x2008008 */
 	} else {
 		pte = (struct pte *) vax_map_physmem(KA49_SCSIMAP, mapsize / VAX_NBPG);
 		for (nsegs = ptecnt; nsegs > 0; ) {

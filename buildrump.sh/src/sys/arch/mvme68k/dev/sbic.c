@@ -1,4 +1,4 @@
-/*	$NetBSD: sbic.c,v 1.35 2018/03/08 03:12:02 mrg Exp $	*/
+/*	$NetBSD: sbic.c,v 1.37 2024/09/08 09:36:49 rillig Exp $	*/
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -86,7 +86,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sbic.c,v 1.35 2018/03/08 03:12:02 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sbic.c,v 1.37 2024/09/08 09:36:49 rillig Exp $");
 
 #include "opt_ddb.h"
 
@@ -1061,7 +1061,7 @@ sbicselectbus(struct sbic_softc *dev)
 	 * We only really need to do anything when the target goes to MSG out
 	 * If the device ignored ATN, it's probably old and brain-dead,
 	 * but we'll try to support it anyhow.
-	 * If it doesn't support message out, it definately doesn't
+	 * If it doesn't support message out, it definitely doesn't
 	 * support synchronous transfers, so no point in even asking...
 	 */
 	if (csr == (SBIC_CSR_MIS_2 | MESG_OUT_PHASE)) {
@@ -2368,7 +2368,7 @@ sbicnextstate(struct sbic_softc *dev, u_char csr, u_char asr)
 			}
 
 			/*
-			 * If we didn't get an interrupt, somethink's up
+			 * If we didn't get an interrupt, something's up
 			 */
 			if ((asr & SBIC_ASR_INT) == 0) {
 				printf("%s: Reselect without identify?"
@@ -2419,7 +2419,7 @@ sbicnextstate(struct sbic_softc *dev, u_char csr, u_char asr)
 		if (dev->sc_nexus) {
 			/*
 			 * Whoops! We've been reselected with
-			 * an command in progress!
+			 * a command in progress!
 			 * The best we can do is to put the current command
 			 * back on the ready list and hope for the best.
 			 */

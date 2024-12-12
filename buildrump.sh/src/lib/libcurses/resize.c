@@ -1,4 +1,4 @@
-/*	$NetBSD: resize.c,v 1.31 2021/05/29 09:11:14 nia Exp $	*/
+/*	$NetBSD: resize.c,v 1.36 2022/10/19 06:09:27 blymn Exp $	*/
 
 /*
  * Copyright (c) 2001
@@ -33,7 +33,7 @@
 #if 0
 static char sccsid[] = "@(#)resize.c   blymn 2001/08/26";
 #else
-__RCSID("$NetBSD: resize.c,v 1.31 2021/05/29 09:11:14 nia Exp $");
+__RCSID("$NetBSD: resize.c,v 1.36 2022/10/19 06:09:27 blymn Exp $");
 #endif
 #endif				/* not lint */
 
@@ -58,10 +58,8 @@ wresize(WINDOW *win, int req_nlines, int req_ncols)
 	if (win == NULL)
 		return ERR;
 
-#ifdef	DEBUG
 	__CTRACE(__CTRACE_WINDOW, "wresize: (%p, %d, %d)\n",
 	    win, nlines, ncols);
-#endif
 	if (win->orig != NULL) {
 		/* subwins must fit inside the parent - check this */
 		if (win->begy > win->orig->begy + win->orig->maxy)
@@ -152,9 +150,7 @@ resizeterm(int nlines, int ncols)
 {
 	int result;
 
-#ifdef	DEBUG
 	__CTRACE(__CTRACE_WINDOW, "resizeterm: (%d, %d)\n", nlines, ncols);
-#endif
 
 	/* Unconditionally inform application screen has been resized. */
 	_cursesi_screen->resized = 1;
@@ -188,9 +184,7 @@ resize_term(int nlines, int ncols)
 	struct __winlist *list;
 	int rlines;
 
-#ifdef	DEBUG
 	__CTRACE(__CTRACE_WINDOW, "resize_term: (%d, %d)\n", nlines, ncols);
-#endif
 
 	if (!is_term_resized(nlines, ncols))
 		return OK;
@@ -261,7 +255,6 @@ __resizewin(WINDOW *win, int nlines, int ncols)
 	int			 y, x;
 	WINDOW			*swin;
 
-#ifdef	DEBUG
 	__CTRACE(__CTRACE_WINDOW, "resize: (%p, %d, %d)\n", win, nlines, ncols);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->wattr = %08x\n", win->wattr);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->flags = %#.4x\n", win->flags);
@@ -271,7 +264,6 @@ __resizewin(WINDOW *win, int nlines, int ncols)
 	__CTRACE(__CTRACE_WINDOW, "resize: win->begx = %d\n", win->begx);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->scr_t = %d\n", win->scr_t);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->scr_b = %d\n", win->scr_b);
-#endif
 
 	/*
 	 * free up any non-spacing storage before we lose the
@@ -358,6 +350,7 @@ __resizewin(WINDOW *win, int nlines, int ncols)
 		lp = win->alines[i];
 		for (sp = lp->line, j = 0; j < win->maxx; j++, sp++) {
 			sp->attr = 0;
+			sp->cflags = CA_BACKGROUND;
 #ifndef HAVE_WCHAR
 			sp->ch = win->bch;
 #else
@@ -365,14 +358,12 @@ __resizewin(WINDOW *win, int nlines, int ncols)
 			sp->nsp = NULL;
 			if (_cursesi_copy_nsp(win->bnsp, sp) == ERR)
 				return ERR;
-			SET_WCOL(*sp, 1);
+			sp->wcols = 1;
 #endif /* HAVE_WCHAR */
 		}
-		lp->hash = __hash((char *)(void *)lp->line,
-				  (size_t)(ncols * __LDATASIZE));
+		lp->hash = __hash_line(lp->line, ncols);
 	}
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_WINDOW, "resize: win->wattr = %08x\n", win->wattr);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->flags = %#.4x\n", win->flags);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->maxy = %d\n", win->maxy);
@@ -381,7 +372,6 @@ __resizewin(WINDOW *win, int nlines, int ncols)
 	__CTRACE(__CTRACE_WINDOW, "resize: win->begx = %d\n", win->begx);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->scr_t = %d\n", win->scr_t);
 	__CTRACE(__CTRACE_WINDOW, "resize: win->scr_b = %d\n", win->scr_b);
-#endif
 
 	if (win->orig == NULL) {
 		/* bound subwindows to new size and fixup their pointers */
@@ -401,7 +391,7 @@ __resizewin(WINDOW *win, int nlines, int ncols)
 			if (swin->begx + x > win->begx + win->maxx)
 				x = 0;
 			if (x <= 0)
-				x += win->begy + win->maxx - swin->begx;
+				x += win->begx + win->maxx - swin->begx;
 			if (x < 1)
 				x = 1;
 			__resizewin(swin, y, x);

@@ -1,4 +1,4 @@
-/*	$NetBSD: ixp425_if_npe.c,v 1.47 2020/02/18 14:49:32 thorpej Exp $ */
+/*	$NetBSD: ixp425_if_npe.c,v 1.54 2024/06/29 12:11:10 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2006 Sam Leffler.  All rights reserved.
@@ -28,7 +28,7 @@
 #if 0
 __FBSDID("$FreeBSD: src/sys/arm/xscale/ixp425/if_npe.c,v 1.1 2006/11/19 23:55:23 sam Exp $");
 #endif
-__KERNEL_RCSID(0, "$NetBSD: ixp425_if_npe.c,v 1.47 2020/02/18 14:49:32 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ixp425_if_npe.c,v 1.54 2024/06/29 12:11:10 riastradh Exp $");
 
 /*
  * Intel XScale NPE Ethernet driver.
@@ -52,8 +52,8 @@ __KERNEL_RCSID(0, "$NetBSD: ixp425_if_npe.c,v 1.47 2020/02/18 14:49:32 thorpej E
 #include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/callout.h>
+#include <sys/kmem.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/socket.h>
 #include <sys/endian.h>
 #include <sys/ioctl.h>
@@ -468,9 +468,7 @@ npe_dma_setup(struct npe_softc *sc, struct npedma *dma,
 		goto unmap_dmamem;
 	}
 
-	/* XXX M_TEMP */
-	dma->buf = malloc(nbuf * sizeof(struct npebuf), M_TEMP,
-	    M_WAITOK | M_ZERO);
+	dma->buf = kmem_zalloc(nbuf * sizeof(struct npebuf), KM_SLEEP);
 	dma->buf_phys = dma->buf_map->dm_segs[0].ds_addr;
 	for (i = 0; i < dma->nbuf; i++) {
 		struct npebuf *npe = &dma->buf[i];
@@ -514,7 +512,7 @@ npe_dma_destroy(struct npe_softc *sc, struct npedma *dma)
 		bus_dmamap_destroy(sc->sc_dt, dma->buf_map);
 	}
 	if (dma->buf != NULL)
-		free(dma->buf, M_TEMP);
+		kmem_free(dma->buf, dma->nbuf * sizeof(struct npebuf));
 	memset(dma, 0, sizeof(*dma));
 }
 #endif
@@ -616,7 +614,7 @@ npe_activate(struct npe_softc *sc)
 	 * frames to process or tx'd frames to reap.  These callbacks
 	 * are controlled by the q configurations; e.g. we get a
 	 * callback when tx_done has 2 or more frames to process and
-	 * when the rx q has at least one frame.  These setings can
+	 * when the rx q has at least one frame.  These settings can
 	 * changed at the time the q is configured.
 	 */
 	sc->rx_qid = npeconfig[unit].rx_qid;
@@ -690,18 +688,18 @@ npe_addstats(struct npe_softc *sc)
 	struct npestats *ns = sc->sc_stats;
 
 	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
-	if_statadd_ref(nsr, if_oerrors,
+	if_statadd_ref(ifp, nsr, if_oerrors,
 		  be32toh(ns->dot3StatsInternalMacTransmitErrors)
 		+ be32toh(ns->dot3StatsCarrierSenseErrors)
 		+ be32toh(ns->TxVLANIdFilterDiscards)
 		);
-	if_statadd_ref(nsr, if_ierrors,
+	if_statadd_ref(ifp, nsr, if_ierrors,
 		  be32toh(ns->dot3StatsFCSErrors)
 		+ be32toh(ns->dot3StatsInternalMacReceiveErrors)
 		+ be32toh(ns->RxOverrunDiscards)
 		+ be32toh(ns->RxUnderflowEntryDiscards)
 		);
-	if_statadd_ref(nsr, if_collisions,
+	if_statadd_ref(ifp, nsr, if_collisions,
 		  be32toh(ns->dot3StatsSingleCollisionFrames)
 		+ be32toh(ns->dot3StatsMultipleCollisionFrames)
 		);
@@ -788,7 +786,6 @@ npe_txdone_finish(struct npe_softc *sc, const struct txdone *td)
 	 * start routine to xmit more packets.
 	 */
 	if_statadd(ifp, if_opackets, td->count);
-	ifp->if_flags &= ~IFF_OACTIVE;
 	ifp->if_timer = 0;
 	if_schedule_deferred_start(ifp);
 }
@@ -1174,7 +1171,6 @@ npeinit_locked(void *xsc)
 	npe_startrecv(sc);
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 	ifp->if_timer = 0;		/* just in case */
 
 	/* Enable transmitter and receiver in the MAC */
@@ -1244,7 +1240,7 @@ npestart(struct ifnet *ifp)
 	int nseg, len, error, i;
 	uint32_t next;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	while (sc->tx_free != NULL) {
@@ -1308,8 +1304,6 @@ npestart(struct ifnet *ifp)
 
 		ifp->if_timer = 5;
 	}
-	if (sc->tx_free == NULL)
-		ifp->if_flags |= IFF_OACTIVE;
 }
 
 static void
@@ -1380,7 +1374,7 @@ npestop(struct ifnet *ifp, int disable)
 	WR4(sc, NPE_MAC_CORE_CNTRL, NPE_CORE_MDC_EN);
 
 	ifp->if_timer = 0;
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 }
 
 void
@@ -1429,13 +1423,13 @@ npeioctl(struct ifnet *ifp, u_long cmd, void *data)
 			 * If interface is marked down and it is running,
 			 * then stop and disable it.
 			 */
-			(*ifp->if_stop)(ifp, 1);
+			if_stop(ifp, 1);
 		} else if ((ifp->if_flags & (IFF_UP |IFF_RUNNING)) == IFF_UP) {
 			/*
 			 * If interface is marked up and it is stopped, then
 			 * start it.
 			 */
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		} else if ((ifp->if_flags & IFF_UP) != 0) {
 			u_short diff;
 
@@ -1445,7 +1439,7 @@ npeioctl(struct ifnet *ifp, u_long cmd, void *data)
 			    & (IFF_PROMISC | IFF_ALLMULTI);
 			if ((diff & (IFF_PROMISC | IFF_ALLMULTI)) != 0) {
 				/*
-				 * If the difference bettween last flag and
+				 * If the difference between last flag and
 				 * new flag only IFF_PROMISC or IFF_ALLMULTI,
 				 * set multicast filter only (don't reset to
 				 * prevent link down).
@@ -1457,7 +1451,7 @@ npeioctl(struct ifnet *ifp, u_long cmd, void *data)
 				 * any other flags that affect the hardware
 				 * state.
 				 */
-				error = (*ifp->if_init)(ifp);
+				error = if_init(ifp);
 			}
 		}
 		sc->sc_if_flags = ifp->if_flags;

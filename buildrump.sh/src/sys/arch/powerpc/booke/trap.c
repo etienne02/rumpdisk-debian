@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.37 2021/03/06 08:08:19 rin Exp $	*/
+/*	$NetBSD: trap.c,v 1.41 2024/09/08 10:16:04 andvar Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: trap.c,v 1.37 2021/03/06 08:08:19 rin Exp $");
+__KERNEL_RCSID(1, "$NetBSD: trap.c,v 1.41 2024/09/08 10:16:04 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altivec.h"
@@ -144,14 +144,17 @@ get_faultmap(const struct trapframe * const tf, register_t psl_mask)
 static inline pt_entry_t *
 trap_pte_lookup(struct trapframe *tf, vaddr_t va, register_t psl_mask)
 {
-	pmap_segtab_t ** const stps = &curcpu()->ci_pmap_kern_segtab;
-	pmap_segtab_t * const stp = stps[(tf->tf_srr1 / psl_mask) & 1];
-	if (__predict_false(stp == NULL))
+	pmap_segtab_t ** const stbs = &curcpu()->ci_pmap_kern_segtab;
+	pmap_segtab_t * const stb = stbs[(tf->tf_srr1 / psl_mask) & 1];
+	if (__predict_false(stb == NULL))
 		return NULL;
-	pt_entry_t * const ptep = stp->seg_tab[va >> SEGSHIFT];
-	if (__predict_false(ptep == NULL))
+
+	pmap_ptpage_t * const ppg = stb->seg_ppg[va >> SEGSHIFT];
+	if (__predict_false(ppg == NULL))
 		return NULL;
-	return ptep + ((va & SEGOFSET) >> PAGE_SHIFT);
+	const size_t pte_idx = (va >> PGSHIFT) & (NPTEPG - 1);
+
+	return ppg->ppg_ptes + pte_idx;
 }
 
 static int
@@ -297,7 +300,7 @@ isi_exception(struct trapframe *tf, ksiginfo_t *ksi)
 		if (VM_PAGEMD_EXECPAGE_P(mdpg))
 			UVMHIST_LOG(pmapexechist,
 			    "srr0=%#x pg=%p (pa %#"PRIxPADDR"): "
-			    "no syncicache (already execpage)", 
+			    "no syncicache (already execpage)",
 			    tf->tf_srr0, (uintptr_t)pg, pa, 0);
 		else
 			UVMHIST_LOG(pmapexechist,
@@ -456,7 +459,7 @@ pgm_exception(struct trapframe *tf, ksiginfo_t *ksi)
 
 	UVMHIST_FUNC(__func__); UVMHIST_CALLED(pmapexechist);
 
-	UVMHIST_LOG(pmapexechist, " srr0/1=%#x/%#x esr=%#x pte=%#x", 
+	UVMHIST_LOG(pmapexechist, " srr0/1=%#x/%#x esr=%#x pte=%#x",
 	    tf->tf_srr0, tf->tf_srr1, tf->tf_esr,
 	    *trap_pte_lookup(tf, trunc_page(tf->tf_srr0), PSL_IS));
 
@@ -657,6 +660,7 @@ dump_trapframe(const struct trapframe *tf, void (*pr)(const char *, ...))
 	}
 }
 
+#ifdef DDB
 static bool
 ddb_exception(struct trapframe *tf)
 {
@@ -693,6 +697,7 @@ ddb_exception(struct trapframe *tf)
 	return false;
 #endif
 }
+#endif /* DDB */
 
 static bool
 onfaulted(struct trapframe *tf, register_t rv)
@@ -740,7 +745,7 @@ trap(enum ppc_booke_exceptions trap_code, struct trapframe *tf)
 		printf("%s(entry): pid %d.%d (%s): invalid tf addr %p\n",
 		    __func__, p->p_pid, l->l_lid, p->p_comm, tf);
 		dump_trapframe(tf, NULL);
-		Debugger();
+		console_debugger();
 	}
 #endif
 #if 0
@@ -759,7 +764,7 @@ trap(enum ppc_booke_exceptions trap_code, struct trapframe *tf)
 		    trap_names[trap_code], tf->tf_fixreg[1],
 		    (uintmax_t)mfspr(SPR_SPRG1));
 		dump_trapframe(tf, NULL);
-		Debugger();
+		console_debugger();
 	}
 
 	if (usertrap && (tf->tf_srr1 & (PSL_DS|PSL_IS)) != (PSL_DS|PSL_IS)) {
@@ -767,7 +772,7 @@ trap(enum ppc_booke_exceptions trap_code, struct trapframe *tf)
 		    __func__, p->p_pid, l->l_lid, p->p_comm,
 		    trap_names[trap_code], tf->tf_srr1);
 		dump_trapframe(tf, NULL);
-		Debugger();
+		console_debugger();
 	}
 
 	switch (trap_code) {
@@ -829,7 +834,9 @@ trap(enum ppc_booke_exceptions trap_code, struct trapframe *tf)
 		rv = embedded_fp_round_exception(tf, &ksi);
 		break;
 	case T_EMBEDDED_PERF_MONITOR:
+#ifdef DDB
 		//db_stack_trace_print(tf->tf_fixreg[1], true, 40, "", printf);
+#endif
 		dump_trapframe(tf, NULL);
 		rv = EPERM;
 		break;
@@ -842,14 +849,14 @@ trap(enum ppc_booke_exceptions trap_code, struct trapframe *tf)
 			    __func__, p->p_pid, l->l_lid, p->p_comm,
 			    tf->tf_fixreg[1]);
 			dump_trapframe(tf, NULL);
-			Debugger();
+			console_debugger();
 		}
 		if ((tf->tf_srr1 & (PSL_DS|PSL_IS)) != (PSL_DS|PSL_IS)) {
 			printf("%s(entry): pid %d.%d (%s): %s invalid PSL %#lx\n",
 			    __func__, p->p_pid, l->l_lid, p->p_comm,
 			    trap_names[trap_code], tf->tf_srr1);
 			dump_trapframe(tf, NULL);
-			Debugger();
+			console_debugger();
 		}
 #if 0
 		if ((mfmsr() & PSL_CE) == 0) {
@@ -865,7 +872,9 @@ trap(enum ppc_booke_exceptions trap_code, struct trapframe *tf)
 	if (!usertrap) {
 		if (rv != 0) {
 			if (!onfaulted(tf, rv)) {
+#ifdef DDB
 				db_stack_trace_print(tf->tf_fixreg[1], true, 40, "", printf);
+#endif
 				dump_trapframe(tf, NULL);
 				panic("%s: pid %d.%d (%s): %s exception in kernel mode"
 				    " (tf=%p, dear=%#lx, esr=%#x,"
@@ -927,7 +936,7 @@ trap(enum ppc_booke_exceptions trap_code, struct trapframe *tf)
 			    __func__, p->p_pid, l->l_lid, p->p_comm,
 			    trap_names[trap_code], tf->tf_srr1);
 			dump_trapframe(tf, NULL);
-			Debugger();
+			console_debugger();
 		}
 #endif
 #if 0

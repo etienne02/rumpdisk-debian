@@ -71,7 +71,7 @@
 #define PSM_STAT_OVT	0x02	/* Over temperature condition */
 #define PSM_STAT_UN1	0x04	/* Unused */
 #define PSM_STAT_UN2	0x08	/* Unused */
-#define PSM_STAT_ERR	0x10	/* Hardware error occured */
+#define PSM_STAT_ERR	0x10	/* Hardware error occurred */
 #define PSM_STAT_MCR	0x20	/* Master Command Register busy */
 #define PSM_STAT_WBF	0x40	/* Write buffer full */
 #define PSM_STAT_RDA	0x80	/* Read data available */
@@ -84,7 +84,7 @@
 				((m & 0x07) << 5)
 
 #define PSM_MODE_SYSCFG	0x00	/* System configuration mode */
-#define PSM_MODE_BQRW	0x01	/* Read write battery fuel guage */
+#define PSM_MODE_BQRW	0x01	/* Read write battery fuel gauge */
 #define PSM_MODE_BCB	0x02	/* Battery status block control */
 #define PSM_MODE_PMPS	0x03	/* Power management policies/status */
 #define PSM_MODE_MISC	0x04	/* Misc. control / status registers */
@@ -129,7 +129,7 @@
 					((lo & 0x01) << 6) | \
 					((e & 0x01) << 7)
 
-/* Mode 1 - Battery fuel guage read / write */
+/* Mode 1 - Battery fuel gauge read / write */
 
 #define PSM_BQRW_CACHED		0x80
 #define PSM_BQRW_REGMASK	0x1f
@@ -144,7 +144,7 @@
 
 #define PSM_BCB_CR		0x01	/* Calibration required */
 #define PSM_BCB_BCF		0x02	/* Battery control block failure */
-#define PSM_BCB_FGF		0x04	/* Fuel guage failure */
+#define PSM_BCB_FGF		0x04	/* Fuel gauge failure */
 #define PSM_BCB_FULL		0x08	/* Battery is full */
 #define	PSM_BCB_CHG		0x10	/* Battery pack charging */
 #define PSM_BCB_USE		0x20	/* Battery pack in use */

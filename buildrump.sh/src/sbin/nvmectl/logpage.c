@@ -1,4 +1,4 @@
-/*	$NetBSD: logpage.c,v 1.7 2018/04/18 10:11:44 nonaka Exp $	*/
+/*	$NetBSD: logpage.c,v 1.11 2023/02/02 08:21:32 mlelstv Exp $	*/
 
 /*-
  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
@@ -33,7 +33,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: logpage.c,v 1.7 2018/04/18 10:11:44 nonaka Exp $");
+__RCSID("$NetBSD: logpage.c,v 1.11 2023/02/02 08:21:32 mlelstv Exp $");
 #if 0
 __FBSDID("$FreeBSD: head/sbin/nvmecontrol/logpage.c 329824 2018-02-22 13:32:31Z wma $");
 #endif
@@ -124,7 +124,9 @@ read_logpage(int fd, uint8_t log_page, int nsid, void *payload,
 		err(1, "get log page request failed");
 
 	if (nvme_completion_is_error(&pt.cpl))
-		errx(1, "get log page request returned error");
+		errx(1, "get log page request returned error 0x%x/0x%02x",
+			(uint8_t)__SHIFTOUT(pt.cpl.flags, NVME_CQE_SCT_MASK),
+			(uint8_t)__SHIFTOUT(pt.cpl.flags, NVME_CQE_SC_MASK));
 }
 
 static void
@@ -261,9 +263,9 @@ print_log_health(const struct nvm_identify_controller *cdata __unused, void *buf
 	printf("Percentage used:                %u\n",
 	    health->percentage_used);
 
-	print_bignum("Data units (512 byte) read:", health->data_units_read, "");
-	print_bignum("Data units (512 byte) written:", health->data_units_written,
-	    "");
+	print_bignum1("Data units read:", health->data_units_read, "", "B", 512000);
+	print_bignum1("Data units written:", health->data_units_written,
+	    "", "B", 512000);
 	print_bignum("Host read commands:", health->host_read_commands, "");
 	print_bignum("Host write commands:", health->host_write_commands, "");
 	print_bignum("Controller busy time (minutes):", health->controller_busy_time,
@@ -682,7 +684,7 @@ print_hgst_info_background_scan(void *buf, uint16_t subtype __unused,
 		return;
 	}
 	if (code != 0) {
-		printf("Expceted code 0, found code %#x\n", code);
+		printf("Expected code 0, found code %#x\n", code);
 		return;
 	}
 	pom = le32dec(walker);
@@ -1042,7 +1044,7 @@ logpage(int argc, char *argv[])
 	read_controller_data(fd, &cdata);
 
 	/*
-	 * The log page attribtues indicate whether or not the controller
+	 * The log page attributes indicate whether or not the controller
 	 * supports the SMART/Health information log page on a per
 	 * namespace basis.
 	 */

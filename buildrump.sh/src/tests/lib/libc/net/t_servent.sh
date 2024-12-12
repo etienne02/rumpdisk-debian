@@ -1,4 +1,4 @@
-# $NetBSD: t_servent.sh,v 1.2 2016/03/08 08:34:17 joerg Exp $
+# $NetBSD: t_servent.sh,v 1.4 2022/12/04 02:53:17 jschauma Exp $
 #
 # Copyright (c) 2008 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -24,6 +24,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 #
+: ${TEST_FILE:="/etc/services"}
 
 atf_test_case servent
 servent_head()
@@ -40,46 +41,46 @@ servent_body()
 	#  (2) fold all names for the same port/proto together
 	#  (3) prune duplicates
 	#
-	tr '\t' ' ' </etc/services | awk '
-		function add(key, name,      i, n, ar) {
-		n = split(names[key], ar);
-		for (i=1; i<=n; i++) {
-			if (name == ar[i]) {
-			return;
+	tr '\t' ' ' <"${TEST_FILE}" | awk '
+		function add(key, name, i, n, ar) {
+			n = split(names[key], ar);
+			for (i=1; i<=n; i++) {
+				if (name == ar[i]) {
+					return;
+				}
 			}
-		}
-		delete ar;
-		names[key] = names[key] " " name;
+			delete ar;
+			names[key] = names[key] " " name;
 		}
 
 		{
-		sub("#.*", "", $0);
-		gsub("  *", " ", $0);
-		if (NF==0) {
-			next;
-		}
-		add($2, $1, 0);
-		for (i=3; i<=NF; i++) {
-			add($2, $i, 1);
-		}
+			sub("#.*", "", $0);
+			gsub("  *", " ", $0);
+			if (NF==0) {
+				next;
+			}
+			add($2, $1, 0);
+			for (i=3; i<=NF; i++) {
+				add($2, $i, 1);
+			}
 		}
 		END {
-		for (key in names) {
-			portproto = key;
-			sub("/", ", proto=", portproto);
-			portproto = "port=" portproto;
+			for (key in names) {
+				portproto = key;
+				sub("/", ", proto=", portproto);
+				portproto = "port=" portproto;
 
-			n = split(names[key], ar);
-			printf "name=%s, %s, aliases=", ar[1], portproto;
-			for (i=2; i<=n; i++) {
-			if (i>2) {
-				printf " ";
+				n = split(names[key], ar);
+				printf "name=%s, %s, aliases=", ar[1], portproto;
+				for (i=2; i<=n; i++) {
+					if (i>2) {
+						printf " ";
+					}
+					printf "%s", ar[i];
+				}
+				printf "\n";
+				delete ar;
 			}
-			printf "%s", ar[i];
-			}
-			printf "\n";
-			delete ar;
-		}
 		}
 	' | sort >exp
 

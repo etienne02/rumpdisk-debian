@@ -1,4 +1,4 @@
-/*	$NetBSD: siop_common.c,v 1.55 2019/12/27 09:41:50 msaitoh Exp $	*/
+/*	$NetBSD: siop_common.c,v 1.60 2024/02/08 19:44:08 andvar Exp $	*/
 
 /*
  * Copyright (c) 2000, 2002 Manuel Bouyer.
@@ -28,12 +28,11 @@
 /* SYM53c7/8xx PCI-SCSI I/O Processors driver */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: siop_common.c,v 1.55 2019/12/27 09:41:50 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: siop_common.c,v 1.60 2024/02/08 19:44:08 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/buf.h>
 #include <sys/kernel.h>
 #include <sys/scsiio.h>
@@ -435,7 +434,7 @@ siop_ppr_neg(struct siop_common_cmd *siop_cmd)
 		offset = tables->msg_in[5];
 		options = tables->msg_in[7];
 		if (options != MSG_EXT_PPR_DT) {
-			/* should't happen */
+			/* shouldn't happen */
 			printf("%s: ppr negotiation for target %d: "
 			    "no DT option\n", device_xname(sc->sc_dev), target);
 			siop_target->status = TARST_ASYNC;
@@ -815,12 +814,12 @@ siop_sdp(struct siop_common_cmd *siop_cmd, int offset)
 #endif
 	/*
 	 * Save data pointer. We do this by adjusting the tables to point
-	 * at the begginning of the data not yet transferred.
+	 * at the beginning of the data not yet transferred.
 	 * offset points to the first table with untransferred data.
 	 */
 
 	/*
-	 * before doing that we decrease resid from the ammount of data which
+	 * before doing that we decrease resid from the amount of data which
 	 * has been transferred.
 	 */
 	siop_update_resid(siop_cmd, offset);
@@ -841,7 +840,7 @@ siop_sdp(struct siop_common_cmd *siop_cmd, int offset)
 
 	/*
 	 * now we can remove entries which have been transferred.
-	 * We just move the entries with data left at the beggining of the
+	 * We just move the entries with data left at the beginning of the
 	 * tables
 	 */
 	memmove(&siop_cmd->siop_tables->data[0],
@@ -869,7 +868,7 @@ siop_update_resid(struct siop_common_cmd *siop_cmd, int offset)
 		    siop_ctoh32(sc, siop_cmd->siop_tables->data[i].count);
 	/*
 	 * if CMDFL_RESID is set, the last table (pointed by offset) is a
-	 * partial transfers. If not, offset points to the entry folloing
+	 * partial transfers. If not, offset points to the entry following
 	 * the last full transfer.
 	 */
 	if (siop_cmd->flags & CMDFL_RESID) {
@@ -911,7 +910,7 @@ siop_iwr(struct siop_common_cmd *siop_cmd)
 		} else {
 			/*
 			 * now we really had a short xfer, by one byte.
-			 * handle it just as if we had a phase mistmatch
+			 * handle it just as if we had a phase mismatch
 			 * (there is a resid of one for this table).
 			 * Update scratcha1 to reflect the fact that
 			 * this xfer isn't complete.

@@ -1,13 +1,13 @@
 #
-# $NetBSD: SMALL030,v 1.25 2021/01/26 10:51:27 rin Exp $
+# $NetBSD: SMALL030,v 1.28 2022/08/07 02:55:46 simonb Exp $
 #
 # This file was automatically created. Changes will be
 # lost when running makeconf in this directory.
 #
 # Created from:
-#		NetBSD: GENERIC.in,v 1.121 2021/01/21 06:51:54 nia Exp $
+#		NetBSD: GENERIC.in,v 1.124 2022/08/07 02:52:24 simonb Exp $
 include "arch/atari/conf/std.atari"
-makeoptions COPTS="-Os" # optimize for space
+makeoptions COPTS="-Os -fno-unwind-tables" # optimize for space
 maxusers 16
 options HZ=64 # Set the clock-rate (48/64/96)
 options INSECURE # disable kernel security levels
@@ -30,7 +30,7 @@ no options COMPAT_13 # NetBSD 1.3,
 no options COMPAT_14 # NetBSD 1.4,
 no options COMPAT_15 # NetBSD 1.5,
 options PIPE_SOCKETPAIR # smaller, but slower pipe(2)
-options ST_POOL_SIZE=24 # smallest that allows TT-HIGH
+options ST_POOL_SIZE=56 # for SCSI, FDC, and Xserver
 options TT_SCSI # SCSI-support for TT
 options TT_VIDEO # Graphics support for TT
 options FALCON_SCSI # SCSI-support for Falcon

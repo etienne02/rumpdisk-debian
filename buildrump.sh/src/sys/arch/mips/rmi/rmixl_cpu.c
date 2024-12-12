@@ -1,4 +1,4 @@
-/*	$NetBSD: rmixl_cpu.c,v 1.12 2020/08/12 07:37:39 skrll Exp $	*/
+/*	$NetBSD: rmixl_cpu.c,v 1.15 2022/09/29 07:00:47 skrll Exp $	*/
 
 /*
  * Copyright 2002 Wasabi Systems, Inc.
@@ -38,7 +38,7 @@
 #include "locators.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rmixl_cpu.c,v 1.12 2020/08/12 07:37:39 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rmixl_cpu.c,v 1.15 2022/09/29 07:00:47 skrll Exp $");
 
 #include "opt_multiprocessor.h"
 #include "opt_ddb.h"
@@ -50,7 +50,6 @@ __KERNEL_RCSID(0, "$NetBSD: rmixl_cpu.c,v 1.12 2020/08/12 07:37:39 skrll Exp $")
 #include <sys/lock.h>
 #include <sys/lwp.h>
 #include <sys/cpu.h>
-#include <sys/malloc.h>
 #include <uvm/uvm_pglist.h>
 #include <uvm/uvm_extern.h>
 #include <mips/regnum.h>
@@ -65,6 +64,7 @@ __KERNEL_RCSID(0, "$NetBSD: rmixl_cpu.c,v 1.12 2020/08/12 07:37:39 skrll Exp $")
 #include <mips/db_machdep.h>
 #endif
 
+#include <mips/asm.h>		/* XXX CALLFRAME_SIZ */
 
 static int	cpu_rmixl_match(device_t, cfdata_t, void *);
 static void	cpu_rmixl_attach(device_t, device_t, void *);
@@ -87,7 +87,7 @@ struct cpu_info *
 #endif	/* DEBUG */
 
 CFATTACH_DECL_NEW(cpu_rmixl, sizeof(struct rmixl_cpu_softc),
-	cpu_rmixl_match, cpu_rmixl_attach, NULL, NULL); 
+	cpu_rmixl_match, cpu_rmixl_attach, NULL, NULL);
 
 #ifdef MULTIPROCESSOR
 static struct rmixl_cpu_trampoline_args rmixl_cpu_trampoline_args;
@@ -117,7 +117,7 @@ cpu_rmixl_watchpoint_init(void)
  * cpu_xls616_erratum
  *
  * on the XLS616, COUNT/COMPARE clock regs seem to interact between
- * threads on a core 
+ * threads on a core
  *
  * the symptom of the error is retarded clock interrupts
  * and very slow apparent system performance
@@ -173,7 +173,7 @@ cpu_rmixl_attach(device_t parent, device_t self, void *aux)
 	struct cpu_info *ci = NULL;
 	static bool once = false;
 	extern void rmixl_spl_init_cpu(void);
-	
+
 	if (once == false) {
 		/* first attach is the primary cpu */
 		once = true;
@@ -335,7 +335,7 @@ cpu_setup_trampoline_common(struct cpu_info *ci, struct rmixl_cpu_trampoline_arg
 {
 	struct lwp *l = ci->ci_data.cpu_idlelwp;
 	uintptr_t stacktop;
- 
+
 #ifdef DIAGNOSTIC
 	/* Ensure our current stack can be used by the firmware */
 	uint64_t sp;
@@ -391,7 +391,7 @@ cpu_setup_trampoline_callback(struct cpu_info *ci)
 	struct rmixl_cpu_trampoline_args *ta = &rmixl_cpu_trampoline_args;
 	extern void rmixl_cpu_trampoline(void *);
 	extern void rmixlfw_wakeup_cpu(void *, void *, u_int64_t, void *);
- 
+
 	cpu_setup_trampoline_common(ci, ta);
 
 #if _LP64

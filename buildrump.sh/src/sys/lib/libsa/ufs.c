@@ -1,4 +1,4 @@
-/*	$NetBSD: ufs.c,v 1.80 2021/05/27 06:54:44 mrg Exp $	*/
+/*	$NetBSD: ufs.c,v 1.88 2022/12/01 18:06:09 christos Exp $	*/
 
 /*-
  * Copyright (c) 1993
@@ -156,9 +156,6 @@ typedef uint32_t	ino32_t;
 #ifndef FSBTODB
 #define FSBTODB(fs, indp) FFS_FSBTODB(fs, indp)
 #endif
-#ifndef FS_MAGIC
-#define FS_MAGIC FS_UFS1_MAGIC
-#endif
 #ifndef UFS_NINDIR
 #define UFS_NINDIR FFS_NINDIR
 #endif
@@ -214,17 +211,63 @@ static int search_directory(const char *, int, struct open_file *, ino32_t *);
 static void ffs_oldfscompat(FS *);
 #endif
 
+#ifdef LIBSA_FFSv1
 static __inline__ bool
 ffs_is_magic(FS *fs)
 {
-	return fs->fs_magic == FS_MAGIC;
+	return fs->fs_magic == FS_UFS1_MAGIC;
 }
+
+#ifdef LIBSA_FFS_EI
+static __inline__ bool
+ffs_is_magic_swapped(FS *fs)
+{
+	return fs->fs_magic == bswap32(FS_UFS1_MAGIC);
+}
+#endif
+
+#endif
+
+#ifdef LIBSA_FFSv2
+static __inline__ bool
+ffs_is_magic(FS *fs)
+{
+	return fs->fs_magic == FS_UFS2_MAGIC || fs->fs_magic == FS_UFS2EA_MAGIC;
+}
+
+#ifdef LIBSA_FFS_EI
+static __inline__ bool
+ffs_is_magic_swapped(FS *fs)
+{
+	return fs->fs_magic == bswap32(FS_UFS2_MAGIC) ||
+		fs->fs_magic == bswap32(FS_UFS2EA_MAGIC);
+}
+#endif
+
+#endif
+
+#ifdef LIBSA_LFS
+static __inline__ bool
+ffs_is_magic(FS *fs)
+{
+	return fs->fs_magic == LFS_MAGIC;
+}
+
+#ifdef LIBSA_FFS_EI
+static __inline__ bool
+ffs_is_magic_swapped(FS *fs)
+{
+	return fs->fs_magic == bswap32(LFS_MAGIC);
+}
+#endif
+
+#endif
 
 static __inline__ void
 ffs_fix_magic_swapped(struct file *fp, FS *fs)
 {
 #ifdef LIBSA_FFS_EI
-	fp->f_swapped = fs->fs_magic == bswap32(FS_MAGIC);
+	fp->f_swapped = ffs_is_magic_swapped(fs);
 	if (fp->f_swapped)
 {
 		ffs_sb_swap(fs, fs);
@@ -597,10 +640,12 @@ ffs_find_superblock(struct open_file *f, FS *fs)
 #ifdef LIBSA_FFSv2
 	static daddr_t sblock_try[] = SBLOCKSEARCH;
 	int i;
+#endif
 
+#ifdef LIBSA_FFSv2
 	for (i = 0; sblock_try[i] != -1; i++) {
 		rc = DEV_STRATEGY(f->f_dev)(f->f_devdata, F_READ,
-		    sblock_try[i] / DEV_BSIZE, SBLOCKSIZE, fs, &buf_size);
+		    sblock_try[i] / GETSECSIZE(f), SBLOCKSIZE, fs, &buf_size);
 		if (rc)
 			return rc;
 		if (buf_size != SBLOCKSIZE)
@@ -615,7 +660,7 @@ ffs_find_superblock(struct open_file *f, FS *fs)
 	return EINVAL;
 #else /* LIBSA_FFSv2 */
 	rc = DEV_STRATEGY(f->f_dev)(f->f_devdata, F_READ,
-		SBLOCKOFFSET / DEV_BSIZE, SBLOCKSIZE, fs, &buf_size);
+		SBLOCKOFFSET / GETSECSIZE(f), SBLOCKSIZE, fs, &buf_size);
 	if (rc)
 		return rc;
 	if (buf_size != SBLOCKSIZE)
@@ -701,7 +746,7 @@ ufs_open(const char *path, struct open_file *f)
 		/*
 		 * We note that the number of indirect blocks is always
 		 * a power of 2.  This lets us use shifts and masks instead
-		 * of divide and remainder and avoinds pulling in the
+		 * of divide and remainder and avoids pulling in the
 		 * 64bit division routine into the boot code.
 		 */
 		mult = UFS_NINDIR(fs);
@@ -849,9 +894,11 @@ ufs_open(const char *path, struct open_file *f)
 out:
 	if (rc)
 		ufs_close(f);
-#ifdef FSMOD		/* Only defined for lfs */
 	else
+#ifdef FSMOD
 		fsmod = FSMOD;
+#else
+		fsmod = NULL;
 #endif
 	return rc;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_ioctl.h,v 1.27 2013/06/08 12:50:32 stacktic Exp $	*/
+/*	$NetBSD: linux_ioctl.h,v 1.30 2024/10/01 16:41:29 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998 The NetBSD Foundation, Inc.
@@ -41,6 +41,8 @@ int linux_ioctl_cdrom(struct lwp *, const struct linux_sys_ioctl_args *,
     register_t *);
 int linux_ioctl_termios(struct lwp *, const struct linux_sys_ioctl_args *,
     register_t *);
+int linux_ioctl_timerfd(struct lwp *, const struct linux_sys_ioctl_args *,
+    register_t *);
 int linux_ioctl_socket(struct lwp *, const struct linux_sys_ioctl_args *,
     register_t *);
 int linux_ioctl_hdio(struct lwp *, const struct linux_sys_ioctl_args *,
@@ -51,7 +53,7 @@ int linux_ioctl_blkio(struct lwp *, const struct linux_sys_ioctl_args *uap,
                  register_t *retval);
 int linux_ioctl_sg(struct lwp *, const struct linux_sys_ioctl_args *uap,
                  register_t *retval);
-int linux_ioctl_mtio(struct lwp *, const struct linux_sys_ioctl_args *uap, 
+int linux_ioctl_mtio(struct lwp *, const struct linux_sys_ioctl_args *uap,
                  register_t *retval);
 __END_DECLS
 #endif	/* !_KERNEL */
@@ -66,6 +68,8 @@ __END_DECLS
 #include <compat/linux/arch/powerpc/linux_ioctl.h>
 #elif defined(__mips__)
 #include <compat/linux/arch/mips/linux_ioctl.h>
+#elif defined(__aarch64__)
+#include <compat/linux/arch/arm/linux_ioctl.h>
 #elif defined(__arm__)
 #include <compat/linux/arch/arm/linux_ioctl.h>
 #elif defined(__amd64__)

@@ -1,4 +1,4 @@
-/*	$NetBSD: mpacpi.c,v 1.107 2021/08/07 16:19:08 thorpej Exp $	*/
+/*	$NetBSD: mpacpi.c,v 1.111 2024/09/30 17:00:10 bouyer Exp $	*/
 
 /*
  * Copyright (c) 2003 Wasabi Systems, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mpacpi.c,v 1.107 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mpacpi.c,v 1.111 2024/09/30 17:00:10 bouyer Exp $");
 
 #include "acpica.h"
 #include "opt_acpi.h"
@@ -152,7 +152,7 @@ mpacpi_cpuprint(void *aux, const char *pnp)
 	if (pnp)
 		aprint_normal("cpu at %s", pnp);
 	aprint_normal(" apid %d", caa->cpu_number);
-	return (UNCONF);
+	return UNCONF;
 }
 
 static int
@@ -163,7 +163,7 @@ mpacpi_ioapicprint(void *aux, const char *pnp)
 	if (pnp)
 		aprint_normal("ioapic at %s", pnp);
 	aprint_normal(" apid %d", aaa->apic_id);
-	return (UNCONF);
+	return UNCONF;
 }
 
 /*
@@ -393,16 +393,6 @@ mpacpi_config_cpu(ACPI_SUBTABLE_HEADER *hdrp, void *aux)
 	case ACPI_MADT_TYPE_LOCAL_X2APIC:
 		x2apic = (ACPI_MADT_LOCAL_X2APIC *)hdrp;
 
-		/* ACPI spec: "Logical processors with APIC ID values
-		 * less than 255 must use the Processor Local APIC
-		 * structure to convey their APIC information to OSPM."
-		 */
-		if (x2apic->LocalApicId <= 0xff) {
-			printf("bogus MADT X2APIC entry (id = 0x%"PRIx32")\n",
-			    x2apic->LocalApicId);
-			break;
-		}
-
 		if (x2apic->LapicFlags & ACPI_MADT_ENABLED) {
 			if (x2apic->LocalApicId != cpunum)
 				caa.cpu_role = CPU_ROLE_AP;
@@ -506,7 +496,8 @@ mpacpi_pci_foundbus(struct acpi_devnode *ad)
 	}
 
 	mpr = kmem_zalloc(sizeof(struct mpacpi_pcibus), KM_SLEEP);
-	mpr->mpr_devhandle = devhandle_from_acpi(ad->ad_handle);
+	mpr->mpr_devhandle =
+	    devhandle_from_acpi(devhandle_invalid(), ad->ad_handle);
 	mpr->mpr_buf = buf;
 	mpr->mpr_seg = ad->ad_pciinfo->ap_segment;
 	mpr->mpr_bus = ad->ad_pciinfo->ap_downbus;
@@ -564,7 +555,7 @@ static int
 mpacpi_pciroute(struct mpacpi_pcibus *mpr)
 {
 	ACPI_PCI_ROUTING_TABLE *ptrp;
-        ACPI_HANDLE linkdev;
+	ACPI_HANDLE linkdev;
 	char *p;
 	struct mp_intr_map *mpi, *iter;
 	struct mp_bus *mpb;
@@ -890,7 +881,7 @@ mpacpi_print_intr(struct mp_intr_map *mpi)
 	}
 	snprintb(buf, sizeof(buf), inttype_fmt, mpi->type);
 	printf(" (type %s", buf);
-	    
+
 	snprintb(buf, sizeof(buf), flagtype_fmt, mpi->flags);
 	printf(" flags %s)\n", buf);
 
@@ -1060,14 +1051,14 @@ mpacpi_findintr_linkdev(struct mp_intr_map *mip)
 	 */
 	if (pol == ACPI_ACTIVE_LOW)
 		pol = MPS_INTPO_ACTLO;
-	else 
+	else
 		pol = MPS_INTPO_ACTHI;
- 
+
 	if (trig == ACPI_EDGE_SENSITIVE)
 		trig = MPS_INTTR_EDGE;
 	else
 		trig = MPS_INTTR_LEVEL;
- 
+
 	mip->flags = pol | (trig << 2);
 	mip->global_int = irq;
 	pic = intr_findpic(irq);

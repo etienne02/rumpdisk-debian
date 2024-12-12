@@ -1,4 +1,4 @@
-/*	$NetBSD: nvmm.c,v 1.43 2021/04/12 09:22:58 mrg Exp $	*/
+/*	$NetBSD: nvmm.c,v 1.47 2022/09/13 20:10:04 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2018-2020 Maxime Villard, m00nbsd.net
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nvmm.c,v 1.43 2021/04/12 09:22:58 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nvmm.c,v 1.47 2022/09/13 20:10:04 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -59,6 +59,15 @@ __KERNEL_RCSID(0, "$NetBSD: nvmm.c,v 1.43 2021/04/12 09:22:58 mrg Exp $");
 static struct nvmm_machine machines[NVMM_MAX_MACHINES];
 static volatile unsigned int nmachines __cacheline_aligned;
 
+static struct {
+	kmutex_t	lock;
+	kcondvar_t	suspendcv;
+	kcondvar_t	resumecv;
+	unsigned	users;
+} suspension;
+
+volatile bool nvmm_suspending;
+
 static const struct nvmm_impl *nvmm_impl_list[] = {
 #if defined(__x86_64__)
 	&nvmm_x86_svm,	/* x86 AMD SVM */
@@ -69,6 +78,50 @@ static const struct nvmm_impl *nvmm_impl_list[] = {
 static const struct nvmm_impl *nvmm_impl __read_mostly = NULL;
 
 static struct nvmm_owner root_owner;
+
+/* -------------------------------------------------------------------------- */
+
+static int
+nvmm_enter_sig(void)
+{
+	int error;
+
+	mutex_enter(&suspension.lock);
+	while (nvmm_suspending) {
+		error = cv_wait_sig(&suspension.resumecv, &suspension.lock);
+		if (error)
+			goto out;
+	}
+	KASSERT(suspension.users < UINT_MAX);
+	suspension.users++;
+	error = 0;
+out:	mutex_exit(&suspension.lock);
+
+	return 0;
+}
+
+static void
+nvmm_enter(void)
+{
+
+	mutex_enter(&suspension.lock);
+	while (nvmm_suspending)
+		cv_wait(&suspension.resumecv, &suspension.lock);
+	KASSERT(suspension.users < UINT_MAX);
+	suspension.users++;
+	mutex_exit(&suspension.lock);
+}
+
+static void
+nvmm_exit(void)
+{
+
+	mutex_enter(&suspension.lock);
+	KASSERT(suspension.users > 0);
+	if (--suspension.users == 0)
+		cv_signal(&suspension.suspendcv);
+	mutex_exit(&suspension.lock);
+}
 
 /* -------------------------------------------------------------------------- */
 
@@ -989,6 +1042,11 @@ nvmm_init(void)
 		}
 	}
 
+	mutex_init(&suspension.lock, MUTEX_DEFAULT, IPL_NONE);
+	cv_init(&suspension.suspendcv, "nvmmsus");
+	cv_init(&suspension.resumecv, "nvmmres");
+	suspension.users = 0;
+
 	(*nvmm_impl->init)();
 
 	return 0;
@@ -1080,7 +1138,11 @@ nvmm_close(file_t *fp)
 	struct nvmm_owner *owner = fp->f_data;
 
 	KASSERT(owner != NULL);
+
+	nvmm_enter();
 	nvmm_kill_machines(owner);
+	nvmm_exit();
+
 	if (owner != &root_owner) {
 		kmem_free(owner, sizeof(*owner));
 	}
@@ -1098,6 +1160,8 @@ nvmm_mmap(file_t *fp, off_t *offp, size_t size, int prot, int *flagsp,
 	nvmm_machid_t machid;
 	nvmm_cpuid_t cpuid;
 	int error;
+
+	KASSERT(size > 0);
 
 	if (prot & PROT_EXEC)
 		return EACCES;
@@ -1124,7 +1188,7 @@ nvmm_mmap(file_t *fp, off_t *offp, size_t size, int prot, int *flagsp,
 }
 
 static int
-nvmm_ioctl(file_t *fp, u_long cmd, void *data)
+nvmm_ioctl_internal(file_t *fp, u_long cmd, void *data)
 {
 	struct nvmm_owner *owner = fp->f_data;
 
@@ -1168,11 +1232,27 @@ nvmm_ioctl(file_t *fp, u_long cmd, void *data)
 	}
 }
 
+static int
+nvmm_ioctl(struct file *fp, u_long cmd, void *data)
+{
+	int error;
+
+	error = nvmm_enter_sig();
+	if (error)
+		return error;
+	error = nvmm_ioctl_internal(fp, cmd, data);
+	nvmm_exit();
+
+	return error;
+}
+
 /* -------------------------------------------------------------------------- */
 
 static int nvmm_match(device_t, cfdata_t, void *);
 static void nvmm_attach(device_t, device_t, void *);
 static int nvmm_detach(device_t, int);
+static bool nvmm_suspend(device_t, const pmf_qual_t *);
+static bool nvmm_resume(device_t, const pmf_qual_t *);
 
 extern struct cfdriver nvmm_cd;
 
@@ -1207,6 +1287,8 @@ nvmm_attach(device_t parent, device_t self, void *aux)
 		panic("%s: impossible", __func__);
 	aprint_normal_dev(self, "attached, using backend %s\n",
 	    nvmm_impl->name);
+	if (nvmm_impl->suspend != NULL && nvmm_impl->resume != NULL)
+		pmf_device_register(self, nvmm_suspend, nvmm_resume);
 }
 
 static int
@@ -1214,8 +1296,145 @@ nvmm_detach(device_t self, int flags)
 {
 	if (atomic_load_relaxed(&nmachines) > 0)
 		return EBUSY;
+	pmf_device_deregister(self);
 	nvmm_fini();
 	return 0;
+}
+
+static void
+nvmm_suspend_vcpu(struct nvmm_machine *mach, struct nvmm_cpu *vcpu)
+{
+
+	mutex_enter(&vcpu->lock);
+	if (vcpu->present && nvmm_impl->vcpu_suspend)
+		(*nvmm_impl->vcpu_suspend)(mach, vcpu);
+	mutex_exit(&vcpu->lock);
+}
+
+static void
+nvmm_resume_vcpu(struct nvmm_machine *mach, struct nvmm_cpu *vcpu)
+{
+
+	mutex_enter(&vcpu->lock);
+	if (vcpu->present && nvmm_impl->vcpu_resume)
+		(*nvmm_impl->vcpu_resume)(mach, vcpu);
+	mutex_exit(&vcpu->lock);
+}
+
+static void
+nvmm_suspend_machine(struct nvmm_machine *mach)
+{
+
+	rw_enter(&mach->lock, RW_WRITER);
+	if (mach->present) {
+		if (nvmm_impl->vcpu_suspend) {
+			size_t cpuid;
+
+			for (cpuid = 0; cpuid < NVMM_MAX_VCPUS; cpuid++)
+				nvmm_suspend_vcpu(mach, &mach->cpus[cpuid]);
+		}
+		if (nvmm_impl->machine_suspend)
+			(*nvmm_impl->machine_suspend)(mach);
+	}
+	rw_exit(&mach->lock);
+}
+
+static void
+nvmm_resume_machine(struct nvmm_machine *mach)
+{
+
+	rw_enter(&mach->lock, RW_WRITER);
+	if (mach->present) {
+		if (nvmm_impl->vcpu_resume) {
+			size_t cpuid;
+
+			for (cpuid = 0; cpuid < NVMM_MAX_VCPUS; cpuid++)
+				nvmm_resume_vcpu(mach, &mach->cpus[cpuid]);
+		}
+		if (nvmm_impl->machine_resume)
+			(*nvmm_impl->machine_resume)(mach);
+	}
+	rw_exit(&mach->lock);
+}
+
+static bool
+nvmm_suspend(device_t self, const pmf_qual_t *qual)
+{
+	size_t i;
+
+	/*
+	 * Prevent new users (via ioctl) from starting.
+	 */
+	mutex_enter(&suspension.lock);
+	KASSERT(!nvmm_suspending);
+	atomic_store_relaxed(&nvmm_suspending, true);
+	mutex_exit(&suspension.lock);
+
+	/*
+	 * Interrupt any running VMs so they will break out of run
+	 * loops or anything else and not start up again until we've
+	 * resumed.
+	 */
+	if (nvmm_impl->suspend_interrupt)
+		(*nvmm_impl->suspend_interrupt)();
+
+	/*
+	 * Wait for any running VMs or other ioctls to finish running
+	 * or handling any other ioctls.
+	 */
+	mutex_enter(&suspension.lock);
+	while (suspension.users)
+		cv_wait(&suspension.suspendcv, &suspension.lock);
+	mutex_exit(&suspension.lock);
+
+	/*
+	 * Suspend all the machines.
+	 */
+	if (nvmm_impl->machine_suspend || nvmm_impl->vcpu_suspend) {
+		for (i = 0; i < NVMM_MAX_MACHINES; i++)
+			nvmm_suspend_machine(&machines[i]);
+	}
+
+	/*
+	 * Take any systemwide suspend action.
+	 */
+	if (nvmm_impl->suspend)
+		(*nvmm_impl->suspend)();
+
+	return true;
+}
+
+static bool
+nvmm_resume(device_t self, const pmf_qual_t *qual)
+{
+	size_t i;
+
+	KASSERT(atomic_load_relaxed(&nvmm_suspending));
+	KASSERT(suspension.users == 0);
+
+	/*
+	 * Take any systemwide resume action.
+	 */
+	if (nvmm_impl->resume)
+		(*nvmm_impl->resume)();
+
+	/*
+	 * Resume all the machines.
+	 */
+	if (nvmm_impl->machine_resume || nvmm_impl->vcpu_resume) {
+		for (i = 0; i < NVMM_MAX_MACHINES; i++)
+			nvmm_resume_machine(&machines[i]);
+	}
+
+	/*
+	 * Allow new users (via ioctl) to start again.
+	 */
+	mutex_enter(&suspension.lock);
+	atomic_store_relaxed(&nvmm_suspending, false);
+	cv_broadcast(&suspension.resumecv);
+	mutex_exit(&suspension.lock);
+
+	return true;
 }
 
 void
@@ -1253,7 +1472,9 @@ nvmm_modcmd(modcmd_t cmd, void *arg)
 #endif
 		error = config_cfattach_attach(nvmm_cd.cd_name, &nvmm_ca);
 		if (error) {
+#if defined(_MODULE)
 			config_cfdriver_detach(&nvmm_cd);
+#endif
 			aprint_error("%s: config_cfattach_attach failed\n",
 			    nvmm_cd.cd_name);
 			return error;
@@ -1262,7 +1483,9 @@ nvmm_modcmd(modcmd_t cmd, void *arg)
 		error = config_cfdata_attach(nvmm_cfdata, 1);
 		if (error) {
 			config_cfattach_detach(nvmm_cd.cd_name, &nvmm_ca);
+#if defined(_MODULE)
 			config_cfdriver_detach(&nvmm_cd);
+#endif
 			aprint_error("%s: unable to register cfdata\n",
 			    nvmm_cd.cd_name);
 			return error;
@@ -1272,7 +1495,9 @@ nvmm_modcmd(modcmd_t cmd, void *arg)
 			aprint_error("%s: config_attach_pseudo failed\n",
 			    nvmm_cd.cd_name);
 			config_cfattach_detach(nvmm_cd.cd_name, &nvmm_ca);
+#if defined(_MODULE)
 			config_cfdriver_detach(&nvmm_cd);
+#endif
 			return ENXIO;
 		}
 
@@ -1281,8 +1506,8 @@ nvmm_modcmd(modcmd_t cmd, void *arg)
 		error = devsw_attach(nvmm_cd.cd_name, NULL, &bmajor,
 			&nvmm_cdevsw, &cmajor);
 		if (error) {
-			aprint_error("%s: unable to register devsw\n",
-			    nvmm_cd.cd_name);
+			aprint_error("%s: unable to register devsw, err %d\n",
+			    nvmm_cd.cd_name, error);
 			config_cfattach_detach(nvmm_cd.cd_name, &nvmm_ca);
 			config_cfdriver_detach(&nvmm_cd);
 			return error;

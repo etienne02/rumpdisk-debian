@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_blist.c,v 1.13 2017/02/13 16:53:41 zafer Exp $	*/
+/*	$NetBSD: subr_blist.c,v 1.16 2024/09/08 17:28:36 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1998 Matthew Dillon.  All Rights Reserved.
@@ -63,8 +63,8 @@
  *	due to swap interleaving not all that much less), but the blist code 
  *	scales much, much better.
  *
- *	LAYOUT: The radix tree is layed out recursively using a
- *	linear array.  Each meta node is immediately followed (layed out
+ *	LAYOUT: The radix tree is laid out recursively using a
+ *	linear array.  Each meta node is immediately followed (laid out
  *	sequentially in memory) by BLIST_META_RADIX lower level nodes.  This
  *	is a recursive structure but one that can be easily scanned through
  *	a very simple 'skip' calculation.  In order to support large radixes, 
@@ -77,7 +77,7 @@
  *	NOTE: the allocator cannot currently allocate more than 
  *	BLIST_BMAP_RADIX blocks per call.  It will panic with 'allocation too 
  *	large' if you try.  This is an area that could use improvement.  The 
- *	radix is large enough that this restriction does not effect the swap 
+ *	radix is large enough that this restriction does not affect the swap 
  *	system, though.  Currently only the allocation code is effected by
  *	this algorithmic unfeature.  The freeing code can handle arbitrary
  *	ranges.
@@ -86,7 +86,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_blist.c,v 1.13 2017/02/13 16:53:41 zafer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_blist.c,v 1.16 2024/09/08 17:28:36 rillig Exp $");
 #if 0
 __FBSDID("$FreeBSD: src/sys/kern/subr_blist.c,v 1.17 2004/06/04 04:03:25 alc Exp $");
 #endif
@@ -256,7 +256,7 @@ blist_alloc(blist_t bl, blist_blkno_t count)
 
 /*
  * blist_free() -	free up space in the block bitmap.  Return the base
- *		     	of a contiguous region.  Panic if an inconsistancy is
+ *		     	of a contiguous region.  Panic if an inconsistency is
  *			found.
  */
 

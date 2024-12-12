@@ -1,9 +1,11 @@
-/*	$NetBSD: expr_precedence.c,v 1.7 2021/07/26 18:10:14 rillig Exp $	*/
+/*	$NetBSD: expr_precedence.c,v 1.12 2024/05/01 07:40:11 rillig Exp $	*/
 # 3 "expr_precedence.c"
 
 /*
  * Tests for the precedence among operators.
  */
+
+/* lint1-extra-flags: -X 351 */
 
 int var;
 
@@ -18,8 +20,9 @@ int init_error = 3, 4;
 int init_syntactically_ok = var = 1 ? 2 : 3;
 
 /*
- * The arguments of __attribute__ must be constant-expression, as assignments
- * don't make sense at that point.
+ * The arguments of __attribute__ must be constant-expression, but for
+ * simplicity of implementation, they are parsed just like function arguments,
+ * even though this allows assignment-expression.
  */
 void __attribute__((format(printf,
     /*
@@ -28,10 +31,8 @@ void __attribute__((format(printf,
      * __attribute__ are constant expressions, looking up global variables
      * would not make sense.  Therefore, 'var' is undefined.
      *
-     * See lex.c, function 'search', keyword 'attron'.
+     * See lex.c, function 'search', keyword 'in_gcc_attribute'.
      */
-    /* expect+2: error: 'var' undefined [99] */
-    /* expect+1: syntax error '=' [249] */
     var = 1,
     /* Syntactically ok, must be a constant expression though. */
     var > 0 ? 2 : 1)))

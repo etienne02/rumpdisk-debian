@@ -1,11 +1,11 @@
-/*	$NetBSD: expr_promote_trad.c,v 1.2 2021/08/16 20:27:31 rillig Exp $	*/
+/*	$NetBSD: expr_promote_trad.c,v 1.5 2024/11/05 04:53:28 rillig Exp $	*/
 # 3 "expr_promote_trad.c"
 
 /*
  * Test arithmetic promotions in traditional C.
  */
 
-/* lint1-flags: -tw */
+/* lint1-flags: -tw -X 351 */
 
 sink();
 
@@ -35,6 +35,7 @@ struct arithmetic_types {
 caller(arg)
 	struct arithmetic_types *arg;
 {
+	/* See expr_promote_trad.exp-ln for the resulting types. */
 	sink("",
 	    arg->plain_char,		/* gets promoted to 'int' */
 	    arg->unsigned_char,		/* gets promoted to 'unsigned int' */
@@ -46,7 +47,7 @@ caller(arg)
 	    arg->unsigned_long,
 	    arg->single_floating,	/* gets promoted to 'double' */
 	    arg->double_floating,
-	    arg->enumerator);
+	    arg->enumerator);		/* should get promoted to 'int' */
 }
 
 /*

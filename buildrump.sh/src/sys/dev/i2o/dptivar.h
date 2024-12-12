@@ -1,4 +1,4 @@
-/*	$NetBSD: dptivar.h,v 1.9 2012/10/27 17:18:17 chs Exp $	*/
+/*	$NetBSD: dptivar.h,v 1.11 2024/07/06 10:09:15 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -217,7 +217,7 @@ struct dpt_sysinfo {
 	u_int8_t	osMinorVersion;         /* The OS version */
 	u_int8_t	osRevision;
 	u_int8_t	osSubRevision;
-	u_int8_t	busType;                /* See defininitions above */
+	u_int8_t	busType;                /* See definitions above */
 	u_int8_t	pad[3];                 /* For alignment */
 	struct	dpt_dparam drives[16];		/* SmartROM Logical Drives */
 };
@@ -265,7 +265,7 @@ struct dpt_sysinfo {
 #define	PROC_i960       0x05    /* Intel i960 */
 #define	PROC_ULTRASPARC 0x06    /* SPARC processor */
 
-/* Specific Minimim Processor - u_int8_t dsProcessor;    FLAG BITS */
+/* Specific Minimum Processor - u_int8_t dsProcessor;    FLAG BITS */
 /* ------------------------------------------------------------------ */
 /* Different bit definitions dependent on processor_family */
 

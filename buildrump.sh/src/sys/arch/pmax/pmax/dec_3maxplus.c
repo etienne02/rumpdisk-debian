@@ -1,4 +1,4 @@
-/* $NetBSD: dec_3maxplus.c,v 1.71 2016/03/22 04:48:25 mrg Exp $ */
+/* $NetBSD: dec_3maxplus.c,v 1.73 2024/09/20 21:46:15 andvar Exp $ */
 
 /*
  * Copyright (c) 1998 Jonathan Stone.  All rights reserved.
@@ -70,7 +70,7 @@
 #define __INTR_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dec_3maxplus.c,v 1.71 2016/03/22 04:48:25 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dec_3maxplus.c,v 1.73 2024/09/20 21:46:15 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -85,7 +85,7 @@ __KERNEL_RCSID(0, "$NetBSD: dec_3maxplus.c,v 1.71 2016/03/22 04:48:25 mrg Exp $"
 
 /* all these to get ioasic_base */
 #include <dev/tc/tcvar.h>		/* tc type definitions for.. */
-#include <dev/tc/ioasicreg.h>		/* ioasic interrrupt masks */
+#include <dev/tc/ioasicreg.h>		/* ioasic interrupt masks */
 #include <dev/tc/ioasicvar.h>		/* ioasic_base */
 
 #include <pmax/sysconf.h>
@@ -264,7 +264,7 @@ dec_3maxplus_intr_establish(device_t dev, void *cookie, int level,
 		break;
 	default:
 #ifdef DIAGNOSTIC
-		printf("warning: enabling unknown intr %x\n", (int)cookie);
+		printf("warning: enabling unknown intr %p\n", cookie);
 #endif
 		return;
 	}

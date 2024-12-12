@@ -1,4 +1,4 @@
-# $NetBSD: bsd.clean.mk,v 1.8 2012/11/19 16:04:54 apb Exp $
+# $NetBSD: bsd.clean.mk,v 1.10 2023/06/03 21:21:32 lukem Exp $
 
 # <bsd.clean.mk>
 #
@@ -31,9 +31,6 @@ _BSD_CLEAN_MK_=1
 
 .include <bsd.init.mk>
 
-MKCLEANSRC?=	yes
-MKCLEANVERIFY?=	yes
-
 clean:		.PHONY __doclean
 __doclean:	.PHONY .MADE __cleanuse CLEANFILES
 cleandir:	.PHONY clean __docleandir
@@ -53,7 +50,7 @@ __docleandir:	.PHONY .MADE __cleanuse CLEANDIRFILES
 # The use of :M* is needed to handle the case that CLEANFILES
 # or CLEANDIRFILES is not completely empty but contains spaces.
 # This can easily happen when CLEANFILES or CLEANDIRFILES is set
-# from other variables that happen to be empty.)
+# from other variables that happen to be empty.
 #
 # The use of :Q is needed to handle the case that CLEANFILES
 # or CLEANDIRFILES contains quoted strings, such as

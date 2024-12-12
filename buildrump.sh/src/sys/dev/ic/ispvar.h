@@ -1,4 +1,4 @@
-/* $NetBSD: ispvar.h,v 1.73 2014/10/18 08:33:27 snj Exp $ */
+/* $NetBSD: ispvar.h,v 1.76 2023/09/21 09:31:50 msaitoh Exp $ */
 /*
  * Copyright (C) 1999 National Aeronautics & Space Administration
  * All rights reserved.
@@ -55,7 +55,7 @@
  *  SUCH DAMAGE.
  */
 /*
- * Soft Definitions for for Qlogic ISP SCSI adapters.
+ * Soft Definitions for Qlogic ISP SCSI adapters.
  */
 
 #ifndef	_ISPVAR_H
@@ -395,9 +395,9 @@ typedef struct {
  * index to put it into the Database, but that's just an optimization. We mark
  * the entry VALID and make sure that the target index is updated and correct.
  *
- * When we get done searching the local loop, we then search similarily for
+ * When we get done searching the local loop, we then search similarly for
  * a list of devices we've gotten from the fabric name controller (if we're
- * on a fabric). VALID marking is also done similarily.
+ * on a fabric). VALID marking is also done similarly.
  *
  * When all of this is done, we can march through the database and clean up
  * any entry that is still PROBATIONAL (these represent devices which have
@@ -1117,7 +1117,7 @@ void isp_async(ispsoftc_t *, ispasync_t, ...);
  *	DEFAULT_PORTWWN(ispsoftc_t *, chan)	Default FC Port WWN to use
  *
  *		These defines are hooks to allow the setting of node and
- *		port WWNs when NVRAM cannot be read or is to be overriden.
+ *		port WWNs when NVRAM cannot be read or is to be overridden.
  *
  *	ACTIVE_NODEWWN(ispsoftc_t *, chan)	FC Node WWN to use
  *	ACTIVE_PORTWWN(ispsoftc_t *, chan)	FC Port WWN to use

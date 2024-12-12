@@ -1,4 +1,4 @@
-/*      $NetBSD: main.h,v 1.6 2008/04/28 20:24:14 martin Exp $ */
+/*      $NetBSD: main.h,v 1.8 2023/09/09 18:27:59 ad Exp $ */
 
 /*
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -31,12 +31,10 @@
 
 extern int debug, verbose, recurse, page_size;
 extern int print_all, print_map, print_maps, print_solaris, print_ddb;
+extern int tree;
 extern u_long kernel_map_addr;
 extern void *uvm_vnodeops, *uvm_deviceops, *aobj_pager, *ubc_pager;
 extern rlim_t maxssiz;
-
-LIST_HEAD(nchashhead, namecache);
-extern struct nchashhead *nchashtbl;
 
 struct cache_entry {
 	LIST_ENTRY(cache_entry) ce_next;

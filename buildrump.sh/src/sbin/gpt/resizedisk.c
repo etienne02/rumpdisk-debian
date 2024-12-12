@@ -33,7 +33,7 @@
 __FBSDID("$FreeBSD: src/sbin/gpt/add.c,v 1.14 2006/06/22 22:05:28 marcel Exp $");
 #endif
 #ifdef __RCSID
-__RCSID("$NetBSD: resizedisk.c,v 1.18 2020/05/24 14:42:44 jmcneill Exp $");
+__RCSID("$NetBSD: resizedisk.c,v 1.21 2024/02/06 20:25:11 christos Exp $");
 #endif
 
 #include <sys/bootblock.h>
@@ -62,7 +62,7 @@ struct gpt_cmd c_resizedisk = {
 	"resizedisk",
 	cmd_resizedisk,
 	resizediskhelp, __arraycount(resizediskhelp),
-	0,
+	GPT_OPTGPT,
 };
 
 #define usage() gpt_usage(NULL, &c_resizedisk)
@@ -107,7 +107,7 @@ resizedisk(gpt_t gpt, off_t sector, off_t size, bool quiet)
         mbr = mbrmap->map_data;
 
 	gpt->gpt = map_find(gpt, MAP_TYPE_PRI_GPT_HDR);
-	if (gpt == NULL) {
+	if (gpt->gpt == NULL) {
 		gpt_warnx(gpt, "No primary GPT header; run create or recover");
 		return -1;
 	}
@@ -123,25 +123,9 @@ resizedisk(gpt_t gpt, off_t sector, off_t size, bool quiet)
 
 	gpt->tpg = map_find(gpt, MAP_TYPE_SEC_GPT_HDR);
 	gpt->lbt = map_find(gpt, MAP_TYPE_SEC_GPT_TBL);
-	if (gpt->tpg == NULL || gpt->lbt == NULL) {
-		if (gpt_gpt(gpt, oldloc, 1) == -1) {
-			gpt_warnx(gpt,
-			    "Error reading backup GPT information at %#jx",
-			    oldloc);
-			return -1;
-		}
-	}
 
-	gpt->tpg = map_find(gpt, MAP_TYPE_SEC_GPT_HDR);
-	if (gpt->tpg == NULL) {
-		gpt_warnx(gpt, "No secondary GPT header; Run recover");
-		return -1;
-	}
-	gpt->lbt = map_find(gpt, MAP_TYPE_SEC_GPT_TBL);
-	if (gpt->lbt == NULL) {
-		gpt_warnx(gpt, "No secondary GPT table; Run recover");
-		return -1;
-	}
+	if (gpt->tpg == NULL || gpt->lbt == NULL)
+		gpt_warnx(gpt, "No secondary GPT table");
 
 	gpt_size = gpt->tbl->map_size;
 	if (sector == oldloc) {
@@ -153,7 +137,8 @@ resizedisk(gpt_t gpt, off_t sector, off_t size, bool quiet)
 	if (sector == 0 && last == oldloc) {
 		if (!quiet)
 			gpt_warnx(gpt, "Device hasn't changed size");
-		return 0;
+		if (gpt->tpg != NULL && gpt->lbt != NULL)
+			return 0;
 	}
 
 	for (ent = gpt->tbl->map_data; ent <
@@ -183,18 +168,14 @@ resizedisk(gpt_t gpt, off_t sector, off_t size, bool quiet)
 	if (sector == 0 && last > oldloc)
 		newloc = last;
 
-	if (newloc > 0) {
-		if (gpt->tpg == NULL) {
-			gpt_warnx(gpt, "No secondary GPT header; run recover");
-			return -1;
-		}
-		if (gpt->lbt == NULL) {
-			gpt_warnx(gpt, "Run recover");
-			return -1;
-		}
+	if (newloc > 0 && gpt->tpg != NULL && gpt->lbt != NULL) {
+		if (!quiet)
+			gpt_msg(gpt, "Moving secondary GPT header");
 		gpt->tpg->map_start = newloc;
 		gpt->lbt->map_start = newloc - gpt_size;
 	} else {
+		if (!quiet)
+			gpt_msg(gpt, "Creating new secondary GPT header");
 		if (sector > 0)
 			newloc = sector;
 		else
@@ -213,7 +194,7 @@ resizedisk(gpt_t gpt, off_t sector, off_t size, bool quiet)
 	}
 
 	hdr = gpt->gpt->map_data;
-	hdr->hdr_lba_alt = (uint64_t)gpt->tpg->map_start;
+	hdr->hdr_lba_alt = htole64((uint64_t)gpt->tpg->map_start);
 	hdr->hdr_crc_self = 0;
 	hdr->hdr_lba_end = htole64((uint64_t)(gpt->lbt->map_start - 1));
 	hdr->hdr_crc_self =

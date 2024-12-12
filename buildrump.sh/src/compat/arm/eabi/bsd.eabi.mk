@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.eabi.mk,v 1.5 2015/07/05 20:19:29 matt Exp $
+#	$NetBSD: bsd.eabi.mk,v 1.7 2023/05/13 10:56:54 riastradh Exp $
 
 .if !defined(MLIBDIR)
 
@@ -29,7 +29,7 @@ ARM_MACHINE_ARCH=	earm
 ARM_LD=			-m armelf_nbsd_eabi
 .endif
 
-EARM_COMPAT_FLAGS+=	-B ${TOOLDIR}/aarch64--netbsd/bin 
+EARM_COMPAT_FLAGS+=	-B ${TOOLDIR}/aarch64--netbsd/bin
 
 LIBC_MACHINE_ARCH=	${ARM_MACHINE_ARCH}
 LIBGCC_MACHINE_ARCH=	${ARM_MACHINE_ARCH}
@@ -61,6 +61,9 @@ CPUFLAGS+=		${EARM_COMPAT_FLAGS}
 LDADD+=			${EARM_COMPAT_FLAGS}
 LDFLAGS+=		${EARM_COMPAT_FLAGS}
 MKDEPFLAGS+=		${EARM_COMPAT_FLAGS}
+
+# sync with MKRELRO in bsd.own.mk
+NORELRO=		# defined
 
 .include "${.PARSEDIR}/../../Makefile.compat"
 

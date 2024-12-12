@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_km.c,v 1.160 2021/03/13 15:29:55 skrll Exp $	*/
+/*	$NetBSD: uvm_km.c,v 1.166 2024/12/07 23:19:07 chs Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -152,7 +152,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_km.c,v 1.160 2021/03/13 15:29:55 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_km.c,v 1.166 2024/12/07 23:19:07 chs Exp $");
 
 #include "opt_uvmhist.h"
 
@@ -194,14 +194,14 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_km.c,v 1.160 2021/03/13 15:29:55 skrll Exp $");
 struct vm_map *kernel_map = NULL;
 
 /*
- * local data structues
+ * local data structures
  */
 
 static struct vm_map		kernel_map_store;
 static struct vm_map_entry	kernel_image_mapent_store;
 static struct vm_map_entry	kernel_kmem_mapent_store;
 
-int nkmempages = 0;
+size_t nkmempages = 0;
 vaddr_t kmembase;
 vsize_t kmemsize;
 
@@ -216,7 +216,7 @@ vmem_t *kmem_va_arena;
 void
 kmeminit_nkmempages(void)
 {
-	int npages;
+	size_t npages;
 
 	if (nkmempages != 0) {
 		/*
@@ -226,17 +226,30 @@ kmeminit_nkmempages(void)
 		return;
 	}
 
+#if defined(NKMEMPAGES_MAX_UNLIMITED) && !defined(KMSAN)
+	/*
+	 * The extra 1/9 here is to account for uvm_km_va_starved_p()
+	 * wanting to keep 10% of kmem virtual space free.
+	 * The intent is that on "unlimited" platforms we should be able
+	 * to allocate all of physical memory as kmem without behaving
+	 * as though we running short of kmem virtual space.
+	 */
+	npages = (physmem * 10) / 9;
+#else
+
 #if defined(KMSAN)
-	npages = (physmem / 8);
+	npages = (physmem / 4);
 #elif defined(PMAP_MAP_POOLPAGE)
 	npages = (physmem / 4);
 #else
 	npages = (physmem / 3) * 2;
 #endif /* defined(PMAP_MAP_POOLPAGE) */
 
-#ifndef NKMEMPAGES_MAX_UNLIMITED
+#if !defined(NKMEMPAGES_MAX_UNLIMITED)
 	if (npages > NKMEMPAGES_MAX)
 		npages = NKMEMPAGES_MAX;
+#endif
+
 #endif
 
 	if (npages < NKMEMPAGES_MIN)
@@ -531,7 +544,8 @@ uvm_km_pgremove_intrsafe(struct vm_map *map, vaddr_t start, vaddr_t end)
 		for (i = 0; i < npgrm; i++) {
 			pg = PHYS_TO_VM_PAGE(pa[i]);
 			KASSERT(pg);
-			KASSERT(pg->uobject == NULL && pg->uanon == NULL);
+			KASSERT(pg->uobject == NULL);
+			KASSERT(pg->uanon == NULL);
 			KASSERT((pg->flags & PG_BUSY) == 0);
 			uvm_pagefree(pg);
 		}

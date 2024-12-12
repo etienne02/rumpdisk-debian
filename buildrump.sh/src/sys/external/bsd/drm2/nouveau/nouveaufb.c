@@ -1,4 +1,4 @@
-/*	$NetBSD: nouveaufb.c,v 1.4 2016/12/12 19:45:56 maya Exp $	*/
+/*	$NetBSD: nouveaufb.c,v 1.9 2022/07/18 23:34:02 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2015 The NetBSD Foundation, Inc.
@@ -30,19 +30,21 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nouveaufb.c,v 1.4 2016/12/12 19:45:56 maya Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nouveaufb.c,v 1.9 2022/07/18 23:34:02 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/errno.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_drv.h>
 #include <drm/drmfb.h>
 #include <drm/drmfb_pci.h>
 
+#include <ttm/ttm_placement.h>
+
 #include "nouveau_bo.h"
-#include "nouveau_drm.h"
+#include "nouveau_drv.h"
 #include "nouveau_fbcon.h"
 #include "nouveau_pci.h"
 #include "nouveaufb.h"
@@ -61,7 +63,6 @@ struct nouveaufb_softc {
 	device_t			sc_dev;
 	struct nouveaufb_attach_args	sc_nfa;
 	struct nouveau_pci_task		sc_attach_task;
-	bool				sc_scheduled:1;
 	bool				sc_attached:1;
 };
 
@@ -87,29 +88,17 @@ nouveaufb_attach(device_t parent, device_t self, void *aux)
 {
 	struct nouveaufb_softc *const sc = device_private(self);
 	const struct nouveaufb_attach_args *const nfa = aux;
-	int error;
 
 	sc->sc_dev = self;
 	sc->sc_nfa = *nfa;
-	sc->sc_scheduled = false;
 	sc->sc_attached = false;
 
 	aprint_naive("\n");
 	aprint_normal("\n");
 
 	nouveau_pci_task_init(&sc->sc_attach_task, &nouveaufb_attach_task);
-	error = nouveau_pci_task_schedule(parent, &sc->sc_attach_task);
-	if (error) {
-		aprint_error_dev(self, "failed to schedule mode set: %d\n",
-		    error);
-		goto fail0;
-	}
-	sc->sc_scheduled = true;
-
-	/* Success!  */
-	return;
-
-fail0:	return;
+	nouveau_pci_task_schedule(parent, &sc->sc_attach_task);
+	config_pending_incr(self);
 }
 
 static int
@@ -117,9 +106,6 @@ nouveaufb_detach(device_t self, int flags)
 {
 	struct nouveaufb_softc *const sc = device_private(self);
 	int error;
-
-	if (sc->sc_scheduled)
-		return EBUSY;
 
 	if (sc->sc_attached) {
 		pmf_device_deregister(self);
@@ -156,7 +142,7 @@ nouveaufb_attach_task(struct nouveau_pci_task *task)
 	if (error) {
 		aprint_error_dev(sc->sc_dev, "failed to attach drmfb: %d\n",
 		    error);
-		return;
+		goto out;
 	}
 
 	if (!pmf_device_register1(sc->sc_dev, NULL, NULL, &nouveaufb_shutdown))
@@ -164,6 +150,8 @@ nouveaufb_attach_task(struct nouveau_pci_task *task)
 		    "failed to register shutdown handler\n");
 
 	sc->sc_attached = true;
+out:
+	config_pending_decr(sc->sc_dev);
 }
 
 static bool
@@ -180,9 +168,10 @@ nouveaufb_drmfb_mmapfb(struct drmfb_softc *drmfb, off_t offset, int prot)
 	struct nouveaufb_softc *const sc = container_of(drmfb,
 	    struct nouveaufb_softc, sc_drmfb);
 	struct drm_fb_helper *const helper = sc->sc_nfa.nfa_fb_helper;
-	struct nouveau_fbdev *const fbdev = container_of(helper,
-	    struct nouveau_fbdev, helper);
-	struct nouveau_bo *const nvbo = fbdev->nouveau_fb.nvbo;
+	struct drm_framebuffer *const fb = helper->fb;
+	struct nouveau_framebuffer *const nvfb = container_of(fb,
+	    struct nouveau_framebuffer, base);
+	struct nouveau_bo *const nvbo = nvfb->nvbo;
 	const unsigned num_pages __diagused = nvbo->bo.num_pages;
 	int flags = 0;
 

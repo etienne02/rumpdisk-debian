@@ -1,12 +1,14 @@
-#	$NetBSD: Makefile,v 1.16 2021/08/22 22:24:12 rillig Exp $
+#	$NetBSD: Makefile,v 1.18 2024/04/20 13:24:49 rillig Exp $
 #
+
+NOFULLRELRO=	yes
 
 .PATH: ${.CURDIR}/../rump_allserver
 
 PROG=		rump_server
 SRCS=		rump_allserver.c
 NOMAN=		installed by ../rump_allserver
-LINT_SUPPORTED=	no	# LDADD contains -Wl,...
+NOLINT=		# LDADD contains -Wl,...
 
 LDADD+= \
     -Wl,--whole-archive \

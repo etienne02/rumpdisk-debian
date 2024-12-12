@@ -1,4 +1,4 @@
-/*	$NetBSD: pci_msi_machdep.c,v 1.15 2021/03/14 08:10:23 skrll Exp $	*/
+/*	$NetBSD: pci_msi_machdep.c,v 1.19 2023/11/21 23:22:23 gutteridge Exp $	*/
 
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pci_msi_machdep.c,v 1.15 2021/03/14 08:10:23 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pci_msi_machdep.c,v 1.19 2023/11/21 23:22:23 gutteridge Exp $");
 
 #include "opt_intrdebug.h"
 #include "ioapic.h"
@@ -175,14 +175,6 @@ pci_msi_alloc_common(pci_intr_handle_t **ihps, int *count,
 		return EINVAL;
 	}
 
-#ifdef XENPV
-	if (xen_pci_msi_probe(msi_pic, *count)) {
-		DPRINTF(("xen_pci_msi_probe() failed\n"));
-		msipic_destruct_msi_pic(msi_pic);
-		return EINVAL;
-	}
-#endif
-
 	vectors = NULL;
 	while (*count > 0) {
 		vectors = pci_msi_alloc_vectors(msi_pic, NULL, count);
@@ -216,6 +208,15 @@ pci_msi_alloc_common(pci_intr_handle_t **ihps, int *count,
 	}
 
 	*ihps = vectors;
+#ifdef XENPV
+	if (xen_map_msi_pirq(msi_pic, *count)) {
+		DPRINTF(("xen_map_msi_pirq() failed\n"));
+		pci_msi_free_vectors(msi_pic, vectors, *count);
+		msipic_destruct_msi_pic(msi_pic);
+		return EINVAL;
+	}
+#endif
+
 	return 0;
 }
 #endif /* __HAVE_PCI_MSI_MSIX */
@@ -270,14 +271,6 @@ pci_msix_alloc_common(pci_intr_handle_t **ihps, u_int *table_indexes,
 	if (msix_pic == NULL)
 		return EINVAL;
 
-#ifdef XENPV
-	if (xen_pci_msi_probe(msix_pic, *count)) {
-		DPRINTF(("xen_pci_msi_probe() failed\n"));
-		msipic_destruct_msix_pic(msix_pic);
-		return EINVAL;
-	}
-#endif
-
 	vectors = NULL;
 	while (*count > 0) {
 		vectors = pci_msi_alloc_vectors(msix_pic, table_indexes, count);
@@ -311,6 +304,15 @@ pci_msix_alloc_common(pci_intr_handle_t **ihps, u_int *table_indexes,
 	}
 
 	*ihps = vectors;
+
+#ifdef XENPV
+	if (xen_map_msix_pirq(msix_pic, *count)) {
+		DPRINTF(("xen_map_msi_pirq() failed\n"));
+		pci_msi_free_vectors(msix_pic, vectors, *count);
+		msipic_destruct_msix_pic(msix_pic);
+		return EINVAL;
+	}
+#endif
 	return 0;
 }
 
@@ -340,6 +342,9 @@ x86_pci_msi_release_internal(pci_intr_handle_t *pihs, int count)
 	if (pic == NULL)
 		return;
 
+#ifdef XENPV
+	xen_pci_msi_release(pic, count);
+#endif
 	pci_msi_free_vectors(pic, pihs, count);
 	msipic_destruct_msi_pic(pic);
 }
@@ -379,6 +384,9 @@ x86_pci_msix_release_internal(pci_intr_handle_t *pihs, int count)
 	if (pic == NULL)
 		return;
 
+#ifdef XENPV
+	xen_pci_msi_release(pic, count);
+#endif
 	pci_msi_free_vectors(pic, pihs, count);
 	msipic_destruct_msix_pic(pic);
 }
@@ -389,7 +397,7 @@ x86_pci_msix_release_internal(pci_intr_handle_t *pihs, int count)
  */
 
 /*
- * Return intrid for a MSI/MSI-X device.
+ * Return intrid for an MSI/MSI-X device.
  * "buf" must be allocated by caller.
  */
 const char *
@@ -424,9 +432,9 @@ x86_pci_msi_release(pci_chipset_tag_t pc, pci_intr_handle_t *pihs, int count)
 }
 
 /*
- * Establish a MSI handle.
- * If multiple MSI handle is requied to establish, device driver must call
- * this function for each handle.
+ * Establish an MSI handle.
+ * If multiple MSI handles are required to be established, a device driver
+ * must call this function for each handle.
  */
 void *
 x86_pci_msi_establish(pci_chipset_tag_t pc, pci_intr_handle_t ih,
@@ -444,9 +452,9 @@ x86_pci_msi_establish(pci_chipset_tag_t pc, pci_intr_handle_t ih,
 }
 
 /*
- * Disestablish a MSI handle.
- * If multiple MSI handle is requied to disestablish, device driver must call
- * this function for each handle.
+ * Disestablish an MSI handle.
+ * If multiple MSI handles are required to be disestablished, a device driver
+ * must call this function for each handle.
  */
 void
 x86_pci_msi_disestablish(pci_chipset_tag_t pc, void *cookie)
@@ -469,9 +477,9 @@ x86_pci_msix_release(pci_chipset_tag_t pc, pci_intr_handle_t *pihs, int count)
 }
 
 /*
- * Establish a MSI-X handle.
- * If multiple MSI-X handle is requied to establish, device driver must call
- * this function for each handle.
+ * Establish an MSI-X handle.
+ * If multiple MSI-X handles are required to be established, a device driver
+ * must call this function for each handle.
  */
 void *
 x86_pci_msix_establish(pci_chipset_tag_t pc, pci_intr_handle_t ih,
@@ -489,9 +497,9 @@ x86_pci_msix_establish(pci_chipset_tag_t pc, pci_intr_handle_t ih,
 }
 
 /*
- * Disestablish a MSI-X handle.
- * If multiple MSI-X handle is requied to disestablish, device driver must call
- * this function for each handle.
+ * Disestablish an MSI-X handle.
+ * If multiple MSI-X handles are required to be disestablished, a device driver
+ * must call this function for each handle.
  */
 void
 x86_pci_msix_disestablish(pci_chipset_tag_t pc, void *cookie)
@@ -569,7 +577,7 @@ pci_msi_alloc_exact(const struct pci_attach_args *pa, pci_intr_handle_t **ihps,
 /*
  * This function is used by device drivers like pci_intr_map().
  *
- * "ihps" is the array  of vector numbers which MSI-X used instead of IRQ number.
+ * "ihps" is the array of vector numbers which MSI-X used instead of IRQ number.
  * "count" can decrease if enough struct intrsources cannot be allocated.
  * if count == 0, return non-zero value.
  */
@@ -622,7 +630,7 @@ pci_msix_alloc_exact(const struct pci_attach_args *pa, pci_intr_handle_t **ihps,
 
 /*
  * This function is used by device drivers like pci_intr_map().
- * Futhermore, this function can map each handle to a MSI-X table index.
+ * Furthermore, this function can map each handle to an MSI-X table index.
  *
  * "ihps" is the array of vector numbers which MSI-X used instead of IRQ number.
  * "count" can not decrease.

@@ -1,4 +1,4 @@
-/*	$NetBSD: key.c,v 1.271 2020/03/13 06:55:35 knakahara Exp $	*/
+/*	$NetBSD: key.c,v 1.285 2024/09/02 18:56:20 andvar Exp $	*/
 /*	$FreeBSD: key.c,v 1.3.2.3 2004/02/14 22:23:23 bms Exp $	*/
 /*	$KAME: key.c,v 1.191 2001/06/27 10:46:49 sakane Exp $	*/
 
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: key.c,v 1.271 2020/03/13 06:55:35 knakahara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: key.c,v 1.285 2024/09/02 18:56:20 andvar Exp $");
 
 /*
  * This code is referred to RFC 2367
@@ -534,6 +534,7 @@ static const int maxsize[] = {
 static int ipsec_esp_keymin = 256;
 static int ipsec_esp_auth = 0;
 static int ipsec_ah_keymin = 128;
+static bool ipsec_allow_different_idtype = false;
 
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_key);
@@ -700,9 +701,9 @@ static void key_init_sav(struct secasvar *);
 static void key_wait_sav(struct secasvar *);
 static void key_destroy_sav(struct secasvar *);
 static struct secasvar *key_newsav(struct mbuf *,
-	const struct sadb_msghdr *, int *, const char*, int);
-#define	KEY_NEWSAV(m, sadb, e)				\
-	key_newsav(m, sadb, e, __func__, __LINE__)
+	const struct sadb_msghdr *, int *, int, const char*, int);
+#define	KEY_NEWSAV(m, sadb, e, proto)				\
+	key_newsav(m, sadb, e, proto, __func__, __LINE__)
 static void key_delsav (struct secasvar *);
 static struct secashead *key_getsah(const struct secasindex *, int);
 static struct secashead *key_getsah_ref(const struct secasindex *, int);
@@ -870,6 +871,13 @@ key_sp_refcnt(const struct secpolicy *sp)
 	return 0;
 }
 
+void
+key_sp_touch(struct secpolicy *sp)
+{
+
+	sp->lastused = time_uptime;
+}
+
 static void
 key_spd_pserialize_perform(void)
 {
@@ -964,7 +972,7 @@ found:
 		KEY_CHKSPDIR(sp->spidx.dir, dir);
 
 		/* found a SPD entry */
-		sp->lastused = time_uptime;
+		key_sp_touch(sp);
 		key_sp_ref(sp, where, tag);
 	}
 	pserialize_read_exit(s);
@@ -1041,7 +1049,7 @@ key_gettunnel(const struct sockaddr *osrc,
 	sp = NULL;
 found:
 	if (sp) {
-		sp->lastused = time_uptime;
+		key_sp_touch(sp);
 		key_sp_ref(sp, where, tag);
 	}
 	pserialize_read_exit(s);
@@ -1220,8 +1228,7 @@ key_sendup_message_delete(struct secasvar *sav)
 	key_sendup_mbuf(NULL, result, KEY_SENDUP_REGISTERED);
 	result = NULL;
 msgfail:
-	if (result)
-		m_freem(result);
+	m_freem(result);
 }
 #endif
 
@@ -1288,8 +1295,11 @@ key_lookup_sa(
 		}
 	}
 	KEYDEBUG_PRINTF(KEYDEBUG_IPSEC_STAMP,
-	    "DP from %s:%u check_spi=%d, check_alg=%d\n",
-	    where, tag, must_check_spi, must_check_alg);
+	    "DP from %s:%u check_spi=%d(%#x), check_alg=%d(%d), proto=%d\n",
+	    where, tag,
+	    must_check_spi, ntohl(spi),
+	    must_check_alg, algo,
+	    proto);
 
 
 	/*
@@ -2070,8 +2080,7 @@ key_sp2msg(const struct secpolicy *sp, int mflag)
 
 	m = key_alloc_mbuf(tlen, mflag);
 	if (!m || m->m_next) {	/*XXX*/
-		if (m)
-			m_freem(m);
+		m_freem(m);
 		return NULL;
 	}
 
@@ -2085,6 +2094,8 @@ key_sp2msg(const struct secpolicy *sp, int mflag)
 	xpl->sadb_x_policy_type = sp->policy;
 	xpl->sadb_x_policy_dir = sp->spidx.dir;
 	xpl->sadb_x_policy_id = sp->id;
+	if (sp->origin == IPSEC_SPORIGIN_KERNEL)
+		xpl->sadb_x_policy_flags |= IPSEC_POLICY_FLAG_ORIGIN_KERNEL;
 	p = (char *)xpl + sizeof(*xpl);
 
 	/* if is the policy for ipsec ? */
@@ -2227,7 +2238,7 @@ key_spdadd(struct socket *so, struct mbuf *m,
 
 	xpl0 = mhp->ext[SADB_X_EXT_POLICY];
 
-	/* checking the direciton. */
+	/* checking the direction. */
 	switch (xpl0->sadb_x_policy_dir) {
 	case IPSEC_DIR_INBOUND:
 	case IPSEC_DIR_OUTBOUND:
@@ -2510,7 +2521,7 @@ key_api_spddelete(struct socket *so, struct mbuf *m,
 
 	xpl0 = mhp->ext[SADB_X_EXT_POLICY];
 
-	/* checking the directon. */
+	/* checking the direction. */
 	switch (xpl0->sadb_x_policy_dir) {
 	case IPSEC_DIR_INBOUND:
 	case IPSEC_DIR_OUTBOUND:
@@ -2783,8 +2794,7 @@ key_spdacquire(const struct secpolicy *sp)
 	return key_sendup_mbuf(NULL, m, KEY_SENDUP_REGISTERED);
 
 fail:
-	if (result)
-		m_freem(result);
+	m_freem(result);
 	return error;
 }
 #endif /* notyet */
@@ -2840,8 +2850,7 @@ key_api_spdflush(struct socket *so, struct mbuf *m,
 		return key_senderror(so, m, ENOBUFS);
 	}
 
-	if (m->m_next)
-		m_freem(m->m_next);
+	m_freem(m->m_next);
 	m->m_next = NULL;
 	m->m_pkthdr.len = m->m_len = PFKEY_ALIGN8(sizeof(struct sadb_msg));
 	newmsg = mtod(m, struct sadb_msg *);
@@ -2945,9 +2954,9 @@ key_api_spddump(struct socket *so, struct mbuf *m0,
 		return key_senderror(so, m0, ENOENT);
 	}
 	{
-		uint64_t *ps = PFKEY_STAT_GETREF();
-		ps[PFKEY_STAT_IN_TOTAL]++;
-		ps[PFKEY_STAT_IN_BYTES] += len;
+		net_stat_ref_t ps = PFKEY_STAT_GETREF();
+		_NET_STATINC_REF(ps, PFKEY_STAT_IN_TOTAL);
+		_NET_STATADD_REF(ps, PFKEY_STAT_IN_BYTES, len);
 		PFKEY_STAT_PUTREF();
 	}
 
@@ -3279,7 +3288,7 @@ key_destroy_sah(struct secashead *sah)
  */
 static struct secasvar *
 key_newsav(struct mbuf *m, const struct sadb_msghdr *mhp,
-    int *errp, const char* where, int tag)
+    int *errp, int proto, const char* where, int tag)
 {
 	struct secasvar *newsav;
 	const struct sadb_sa *xsa;
@@ -3339,7 +3348,8 @@ key_newsav(struct mbuf *m, const struct sadb_msghdr *mhp,
 	newsav->pid = mhp->msg->sadb_msg_pid;
 
 	KEYDEBUG_PRINTF(KEYDEBUG_IPSEC_STAMP,
-	    "DP from %s:%u return SA:%p\n", where, tag, newsav);
+	    "DP from %s:%u return SA:%p spi=%#x proto=%d\n",
+	    where, tag, newsav, ntohl(newsav->spi), proto);
 	return newsav;
 
 error:
@@ -3575,21 +3585,21 @@ key_freesaval(struct secasvar *sav)
 	    key_sa_refcnt(sav));
 
 	if (sav->replay != NULL)
-		kmem_intr_free(sav->replay, sav->replay_len);
+		kmem_free(sav->replay, sav->replay_len);
 	if (sav->key_auth != NULL)
-		kmem_intr_free(sav->key_auth, sav->key_auth_len);
+		kmem_free(sav->key_auth, sav->key_auth_len);
 	if (sav->key_enc != NULL)
-		kmem_intr_free(sav->key_enc, sav->key_enc_len);
+		kmem_free(sav->key_enc, sav->key_enc_len);
 	if (sav->lft_c_counters_percpu != NULL) {
 		percpu_free(sav->lft_c_counters_percpu,
 		    sizeof(lifetime_counters_t));
 	}
 	if (sav->lft_c != NULL)
-		kmem_intr_free(sav->lft_c, sizeof(*(sav->lft_c)));
+		kmem_free(sav->lft_c, sizeof(*(sav->lft_c)));
 	if (sav->lft_h != NULL)
-		kmem_intr_free(sav->lft_h, sizeof(*(sav->lft_h)));
+		kmem_free(sav->lft_h, sizeof(*(sav->lft_h)));
 	if (sav->lft_s != NULL)
-		kmem_intr_free(sav->lft_s, sizeof(*(sav->lft_s)));
+		kmem_free(sav->lft_s, sizeof(*(sav->lft_s)));
 }
 
 /*
@@ -4309,8 +4319,7 @@ key_setsadbaddr(u_int16_t exttype, const struct sockaddr *saddr,
 	    PFKEY_ALIGN8(saddr->sa_len);
 	m = key_alloc_mbuf(len, mflag);
 	if (!m || m->m_next) {	/*XXX*/
-		if (m)
-			m_freem(m);
+		m_freem(m);
 		return NULL;
 	}
 
@@ -4347,8 +4356,7 @@ key_setsadbident(u_int16_t exttype, u_int16_t idtype,
 	len = PFKEY_ALIGN8(sizeof(struct sadb_ident)) + PFKEY_ALIGN8(stringlen);
 	m = key_alloc_mbuf(len);
 	if (!m || m->m_next) {	/*XXX*/
-		if (m)
-			m_freem(m);
+		m_freem(m);
 		return NULL;
 	}
 
@@ -4410,8 +4418,7 @@ key_setsadbxpolicy(const u_int16_t type, const u_int8_t dir, const u_int32_t id,
 	len = PFKEY_ALIGN8(sizeof(struct sadb_x_policy));
 	m = key_alloc_mbuf(len, mflag);
 	if (!m || m->m_next) {	/*XXX*/
-		if (m)
-			m_freem(m);
+		m_freem(m);
 		return NULL;
 	}
 
@@ -4679,75 +4686,103 @@ key_spidx_match_withmask(
 	if (spidx0->src.sa.sa_family != spidx1->src.sa.sa_family ||
 	    spidx0->dst.sa.sa_family != spidx1->dst.sa.sa_family ||
 	    spidx0->src.sa.sa_len != spidx1->src.sa.sa_len ||
-	    spidx0->dst.sa.sa_len != spidx1->dst.sa.sa_len)
+	    spidx0->dst.sa.sa_len != spidx1->dst.sa.sa_len) {
+		KEYDEBUG_PRINTF(KEYDEBUG_MATCH, ".sa wrong\n");
 		return 0;
+	}
 
 	/* if spidx.ul_proto == IPSEC_ULPROTO_ANY, ignore. */
 	if (spidx0->ul_proto != (u_int16_t)IPSEC_ULPROTO_ANY &&
-	    spidx0->ul_proto != spidx1->ul_proto)
+	    spidx0->ul_proto != spidx1->ul_proto) {
+		KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "proto wrong\n");
 		return 0;
+	}
 
 	switch (spidx0->src.sa.sa_family) {
 	case AF_INET:
 		if (spidx0->src.sin.sin_port != IPSEC_PORT_ANY &&
-		    spidx0->src.sin.sin_port != spidx1->src.sin.sin_port)
+		    spidx0->src.sin.sin_port != spidx1->src.sin.sin_port) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v4 src port wrong\n");
 			return 0;
+		}
 		if (!key_bb_match_withmask(&spidx0->src.sin.sin_addr,
-		    &spidx1->src.sin.sin_addr, spidx0->prefs))
+					   &spidx1->src.sin.sin_addr, spidx0->prefs)) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v4 src addr wrong\n");
 			return 0;
+		}
 		break;
 	case AF_INET6:
 		if (spidx0->src.sin6.sin6_port != IPSEC_PORT_ANY &&
-		    spidx0->src.sin6.sin6_port != spidx1->src.sin6.sin6_port)
+		    spidx0->src.sin6.sin6_port != spidx1->src.sin6.sin6_port) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v6 src port wrong\n");
 			return 0;
+		}
 		/*
 		 * scope_id check. if sin6_scope_id is 0, we regard it
 		 * as a wildcard scope, which matches any scope zone ID.
 		 */
 		if (spidx0->src.sin6.sin6_scope_id &&
 		    spidx1->src.sin6.sin6_scope_id &&
-		    spidx0->src.sin6.sin6_scope_id != spidx1->src.sin6.sin6_scope_id)
+		    spidx0->src.sin6.sin6_scope_id != spidx1->src.sin6.sin6_scope_id) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v6 src scope wrong\n");
 			return 0;
+		}
 		if (!key_bb_match_withmask(&spidx0->src.sin6.sin6_addr,
-		    &spidx1->src.sin6.sin6_addr, spidx0->prefs))
+		    &spidx1->src.sin6.sin6_addr, spidx0->prefs)) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v6 src addr wrong\n");
 			return 0;
+		}
 		break;
 	default:
 		/* XXX */
-		if (memcmp(&spidx0->src, &spidx1->src, spidx0->src.sa.sa_len) != 0)
+		if (memcmp(&spidx0->src, &spidx1->src, spidx0->src.sa.sa_len) != 0) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "src memcmp wrong\n");
 			return 0;
+		}
 		break;
 	}
 
 	switch (spidx0->dst.sa.sa_family) {
 	case AF_INET:
 		if (spidx0->dst.sin.sin_port != IPSEC_PORT_ANY &&
-		    spidx0->dst.sin.sin_port != spidx1->dst.sin.sin_port)
+		    spidx0->dst.sin.sin_port != spidx1->dst.sin.sin_port) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v4 dst port wrong\n");
 			return 0;
+		}
 		if (!key_bb_match_withmask(&spidx0->dst.sin.sin_addr,
-		    &spidx1->dst.sin.sin_addr, spidx0->prefd))
+		    &spidx1->dst.sin.sin_addr, spidx0->prefd)) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v4 dst addr wrong\n");
 			return 0;
+		}
 		break;
 	case AF_INET6:
 		if (spidx0->dst.sin6.sin6_port != IPSEC_PORT_ANY &&
-		    spidx0->dst.sin6.sin6_port != spidx1->dst.sin6.sin6_port)
+		    spidx0->dst.sin6.sin6_port != spidx1->dst.sin6.sin6_port) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v6 dst port wrong\n");
 			return 0;
+		}
 		/*
 		 * scope_id check. if sin6_scope_id is 0, we regard it
 		 * as a wildcard scope, which matches any scope zone ID.
 		 */
 		if (spidx0->src.sin6.sin6_scope_id &&
 		    spidx1->src.sin6.sin6_scope_id &&
-		    spidx0->dst.sin6.sin6_scope_id != spidx1->dst.sin6.sin6_scope_id)
+		    spidx0->dst.sin6.sin6_scope_id != spidx1->dst.sin6.sin6_scope_id) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "DP v6 dst scope wrong\n");
 			return 0;
+		}
 		if (!key_bb_match_withmask(&spidx0->dst.sin6.sin6_addr,
-		    &spidx1->dst.sin6.sin6_addr, spidx0->prefd))
+		    &spidx1->dst.sin6.sin6_addr, spidx0->prefd)) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "v6 dst addr wrong\n");
 			return 0;
+		}
 		break;
 	default:
 		/* XXX */
-		if (memcmp(&spidx0->dst, &spidx1->dst, spidx0->dst.sa.sa_len) != 0)
+		if (memcmp(&spidx0->dst, &spidx1->dst, spidx0->dst.sa.sa_len) != 0) {
+			KEYDEBUG_PRINTF(KEYDEBUG_MATCH, "dst memcmp wrong\n");
 			return 0;
+		}
 		break;
 	}
 
@@ -4900,7 +4935,7 @@ key_timehandler_spd(void)
 		mutex_enter(&key_spd.lock);
 		/*
 		 * To avoid for sp->created to overtake "now" because of
-		 * wating mutex, set time_uptime here.
+		 * waiting mutex, set time_uptime here.
 		 */
 		now = time_uptime;
 		SPLIST_WRITER_FOREACH(sp, dir) {
@@ -5402,7 +5437,7 @@ key_api_getspi(struct socket *so, struct mbuf *m,
 
 	/* get a new SA */
 	/* XXX rewrite */
-	newsav = KEY_NEWSAV(m, mhp, &error);
+	newsav = KEY_NEWSAV(m, mhp, &error, proto);
 	if (newsav == NULL) {
 		key_sah_unref(sah);
 		/* XXX don't free new SA index allocated in above. */
@@ -5818,6 +5853,10 @@ key_api_update(struct socket *so, struct mbuf *m, const struct sadb_msghdr *mhp)
 	newsav->created = sav->created;
 	newsav->pid = sav->pid;
 	newsav->sah = sav->sah;
+ 	KEYDEBUG_PRINTF(KEYDEBUG_IPSEC_STAMP,
+	    "DP from %s:%u update SA:%p to SA:%p spi=%#x proto=%d\n",
+	    __func__, __LINE__, sav, newsav,
+	    ntohl(newsav->spi), proto);
 
 	error = key_setsaval(newsav, m, mhp);
 	if (error) {
@@ -6031,7 +6070,7 @@ key_api_add(struct socket *so, struct mbuf *m,
     }
 
 	/* create new SA entry. */
-	newsav = KEY_NEWSAV(m, mhp, &error);
+	newsav = KEY_NEWSAV(m, mhp, &error, proto);
 	if (newsav == NULL)
 		goto error;
 	newsav->sah = sah;
@@ -6135,7 +6174,14 @@ key_setident(struct secashead *sah, struct mbuf *m,
 	if (idsrc->sadb_ident_type != iddst->sadb_ident_type) {
 		IPSECLOG(LOG_DEBUG, "ident type mismatched src %u, dst %u.\n",
 		    idsrc->sadb_ident_type, iddst->sadb_ident_type);
-		return EINVAL;
+		/*
+		 * Some VPN appliances(e.g. NetScreen) can send different
+		 * identifier types on IDii and IDir, so be able to allow
+		 * such message.
+		 */
+		if (!ipsec_allow_different_idtype) {
+			return EINVAL;
+		}
 	}
 
 	switch (idsrc->sadb_ident_type) {
@@ -6529,8 +6575,7 @@ key_getcomb_esp(int mflag)
 	return result;
 
  fail:
-	if (result)
-		m_freem(result);
+	m_freem(result);
 	return NULL;
 }
 
@@ -6751,7 +6796,7 @@ key_acquire(const struct secasindex *saidx, const struct secpolicy *sp, int mfla
 
 #ifndef IPSEC_NONBLOCK_ACQUIRE
 	/*
-	 * We never do anything about acquirng SA.  There is anather
+	 * We never do anything about acquiring SA.  There is another
 	 * solution that kernel blocks to send SADB_ACQUIRE message until
 	 * getting something message from IKEd.  In later case, to be
 	 * managed with ACQUIRING list.
@@ -6918,8 +6963,7 @@ key_acquire(const struct secasindex *saidx, const struct secpolicy *sp, int mfla
 	return key_acquire_sendup_mbuf_later(result);
 
  fail:
-	if (result)
-		m_freem(result);
+	m_freem(result);
 	return error;
 }
 
@@ -7128,7 +7172,7 @@ key_api_acquire(struct socket *so, struct mbuf *m,
 			return 0;
 		}
 
-		/* reset acq counter in order to deletion by timehander. */
+		/* reset acq counter in order to deletion by timehandler. */
 		acq->created = time_uptime;
 		acq->count = 0;
 		mutex_exit(&key_misc.lock);
@@ -7475,8 +7519,7 @@ key_expire(struct secasvar *sav)
 	return key_sendup_mbuf(NULL, result, KEY_SENDUP_REGISTERED);
 
  fail:
-	if (result)
-		m_freem(result);
+	m_freem(result);
 	splx(s);
 	return error;
 }
@@ -7546,8 +7589,7 @@ key_api_flush(struct socket *so, struct mbuf *m,
 		return key_senderror(so, m, ENOBUFS);
 	}
 
-	if (m->m_next)
-		m_freem(m->m_next);
+	m_freem(m->m_next);
 	m->m_next = NULL;
 	m->m_pkthdr.len = m->m_len = sizeof(struct sadb_msg);
 	newmsg = mtod(m, struct sadb_msg *);
@@ -7691,9 +7733,9 @@ key_api_dump(struct socket *so, struct mbuf *m0,
 		return key_senderror(so, m0, ENOENT);
 	}
 	{
-		uint64_t *ps = PFKEY_STAT_GETREF();
-		ps[PFKEY_STAT_IN_TOTAL]++;
-		ps[PFKEY_STAT_IN_BYTES] += len;
+		net_stat_ref_t ps = PFKEY_STAT_GETREF();
+		_NET_STATINC_REF(ps, PFKEY_STAT_IN_TOTAL);
+		_NET_STATADD_REF(ps, PFKEY_STAT_IN_BYTES, len);
 		PFKEY_STAT_PUTREF();
 	}
 
@@ -8719,10 +8761,7 @@ key_savlut_writer_insert_head(struct secasvar *sav)
 	KASSERT(mutex_owned(&key_sad.lock));
 	KASSERT(!sav->savlut_added);
 
-	if (sav->sah->saidx.proto == IPPROTO_IPCOMP)
-		hash_key = sav->alg_comp;
-	else
-		hash_key = sav->spi;
+	hash_key = sav->spi;
 
 	hash = key_savluthash(&sav->sah->saidx.dst.sa,
 	    sav->sah->saidx.proto, hash_key, key_sad.savlutmask);
@@ -8998,6 +9037,11 @@ sysctl_net_keyv2_setup(struct sysctllog **clog)
 		       SYSCTL_DESCR("PF_KEY statistics"),
 		       sysctl_net_key_stats, 0, NULL, 0,
 		       CTL_NET, IPSEC_PFKEY, CTL_CREATE, CTL_EOL);
+	sysctl_createv(clog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_READWRITE,
+		       CTLTYPE_BOOL, "allow_different_idtype", NULL,
+		       NULL, 0, &ipsec_allow_different_idtype, 0,
+		       CTL_NET, IPSEC_PFKEY, KEYCTL_ALLOW_DIFFERENT_IDTYPE, CTL_EOL);
 }
 
 /*

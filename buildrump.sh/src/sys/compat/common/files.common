@@ -1,4 +1,4 @@
-#	$NetBSD: files.common,v 1.7 2021/08/09 20:49:09 andvar Exp $
+#	$NetBSD: files.common,v 1.14 2024/05/20 02:36:33 christos Exp $
 
 #
 # Generic utility files, used by various compat options.
@@ -109,6 +109,15 @@ file	compat/common/if_media_80.c		compat_80
 # Compatibility code for NetBSD 9.0
 file	compat/common/compat_90_mod.c		compat_90
 file	compat/common/vfs_syscalls_90.c		compat_90
+file	compat/common/net_inet6_nd_90.c		compat_90
+
+# Compatibility code for NetBSD 10.0
+file	compat/common/compat_100_mod.c		compat_100
+file	compat/common/kern_event_100.c		compat_100
+file	compat/common/sys_descrip_100.c		compat_100
+
+# Compatibility code for NetBSD 11.0
+file	compat/common/compat_110_mod.c		compat_110
 
 #
 # Sources for sysv ipc compatibility across the versions.

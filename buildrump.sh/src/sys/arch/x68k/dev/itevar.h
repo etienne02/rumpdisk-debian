@@ -1,4 +1,4 @@
-/*	$NetBSD: itevar.h,v 1.15 2012/10/10 17:49:50 tsutsui Exp $	*/
+/*	$NetBSD: itevar.h,v 1.18 2024/10/05 03:56:54 isaki Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -50,6 +50,7 @@ struct itesw {
 	void	(*ite_putc)(struct ite_softc *, int, int, int, int);
 	void	(*ite_cursor)(struct ite_softc *, int);
 	void	(*ite_scroll)(struct ite_softc *, int, int, int, int);
+	void	(*ite_sixel)(struct ite_softc *, int, int);
 };
 
 enum ite_arraymaxs {
@@ -94,6 +95,28 @@ struct ite_softc {
 	short	save_curx, save_cury, save_attribute, save_char;
 	char	sc_G0, sc_G1, sc_G2, sc_G3;
 	char	*sc_GL, *sc_GR;
+	enum {
+		DCS_START = 0,
+		DCS_SIXEL = 'q',	/* DECRQSS also use 'q'... */
+		DCS_DISCARD = -1,
+	} dcs_cmd;
+	enum {
+		DECSIXEL_INIT = 0,
+		DECSIXEL_RASTER_PAD,
+		DECSIXEL_RASTER_PH,
+		DECSIXEL_RASTER_PV,
+		DECSIXEL_REPEAT = '!',
+		DECSIXEL_RASTER = '\"',
+		DECSIXEL_COLOR = '#',
+	} decsixel_state;
+	int	decsixel_ph;
+	int	decsixel_x;
+	int	decsixel_y;
+	int	decsixel_repcount;
+	int	decsixel_color;
+	int	decsixel_ormode;
+#define MAX_SIXEL_WIDTH (768)
+	uint32_t decsixel_buf[MAX_SIXEL_WIDTH];
 };
 
 enum emul_level {
@@ -146,7 +169,7 @@ enum emul_level {
 	(((c) / (ip)->cpl) * (ip)->ftheight + (ip)->fonty)
 
 /* Character attributes */
-#define ATTR_NOR        0x0             /* normal */
+#define ATTR_NOR	0x0		/* normal */
 #define	ATTR_INV	0x1		/* inverse */
 #define	ATTR_UL		0x2		/* underline */
 #define ATTR_BOLD	0x4		/* bold */
@@ -160,14 +183,14 @@ enum emul_level {
 #define RR_CLEAR		0x0
 #define RR_COPY			0x3
 #define RR_XOR			0x6
-#define RR_COPYINVERTED  	0xc
+#define RR_COPYINVERTED		0xc
 
 #define SCROLL_UP	0x01
 #define SCROLL_DOWN	0x02
 #define SCROLL_LEFT	0x03
 #define SCROLL_RIGHT	0x04
 #define DRAW_CURSOR	0x05
-#define ERASE_CURSOR    0x06
+#define ERASE_CURSOR	0x06
 #define MOVE_CURSOR	0x07
 #define START_CURSOROPT	0x08	/* at start of output. May disable cursor */
 #define END_CURSOROPT	0x09	/* at end, make sure cursor state is ok */
@@ -223,6 +246,7 @@ enum tab_size { TABSIZE = 8 };
 #define CSET_JIS1978	(3|CSET_MULTI) /* iso2022jp old jis kanji */
 #define CSET_JIS1983	(4|CSET_MULTI) /* iso2022jp new jis kanji */
 #define CSET_JIS1990	(5|CSET_MULTI) /* iso2022jp hojo kanji */
+#define CSET_DECGRAPH	6 /* DEC special graphics characters */
 
 struct consdev;
 
@@ -235,7 +259,6 @@ void	itecnfinish(struct ite_softc *);
 
 /* standard ite device entry points. */
 void	iteinit(dev_t);
-void	itestart(struct tty *);
 
 /* ite functions */
 int	iteon(dev_t, int);
@@ -256,4 +279,7 @@ extern unsigned char kern_font[];
 extern unsigned char kbdled;
 void ite_set_glyph(void);
 void kbd_setLED(void);
+
+/* DEC special graphics character to ASCII table for box drawing etc. */
+extern const uint8_t ite_decgraph2ascii[];
 #endif

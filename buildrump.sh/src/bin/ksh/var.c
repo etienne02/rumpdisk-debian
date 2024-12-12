@@ -1,9 +1,9 @@
-/*	$NetBSD: var.c,v 1.24 2018/05/08 16:37:59 kamil Exp $	*/
+/*	$NetBSD: var.c,v 1.26 2024/09/08 17:28:36 rillig Exp $	*/
 
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: var.c,v 1.24 2018/05/08 16:37:59 kamil Exp $");
+__RCSID("$NetBSD: var.c,v 1.26 2024/09/08 17:28:36 rillig Exp $");
 #endif
 
 #include <sys/stat.h>
@@ -1136,7 +1136,7 @@ unsetspec(vp)
 	   * set in various places.
 	   * Don't know what at&t does for:
 	   *		MAIL, MAILPATH, HISTSIZE, HISTFILE,
-	   * Unsetting these in at&t ksh does not loose the `specialness':
+	   * Unsetting these in at&t ksh does not lose the `specialness':
 	   *    no effect: IFS, COLUMNS, PATH, TMPDIR,
 	   *		VISUAL, EDITOR,
 	   * pdkshisms: no effect:
@@ -1249,7 +1249,7 @@ set_array(var, reset, vals)
 		/* trash existing values and attributes */
 		unset(vp, 0);
 	/* todo: would be nice for assignment to completely succeed or
-	 * completely fail.  Only really effects integer arrays:
+	 * completely fail.  Only really affects integer arrays:
 	 * evaluation of some of vals[] may fail...
 	 */
 	for (i = 0; vals[i]; i++) {

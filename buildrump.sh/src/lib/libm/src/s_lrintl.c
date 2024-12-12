@@ -2,14 +2,14 @@
 #ifdef __FreeBSD__
 __FBSDID("$FreeBSD: head/lib/msun/src/s_lrintl.c 175309 2008-01-14 02:12:07Z das $");
 #else
-__RCSID("$NetBSD: s_lrintl.c,v 1.2 2017/05/07 11:29:21 martin Exp $");
+__RCSID("$NetBSD: s_lrintl.c,v 1.4 2024/02/24 15:16:53 christos Exp $");
 #endif
 
-#ifdef __HAVE_LONG_DOUBLE
+#include <math.h>
+
 #define stype		long double
 #define	roundit		rintl
 #define dtype		long
 #define	fn		lrintl
 
 #include "s_lrint.c"
-#endif

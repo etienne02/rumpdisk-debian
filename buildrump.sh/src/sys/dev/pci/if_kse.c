@@ -1,4 +1,4 @@
-/*	$NetBSD: if_kse.c,v 1.57 2021/05/08 00:27:02 thorpej Exp $	*/
+/*	$NetBSD: if_kse.c,v 1.59 2022/09/24 18:12:42 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_kse.c,v 1.57 2021/05/08 00:27:02 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_kse.c,v 1.59 2022/09/24 18:12:42 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -43,7 +43,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_kse.c,v 1.57 2021/05/08 00:27:02 thorpej Exp $");
 #include <sys/callout.h>
 #include <sys/ioctl.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/rndsource.h>
 #include <sys/errno.h>
 #include <sys/systm.h>
@@ -689,7 +688,7 @@ kse_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 			break;
 		error = 0;
 		if (cmd == SIOCSIFCAP)
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		if (cmd != SIOCADDMULTI && cmd != SIOCDELMULTI)
 			;
 		else if (ifp->if_flags & IFF_RUNNING) {

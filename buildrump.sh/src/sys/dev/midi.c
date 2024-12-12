@@ -1,4 +1,4 @@
-/*	$NetBSD: midi.c,v 1.94 2021/08/07 16:19:08 thorpej Exp $	*/
+/*	$NetBSD: midi.c,v 1.101 2022/10/23 23:03:30 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1998, 2008 The NetBSD Foundation, Inc.
@@ -31,11 +31,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: midi.c,v 1.94 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: midi.c,v 1.101 2022/10/23 23:03:30 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "midi.h"
-#include "sequencer.h"
 #endif
 
 #include <sys/param.h>
@@ -207,13 +206,16 @@ mididetach(device_t self, int flags)
 
 	mutex_enter(sc->lock);
 	sc->dying = 1;
-
-	if (--sc->refcnt >= 0) {
-		/* Wake anything? */
-		(void)cv_timedwait(&sc->detach_cv, sc->lock, hz * 60);
-	}
 	cv_broadcast(&sc->wchan);
 	cv_broadcast(&sc->rchan);
+
+	if (--sc->refcnt >= 0) {
+		(void)cv_timedwait(&sc->detach_cv, sc->lock, hz * 60);
+		if (sc->refcnt >= 0) {
+			aprint_error_dev(self, "refcnt failed to drain,"
+			    " bashing my brains out anyway\n");
+		}
+	}
 	mutex_exit(sc->lock);
 
 	/* locate the major number */
@@ -244,10 +246,8 @@ mididetach(device_t self, int flags)
 		sc->sih = NULL;
 	}
 
-	mutex_enter(sc->lock);
-	callout_halt(&sc->xmt_asense_co, sc->lock);
-	callout_halt(&sc->rcv_asense_co, sc->lock);
-	mutex_exit(sc->lock);
+	callout_halt(&sc->xmt_asense_co, NULL);
+	callout_halt(&sc->rcv_asense_co, NULL);
 
 	callout_destroy(&sc->xmt_asense_co);
 	callout_destroy(&sc->rcv_asense_co);
@@ -420,7 +420,7 @@ static struct {
  * meaningless) outside of a System Exclusive message, anywhere a status byte
  * could appear. Second, it is allowed to be absent at the end of a System
  * Exclusive message (!) - any status byte at all (non-realtime) is allowed to
- * terminate the message. Both require accomodation in the interface to
+ * terminate the message. Both require accommodation in the interface to
  * midi_fst's caller. A stray 0xf7 should be ignored BUT should count as a
  * message received for purposes of Active Sense timeout; the case is
  * represented by a return of FST_COM with a length of zero (pos == end). A
@@ -1764,7 +1764,7 @@ filt_midiread(struct knote *kn, long hint)
 }
 
 static const struct filterops midiread_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_midirdetach,
 	.f_event = filt_midiread,
@@ -1812,7 +1812,7 @@ filt_midiwrite(struct knote *kn, long hint)
 }
 
 static const struct filterops midiwrite_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_midiwdetach,
 	.f_event = filt_midiwrite,
@@ -1900,47 +1900,3 @@ midi_attach_mi(const struct midi_hw_if *mhwp, void *hdlp, device_t dev)
 }
 
 #endif /* NMIDI > 0 || NMIDIBUS > 0 */
-
-#ifdef _MODULE
-#include "ioconf.c"
-
-devmajor_t midi_bmajor = -1, midi_cmajor = -1;
-#endif
-
-MODULE(MODULE_CLASS_DRIVER, midi, "audio");
-
-static int
-midi_modcmd(modcmd_t cmd, void *arg)
-{
-	int error = 0;
-
-#ifdef _MODULE
-	switch (cmd) {
-	case MODULE_CMD_INIT:
-		error = devsw_attach(midi_cd.cd_name, NULL, &midi_bmajor,
-		    &midi_cdevsw, &midi_cmajor);
-		if (error)
-			break;
-
-		error = config_init_component(cfdriver_ioconf_midi,
-		    cfattach_ioconf_midi, cfdata_ioconf_midi);
-		if (error) {
-			devsw_detach(NULL, &midi_cdevsw);
-		}
-		break;
-	case MODULE_CMD_FINI:
-		devsw_detach(NULL, &midi_cdevsw);
-		error = config_fini_component(cfdriver_ioconf_midi,
-		   cfattach_ioconf_midi, cfdata_ioconf_midi);
-		if (error)
-			devsw_attach(midi_cd.cd_name, NULL, &midi_bmajor,
-			    &midi_cdevsw, &midi_cmajor);
-		break;
-	default:
-		error = ENOTTY;
-		break;
-	}
-#endif
-
-	return error;
-}

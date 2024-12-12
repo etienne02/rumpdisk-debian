@@ -1,4 +1,4 @@
-/*	$NetBSD: isapnp.c,v 1.62 2021/08/07 16:19:12 thorpej Exp $	*/
+/*	$NetBSD: isapnp.c,v 1.64 2024/09/08 09:36:50 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1996, 2008 The NetBSD Foundation, Inc.
@@ -34,14 +34,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: isapnp.c,v 1.62 2021/08/07 16:19:12 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: isapnp.c,v 1.64 2024/09/08 09:36:50 rillig Exp $");
 
 #include "isadma.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
+#include <sys/kmem.h>
 
 #include <sys/bus.h>
 
@@ -702,7 +702,7 @@ isapnp_find(struct isapnp_softc *sc, int all)
 /* isapnp_configure():
  *	Configure a PnP card
  *	XXX: The memory configuration code is wrong. We need to check the
- *	     range/length bit an do appropriate sets.
+ *	     range/length bit and do appropriate sets.
  */
 static void
 isapnp_configure(struct isapnp_softc *sc, const struct isapnp_attach_args *ipa)
@@ -862,7 +862,7 @@ isapnp_match(device_t parent, cfdata_t match, void *aux)
 		if (ipc->ipc_parent == parent)
 			return (0);
 
-	ipc = malloc(sizeof(*ipc), M_DEVBUF, M_WAITOK);
+	ipc = kmem_alloc(sizeof(*ipc), KM_SLEEP);
 	ipc->ipc_parent = parent;
 	LIST_INSERT_HEAD(&isapnp_probes, ipc, ipc_link);
 

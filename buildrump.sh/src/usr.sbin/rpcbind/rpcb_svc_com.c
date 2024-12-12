@@ -1,4 +1,4 @@
-/*	$NetBSD: rpcb_svc_com.c,v 1.25 2021/04/13 05:58:45 mrg Exp $	*/
+/*	$NetBSD: rpcb_svc_com.c,v 1.28 2024/02/09 22:08:38 andvar Exp $	*/
 /*	$FreeBSD: head/usr.sbin/rpcbind/rpcb_svc_com.c 301770 2016-06-09 22:25:00Z pfg $ */
 
 /*-
@@ -288,7 +288,7 @@ map_unset(RPCB *regp, const char *owner)
 	/*
 	 * We return 1 either when the entry was not there or it
 	 * was able to unset it.  It can come to this point only if
-	 * atleast one of the conditions is true.
+	 * at least one of the conditions is true.
 	 */
 	return (1);
 }
@@ -1106,7 +1106,7 @@ my_svc_run(void)
 {
 	size_t nfds;
 	struct pollfd *pollfds;
-	int npollfds;
+	int npollfds, newfdcount;
 	int poll_ret, check_ret;
 	int n, *m;
 #ifdef SVC_RUN_DEBUG
@@ -1118,19 +1118,20 @@ my_svc_run(void)
 	npollfds = 0;
 
 	for (;;) {
-		if (svc_fdset_getsize(0) != npollfds) {
-			npollfds = svc_fdset_getsize(0);
-			pollfds = realloc(pollfds, npollfds * sizeof(*pollfds));
+		newfdcount = svc_fdset_getsize(0);
+		if (newfdcount != npollfds) {
+			if (reallocarr(&pollfds,
+			    newfdcount, sizeof(*pollfds)) != 0) {
+wait:
+				syslog(LOG_ERR, "Cannot allocate pollfds");
+				sleep(1);
+				continue;
+			}
+			npollfds = newfdcount;
 		}
 		p = pollfds;
-		if (p == NULL) {
-out:
-			syslog(LOG_ERR, "Cannot allocate pollfds");
-			sleep(1);
-			continue;
-		}
 		if ((m = svc_fdset_getmax()) == NULL)
-			goto out;
+			goto wait;
 		for (n = 0; n <= *m; n++) {
 			if (svc_fdset_isset(n)) {
 				p->fd = n;

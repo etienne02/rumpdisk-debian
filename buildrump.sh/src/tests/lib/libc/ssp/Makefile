@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.10 2019/10/13 07:28:14 mrg Exp $
+# $NetBSD: Makefile,v 1.12 2023/11/10 23:03:25 christos Exp $
 
 NOMAN=		# defined
 
@@ -31,6 +31,7 @@ BINDIR=		${TESTSDIR}
 PROGS=		h_fgets
 PROGS+=		h_gets
 PROGS+=		h_getcwd
+PROGS+=		h_getcwd2
 PROGS+=		h_memcpy
 PROGS+=		h_memmove
 PROGS+=		h_memset
@@ -49,6 +50,6 @@ PROGS+=		h_vsnprintf
 PROGS+=		h_vsprintf
 
 # Test exercises truncation
-COPTS.h_snprintf.c+=	${GCC_NO_FORMAT_TRUNCATION}
+COPTS.h_snprintf.c+=	${CC_WNO_FORMAT_TRUNCATION}
 
 .include <bsd.test.mk>

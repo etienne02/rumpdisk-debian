@@ -1,4 +1,5 @@
-/*	$NetBSD: uipc_mbuf.c,v 1.243 2021/03/04 01:37:42 msaitoh Exp $	*/
+
+/*	$NetBSD: uipc_mbuf.c,v 1.254 2024/12/06 18:44:00 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1999, 2001, 2018 The NetBSD Foundation, Inc.
@@ -62,29 +63,32 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uipc_mbuf.c,v 1.243 2021/03/04 01:37:42 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uipc_mbuf.c,v 1.254 2024/12/06 18:44:00 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
+#include "ether.h"
+#include "opt_ddb.h"
 #include "opt_mbuftrace.h"
 #include "opt_nmbclusters.h"
-#include "opt_ddb.h"
-#include "ether.h"
 #endif
 
 #include <sys/param.h>
-#include <sys/systm.h>
+#include <sys/types.h>
+
 #include <sys/atomic.h>
 #include <sys/cpu.h>
-#include <sys/proc.h>
-#include <sys/mbuf.h>
-#include <sys/kernel.h>
-#include <sys/syslog.h>
 #include <sys/domain.h>
-#include <sys/protosw.h>
+#include <sys/kernel.h>
+#include <sys/mbuf.h>
 #include <sys/percpu.h>
 #include <sys/pool.h>
+#include <sys/proc.h>
+#include <sys/protosw.h>
+#include <sys/sdt.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
+#include <sys/syslog.h>
+#include <sys/systm.h>
 
 #include <net/if.h>
 
@@ -165,11 +169,7 @@ nmbclusters_limit(void)
 	max_size = MIN(max_size, NMBCLUSTERS_MAX);
 #endif
 
-#ifdef NMBCLUSTERS
-	return MIN(max_size, NMBCLUSTERS);
-#else
 	return max_size;
-#endif
 }
 
 /*
@@ -199,7 +199,7 @@ mbinit(void)
 	 * Set an arbitrary default limit on the number of mbuf clusters.
 	 */
 #ifdef NMBCLUSTERS
-	nmbclusters = nmbclusters_limit();
+	nmbclusters = MIN(NMBCLUSTERS, nmbclusters_limit());
 #else
 	nmbclusters = MAX(1024,
 	    (vsize_t)physmem * PAGE_SIZE / MCLBYTES / 16);
@@ -293,22 +293,25 @@ sysctl_kern_mbuf(SYSCTLFN_ARGS)
 	case MBUF_MCLLOWAT:
 		newval = *(int*)rnode->sysctl_data;
 		break;
+	case MBUF_NMBCLUSTERS_LIMIT:
+		newval = nmbclusters_limit();
+		break;
 	default:
-		return EOPNOTSUPP;
+		return SET_ERROR(EOPNOTSUPP);
 	}
 
 	error = sysctl_lookup(SYSCTLFN_CALL(&node));
 	if (error || newp == NULL)
 		return error;
 	if (newval < 0)
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 
 	switch (node.sysctl_num) {
 	case MBUF_NMBCLUSTERS:
 		if (newval < nmbclusters)
-			return EINVAL;
+			return SET_ERROR(EINVAL);
 		if (newval > nmbclusters_limit())
-			return EINVAL;
+			return SET_ERROR(EINVAL);
 		nmbclusters = newval;
 		pool_cache_sethardlimit(mcl_cache, nmbclusters,
 		    mclpool_warnmsg, 60);
@@ -359,9 +362,9 @@ sysctl_kern_mbuf_mowners(SYSCTLFN_ARGS)
 	int error = 0;
 
 	if (namelen != 0)
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	if (newp != NULL)
-		return EPERM;
+		return SET_ERROR(EPERM);
 
 	LIST_FOREACH(mo, &mowners, mo_link) {
 		struct mowner_user mo_user;
@@ -370,7 +373,7 @@ sysctl_kern_mbuf_mowners(SYSCTLFN_ARGS)
 
 		if (oldp != NULL) {
 			if (*oldlenp - len < sizeof(mo_user)) {
-				error = ENOMEM;
+				error = SET_ERROR(ENOMEM);
 				break;
 			}
 			error = copyout(&mo_user, (char *)oldp + len,
@@ -491,6 +494,12 @@ sysctl_kern_mbuf_setup(void)
 		       sysctl_kern_mbuf_mowners, 0, NULL, 0,
 		       CTL_KERN, KERN_MBUF, MBUF_MOWNERS, CTL_EOL);
 #endif
+	sysctl_createv(&mbuf_sysctllog, 0, NULL, NULL,
+		       CTLFLAG_PERMANENT|CTLFLAG_READONLY,
+		       CTLTYPE_INT, "nmbclusters_limit",
+		       SYSCTL_DESCR("Limit of nmbclusters"),
+		       sysctl_kern_mbuf, 0, NULL, 0,
+		       CTL_KERN, KERN_MBUF, MBUF_NMBCLUSTERS_LIMIT, CTL_EOL);
 }
 
 static int
@@ -534,7 +543,11 @@ m_get(int how, int type)
 	    how == M_WAIT ? PR_WAITOK|PR_LIMITFAIL : PR_NOWAIT);
 	if (m == NULL)
 		return NULL;
-	KASSERT(((vaddr_t)m->m_dat & PAGE_MASK) + MLEN <= PAGE_SIZE);
+	KASSERTMSG(((vaddr_t)m->m_dat & PAGE_MASK) + MLEN <= PAGE_SIZE,
+	    "m=%p m->m_dat=%p"
+	    " MLEN=%u PAGE_MASK=0x%x PAGE_SIZE=%u",
+	    m, m->m_dat,
+	    (unsigned)MLEN, (unsigned)PAGE_MASK, (unsigned)PAGE_SIZE);
 
 	mbstat_type_add(type, 1);
 
@@ -578,6 +591,50 @@ m_gethdr(int how, int type)
 	return m;
 }
 
+struct mbuf *
+m_get_n(int how, int type, size_t alignbytes, size_t nbytes)
+{
+	struct mbuf *m;
+
+	if (alignbytes > MCLBYTES || nbytes > MCLBYTES - alignbytes)
+		return NULL;
+	if ((m = m_get(how, type)) == NULL)
+		return NULL;
+	if (nbytes + alignbytes > MLEN) {
+		m_clget(m, how);
+		if ((m->m_flags & M_EXT) == 0) {
+			m_free(m);
+			return NULL;
+		}
+	}
+	m->m_len = alignbytes + nbytes;
+	m_adj(m, alignbytes);
+
+	return m;
+}
+
+struct mbuf *
+m_gethdr_n(int how, int type, size_t alignbytes, size_t nbytes)
+{
+	struct mbuf *m;
+
+	if (nbytes > MCLBYTES || nbytes > MCLBYTES - alignbytes)
+		return NULL;
+	if ((m = m_gethdr(how, type)) == NULL)
+		return NULL;
+	if (alignbytes + nbytes > MHLEN) {
+		m_clget(m, how);
+		if ((m->m_flags & M_EXT) == 0) {
+			m_free(m);
+			return NULL;
+		}
+	}
+	m->m_len = m->m_pkthdr.len = alignbytes + nbytes;
+	m_adj(m, alignbytes);
+
+	return m;
+}
+
 void
 m_clget(struct mbuf *m, int how)
 {
@@ -588,8 +645,12 @@ m_clget(struct mbuf *m, int how)
 	if (m->m_ext_storage.ext_buf == NULL)
 		return;
 
-	KASSERT(((vaddr_t)m->m_ext_storage.ext_buf & PAGE_MASK) + mclbytes
-	    <= PAGE_SIZE);
+	KASSERTMSG((((vaddr_t)m->m_ext_storage.ext_buf & PAGE_MASK) + mclbytes
+		<= PAGE_SIZE),
+	    "m=%p m->m_ext_storage.ext_buf=%p"
+	    " mclbytes=%u PAGE_MASK=0x%x PAGE_SIZE=%u",
+	    m, m->m_dat,
+	    (unsigned)mclbytes, (unsigned)PAGE_MASK, (unsigned)PAGE_SIZE);
 
 	MCLINITREFERENCE(m);
 	m->m_data = m->m_ext.ext_buf;
@@ -686,6 +747,8 @@ m_copylen(int len, int copylen)
 static struct mbuf *
 m_copy_internal(struct mbuf *m, int off0, int len, int wait, bool deep)
 {
+	struct mbuf *m0 __diagused = m;
+	int len0 __diagused = len;
 	struct mbuf *n, **np;
 	int off = off0;
 	struct mbuf *top;
@@ -756,7 +819,9 @@ m_copy_internal(struct mbuf *m, int off0, int len, int wait, bool deep)
 			len -= n->m_len;
 		off += n->m_len;
 
-		KASSERT(off <= m->m_len);
+		KASSERTMSG(off <= m->m_len,
+		    "m=%p m->m_len=%d off=%d len=%d m0=%p off0=%d len0=%d",
+		    m, m->m_len, off, len, m0, off0, len0);
 
 		if (off == m->m_len) {
 			m = m->m_next;
@@ -1112,7 +1177,8 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 			m_freem(m);
 			return NULL;	/* ENOBUFS */
 		}
-		KASSERT(o->m_len >= len);
+		KASSERTMSG(o->m_len >= len, "o=%p o->m_len=%d len=%d",
+		    o, o->m_len, len);
 		for (mlast = o; mlast->m_next != NULL; mlast = mlast->m_next)
 			;
 		n->m_len = off;
@@ -1281,10 +1347,7 @@ m_split_internal(struct mbuf *m0, int len0, int wait, bool copyhdr)
 		len_save = m0->m_pkthdr.len;
 		m0->m_pkthdr.len = len0;
 
-		if (m->m_flags & M_EXT)
-			goto extpacket;
-
-		if (remain > MHLEN) {
+		if ((m->m_flags & M_EXT) == 0 && remain > MHLEN) {
 			/* m can't be the lead packet */
 			m_align(n, 0);
 			n->m_len = 0;
@@ -1295,8 +1358,6 @@ m_split_internal(struct mbuf *m0, int len0, int wait, bool copyhdr)
 				return NULL;
 			}
 			return n;
-		} else {
-			m_align(n, remain);
 		}
 	} else if (remain == 0) {
 		n = m->m_next;
@@ -1307,14 +1368,13 @@ m_split_internal(struct mbuf *m0, int len0, int wait, bool copyhdr)
 		if (n == NULL)
 			return NULL;
 		MCLAIM(n, m->m_owner);
-		m_align(n, remain);
 	}
 
-extpacket:
 	if (m->m_flags & M_EXT) {
 		n->m_data = m->m_data + len;
 		MCLADDREFERENCE(m, n);
 	} else {
+		m_align(n, remain);
 		memcpy(mtod(n, void *), mtod(m, char *) + len, remain);
 	}
 
@@ -1657,7 +1717,7 @@ out:
 	return 0;
 
 enobufs:
-	return ENOBUFS;
+	return SET_ERROR(ENOBUFS);
 }
 
 /*
@@ -1701,7 +1761,9 @@ m_defrag(struct mbuf *m, int how)
 			m0 = m_get(how, MT_DATA);
 			if (m0 == NULL)
 				return NULL;
-			KASSERT(m->m_len <= MHLEN);
+			KASSERTMSG(m->m_len <= MHLEN,
+			    "m=%p m->m_len=%d MHLEN=%u",
+			    m, m->m_len, (unsigned)MHLEN);
 			m_copydata(m, 0, m->m_len, mtod(m0, void *));
 
 			MCLGET(m, how);
@@ -1712,7 +1774,10 @@ m_defrag(struct mbuf *m, int how)
 			memcpy(m->m_data, mtod(m0, void *), m->m_len);
 			m_free(m0);
 		}
-		KASSERT(M_TRAILINGSPACE(m) >= (m->m_pkthdr.len - m->m_len));
+		KASSERTMSG(M_TRAILINGSPACE(m) >= (m->m_pkthdr.len - m->m_len),
+		    "m=%p M_TRAILINGSPACE(m)=%zd m->m_pkthdr.len=%d"
+		    " m->m_len=%d",
+		    m, M_TRAILINGSPACE(m), m->m_pkthdr.len, m->m_len);
 		m_copydata(m->m_next, 0, m->m_pkthdr.len - m->m_len,
 			    mtod(m, char *) + m->m_len);
 		m->m_len = m->m_pkthdr.len;
@@ -1815,11 +1880,12 @@ m_align(struct mbuf *m, int len)
 	int buflen, adjust;
 
 	KASSERT(len != M_COPYALL);
-	KASSERT(M_LEADINGSPACE(m) == 0);
+	KASSERTMSG(M_LEADINGSPACE(m) == 0, "m=%p M_LEADINGSPACE(m)=%zd",
+	    m, M_LEADINGSPACE(m));
 
 	buflen = M_BUFSIZE(m);
 
-	KASSERT(len <= buflen);
+	KASSERTMSG(len <= buflen, "m=%p len=%d buflen=%d", m, len, buflen);
 	adjust = buflen - len;
 	m->m_data += adjust &~ (sizeof(long)-1);
 }
@@ -1918,6 +1984,7 @@ m_ext_free(struct mbuf *m)
 	if (__predict_true(m->m_ext.ext_refcnt == 1)) {
 		refcnt = m->m_ext.ext_refcnt = 0;
 	} else {
+		membar_release();
 		refcnt = atomic_dec_uint_nv(&m->m_ext.ext_refcnt);
 	}
 
@@ -1934,6 +2001,7 @@ m_ext_free(struct mbuf *m)
 		/*
 		 * dropping the last reference
 		 */
+		membar_acquire();
 		if (!embedded) {
 			m->m_ext.ext_refcnt++; /* XXX */
 			m_ext_free(m->m_ext_ref);

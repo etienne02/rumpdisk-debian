@@ -1,4 +1,4 @@
-/*	$NetBSD: in6.c,v 1.282 2020/09/29 19:33:36 roy Exp $	*/
+/*	$NetBSD: in6.c,v 1.292 2024/03/01 23:50:27 riastradh Exp $	*/
 /*	$KAME: in6.c,v 1.198 2001/07/18 09:12:38 itojun Exp $	*/
 
 /*
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in6.c,v 1.282 2020/09/29 19:33:36 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in6.c,v 1.292 2024/03/01 23:50:27 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -105,13 +105,8 @@ __KERNEL_RCSID(0, "$NetBSD: in6.c,v 1.282 2020/09/29 19:33:36 roy Exp $");
 #include <netinet6/in6_ifattach.h>
 #include <netinet6/scope6_var.h>
 
-#ifdef COMPAT_50
-#include <compat/netinet6/in6_var.h>
-#endif
-#ifdef COMPAT_90
 #include <compat/netinet6/in6_var.h>
 #include <compat/netinet6/nd6.h>
-#endif
 
 MALLOC_DEFINE(M_IP6OPT, "ip6_options", "IPv6 options");
 
@@ -208,7 +203,7 @@ in6_ifremlocal(struct ifaddr *ifa)
 	 * from an interface direct route, when removing the direct route
 	 * (see comments in net/net_osdep.h).  Even for variants that do remove
 	 * cloned routes, they could fail to remove the cloned routes when
-	 * we handle multple addresses that share a common prefix.
+	 * we handle multiple addresses that share a common prefix.
 	 * So, we should remove the route corresponding to the deleted address.
 	 */
 
@@ -273,10 +268,21 @@ in6_ifaddprefix(struct in6_ifaddr *ia)
 	if ((error = rtinit(&ia->ia_ifa, RTM_ADD, RTF_UP | flags)) == 0)
 		ia->ia_flags |= IFA_ROUTE;
 	else if (error == EEXIST)
-		/* Existance of the route is not an error. */
+		/* Existence of the route is not an error. */
 		error = 0;
 
 	return error;
+}
+
+static int
+in6_rt_ifa_matcher(struct rtentry *rt, void *v)
+{
+	struct ifaddr *ifa = v;
+
+	if (rt->rt_ifa == ifa)
+		return 1;
+	else
+		return 0;
 }
 
 /* Delete network prefix route if present.
@@ -319,6 +325,16 @@ in6_ifremprefix(struct in6_ifaddr *target)
 
 			error = in6_ifaddprefix(ia);
 
+			if (!ISSET(target->ia_ifa.ifa_flags, IFA_DESTROYING))
+				goto skip;
+			/*
+			 * Replace rt_ifa of routes that have the removing address
+			 * with the new address.
+			 */
+			rt_replace_ifa_matched_entries(AF_INET6,
+			    in6_rt_ifa_matcher, &target->ia_ifa, &ia->ia_ifa);
+
+		skip:
 			ia6_release(ia, &psref);
 			curlwp_bindx(bound);
 
@@ -332,6 +348,13 @@ in6_ifremprefix(struct in6_ifaddr *target)
 	 */
 	rtinit(&target->ia_ifa, RTM_DELETE, 0);
 	target->ia_flags &= ~IFA_ROUTE;
+
+	if (ISSET(target->ia_ifa.ifa_flags, IFA_DESTROYING)) {
+		/* Remove routes that have the removing address as rt_ifa. */
+		rt_delete_matched_entries(AF_INET6, in6_rt_ifa_matcher,
+		    &target->ia_ifa, true);
+	}
+
 	return 0;
 }
 
@@ -703,7 +726,14 @@ in6_control1(struct socket *so, u_long cmd, void *data, struct ifnet *ifp)
 		int s = splsoftnet();
 		error = in6_update_ifa1(ifp, ifra, &ia, &psref, 0);
 		splx(s);
-		if (error)
+		/*
+		 * in6_update_ifa1 doesn't create the address if its
+		 * valid lifetime (vltime) is zero, since we would just
+		 * delete the address immediately in that case anyway.
+		 * So it may succeed but return null ia.  In that case,
+		 * nothing left to do.
+		 */
+		if (error || ia == NULL)
 			break;
 		pfil_run_addrhooks(if_pfil, cmd, &ia->ia_ifa);
 		break;
@@ -757,7 +787,7 @@ in6_control(struct socket *so, u_long cmd, void *data, struct ifnet *ifp)
 	case SIOCAADDRCTL_POLICY:
 	case SIOCDADDRCTL_POLICY:
 
-		if (kauth_authorize_network(curlwp->l_cred,
+		if (kauth_authorize_network(kauth_cred_get(),
 		    KAUTH_NETWORK_SOCKET,
 		    KAUTH_REQ_NETWORK_SOCKET_SETPRIV,
 		    so, NULL, NULL))
@@ -1037,6 +1067,9 @@ in6_update_ifa1(struct ifnet *ifp, struct in6_aliasreq *ifra,
 	int dad_delay, was_tentative;
 	struct in6_ifaddr *ia = iap ? *iap : NULL;
 	char ip6buf[INET6_ADDRSTRLEN];
+	bool addrmaskNotChanged = false;
+	bool send_rtm_newaddr = (ip6_param_rt_msg == 1);
+	int saved_flags = 0;
 
 	KASSERT((iap == NULL && psref == NULL) ||
 	    (iap != NULL && psref != NULL));
@@ -1158,6 +1191,21 @@ in6_update_ifa1(struct ifnet *ifp, struct in6_aliasreq *ifra,
 			return 0; /* there's nothing to do */
 	}
 
+#define sin6eq(a, b) \
+	((a)->sin6_len == sizeof(struct sockaddr_in6) && \
+	 (b)->sin6_len == sizeof(struct sockaddr_in6) && \
+	 IN6_ARE_ADDR_EQUAL(&(a)->sin6_addr, &(b)->sin6_addr))
+
+	if (!send_rtm_newaddr) {
+		if (ia != NULL &&
+		    sin6eq(&ifra->ifra_addr, &ia->ia_addr) &&
+		    sin6eq(&ifra->ifra_prefixmask, &ia->ia_prefixmask)) {
+			addrmaskNotChanged = true;
+			saved_flags = ia->ia6_flags;  /* check it later */
+		}
+	}
+#undef sin6eq
+
 	/*
 	 * If this is a new address, allocate a new ifaddr and link it
 	 * into chains.
@@ -1261,6 +1309,17 @@ in6_update_ifa1(struct ifnet *ifp, struct in6_aliasreq *ifra,
 	if ((ifra->ifra_flags & IN6_IFF_DEPRECATED) != 0) {
 		ia->ia6_lifetime.ia6t_pltime = 0;
 		ia->ia6_lifetime.ia6t_preferred = time_uptime;
+	}
+
+	if (!send_rtm_newaddr) {
+		/*
+		 * We will not send RTM_NEWADDR if the only difference between
+		 * ia and ifra is preferred/valid lifetimes, because it is not
+		 * very useful for userland programs to be notified of that
+		 * changes.
+		 */
+		if (addrmaskNotChanged && ia->ia6_flags == saved_flags)
+			return 0;
 	}
 
 	if (hostIsNew) {
@@ -2236,6 +2295,10 @@ in6_if_link_down(struct ifnet *ifp)
 	}
 	pserialize_read_exit(s);
 	curlwp_bindx(bound);
+
+	/* Clear ND6_IFF_IFDISABLED to allow DAD again on link-up. */
+	if (ifp->if_afdata[AF_INET6] != NULL)
+		ND_IFINFO(ifp)->flags &= ~ND6_IFF_IFDISABLED;
 }
 
 void

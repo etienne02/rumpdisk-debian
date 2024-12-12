@@ -1,4 +1,4 @@
-# $NetBSD: Makefile.efiboot,v 1.18 2020/09/06 07:20:29 mrg Exp $
+# $NetBSD: Makefile.efiboot,v 1.23 2024/06/29 07:52:16 rin Exp $
 
 S=		${.CURDIR}/../../../../..
 
@@ -14,14 +14,14 @@ AFLAGS.start.S= ${${ACTIVE_CC} == "clang":?-no-integrated-as:}
 
 SOURCES= start.S boot.c conf.c devopen.c dev_net.c self_reloc.c panic.c
 SOURCES+= efiboot.c efichar.c eficons.c efidelay.c efidev.c
+SOURCES+= eficpufunc.c
 SOURCES+= efidisk.c efidisk_ll.c efigetsecs.c efimemory.c
 SOURCES+= efinet.c efipxe.c
 LIBI386SRCS= biosdisk.c bootinfo.c bootinfo_biosgeom.c bootmenu.c
+LIBI386SRCS+= comio_direct.c
 LIBI386SRCS+= diskbuf.c exec.c menuutils.c parseutils.c pread.c
 LIBI386SRCS+= exec_multiboot1.c exec_multiboot2.c
-# use our own nfs implementation
-LIBSASRCS+= nfs.c
-SRCS= ${SOURCES} ${EXTRA_SOURCES} ${LIBI386SRCS} ${LIBSASRCS}
+SRCS= ${SOURCES} ${EXTRA_SOURCES} ${LIBI386SRCS}
 
 .include <bsd.init.mk>
 
@@ -41,8 +41,8 @@ BINMODE=444
 .PATH:	${.CURDIR}/../../libsa
 
 LDSCRIPT?= ${.CURDIR}/ldscript
-LDFLAGS+= --no-dynamic-linker --noinhibit-exec
-LDFLAGS+= -nostdlib -T${LDSCRIPT} -Bsymbolic -shared -nocombreloc
+LDFLAGS+= --no-dynamic-linker --noinhibit-exec -z nocombreloc
+LDFLAGS+= -nostdlib -T${LDSCRIPT} -Bsymbolic -shared
 CPPFLAGS+= -I$S -I${.CURDIR} -I${.CURDIR}/.. -I$S/lib/libsa
 CPPFLAGS+= -I${.OBJDIR}
 CPPFLAGS+= -I${.CURDIR}/../../lib
@@ -66,7 +66,8 @@ CPPFLAGS+= -DSUPPORT_BOOTP
 CPPFLAGS+= -DSUPPORT_DHCP
 CPPFLAGS+= -DSUPPORT_NFS
 CPPFLAGS+= -DSUPPORT_TFTP
-CPPFLAGS+= -DPASS_BIOSGEOM
+# Recent macs report garbage geometry
+#CPPFLAGS+= -DPASS_BIOSGEOM
 CPPFLAGS+= -DBIOSDISK_DEFAULT_SECSIZE=2048	# for bootinfo_biosgeom.c
 CPPFLAGS+= -DLIBSA_ENABLE_LS_OP
 
@@ -83,6 +84,7 @@ GNUEFIARCH?= ${MACHINE_CPU}
 CPPFLAGS+= -I${EFIDIR}/inc -I${EFIDIR}/inc/${GNUEFIARCH}
 CPPFLAGS+= -I${EFIDIR}/inc/protocol
 
+SAMISCCPPFLAGS+= -DLIBSA_NFS_IMPLICIT_MOUNT
 SAMISCCPPFLAGS+= -DLIBSA_PRINTF_LONGLONG_SUPPORT
 SAMISCCPPFLAGS+= -DLIBSA_PRINTF_WIDTH_SUPPORT
 SAMISCCPPFLAGS+= -D"cdb2devb(bno)=(bno)"
@@ -143,7 +145,7 @@ ${PROG}.so: ${OBJS} ${LIBLIST} ${LDSCRIPT} ${.CURDIR}/../Makefile.efiboot
 	rm -f ${.TARGET}
 	mv ${.TARGET}.tmp ${.TARGET}
 
-CWARNFLAGS.gcc+=	${GCC_NO_ADDR_OF_PACKED_MEMBER}
+CWARNFLAGS.gcc+=	${CC_WNO_ADDRESS_OF_PACKED_MEMBER}
 
 KLINK_MACHINE?=	${MACHINE}
 .include <bsd.klinks.mk>

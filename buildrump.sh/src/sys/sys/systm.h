@@ -1,4 +1,4 @@
-/*	$NetBSD: systm.h,v 1.301 2021/06/16 11:55:10 rin Exp $	*/
+/*	$NetBSD: systm.h,v 1.306 2024/05/12 10:34:56 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1988, 1991, 1993
@@ -203,7 +203,7 @@ enum hashtype {
 			dst = src; \
 		else \
 			hash_value(&dst, sizeof(dst), &src, sizeof(src)); \
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 #define COND_SET_CPTR(dst, src, allow) \
 	do { \
@@ -214,7 +214,7 @@ enum hashtype {
 			hash_value(&__v, sizeof(__v), &src, sizeof(src)); \
 			dst = __v; \
 		} \
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 #define COND_SET_PTR(dst, src, allow) \
 	do { \
@@ -222,7 +222,7 @@ enum hashtype {
 			dst = src; \
 		else \
 			hash_value(&dst, sizeof(dst), &src, sizeof(src)); \
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 #define COND_SET_VALUE(dst, src, allow)	\
 	do { \
@@ -232,9 +232,11 @@ enum hashtype {
 			uint64_t __v = src; \
 			hash_value(&dst, sizeof(dst), &__v, sizeof(__v)); \
 		} \
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 void	hash_value(void *, size_t, const void *, size_t);
+void	hash_value_ensure_initialized(void);
+
 bool	get_expose_address(struct proc *);
 void	*hashinit(u_int, enum hashtype, bool, u_long *);
 void	hashdone(void *, enum hashtype, u_long);
@@ -620,6 +622,8 @@ void	trace_exit(register_t, const struct sysent *, const void *,
 
 int	uiomove(void *, size_t, struct uio *);
 int	uiomove_frombuf(void *, size_t, struct uio *);
+int	uiopeek(void *, size_t, struct uio *);
+void	uioskip(size_t, struct uio *);
 
 #ifdef _KERNEL
 int	setjmp(label_t *) __returns_twice;
@@ -689,7 +693,7 @@ int cn_get_magic(char *, size_t);
 				(s).cnm_state = 0;			\
 			}						\
 		}							\
-	} while (/* CONSTCOND */ 0)
+	} while (0)
 #endif
 
 /* Encode out-of-band events this way when passing to cn_check_magic() */
@@ -710,7 +714,7 @@ extern int db_fromconsole; /* XXX ddb/ddbvar.h */
 #elif defined(Debugger)
 #define console_debugger() Debugger()
 #else
-#define console_debugger() do {} while (/* CONSTCOND */ 0) /* NOP */
+#define console_debugger() do {} while (0) /* NOP */
 #endif
 
 /* For SYSCALL_DEBUG */
@@ -734,12 +738,12 @@ bool	kernconfig_is_held(void);
 do {						\
 	if ((count) != 0)			\
 		_kernel_lock((count));	\
-} while (/* CONSTCOND */ 0)
+} while (0)
 #define	KERNEL_UNLOCK(all, lwp, p)	_kernel_unlock((all), (p))
 #define	KERNEL_LOCKED_P()		_kernel_locked_p()
 #else
-#define	KERNEL_LOCK(count, lwp)		do {(void)(count); (void)(lwp);} while (/* CONSTCOND */ 0) /*NOP*/
-#define	KERNEL_UNLOCK(all, lwp, ptr)	do {(void)(all); (void)(lwp); (void)(ptr);} while (/* CONSTCOND */ 0) /*NOP*/
+#define	KERNEL_LOCK(count, lwp)		do {(void)(count); (void)(lwp);} while (0) /*NOP*/
+#define	KERNEL_UNLOCK(all, lwp, ptr)	do {(void)(all); (void)(lwp); (void)(ptr);} while (0) /*NOP*/
 #define	KERNEL_LOCKED_P()		(true)
 #endif
 

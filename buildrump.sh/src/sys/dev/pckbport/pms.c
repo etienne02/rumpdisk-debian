@@ -1,4 +1,4 @@
-/* $NetBSD: pms.c,v 1.39 2021/08/07 16:19:15 thorpej Exp $ */
+/* $NetBSD: pms.c,v 1.42 2024/12/07 23:25:19 chs Exp $ */
 
 /*-
  * Copyright (c) 2004 Kentaro Kurahone.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pms.c,v 1.39 2021/08/07 16:19:15 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pms.c,v 1.42 2024/12/07 23:25:19 chs Exp $");
 
 #include "opt_pms.h"
 
@@ -97,9 +97,9 @@ static bool	pms_suspend(device_t, const pmf_qual_t *);
 static bool	pms_resume(device_t, const pmf_qual_t *);
 
 static const struct wsmouse_accessops pms_accessops = {
-	pms_enable,
-	pms_ioctl,
-	pms_disable,
+	.enable = pms_enable,
+	.ioctl = pms_ioctl,
+	.disable = pms_disable,
 };
 
 static int
@@ -558,9 +558,11 @@ pmsinput(void *vsc, int data)
 		 * some mice shortly after reset) output garbage bytes
 		 * between packets.  Just ignore them.
 		 */
-		if ((data & 0xc0) != 0)
+		if ((data & 0xc0) != 0 && (data & 0xff) != PMS_RSTDONE)
 			return;	/* not in sync yet, discard input */
 	}
+	if (sc->inputstate >= sizeof(sc->packet))
+		panic("inputstate should never be %d", sc->inputstate);
 
 	sc->packet[sc->inputstate++] = data & 0xff;
 	switch (sc->inputstate) {
@@ -592,6 +594,13 @@ pmsinput(void *vsc, int data)
 		break;
 
 	case 2:
+		if (sc->packet[0] == PMS_RSTDONE && sc->packet[1] == 0) {
+			device_printf(sc->sc_dev, "received BAT completion, resetting\n");
+			sc->inputstate = 0;
+			sc->sc_enabled = 0;
+			wakeup(&sc->sc_enabled);
+			return;
+		}
 		break;
 
 	case 4:

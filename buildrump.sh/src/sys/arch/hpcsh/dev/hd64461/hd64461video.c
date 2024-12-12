@@ -1,4 +1,4 @@
-/*	$NetBSD: hd64461video.c,v 1.55 2021/08/07 16:18:54 thorpej Exp $	*/
+/*	$NetBSD: hd64461video.c,v 1.58 2023/12/20 14:50:02 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002, 2004 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hd64461video.c,v 1.55 2021/08/07 16:18:54 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hd64461video.c,v 1.58 2023/12/20 14:50:02 thorpej Exp $");
 
 #include "opt_hd64461video.h"
 // #define HD64461VIDEO_HWACCEL
@@ -39,7 +39,6 @@ __KERNEL_RCSID(0, "$NetBSD: hd64461video.c,v 1.55 2021/08/07 16:18:54 thorpej Ex
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/bus.h>
 
 #include <sys/conf.h> /* cdev_decl */
@@ -898,7 +897,7 @@ hd64461video_font_set_attr(struct hd64461video_softc *sc,
 
 }
 
-/* return frame buffer virtual address of charcter #n */
+/* return frame buffer virtual address of character #n */
 STATIC vaddr_t
 hd64461video_font_start_addr(struct hd64461video_softc *sc, int n)
 {
@@ -1127,7 +1126,7 @@ hd64461video_set_clut(struct hd64461video_chip *vc, int idx, int cnt,
 {
 	KASSERT(r && g && b);
 
-	/* index pallete */
+	/* index palette */
 	hd64461_reg_write_2(HD64461_LCDCPTWAR_REG16,
 	    HD64461_LCDCPTWAR_SET(0, idx));
 	/* set data */
@@ -1151,7 +1150,7 @@ hd64461video_get_clut(struct hd64461video_chip *vc, int idx, int cnt,
 {
 	KASSERT(r && g && b);
 
-	/* index pallete */
+	/* index palette */
 	hd64461_reg_write_2(HD64461_LCDCPTRAR_REG16,
 	    HD64461_LCDCPTRAR_SET(0, idx));
 	

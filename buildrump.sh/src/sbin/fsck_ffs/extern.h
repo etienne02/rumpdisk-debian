@@ -1,4 +1,4 @@
-/*	$NetBSD: extern.h,v 1.27 2011/06/09 19:57:52 christos Exp $	*/
+/*	$NetBSD: extern.h,v 1.29 2023/07/04 20:40:53 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1994 James A. Jegers
@@ -42,6 +42,7 @@ void		clri(struct inodesc *, const char *, int);
 int		cmpsblks(const struct fs *, struct fs *);
 int		cmpsblks42(const struct fs *, struct fs *);
 int		cmpsblks44(const struct fs *, struct fs *);
+void		cvt_magic(struct fs *);
 union		dinode * getnextinode(ino_t);
 void		direrror(ino_t, const char *);
 int		dirscan(struct inodesc *);
@@ -86,7 +87,6 @@ struct uquot *	find_uquot(struct uquot_hash *, uint32_t, int);
 void		remove_uquot(struct uquot_hash *,struct uquot *);
 void		update_uquot(ino_t, uid_t, gid_t, int64_t, int64_t);
 int		is_quota_inode(ino_t);
-
 
 int		check_wapbl(void);
 void		replay_wapbl(void);

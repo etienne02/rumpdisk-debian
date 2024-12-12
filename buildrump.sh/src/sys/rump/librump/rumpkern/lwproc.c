@@ -1,4 +1,4 @@
-/*      $NetBSD: lwproc.c,v 1.51 2020/05/30 19:16:53 ad Exp $	*/
+/*      $NetBSD: lwproc.c,v 1.58 2023/10/15 11:11:37 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2010, 2011 Antti Kantee.  All Rights Reserved.
@@ -28,7 +28,7 @@
 #define RUMP__CURLWP_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: lwproc.c,v 1.51 2020/05/30 19:16:53 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: lwproc.c,v 1.58 2023/10/15 11:11:37 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -44,6 +44,7 @@ __KERNEL_RCSID(0, "$NetBSD: lwproc.c,v 1.51 2020/05/30 19:16:53 ad Exp $");
 #include <sys/resourcevar.h>
 #include <sys/uidinfo.h>
 #include <sys/psref.h>
+#include <sys/syncobj.h>
 
 #include <rump-sys/kern.h>
 
@@ -73,7 +74,7 @@ lwp_unsleep(lwp_t *l, bool cleanup)
 
 /*
  * Look up a live LWP within the specified process.
- * 
+ *
  * Must be called with p->p_lock held.
  */
 struct lwp *
@@ -96,25 +97,6 @@ lwp_find(struct proc *p, lwpid_t id)
 		l = NULL;
 
 	return l;
-}
-
-void
-lwp_update_creds(struct lwp *l)
-{
-	struct proc *p;
-	kauth_cred_t oldcred;
-
-	p = l->l_proc;
-	oldcred = l->l_cred;
-	l->l_prflag &= ~LPR_CRMOD;
-
-	mutex_enter(p->p_lock);
-	kauth_cred_hold(p->p_cred);
-	l->l_cred = p->p_cred;
-	mutex_exit(p->p_lock);
-
-	if (oldcred != NULL)
-		kauth_cred_free(oldcred);
 }
 
 void
@@ -334,11 +316,10 @@ lwproc_freelwp(struct lwp *l)
 	lwp_finispecific(l);
 
 	lwproc_curlwpop(RUMPUSER_LWP_DESTROY, l);
-	membar_exit();
 	kmem_free(l, sizeof(*l));
 
 	if (p->p_stat == SDEAD)
-		lwproc_proc_free(p);	
+		lwproc_proc_free(p);
 }
 
 extern kmutex_t unruntime_lock;
@@ -348,6 +329,14 @@ lwproc_makelwp(struct proc *p, bool doswitch, bool procmake)
 {
 	struct lwp *l = kmem_zalloc(sizeof(*l), KM_SLEEP);
 
+	l->l_refcnt = 1;
+	l->l_proc = p;
+	l->l_stat = LSIDL;
+	l->l_mutex = &unruntime_lock;
+
+	proc_alloc_lwpid(p, l);
+
+	mutex_enter(p->p_lock);
 	/*
 	 * Account the new lwp to the owner of the process.
 	 * For some reason, NetBSD doesn't count the first lwp
@@ -357,14 +346,6 @@ lwproc_makelwp(struct proc *p, bool doswitch, bool procmake)
 		chglwpcnt(kauth_cred_getuid(p->p_cred), 1);
 	}
 
-	l->l_refcnt = 1;
-	l->l_proc = p;
-	l->l_stat = LSIDL;
-	l->l_mutex = &unruntime_lock;
-
-	proc_alloc_lwpid(p, l);
-
-	mutex_enter(p->p_lock);
 	KASSERT((p->p_sflag & PS_RUMP_LWPEXIT) == 0);
 	LIST_INSERT_HEAD(&p->p_lwps, l, l_sibling);
 
@@ -375,11 +356,10 @@ lwproc_makelwp(struct proc *p, bool doswitch, bool procmake)
 	TAILQ_INIT(&l->l_ld_locks);
 	mutex_exit(p->p_lock);
 
-	lwp_update_creds(l);
+	l->l_cred = kauth_cred_hold(p->p_cred);
 	lwp_initspecific(l);
 	PSREF_DEBUG_INIT_LWP(l);
 
-	membar_enter();
 	lwproc_curlwpop(RUMPUSER_LWP_CREATE, l);
 	if (doswitch) {
 		rump_lwproc_switch(l);
@@ -472,6 +452,7 @@ void
 rump_lwproc_switch(struct lwp *newlwp)
 {
 	struct lwp *l = curlwp;
+	int nlocks;
 
 	KASSERT(!(l->l_flag & LW_WEXIT) || newlwp);
 
@@ -490,7 +471,7 @@ rump_lwproc_switch(struct lwp *newlwp)
 		fd_free();
 	}
 
-	KERNEL_UNLOCK_ALL(NULL, &l->l_biglocks);
+	KERNEL_UNLOCK_ALL(NULL, &nlocks);
 	lwproc_curlwpop(RUMPUSER_LWP_CLEAR, l);
 
 	newlwp->l_cpu = newlwp->l_target_cpu = l->l_cpu;
@@ -499,7 +480,7 @@ rump_lwproc_switch(struct lwp *newlwp)
 
 	lwproc_curlwpop(RUMPUSER_LWP_SET, newlwp);
 	curcpu()->ci_curlwp = newlwp;
-	KERNEL_LOCK(newlwp->l_biglocks, NULL);
+	KERNEL_LOCK(nlocks, NULL);
 
 	/*
 	 * Check if the thread should get a signal.  This is
@@ -515,6 +496,7 @@ rump_lwproc_switch(struct lwp *newlwp)
 	l->l_pflag &= ~LP_RUNNING;
 	l->l_flag &= ~LW_PENDSIG;
 	l->l_stat = LSRUN;
+	l->l_ru.ru_nvcsw++;
 
 	if (l->l_flag & LW_WEXIT) {
 		l->l_stat = LSIDL;
@@ -583,4 +565,11 @@ rump_lwproc_sysent_usenative()
 	if (!rump_i_know_what_i_am_doing_with_sysents)
 		panic("don't use rump_lwproc_sysent_usenative()");
 	curproc->p_emul = &emul_netbsd;
+}
+
+long
+lwp_pctr(void)
+{
+
+	return curlwp->l_ru.ru_nvcsw;
 }

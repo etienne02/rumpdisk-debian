@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_mipi_dsi.h,v 1.1 2018/08/27 06:33:57 riastradh Exp $	*/
+/*	$NetBSD: drm_mipi_dsi.h,v 1.3 2021/12/19 11:49:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -31,5 +31,28 @@
 
 #ifndef _DRM_MIPI_DSI_H_
 #define _DRM_MIPI_DSI_H_
+
+struct drm_dsc_picture_parameter_set;
+struct mipi_dsi_device;
+struct mipi_dsi_host_ops;
+
+enum mipi_dsi_pixel_format {
+	MIPI_DSI_PIXEL_NFORMATS,
+};
+
+struct mipi_dsi_host {
+	char dummy;
+};
+
+static inline void
+mipi_dsi_picture_parameter_set(struct mipi_dsi_device *dsi,
+    struct drm_dsc_picture_parameter_set *pps)
+{
+}
+
+static inline void
+mipi_dsi_compression_mode(struct mipi_dsi_device *dsi, bool mode)
+{
+}
 
 #endif /*_DRM_MIPI_DSI_H_*/

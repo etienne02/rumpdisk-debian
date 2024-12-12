@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.4 2020/01/08 20:59:18 skrll Exp $	*/
+/*	$NetBSD: locore.S,v 1.6 2021/10/28 11:11:11 christos Exp $	*/
 /*	$OpenBSD: locore.S,v 1.158 2008/07/28 19:08:46 miod Exp $	*/
 
 /*
@@ -1000,7 +1000,7 @@ ENTRY_NOPROFILE(lwp_trampoline,HPPA_FRAME_SIZE)
 	ldw	L_MD(%t2), %t3
 EXIT(lwp_trampoline)
 
-/* Include the signal code. */
+/* Include the signal code, used in compat code */
 #include <hppa/hppa/sigcode.S>
 
 	.end

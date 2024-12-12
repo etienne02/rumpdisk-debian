@@ -1,4 +1,4 @@
-#	$NetBSD: bsd.kmodule.mk,v 1.76 2021/03/29 05:22:49 simonb Exp $
+#	$NetBSD: bsd.kmodule.mk,v 1.86 2024/06/16 21:50:23 pgoyette Exp $
 
 # We are not building this with PIE
 MKPIE=no
@@ -30,11 +30,16 @@ CFLAGS+=	-ffreestanding ${COPTS}
 CPPFLAGS+=	-nostdinc -I. -I${.CURDIR} -isystem $S -isystem $S/arch
 CPPFLAGS+=	-isystem ${S}/../common/include
 CPPFLAGS+=	-D_KERNEL -D_MODULE -DSYSCTL_INCLUDE_DESCR
+CPPFLAGS+=	${${MKDTRACE:Uno} != "no" :? -DKDTRACE_HOOKS :}
+AFLAGS+=	-D_LOCORE -Wa,--fatal-warnings
 
 CWARNFLAGS.clang+=	-Wno-error=constant-conversion
 
 # XXX until the kernel is fixed again...
-CFLAGS+=	-fno-strict-aliasing -Wno-pointer-sign
+CFLAGS+=	-fno-strict-aliasing
+CWARNFLAGS+=	-Wno-pointer-sign -Wno-attributes
+CWARNFLAGS+=	-Wno-type-limits
+CWARNFLAGS+=	${CC_WNO_ADDRESS_OF_PACKED_MEMBER}
 
 # XXX This is a workaround for platforms that have relative relocations
 # that, when relocated by the module loader, result in addresses that
@@ -54,7 +59,7 @@ CFLAGS+=	${${ACTIVE_CC} == "gcc" && ${HAVE_GCC:U0} >= 9:? -mno-pltseq :}
 .elif ${MACHINE_CPU} == "vax"
 CFLAGS+=	-fno-pic
 .elif ${MACHINE_CPU} == "riscv"
-CFLAGS+=	-fPIC -Wa,-fno-pic
+CFLAGS+=	-mcmodel=medany
 .elif ${MACHINE_ARCH} == "mips64eb" && !defined(BSD_MK_COMPAT_FILE)
 CFLAGS+=	-mabi=64
 AFLAGS+=	-mabi=64
@@ -149,8 +154,8 @@ ${KMOD}_tmp.o: ${OBJS} ${DPADD}
 	${_MKTARGET_LINK}
 	${LD} -r -o tmp.o ${OBJS}
 	${LD} -r \
-		`${OBJDUMP} --syms --reloc tmp.o | \
-			${TOOL_AWK} -f ${ARCHDIR}/kmodwrap.awk` \
+		$$(${OBJDUMP} --syms --reloc tmp.o | \
+			${TOOL_AWK} -f ${ARCHDIR}/kmodwrap.awk) \
 		 -o ${.TARGET} tmp.o
 
 ${KMOD}_tramp.S: ${KMOD}_tmp.o ${ARCHDIR}/kmodtramp.awk ${ASM_H}
@@ -166,7 +171,7 @@ ${PROG}: ${KMOD}_tmp.o ${KMOD}_tramp.o
 	${LD} -r -Map=${.TARGET}.map \
 	    -o tmp.o ${KMOD}_tmp.o ${KMOD}_tramp.o
 	${OBJCOPY} \
-		`${NM} tmp.o | ${TOOL_AWK} -f ${ARCHDIR}/kmodhide.awk` \
+		$$(${NM} tmp.o | ${TOOL_AWK} -f ${ARCHDIR}/kmodhide.awk) \
 		tmp.o ${.TARGET} && \
 	rm tmp.o
 .else
@@ -187,7 +192,8 @@ ${PROG}: ${OBJS} ${DPADD} ${KMODSCRIPT}
 .if defined(PROGDEBUG)
 ${PROGDEBUG}: ${PROG}
 	${_MKTARGET_CREATE}
-	(  ${OBJCOPY} --only-keep-debug ${PROG} ${PROGDEBUG} \
+	( ${OBJCOPY} --only-keep-debug --compress-debug-sections \
+	    ${PROG} ${PROGDEBUG} \
 	&& ${OBJCOPY} --strip-debug -p -R .gnu_debuglink \
 		--add-gnu-debuglink=${PROGDEBUG} ${PROG} \
 	) || (rm -f ${PROGDEBUG}; false)

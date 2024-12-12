@@ -1,4 +1,4 @@
-/*	$NetBSD: ww_mutex.h,v 1.13 2018/08/27 15:11:32 riastradh Exp $	*/
+/*	$NetBSD: ww_mutex.h,v 1.15 2022/07/17 17:04:02 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -58,13 +58,16 @@ struct ww_acquire_ctx {
 	struct rb_node	wwx_rb_node;
 };
 
+enum ww_mutex_state {
+	WW_UNLOCKED,	/* nobody owns it */
+	WW_OWNED,	/* owned by a lwp without a context */
+	WW_CTX,		/* owned by a context */
+	WW_WANTOWN,	/* owned by ctx, waiters w/o ctx waiting */
+};
+
 struct ww_mutex {
-	enum ww_mutex_state {
-		WW_UNLOCKED,	/* nobody owns it */
-		WW_OWNED,	/* owned by a lwp without a context */
-		WW_CTX,		/* owned by a context */
-		WW_WANTOWN,	/* owned by ctx, waiters w/o ctx waiting */
-	}			wwm_state;
+	uint8_t			wwm_state;
+	bool			wwm_debug;
 	union {
 		struct lwp		*owner;
 		struct ww_acquire_ctx	*ctx;
@@ -77,9 +80,6 @@ struct ww_mutex {
 	struct ww_class		*wwm_class;
 	struct rb_tree		wwm_waiters;
 	kcondvar_t		wwm_cv;
-#ifdef LOCKDEBUG
-	bool			wwm_debug;
-#endif
 };
 
 /* XXX Make the nm output a little more greppable...  */
@@ -93,6 +93,7 @@ struct ww_mutex {
 #define	ww_mutex_lock_interruptible linux_ww_mutex_lock_interruptible
 #define	ww_mutex_lock_slow	linux_ww_mutex_lock_slow
 #define	ww_mutex_lock_slow_interruptible linux_ww_mutex_lock_slow_interruptible
+#define	ww_mutex_locking_ctx	linux_ww_mutex_locking_ctx
 #define	ww_mutex_trylock	linux_ww_mutex_trylock
 #define	ww_mutex_unlock		linux_ww_mutex_unlock
 
@@ -118,5 +119,8 @@ int	ww_mutex_lock_slow_interruptible(struct ww_mutex *,
 	    struct ww_acquire_ctx *);
 int	ww_mutex_trylock(struct ww_mutex *);
 void	ww_mutex_unlock(struct ww_mutex *);
+
+struct ww_acquire_ctx *
+	ww_mutex_locking_ctx(struct ww_mutex *);
 
 #endif  /* _ASM_WW_MUTEX_H_ */

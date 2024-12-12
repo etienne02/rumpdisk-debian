@@ -1,4 +1,4 @@
-/*	$NetBSD: bootmenu.c,v 1.17 2018/04/02 09:44:18 nonaka Exp $	*/
+/*	$NetBSD: bootmenu.c,v 1.20 2024/11/27 17:19:37 martin Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -59,6 +59,8 @@ do_bootcfg_command(const char *cmd, char *arg)
 {
 	if (strcmp(cmd, BOOTCFG_CMD_LOAD) == 0)
 		module_add(arg);
+	else if (strcmp(cmd, "fs") == 0)
+		fs_add(arg);
 	else if (strcmp(cmd, BOOTCFG_CMD_USERCONF) == 0)
 		userconf_add(arg);
 }
@@ -128,43 +130,36 @@ docommandchoice(int choice)
 	} while (*ic);
 }
 
-void
-bootdefault(void)
-{
-	int choice;
-	static int entered;
-
-	if (bootcfg_info.nummenu > 0) {
-		if (entered) {
-			printf("default boot twice, skipping...\n");
-			return;
-		}
-		entered = 1;
-		choice = bootcfg_info.def;
-		printf("command(s): %s\n", bootcfg_info.command[choice]);
-		docommandchoice(choice);
-	}
-}
-
 __dead void
 doboottypemenu(void)
 {
 	int choice;
 	char input[80];
 
-	printf("\n");
-	/* Display menu */
-	if (bootcfg_info.menuformat == MENUFORMAT_LETTER) {
-		for (choice = 0; choice < bootcfg_info.nummenu; choice++)
-			printf("    %c. %s\n", choice + 'A',
-			    bootcfg_info.desc[choice]);
-	} else {
-		/* Can't use %2d format string with libsa */
-		for (choice = 0; choice < bootcfg_info.nummenu; choice++)
-			printf("    %s%d. %s\n",
-			    (choice < 9) ?  " " : "",
-			    choice + 1,
-			    bootcfg_info.desc[choice]);
+	/*
+	 * If we have a single menu entry with empty description and
+	 * timeout = 0 we do not display any menu.
+	 */
+	if ((bootcfg_info.nummenu > 0 &&
+	     bootcfg_info.desc[0] != bootcfg_info.command[0] &&
+	     bootcfg_info.desc[0][0] != 0) || bootcfg_info.timeout > 0) {
+		printf("\n");
+
+		/* Display menu */
+		if (bootcfg_info.menuformat == MENUFORMAT_LETTER) {
+			for (choice = 0; choice < bootcfg_info.nummenu;
+			    choice++)
+				printf("    %c. %s\n", choice + 'A',
+				    bootcfg_info.desc[choice]);
+		} else {
+			/* Can't use %2d format string with libsa */
+			for (choice = 0; choice < bootcfg_info.nummenu;
+			    choice++)
+				printf("    %s%d. %s\n",
+				    (choice < 9) ?  " " : "",
+				    choice + 1,
+				    bootcfg_info.desc[choice]);
+		}
 	}
 	choice = -1;
 	for (;;) {

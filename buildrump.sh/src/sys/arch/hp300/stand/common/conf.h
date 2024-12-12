@@ -1,4 +1,4 @@
-/*	$NetBSD: conf.h,v 1.2 2005/12/11 12:17:19 christos Exp $	*/
+/*	$NetBSD: conf.h,v 1.4 2024/05/09 15:11:11 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 1982, 1990, 1993
@@ -52,7 +52,31 @@ int sdstrategy(void *, int, daddr_t, size_t, void *, size_t *);
 int sdopen(struct open_file *, ...);
 int sdclose(struct open_file *);
 #endif
+#ifdef SUPPORT_UFS2
+#define NFSYS_UFS2	1
+#else
+#define NFSYS_UFS2	0
+#endif
+#ifdef SUPPORT_CD
+#define NFSYS_CD9660	1
+#else
+#define NFSYS_CD9660	0
+#endif
+#define NFSYS_FS	(1 + NFSYS_UFS2 + NFSYS_CD9660)
 
 #ifdef SUPPORT_ETHERNET
 extern struct netif_driver le_driver;
 #endif
+
+/*
+ * Switch we use to set punit in devopen.
+ */
+struct punitsw {
+	int	(*p_punit)(int, int, int *);
+};
+extern	struct punitsw punitsw[];
+extern	int npunit;
+
+extern	struct fs_ops file_system_rawfs[1];
+extern	struct fs_ops file_system_ufs[NFSYS_FS];
+extern	struct fs_ops file_system_nfs[1];

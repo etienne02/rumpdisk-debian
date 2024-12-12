@@ -1,4 +1,4 @@
-/*      $NetBSD: xenevt.c,v 1.64 2021/07/24 21:31:36 andvar Exp $      */
+/*      $NetBSD: xenevt.c,v 1.68 2022/09/22 16:21:34 bouyer Exp $      */
 
 /*
  * Copyright (c) 2005 Manuel Bouyer.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xenevt.c,v 1.64 2021/07/24 21:31:36 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xenevt.c,v 1.68 2022/09/22 16:21:34 bouyer Exp $");
 
 #include "opt_xen.h"
 #include <sys/param.h>
@@ -210,7 +210,8 @@ xenevt_setipending(int l1, int l2)
 	KASSERT(xenevt_ih->ih_cpu->ci_ilevel >= IPL_HIGH);
 	atomic_or_ulong(&xenevt_ev1, 1UL << l1);
 	atomic_or_ulong(&xenevt_ev2[l1], 1UL << l2);
-	atomic_or_32(&xenevt_ih->ih_cpu->ci_ipending, 1 << SIR_XENIPL_HIGH);
+	atomic_or_64(&xenevt_ih->ih_cpu->ci_istate, (1ULL << SIR_XENIPL_HIGH));
+	atomic_add_int(&xenevt_ih->ih_pending, 1);
 	evtsource[xenevt_ev]->ev_evcnt.ev_count++;
 }
 
@@ -277,8 +278,7 @@ xenevt_notify(void)
 		d->pending = false;
 		mutex_enter(&d->lock);
 		if (d->flags & XENEVT_F_FREE) {
-			xenevt_free(d);
-			mutex_exit(&devevent_lock);
+			xenevt_free(d); /* releases devevent_lock */
 		} else {
 			mutex_exit(&devevent_lock);
 			selnotify(&d->sel, 0, 1);
@@ -401,7 +401,6 @@ xenevt_free(struct xenevt_d *d)
 			hypervisor_mask_event(i);
 			xen_atomic_clear_bit(&d->ci->ci_evtmask[0], i);
 			devevent[i] = NULL;
-
 			op.cmd = EVTCHNOP_close;
 			op.u.close.port = i;
 			if ((error = HYPERVISOR_event_channel_op(&op))) {
@@ -411,6 +410,7 @@ xenevt_free(struct xenevt_d *d)
 		}
 	}
 	mutex_exit(&d->lock);
+	mutex_exit(&devevent_lock);
 	seldestroy(&d->sel);
 	cv_destroy(&d->cv);
 	mutex_destroy(&d->lock);
@@ -427,11 +427,11 @@ xenevt_fclose(struct file *fp)
 	if (d->pending) {
 		d->flags |= XENEVT_F_FREE;
 		mutex_exit(&d->lock);
+		mutex_exit(&devevent_lock);
 	} else {
-		xenevt_free(d);
+		xenevt_free(d); /* releases devevent_lock */
 	}
 
-	mutex_exit(&devevent_lock);
 	fp->f_data = NULL;
 	return (0);
 }

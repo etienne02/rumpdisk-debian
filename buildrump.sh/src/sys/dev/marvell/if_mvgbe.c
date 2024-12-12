@@ -1,4 +1,4 @@
-/*	$NetBSD: if_mvgbe.c,v 1.62 2021/08/30 00:08:28 rin Exp $	*/
+/*	$NetBSD: if_mvgbe.c,v 1.69 2024/12/07 07:52:19 andvar Exp $	*/
 /*
  * Copyright (c) 2007, 2008, 2013 KIYOHARA Takashi
  * All rights reserved.
@@ -25,7 +25,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_mvgbe.c,v 1.62 2021/08/30 00:08:28 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_mvgbe.c,v 1.69 2024/12/07 07:52:19 andvar Exp $");
 
 #include "opt_multiprocessor.h"
 
@@ -266,7 +266,7 @@ static void mvgbec_attach(device_t, device_t, void *);
 static int mvgbec_print(void *, const char *);
 static int mvgbec_search(device_t, cfdata_t, const int *, void *);
 
-/* MII funcstions */
+/* MII functions */
 static int mvgbec_miibus_readreg(device_t, int, int, uint16_t *);
 static int mvgbec_miibus_writereg(device_t, int, int, uint16_t);
 static void mvgbec_miibus_statchg(struct ifnet *);
@@ -921,7 +921,7 @@ mvgbe_attach(device_t parent, device_t self, void *aux)
 #ifdef MVGBE_EVENT_COUNTERS
 	/* Attach event counters. */
 	evcnt_attach_dynamic(&sc->sc_ev_rxoverrun, EVCNT_TYPE_MISC,
-	    NULL, device_xname(sc->sc_dev), "rxoverrrun");
+	    NULL, device_xname(sc->sc_dev), "rxoverrun");
 	evcnt_attach_dynamic(&sc->sc_ev_wdogsoft, EVCNT_TYPE_MISC,
 	    NULL, device_xname(sc->sc_dev), "wdogsoft");
 #endif
@@ -1416,16 +1416,12 @@ mvgbe_stop(struct ifnet *ifp, int disable)
 
 	/* Free RX and TX mbufs still in the queues. */
 	for (i = 0; i < MVGBE_RX_RING_CNT; i++) {
-		if (cdata->mvgbe_rx_chain[i].mvgbe_mbuf != NULL) {
-			m_freem(cdata->mvgbe_rx_chain[i].mvgbe_mbuf);
-			cdata->mvgbe_rx_chain[i].mvgbe_mbuf = NULL;
-		}
+		m_freem(cdata->mvgbe_rx_chain[i].mvgbe_mbuf);
+		cdata->mvgbe_rx_chain[i].mvgbe_mbuf = NULL;
 	}
 	for (i = 0; i < MVGBE_TX_RING_CNT; i++) {
-		if (cdata->mvgbe_tx_chain[i].mvgbe_mbuf != NULL) {
-			m_freem(cdata->mvgbe_tx_chain[i].mvgbe_mbuf);
-			cdata->mvgbe_tx_chain[i].mvgbe_mbuf = NULL;
-		}
+		m_freem(cdata->mvgbe_tx_chain[i].mvgbe_mbuf);
+		cdata->mvgbe_tx_chain[i].mvgbe_mbuf = NULL;
 	}
 
 	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
@@ -1587,6 +1583,7 @@ mvgbe_newbuf(struct mvgbe_softc *sc, int i, struct mbuf *m,
 	struct mvgbe_rx_desc *r;
 	int align;
 	vaddr_t offset;
+	uint16_t bufsize;
 
 	if (m == NULL) {
 		void *buf = NULL;
@@ -1631,12 +1628,13 @@ mvgbe_newbuf(struct mvgbe_softc *sc, int i, struct mbuf *m,
 	c->mvgbe_mbuf = m_new;
 	offset = (vaddr_t)m_new->m_data - (vaddr_t)sc->sc_cdata.mvgbe_jumbo_buf;
 	r->bufptr = H2MVGBE32(dmamap->dm_segs[0].ds_addr + offset);
-	r->bufsize = MVGBE_JLEN & ~MVGBE_RXBUF_MASK;
+	bufsize = MVGBE_JLEN & ~MVGBE_RXBUF_MASK;
+	r->bufsize = H2MVGBE16(bufsize);
 	r->cmdsts =
 	    H2MVGBE32(MVGBE_BUFFER_OWNED_BY_DMA | MVGBE_RX_ENABLE_INTERRUPT);
 
 	/* Invalidate RX buffer */
-	bus_dmamap_sync(sc->sc_dmat, dmamap, offset, r->bufsize,
+	bus_dmamap_sync(sc->sc_dmat, dmamap, offset, bufsize,
 	    BUS_DMASYNC_PREREAD);
 
 	MVGBE_CDRXSYNC(sc, i, BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
@@ -1825,8 +1823,10 @@ do_defrag:
 		/* A small unaligned segment was detected. */
 		struct mbuf *m_new;
 		m_new = m_defrag(m_head, M_DONTWAIT);
-		if (m_new == NULL)
+		if (m_new == NULL) {
+			DPRINTFN(2, ("mvgbe_encap: defrag failed\n"));
 			return EFBIG;
+		}
 		m_head = m_new;
 	}
 
@@ -1871,7 +1871,7 @@ do_defrag:
 	}
 
 
-	DPRINTFN(2, ("mvgbe_encap: dm_nsegs=%d\n", txmap->dm_nsegs));
+	DPRINTFN(3, ("mvgbe_encap: dm_nsegs=%d\n", txmap->dm_nsegs));
 
 	for (i = 0; i < txmap->dm_nsegs; i++) {
 		f = &sc->sc_rdata->mvgbe_tx_ring[current];
@@ -1989,7 +1989,7 @@ mvgbe_rxeof(struct mvgbe_softc *sc)
 		m = cdata->mvgbe_rx_chain[idx].mvgbe_mbuf;
 		cdata->mvgbe_rx_chain[idx].mvgbe_mbuf = NULL;
 		total_len = MVGBE2H16(cur_rx->bytecnt) - ETHER_CRC_LEN;
-		bufsize = cur_rx->bufsize;
+		bufsize = MVGBE2H16(cur_rx->bufsize);
 
 		cdata->mvgbe_rx_map[idx] = NULL;
 
@@ -2125,13 +2125,14 @@ mvgbe_txeof(struct mvgbe_softc *sc)
 		if (cdata->mvgbe_tx_chain[idx].mvgbe_mbuf != NULL) {
 			entry = cdata->mvgbe_tx_map[idx];
 
-			m_freem(cdata->mvgbe_tx_chain[idx].mvgbe_mbuf);
-			cdata->mvgbe_tx_chain[idx].mvgbe_mbuf = NULL;
-
 			bus_dmamap_sync(sc->sc_dmat, entry->dmamap, 0,
 			    entry->dmamap->dm_mapsize, BUS_DMASYNC_POSTWRITE);
 
 			bus_dmamap_unload(sc->sc_dmat, entry->dmamap);
+
+			m_freem(cdata->mvgbe_tx_chain[idx].mvgbe_mbuf);
+			cdata->mvgbe_tx_chain[idx].mvgbe_mbuf = NULL;
+
 			SIMPLEQ_INSERT_TAIL(&sc->sc_txmap_head, entry, link);
 			cdata->mvgbe_tx_map[idx] = NULL;
 		}

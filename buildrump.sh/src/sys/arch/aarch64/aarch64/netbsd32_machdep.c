@@ -1,7 +1,7 @@
-/*	$NetBSD: netbsd32_machdep.c,v 1.18 2021/05/30 05:40:56 rin Exp $	*/
+/*	$NetBSD: netbsd32_machdep.c,v 1.25 2024/06/18 13:29:56 rin Exp $	*/
 
 /*
- * Copyright (c) 2018 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2018 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: netbsd32_machdep.c,v 1.18 2021/05/30 05:40:56 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: netbsd32_machdep.c,v 1.25 2024/06/18 13:29:56 rin Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
@@ -63,7 +63,7 @@ void
 netbsd32_setregs(struct lwp *l, struct exec_package *pack, vaddr_t stack)
 {
 	struct proc * const p = l->l_proc;
-	struct trapframe * const tf = l->l_md.md_utf;
+	struct trapframe * const tf = lwp_trapframe(l);
 
 	netbsd32_adjust_limits(p);
 
@@ -132,7 +132,7 @@ int
 netbsd32_process_read_regs(struct lwp *l, struct reg32 *regs)
 {
 	struct proc * const p = l->l_proc;
-	struct trapframe *tf = l->l_md.md_utf;
+	struct trapframe *tf = lwp_trapframe(l);
 	int i;
 
 	if ((p->p_flag & PK_32) == 0)
@@ -201,7 +201,7 @@ int
 netbsd32_process_write_regs(struct lwp *l, const struct reg32 *regs)
 {
 	struct proc * const p = l->l_proc;
-	struct trapframe *tf = l->l_md.md_utf;
+	struct trapframe *tf = lwp_trapframe(l);
 	int i;
 
 	if ((p->p_flag & PK_32) == 0)
@@ -300,13 +300,13 @@ cpu_coredump32(struct lwp *l, struct coredump_iostate *iocookie,
 	return error;
 }
 
-static void
+void
 netbsd32_sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 {
 	struct lwp * const l = curlwp;
 	struct proc * const p = l->l_proc;
-	struct trapframe * const tf = l->l_md.md_utf;
-	struct sigaltstack * const ss = &l->l_sigstk;
+	struct trapframe * const tf = lwp_trapframe(l);
+	stack_t * const ss = &l->l_sigstk;
 	const int signo = ksi->ksi_signo;
 	const struct sigaction * const sa = &SIGACTION(p, signo);
 	const struct sigact_sigdesc * const sdesc =
@@ -375,18 +375,6 @@ netbsd32_sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 }
 
 void
-netbsd32_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
-{
-#ifdef COMPAT_16
-#error non EABI generation binaries are not supported
-	if (curproc->p_sigacts->sa_sigdesc[ksi->ksi_signo].sd_vers < 2)
-		netbsd32_sendsig_sigcontext(ksi, mask);
-	else
-#endif
-		netbsd32_sendsig_siginfo(ksi, mask);
-}
-
-void
 startlwp32(void *arg)
 {
 	ucontext32_t *uc = arg;
@@ -434,9 +422,9 @@ cpu_mcontext32_validate(struct lwp *l, const mcontext32_t *mcp)
 void
 cpu_getmcontext32(struct lwp *l, mcontext32_t *mcp, unsigned int *flagsp)
 {
-	struct trapframe * const tf = l->l_md.md_utf;
+	struct trapframe * const tf = lwp_trapframe(l);
 	__greg32_t *gr = mcp->__gregs;
-	__greg32_t ras_pc;
+	void *ras_pc;
 
 	gr[_REG_R0]  = tf->tf_reg[0];
 	gr[_REG_R1]  = tf->tf_reg[1];
@@ -456,9 +444,9 @@ cpu_getmcontext32(struct lwp *l, mcontext32_t *mcp, unsigned int *flagsp)
 	gr[_REG_R15] = tf->tf_pc;
 	gr[_REG_CPSR] = tf->tf_spsr;
 
-	if ((ras_pc = (__greg32_t)(uintptr_t)ras_lookup(l->l_proc,
-	    (void *)(uintptr_t)gr[_REG_R15])) != -1) {
-		gr[_REG_R15] = ras_pc;
+	ras_pc = ras_lookup(l->l_proc, (void *)(uintptr_t)gr[_REG_R15]);
+	if (ras_pc != (void *)-1) {
+		gr[_REG_R15] = (__greg32_t)(uintptr_t)ras_pc;
 	}
 	*flagsp |= _UC_CPU;
 
@@ -498,7 +486,7 @@ cpu_getmcontext32(struct lwp *l, mcontext32_t *mcp, unsigned int *flagsp)
 int
 cpu_setmcontext32(struct lwp *l, const mcontext32_t *mcp, unsigned int flags)
 {
-	struct trapframe * const tf = l->l_md.md_utf;
+	struct trapframe * const tf = lwp_trapframe(l);
 	const __greg32_t * const gr = mcp->__gregs;
 	struct proc * const p = l->l_proc;
 	int error, i, j;
@@ -644,16 +632,16 @@ netbsd32_vm_default_addr(struct proc *p, vaddr_t base, vsize_t sz,
 		return VM_DEFAULT_ADDRESS32_BOTTOMUP(base, sz);
 }
 
-void  
+void
 netbsd32_machdep_md_init(void)
-{ 
- 
+{
+
 	/* nothing to do */
 }
- 
+
 void
 netbsd32_machdep_md_fini(void)
 {
- 
+
 	/* nothing to do */
 }

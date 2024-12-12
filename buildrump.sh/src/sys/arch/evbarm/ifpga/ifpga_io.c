@@ -1,4 +1,4 @@
-/*	$NetBSD: ifpga_io.c,v 1.13 2018/03/16 17:56:33 ryo Exp $ */
+/*	$NetBSD: ifpga_io.c,v 1.15 2023/04/21 14:58:34 skrll Exp $ */
 
 /*
  * Copyright (c) 1997 Causality Limited
@@ -32,7 +32,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- * 
+ *
  * From arm/footbridge/footbridge_io.c
  */
 
@@ -41,7 +41,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ifpga_io.c,v 1.13 2018/03/16 17:56:33 ryo Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ifpga_io.c,v 1.15 2023/04/21 14:58:34 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -258,7 +258,7 @@ ifpga_mem_bs_map(void *t, bus_addr_t bpa, bus_size_t size, int cacheable, bus_sp
 		return 0;
 	}
 
-	/* Round the allocation to page boundries */
+	/* Round the allocation to page boundaries */
 	startpa = trunc_page(bpa);
 	endpa = round_page(bpa + size);
 
@@ -274,7 +274,7 @@ ifpga_mem_bs_map(void *t, bus_addr_t bpa, bus_size_t size, int cacheable, bus_sp
 	/* Now map the pages */
 	/* The cookie is the physical base address for the I/O area */
 	while (startpa < endpa) {
-		/* XXX pmap_kenter_pa maps pages cacheable -- not what 
+		/* XXX pmap_kenter_pa maps pages cacheable -- not what
 		   we want.  */
 		pmap_enter(pmap_kernel(), va, (bus_addr_t)t + startpa,
 			   VM_PROT_READ | VM_PROT_WRITE, 0);
@@ -319,7 +319,7 @@ ifpga_mem_bs_unmap(void *t, bus_space_handle_t bsh, bus_size_t size)
 	uvm_km_free(kernel_map, startva, endva - startva, UVM_KMF_VAONLY);
 }
 
-void    
+void
 ifpga_bs_free(void *t, bus_space_handle_t bsh, bus_size_t size)
 {
 
@@ -346,4 +346,4 @@ ifpga_bs_vaddr(void *t, bus_space_handle_t bsh)
 void
 ifpga_bs_barrier(void *t, bus_space_handle_t bsh, bus_size_t offset, bus_size_t len, int flags)
 {
-}	
+}

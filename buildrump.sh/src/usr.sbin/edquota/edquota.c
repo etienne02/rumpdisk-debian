@@ -1,4 +1,4 @@
-/*      $NetBSD: edquota.c,v 1.52 2012/08/14 04:53:43 dholland Exp $ */
+/*      $NetBSD: edquota.c,v 1.54 2023/08/01 08:47:25 mrg Exp $ */
 /*
  * Copyright (c) 1980, 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -41,7 +41,7 @@ __COPYRIGHT("@(#) Copyright (c) 1980, 1990, 1993\
 #if 0
 static char sccsid[] = "from: @(#)edquota.c	8.3 (Berkeley) 4/27/95";
 #else
-__RCSID("$NetBSD: edquota.c,v 1.52 2012/08/14 04:53:43 dholland Exp $");
+__RCSID("$NetBSD: edquota.c,v 1.54 2023/08/01 08:47:25 mrg Exp $");
 #endif
 #endif /* not lint */
 
@@ -639,9 +639,9 @@ clearpriv(int argc, char **argv, const char *filesys, int idtype)
 
 	maxids = 4;
 	nids = 0;
-	ids = malloc(maxids * sizeof(ids[0]));
-	if (ids == NULL) {
-		err(1, "malloc");
+	ids = NULL;
+	if (reallocarr(&ids, maxids, sizeof(ids[0])) != 0) {
+		err(1, "reallocarr");
 	}
 
 	for ( ; argc > 0; argc--, argv++) {
@@ -650,9 +650,8 @@ clearpriv(int argc, char **argv, const char *filesys, int idtype)
 
 		if (nids + 1 > maxids) {
 			maxids *= 2;
-			ids = realloc(ids, maxids * sizeof(ids[0]));
-			if (ids == NULL) {
-				err(1, "realloc");
+			if (reallocarr(&ids, maxids, sizeof(ids[0])) != 0) {
+				err(1, "reallocarr");
 			}
 		}
 		ids[nids++] = id;
@@ -753,10 +752,10 @@ top:
 		setuid(getuid());
 		if ((ed = getenv("EDITOR")) == (char *)0)
 			ed = _PATH_VI;
-		if (strlen(ed) + strlen(ltmpfile) + 2 >= MAX_TMPSTR) {
+		if ((size_t)snprintf(p, sizeof(p), "%s %s", ed, ltmpfile) >=
+		    sizeof(p)) {
 			errx(1, "%s", "editor or filename too long");
 		}
-		snprintf(p, sizeof(p), "%s %s", ed, ltmpfile);
 		execlp(_PATH_BSHELL, _PATH_BSHELL, "-c", p, NULL);
 		err(1, "%s", ed);
 	default:

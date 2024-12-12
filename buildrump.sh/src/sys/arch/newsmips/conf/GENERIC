@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.140 2020/09/27 13:48:53 roy Exp $
+# $NetBSD: GENERIC,v 1.146 2023/11/04 15:30:52 tsutsui Exp $
 #
 # GENERIC machine description file
 # 
@@ -22,7 +22,9 @@ include 	"arch/newsmips/conf/std.newsmips"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"GENERIC-$Revision: 1.140 $"
+#ident 		"GENERIC-$Revision: 1.146 $"
+
+makeoptions	COPTS="-O2 -fno-unwind-tables"
 
 maxusers	16
 
@@ -59,7 +61,7 @@ options 	SCSIVERBOSE		# Verbose SCSI errors
 include 	"conf/compat_netbsd10.config"
 #options 	EXEC_ECOFF	# exec ecoff binaries
 
-# Filesystem options
+# File systems
 file-system	FFS		# Berkeley Fast Filesystem
 file-system	NFS		# Sun NFS-compatible filesystem client
 file-system	KERNFS		# kernel data-structure filesystem
@@ -78,14 +80,16 @@ file-system	PTYFS		# /dev/pts/N support
 file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
-options 	NFSSERVER	# Sun NFS-compatible filesystem server
+# File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+#options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 options 	INET		# Internet protocols
@@ -124,7 +128,8 @@ options 	NFS_BOOT_DHCP
 # wscons options
 options 	WSEMUL_VT100		# VT100 / VT220 emulation
 options 	WSDISPLAY_COMPAT_USL		# wsconscfg VT handling
-options 	FONT_GALLANT12x22
+#options 	FONT_GALLANT12x22
+options 	FONT_SONY12x24
 
 config	netbsd	root on ? type ?
 
@@ -165,6 +170,7 @@ zstty4	at zsc2 channel 0		# tty04
 zstty5	at zsc2 channel 1		# tty05
 
 fb0	at hb0 addr 0x88000000		# NWB-253 frame buffer
+fb0	at hb0 addr 0x90200000		# LCD-MONO on NWS-32x0
 wsdisplay0 at fb? console ?
 
 xafb*	at ap?				# "XA" frame buffer
@@ -222,5 +228,9 @@ pseudo-device	fss			# file system snapshot device
 pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	ksyms			# /dev/ksyms
 pseudo-device	putter			# for puffs and pud
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 include "dev/veriexec.config"
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/newsmips/conf/GENERIC.local"

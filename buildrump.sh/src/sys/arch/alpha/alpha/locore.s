@@ -1,4 +1,4 @@
-/* $NetBSD: locore.s,v 1.141 2021/07/22 15:48:40 thorpej Exp $ */
+/* $NetBSD: locore.s,v 1.143 2022/08/07 10:12:19 andvar Exp $ */
 
 /*-
  * Copyright (c) 1999, 2000, 2019 The NetBSD Foundation, Inc.
@@ -67,7 +67,7 @@
 
 #include <machine/asm.h>
 
-__KERNEL_RCSID(0, "$NetBSD: locore.s,v 1.141 2021/07/22 15:48:40 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: locore.s,v 1.143 2022/08/07 10:12:19 andvar Exp $");
 
 #include "assym.h"
 
@@ -164,7 +164,7 @@ NESTED_NOPROFILE(locorestart,1,0,ra,0,0)
 	 * going to fake our return address as the kthread backstop.
 	 * Hitting the backstop will trigger a panic, and we want lwp0
 	 * to work like other kthreads in that regard.  We will still
-	 * leep the "main returned" backstop here in case something
+	 * keep the "main returned" backstop here in case something
 	 * goes horribly wrong.
 	 */
 	lda	ra, alpha_kthread_backstop
@@ -277,7 +277,7 @@ LEAF(exception_return, 1)			/* XXX should be NESTED */
 2:	/*
 	 * Check to see if a soft interrupt is pending.  We need to only
 	 * check for soft ints eligible to run at the new IPL.  We generate
-	 * the mask of elible soft ints to run by masking the ssir with:
+	 * the mask of eligible soft ints to run by masking the ssir with:
 	 *
 	 *	(ALPHA_ALL_SOFTINTS << ((ipl) << 1))
 	 *
@@ -651,13 +651,10 @@ LEAF(restorefpstate, 1)
  * sanely be used for curlwp iff cpu_switchto won't be called again, e.g.
  * if called from boot().)
  *
+ * N.B. this is actually only used by dumpsys().
+ *
  * Arguments:
  *	a0	'struct pcb *' of the process that needs its context saved
- *
- * Return:
- *	v0	0.  (note that for child processes, it seems
- *		like savectx() returns 1, because the return address
- *		in the PCB is set to the return address from savectx().)
  */
 
 LEAF(savectx, 1)
@@ -672,10 +669,6 @@ LEAF(savectx, 1)
 	stq	s5, PCB_CONTEXT+(5 * 8)(a0)
 	stq	s6, PCB_CONTEXT+(6 * 8)(a0)
 	stq	ra, PCB_CONTEXT+(7 * 8)(a0)	/* store ra */
-	call_pal PAL_OSF1_rdps			/* NOTE: doesn't kill a0 */
-	stq	v0, PCB_CONTEXT+(8 * 8)(a0)	/* store ps, for ipl */
-
-	mov	zero, v0
 	RET
 	END(savectx)
 
@@ -1162,7 +1155,7 @@ LEAF_NOPROFILE(_ufetch_8, 2)
 	ldq_u	t0, 0(a1)	/* load dest quad */
 	insbl	a0, a1, a0	/* a0 = byte in target position */
 	mskbl	t0, a1, t0	/* clear target byte in destination */
-	or	a0, t0, a0	/* or in byte to destionation */
+	or	a0, t0, a0	/* or in byte to destination */
 	stq_u	a0, 0(a1)	/* *a1 = fetched byte! */
 	mov	zero, v0
 	RET
@@ -1178,7 +1171,7 @@ LEAF_NOPROFILE(_ufetch_16, 2)
 	ldq_u	t0, 0(a1)	/* load dest quad */
 	inswl	a0, a1, a0	/* a0 = short in target position */
 	mskwl	t0, a1, t0	/* clear target short in destination */
-	or	a0, t0, a0	/* or in short to destionation */
+	or	a0, t0, a0	/* or in short to destination */
 	stq_u	a0, 0(a1)	/* *a1 = fetched short! */
 	mov	zero, v0
 	RET

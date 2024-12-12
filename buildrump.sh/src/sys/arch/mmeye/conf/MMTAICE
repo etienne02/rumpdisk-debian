@@ -1,4 +1,4 @@
-#	$NetBSD: MMTAICE,v 1.58 2020/01/19 01:25:06 thorpej Exp $
+#	$NetBSD: MMTAICE,v 1.60 2024/01/29 18:27:14 christos Exp $
 #
 #	GENERIC -- everything that's currently supported
 #
@@ -103,8 +103,6 @@ file-system	PTYFS		# /dev/pts/N support
 options 	NFSSERVER	# Network File System server
 #options 	FIFO		# FIFOs; RECOMMENDED
 options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
 
 # Networking options
 #options 	GATEWAY		# packet forwarding
@@ -207,11 +205,6 @@ sqphy*	at mii? phy ?			# Seeq 80220/80221/80223 PHYs
 #tlphy*	at mii? phy ?			# ThunderLAN PHYs
 ukphy*	at mii? phy ?			# generic unknown PHYs
 
-
-# Pull in optional local configuration
-cinclude "arch/mmeye/conf/GENERIC.local"
-
-
 # Pseudo-Devices
 
 # disk/mass storage pseudo-devices
@@ -234,3 +227,6 @@ pseudo-device	clockctl		# user control of clock subsystem
 
 # rnd is EXPERIMENTAL at this point.
 #options 	RND_COM			# use "com" randomness as well (BROKEN)
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/mmeye/conf/GENERIC.local"

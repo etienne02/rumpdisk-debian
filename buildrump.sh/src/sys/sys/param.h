@@ -1,4 +1,4 @@
-/*	$NetBSD: param.h,v 1.701 2021/08/07 19:44:39 thorpej Exp $	*/
+/*	$NetBSD: param.h,v 1.735 2024/08/27 00:57:35 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -55,7 +55,7 @@
  *
  *	M = major version
  *	m = minor version; a minor number of 99 indicates current.
- *	r = 0 (*)
+ *	r = 0 (*) or patchlevel in 9.99
  *	p = patchlevel
  *
  * When new releases are made, src/gnu/usr.bin/groff/tmac/mdoc.local
@@ -67,7 +67,7 @@
  *	2.99.9		(299000900)
  */
 
-#define	__NetBSD_Version__	999008800	/* NetBSD 9.99.88 */
+#define	__NetBSD_Version__	1099001200	/* NetBSD 10.99.12 */
 
 #define __NetBSD_Prereq__(M,m,p) (((((M) * 100000000) + \
     (m) * 1000000) + (p) * 100) <= __NetBSD_Version__)
@@ -88,8 +88,8 @@
 
 /*
  * These macros determine if we are running in protected mode or not.
- *   _HARDKERNEL: code uses kernel namespace and runs in hw priviledged mode
- *   _SOFTKERNEL: code uses kernel namespace but runs without hw priviledges
+ *   _HARDKERNEL: code uses kernel namespace and runs in hw privileged mode
+ *   _SOFTKERNEL: code uses kernel namespace but runs without hw privileges
  */
 #if defined(_KERNEL) && !defined(_RUMPKERNEL)
 #define _HARDKERNEL
@@ -259,7 +259,7 @@
 
 /*
  * Round p (pointer or byte index) up to a correctly-aligned value for all
- * data types (int, long, ...).   The result is u_int and must be cast to
+ * data types (int, long, ...).   The result is uintptr_t and must be cast to
  * any desired pointer type.
  *
  * ALIGNED_POINTER is a boolean macro that checks whether an address
@@ -395,13 +395,16 @@
 #define	MAXFRAG 	8
 
 /*
- * MAXPATHLEN defines the longest permissible path length after expanding
- * symbolic links. It is used to allocate a temporary buffer from the buffer
- * pool in which to do the name expansion, hence should be a power of two,
- * and must be less than or equal to MAXBSIZE.  MAXSYMLINKS defines the
- * maximum number of symbolic links that may be expanded in a path name.
- * It should be set high enough to allow all legitimate uses, but halt
- * infinite loops reasonably quickly.
+ * MAXPATHLEN defines the longest permissible path length after
+ * expanding symbolic links, including a trailing null terminator
+ * byte. It is used to allocate a temporary buffer from the buffer
+ * pool in which to do the name expansion, hence should be a power of
+ * two, and must be less than or equal to MAXBSIZE. It must be the
+ * same as PATH_MAX from <limits.h>.
+ *
+ * MAXSYMLINKS defines the maximum number of symbolic links that may
+ * be expanded in a path name. It should be set high enough to allow
+ * all legitimate uses, but halt infinite loops reasonably quickly.
  *
  * MAXSYMLINKS should be >= _POSIX_SYMLOOP_MAX (see <limits.h>)
  */

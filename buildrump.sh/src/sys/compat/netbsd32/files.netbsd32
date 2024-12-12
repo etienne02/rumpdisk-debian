@@ -1,4 +1,4 @@
-#	$NetBSD: files.netbsd32,v 1.53 2021/04/17 03:57:42 simonb Exp $
+#	$NetBSD: files.netbsd32,v 1.56 2024/05/19 22:25:48 christos Exp $
 #
 # config file description for machine-independent netbsd32 compat code.
 # included by ports that need it.
@@ -16,6 +16,7 @@ file	compat/netbsd32/netbsd32_exec_elf32.c	compat_netbsd32 & exec_elf32
 file	compat/netbsd32/netbsd32_exec_aout.c	compat_netbsd32 & exec_aout
 file	compat/netbsd32/netbsd32_netbsd.c	compat_netbsd32
 #file	compat/netbsd32/netbsd32_drm.c		compat_netbsd32 & drmkms
+file	compat/netbsd32/netbsd32_epoll.c	compat_netbsd32
 file	compat/netbsd32/netbsd32_event.c	compat_netbsd32
 file	compat/netbsd32/netbsd32_execve.c	compat_netbsd32
 file	compat/netbsd32/netbsd32_fd.c		compat_netbsd32
@@ -64,3 +65,5 @@ file	compat/netbsd32/netbsd32_compat_50_sysv.c compat_netbsd32 & compat_50 &
 file	compat/netbsd32/netbsd32_compat_60.c	compat_netbsd32 & compat_60
 file	compat/netbsd32/netbsd32_compat_80.c	compat_netbsd32 & compat_80
 file	compat/netbsd32/netbsd32_compat_90.c	compat_netbsd32 & compat_90
+file	compat/netbsd32/netbsd32_compat_100.c	compat_netbsd32 & compat_100
+file	compat/netbsd32/netbsd32_compat_110.c	compat_netbsd32 & compat_110

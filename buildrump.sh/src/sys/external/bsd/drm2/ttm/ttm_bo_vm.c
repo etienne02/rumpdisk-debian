@@ -1,4 +1,4 @@
-/*	$NetBSD: ttm_bo_vm.c,v 1.14 2020/02/23 15:46:40 ad Exp $	*/
+/*	$NetBSD: ttm_bo_vm.c,v 1.28 2024/06/23 00:49:31 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -29,8 +29,38 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+/**************************************************************************
+ *
+ * Copyright (c) 2006-2009 VMware, Inc., Palo Alto, CA., USA
+ * All Rights Reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sub license, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial portions
+ * of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL
+ * THE COPYRIGHT HOLDERS, AUTHORS AND/OR ITS SUPPLIERS BE LIABLE FOR ANY CLAIM,
+ * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+ * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+ * USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ **************************************************************************/
+/*
+ * Authors: Thomas Hellstrom <thellstrom-at-vmware-dot-com>
+ */
+
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ttm_bo_vm.c,v 1.14 2020/02/23 15:46:40 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ttm_bo_vm.c,v 1.28 2024/06/23 00:49:31 riastradh Exp $");
 
 #include <sys/types.h>
 
@@ -44,8 +74,6 @@ __KERNEL_RCSID(0, "$NetBSD: ttm_bo_vm.c,v 1.14 2020/02/23 15:46:40 ad Exp $");
 
 #include <ttm/ttm_bo_driver.h>
 
-static int	ttm_bo_uvm_fault_idle(struct ttm_buffer_object *,
-		    struct uvm_faultinfo *);
 static int	ttm_bo_uvm_lookup(struct ttm_bo_device *, unsigned long,
 		    unsigned long, struct ttm_buffer_object **);
 
@@ -55,7 +83,7 @@ ttm_bo_uvm_reference(struct uvm_object *uobj)
 	struct ttm_buffer_object *const bo = container_of(uobj,
 	    struct ttm_buffer_object, uvmobj);
 
-	(void)ttm_bo_reference(bo);
+	(void)ttm_bo_get(bo);
 }
 
 void
@@ -64,16 +92,84 @@ ttm_bo_uvm_detach(struct uvm_object *uobj)
 	struct ttm_buffer_object *bo = container_of(uobj,
 	    struct ttm_buffer_object, uvmobj);
 
-	ttm_bo_unref(&bo);
-	KASSERT(bo == NULL);
+	ttm_bo_put(bo);
 }
 
-int
-ttm_bo_uvm_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr,
+static int
+ttm_bo_vm_fault_idle(struct ttm_buffer_object *bo, struct uvm_faultinfo *vmf)
+{
+	int err, ret = 0;
+
+	if (__predict_true(!bo->moving))
+		goto out_unlock;
+
+	/*
+	 * Quick non-stalling check for idle.
+	 */
+	if (dma_fence_is_signaled(bo->moving))
+		goto out_clear;
+
+	/*
+	 * If possible, avoid waiting for GPU with mmap_sem
+	 * held.
+	 */
+	if (1) {		/* always retriable in NetBSD */
+		ret = ERESTART;
+
+		ttm_bo_get(bo);
+		uvmfault_unlockall(vmf, vmf->entry->aref.ar_amap, NULL);
+		(void) dma_fence_wait(bo->moving, true);
+		dma_resv_unlock(bo->base.resv);
+		ttm_bo_put(bo);
+		goto out_unlock;
+	}
+
+	/*
+	 * Ordinary wait.
+	 */
+	err = dma_fence_wait(bo->moving, true);
+	if (__predict_false(err != 0)) {
+		ret = (err != -ERESTARTSYS) ? EINVAL/*SIGBUS*/ :
+		    0/*retry access in userland*/;
+		goto out_unlock;
+	}
+
+out_clear:
+	dma_fence_put(bo->moving);
+	bo->moving = NULL;
+
+out_unlock:
+	return ret;
+}
+
+static int
+ttm_bo_vm_reserve(struct ttm_buffer_object *bo, struct uvm_faultinfo *vmf)
+{
+
+	/*
+	 * Work around locking order reversal in fault / nopfn
+	 * between mmap_sem and bo_reserve: Perform a trylock operation
+	 * for reserve, and if it fails, retry the fault after waiting
+	 * for the buffer to become unreserved.
+	 */
+	if (__predict_false(!dma_resv_trylock(bo->base.resv))) {
+		ttm_bo_get(bo);
+		uvmfault_unlockall(vmf, vmf->entry->aref.ar_amap, NULL);
+		if (!dma_resv_lock_interruptible(bo->base.resv, NULL))
+			dma_resv_unlock(bo->base.resv);
+		ttm_bo_put(bo);
+		return ERESTART;
+	}
+
+	return 0;
+}
+
+static int
+ttm_bo_uvm_fault_reserved(struct uvm_faultinfo *vmf, vaddr_t vaddr,
     struct vm_page **pps, int npages, int centeridx, vm_prot_t access_type,
     int flags)
 {
-	struct uvm_object *const uobj = ufi->entry->object.uvm_obj;
+	struct uvm_object *const uobj = vmf->entry->object.uvm_obj;
 	struct ttm_buffer_object *const bo = container_of(uobj,
 	    struct ttm_buffer_object, uvmobj);
 	struct ttm_bo_device *const bdev = bo->bdev;
@@ -87,137 +183,165 @@ ttm_bo_uvm_fault(struct uvm_faultinfo *ufi, vaddr_t vaddr,
 	voff_t uoffset;		/* offset in bytes into bo */
 	unsigned startpage;	/* offset in pages into bo */
 	unsigned i;
-	vm_prot_t vm_prot;	/* VM_PROT_* */
-	pgprot_t pgprot;	/* VM_PROT_* | PMAP_* cacheability flags */
+	vm_prot_t vm_prot = vmf->entry->protection; /* VM_PROT_* */
+	pgprot_t prot = vm_prot; /* VM_PROT_* | PMAP_* cacheability flags */
+	int err, ret;
+
+	/*
+	 * Refuse to fault imported pages. This should be handled
+	 * (if at all) by redirecting mmap to the exporter.
+	 */
+	if (bo->ttm && (bo->ttm->page_flags & TTM_PAGE_FLAG_SG))
+		return EINVAL;	/* SIGBUS */
+
+	if (bdev->driver->fault_reserve_notify) {
+		struct dma_fence *moving = dma_fence_get(bo->moving);
+
+		err = bdev->driver->fault_reserve_notify(bo);
+		switch (err) {
+		case 0:
+			break;
+		case -EBUSY:
+		case -ERESTARTSYS:
+			return 0;	/* retry access in userland */
+		default:
+			return EINVAL;	/* SIGBUS */
+		}
+
+		if (bo->moving != moving) {
+			spin_lock(&ttm_bo_glob.lru_lock);
+			ttm_bo_move_to_lru_tail(bo, NULL);
+			spin_unlock(&ttm_bo_glob.lru_lock);
+		}
+		dma_fence_put(moving);
+	}
+
+	/*
+	 * Wait for buffer data in transit, due to a pipelined
+	 * move.
+	 */
+	ret = ttm_bo_vm_fault_idle(bo, vmf);
+	if (__predict_false(ret != 0))
+		return ret;
+
+	err = ttm_mem_io_lock(man, true);
+	if (__predict_false(err != 0))
+		return 0;	/* retry access in userland */
+	err = ttm_mem_io_reserve_vm(bo);
+	if (__predict_false(err != 0)) {
+		ret = EINVAL;	/* SIGBUS */
+		goto out_io_unlock;
+	}
+
+	prot = ttm_io_prot(bo->mem.placement, prot);
+	if (!bo->mem.bus.is_iomem) {
+		struct ttm_operation_ctx ctx = {
+			.interruptible = false,
+			.no_wait_gpu = false,
+			.flags = TTM_OPT_FLAG_FORCE_ALLOC
+
+		};
+
+		u.ttm = bo->ttm;
+		size = (size_t)bo->ttm->num_pages << PAGE_SHIFT;
+		if (ttm_tt_populate(bo->ttm, &ctx)) {
+			ret = ENOMEM;
+			goto out_io_unlock;
+		}
+	} else {
+		u.base = (bo->mem.bus.base + bo->mem.bus.offset);
+		size = bo->mem.bus.size;
+	}
+
+	KASSERT(vmf->entry->start <= vaddr);
+	KASSERT((vmf->entry->offset & (PAGE_SIZE - 1)) == 0);
+	KASSERT(vmf->entry->offset <= size);
+	KASSERT((vaddr - vmf->entry->start) <= (size - vmf->entry->offset));
+	KASSERTMSG(((size_t)npages << PAGE_SHIFT <=
+		((size - vmf->entry->offset) - (vaddr - vmf->entry->start))),
+	    "vaddr=%jx npages=%d bo=%p is_iomem=%d size=%zu"
+	    " start=%jx offset=%jx",
+	    (uintmax_t)vaddr, npages, bo, (int)bo->mem.bus.is_iomem, size,
+	    (uintmax_t)vmf->entry->start, (uintmax_t)vmf->entry->offset);
+	uoffset = (vmf->entry->offset + (vaddr - vmf->entry->start));
+	startpage = (uoffset >> PAGE_SHIFT);
+	for (i = 0; i < npages; i++) {
+		paddr_t paddr;
+
+		if ((flags & PGO_ALLPAGES) == 0 && i != centeridx)
+			continue;
+		if (pps[i] == PGO_DONTCARE)
+			continue;
+		if (!bo->mem.bus.is_iomem) {
+			paddr = page_to_phys(u.ttm->pages[startpage + i]);
+		} else if (bdev->driver->io_mem_pfn) {
+			paddr = (paddr_t)(*bdev->driver->io_mem_pfn)(bo,
+			    startpage + i) << PAGE_SHIFT;
+		} else {
+			const paddr_t cookie = bus_space_mmap(bdev->memt,
+			    u.base, (off_t)(startpage + i) << PAGE_SHIFT,
+			    vm_prot, 0);
+
+			paddr = pmap_phys_address(cookie);
+#if 0				/* XXX Why no PMAP_* flags added here? */
+			mmapflags = pmap_mmap_flags(cookie);
+#endif
+		}
+		ret = pmap_enter(vmf->orig_map->pmap, vaddr + i*PAGE_SIZE,
+		    paddr, vm_prot, PMAP_CANFAIL | prot);
+		if (ret) {
+			/*
+			 * XXX Continue with ret=0 if i != centeridx,
+			 * so we don't fail if only readahead pages
+			 * fail?
+			 */
+			KASSERT(ret != ERESTART);
+			break;
+		}
+	}
+	pmap_update(vmf->orig_map->pmap);
+	ret = 0;		/* retry access in userland */
+out_io_unlock:
+	ttm_mem_io_unlock(man);
+	KASSERT(ret != ERESTART);
+	return ret;
+}
+
+int
+ttm_bo_uvm_fault(struct uvm_faultinfo *vmf, vaddr_t vaddr,
+    struct vm_page **pps, int npages, int centeridx, vm_prot_t access_type,
+    int flags)
+{
+	struct uvm_object *const uobj = vmf->entry->object.uvm_obj;
+	struct ttm_buffer_object *const bo = container_of(uobj,
+	    struct ttm_buffer_object, uvmobj);
 	int ret;
 
 	/* Thanks, uvm, but we don't need this lock.  */
 	rw_exit(uobj->vmobjlock);
 
 	/* Copy-on-write mappings make no sense for the graphics aperture.  */
-	if (UVM_ET_ISCOPYONWRITE(ufi->entry)) {
-		ret = -EIO;
-		goto out0;
+	if (UVM_ET_ISCOPYONWRITE(vmf->entry)) {
+		ret = EINVAL;	/* SIGBUS */
+		goto out;
 	}
 
-	/* Try to lock the buffer.  */
-	ret = ttm_bo_reserve(bo, true, true, false, NULL);
+	ret = ttm_bo_vm_reserve(bo, vmf);
 	if (ret) {
-		if (ret != -EBUSY)
-			goto out0;
-		/*
-		 * It's currently locked.  Unlock the fault, wait for
-		 * it, and start over.
-		 */
-		uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap, NULL);
-		(void)ttm_bo_wait_unreserved(bo);
-		return ERESTART;
+		/* ttm_bo_vm_reserve already unlocked on ERESTART */
+		KASSERTMSG(ret == ERESTART, "ret=%d", ret);
+		return ret;
 	}
 
-	/* drm prime buffers are not mappable.  XXX Catch this earlier?  */
-	if (bo->ttm && ISSET(bo->ttm->page_flags, TTM_PAGE_FLAG_SG)) {
-		ret = -EINVAL;
-		goto out1;
-	}
+	ret = ttm_bo_uvm_fault_reserved(vmf, vaddr, pps, npages, centeridx,
+	    access_type, flags);
+	if (ret == ERESTART)	/* already unlocked on ERESTART */
+		return ret;
 
-	/* Notify the driver of a fault if it wants.  */
-	if (bdev->driver->fault_reserve_notify) {
-		ret = (*bdev->driver->fault_reserve_notify)(bo);
-		if (ret) {
-			if (ret == -ERESTART)
-				ret = -EIO;
-			goto out1;
-		}
-	}
+	dma_resv_unlock(bo->base.resv);
 
-	ret = ttm_bo_uvm_fault_idle(bo, ufi);
-	if (ret) {
-		KASSERT(ret == -ERESTART);
-		/* ttm_bo_uvm_fault_idle calls uvmfault_unlockall for us.  */
-		ttm_bo_unreserve(bo);
-		/* XXX errno Linux->NetBSD */
-		return -ret;
-	}
-
-	ret = ttm_mem_io_lock(man, true);
-	if (ret) {
-		ret = -EIO;
-		goto out1;
-	}
-	ret = ttm_mem_io_reserve_vm(bo);
-	if (ret) {
-		ret = -EIO;
-		goto out2;
-	}
-
-	vm_prot = ufi->entry->protection;
-	if (bo->mem.bus.is_iomem) {
-		u.base = (bo->mem.bus.base + bo->mem.bus.offset);
-		size = bo->mem.bus.size;
-		pgprot = ttm_io_prot(bo->mem.placement, vm_prot);
-	} else {
-		u.ttm = bo->ttm;
-		size = (bo->ttm->num_pages << PAGE_SHIFT);
-		if (ISSET(bo->mem.placement, TTM_PL_FLAG_CACHED))
-			pgprot = vm_prot;
-		else
-			pgprot = ttm_io_prot(bo->mem.placement, vm_prot);
-		if ((*u.ttm->bdev->driver->ttm_tt_populate)(u.ttm)) {
-			ret = -ENOMEM;
-			goto out2;
-		}
-	}
-
-	KASSERT(ufi->entry->start <= vaddr);
-	KASSERT((ufi->entry->offset & (PAGE_SIZE - 1)) == 0);
-	KASSERT(ufi->entry->offset <= size);
-	KASSERT((vaddr - ufi->entry->start) <= (size - ufi->entry->offset));
-	KASSERT(npages <= ((size - ufi->entry->offset) -
-		(vaddr - ufi->entry->start)));
-	uoffset = (ufi->entry->offset + (vaddr - ufi->entry->start));
-	startpage = (uoffset >> PAGE_SHIFT);
-	for (i = 0; i < npages; i++) {
-		paddr_t paddr;
-
-		/* XXX PGO_ALLPAGES?  */
-		if (pps[i] == PGO_DONTCARE)
-			continue;
-		if (bo->mem.bus.is_iomem) {
-			const paddr_t cookie = bus_space_mmap(bdev->memt,
-			    u.base, ((startpage + i) << PAGE_SHIFT), vm_prot,
-			    0);
-
-			paddr = pmap_phys_address(cookie);
-		} else {
-			paddr = page_to_phys(u.ttm->pages[startpage + i]);
-		}
-		ret = -pmap_enter(ufi->orig_map->pmap, vaddr + i*PAGE_SIZE,
-		    paddr, vm_prot, (PMAP_CANFAIL | pgprot));
-		if (ret)
-			goto out3;
-	}
-
-out3:	pmap_update(ufi->orig_map->pmap);
-out2:	ttm_mem_io_unlock(man);
-out1:	ttm_bo_unreserve(bo);
-out0:	uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap, NULL);
-	/* XXX errno Linux->NetBSD */
-	return -ret;
-}
-
-static int
-ttm_bo_uvm_fault_idle(struct ttm_buffer_object *bo, struct uvm_faultinfo *ufi)
-{
-
-	if (__predict_true(!test_bit(TTM_BO_PRIV_FLAG_MOVING,
-		    &bo->priv_flags)))
-		return 0;
-	if (ttm_bo_wait(bo, false, false, true) == 0)
-		return 0;
-
-	uvmfault_unlockall(ufi, ufi->entry->aref.ar_amap, NULL);
-	(void)ttm_bo_wait(bo, false, true, false);
-	return -ERESTART;
+out:	uvmfault_unlockall(vmf, vmf->entry->aref.ar_amap, NULL);
+	return ret;
 }
 
 int
@@ -236,7 +360,29 @@ ttm_bo_mmap_object(struct ttm_bo_device *bdev, off_t offset, size_t size,
 	ret = ttm_bo_uvm_lookup(bdev, startpage, npages, &bo);
 	if (ret)
 		goto fail0;
-	KASSERT(drm_vma_node_start(&bo->vma_node) <= offset);
+	KASSERTMSG((drm_vma_node_start(&bo->base.vma_node) <= startpage),
+	    "mapping npages=0x%jx @ pfn=0x%jx"
+	    " from vma npages=0x%jx @ pfn=0x%jx",
+	    (uintmax_t)npages,
+	    (uintmax_t)startpage,
+	    (uintmax_t)drm_vma_node_size(&bo->base.vma_node),
+	    (uintmax_t)drm_vma_node_start(&bo->base.vma_node));
+	KASSERTMSG((npages <= drm_vma_node_size(&bo->base.vma_node)),
+	    "mapping npages=0x%jx @ pfn=0x%jx"
+	    " from vma npages=0x%jx @ pfn=0x%jx",
+	    (uintmax_t)npages,
+	    (uintmax_t)startpage,
+	    (uintmax_t)drm_vma_node_size(&bo->base.vma_node),
+	    (uintmax_t)drm_vma_node_start(&bo->base.vma_node));
+	KASSERTMSG(((startpage - drm_vma_node_start(&bo->base.vma_node))
+		<= (drm_vma_node_size(&bo->base.vma_node) - npages)),
+	    "mapping npages=0x%jx @ pfn=0x%jx"
+	    " from vma npages=0x%jx @ pfn=0x%jx",
+	    (uintmax_t)npages,
+	    (uintmax_t)startpage,
+	    (uintmax_t)drm_vma_node_size(&bo->base.vma_node),
+	    (uintmax_t)drm_vma_node_start(&bo->base.vma_node));
+
 	/* XXX Just assert this?  */
 	if (__predict_false(bdev->driver->verify_access == NULL)) {
 		ret = -EPERM;
@@ -249,10 +395,10 @@ ttm_bo_mmap_object(struct ttm_bo_device *bdev, off_t offset, size_t size,
 	/* Success!  */
 	*uobjp = &bo->uvmobj;
 	*uoffsetp = (offset -
-	    (drm_vma_node_start(&bo->vma_node) << PAGE_SHIFT));
+	    ((off_t)drm_vma_node_start(&bo->base.vma_node) << PAGE_SHIFT));
 	return 0;
 
-fail1:	ttm_bo_unref(&bo);
+fail1:	ttm_bo_put(bo);
 fail0:	KASSERT(ret);
 	return ret;
 }
@@ -264,15 +410,16 @@ ttm_bo_uvm_lookup(struct ttm_bo_device *bdev, unsigned long startpage,
 	struct ttm_buffer_object *bo = NULL;
 	struct drm_vma_offset_node *node;
 
-	drm_vma_offset_lock_lookup(&bdev->vma_manager);
-	node = drm_vma_offset_lookup_locked(&bdev->vma_manager, startpage,
+	drm_vma_offset_lock_lookup(bdev->vma_manager);
+	node = drm_vma_offset_lookup_locked(bdev->vma_manager, startpage,
 	    npages);
 	if (node != NULL) {
-		bo = container_of(node, struct ttm_buffer_object, vma_node);
+		bo = container_of(node, struct ttm_buffer_object,
+		    base.vma_node);
 		if (!kref_get_unless_zero(&bo->kref))
 			bo = NULL;
 	}
-	drm_vma_offset_unlock_lookup(&bdev->vma_manager);
+	drm_vma_offset_unlock_lookup(bdev->vma_manager);
 
 	if (bo == NULL)
 		return -ENOENT;

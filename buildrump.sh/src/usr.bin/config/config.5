@@ -1,4 +1,4 @@
-.\" $NetBSD: config.5,v 1.45 2020/09/29 03:02:19 msaitoh Exp $
+.\" $NetBSD: config.5,v 1.50 2024/08/13 23:24:23 uwe Exp $
 .\"
 .\"  Copyright (c) 2006, 2007 The NetBSD Foundation.
 .\"  All rights reserved.
@@ -24,7 +24,7 @@
 .\"  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 .\"  POSSIBILITY OF SUCH DAMAGE.
 .\"
-.Dd July 19, 2016
+.Dd August 13, 2024
 .Dt CONFIG 5
 .Os
 .Sh NAME
@@ -459,6 +459,24 @@ The optional
 argument should match the original definition of the option.
 .\"
 .Pp
+.It Ic mkflagvar \
+    Ar option ...
+Specifes that an option previously defined with
+.Ic defflag
+should have a variable created in the kernel Makefile if the option
+is selection with an
+.Ic options
+statement.
+No variable is created if the option is not selected.
+The Makefile variable will have the name
+.Li KERNEL_OPT_ Ns Aq Ar option
+and, because options defined with
+.Ic defflag
+are boolean, 
+the variable will have the value
+.Dq 1 .
+.\"
+.Pp
 .It Ic define \
     Ar attribute \
     Oo Ic \&{ Ar locators Ic \&} Oc \
@@ -683,7 +701,7 @@ The
 is mandatory and only
 .Ic +=
 can be used.
-Not to be confused with the the confusingly similar variant of
+Not to be confused with the confusingly similar variant of
 .Ic makeoptions
 used in the selections section.
 .El
@@ -720,6 +738,16 @@ the
 .Ar arch
 and each of the
 .Ar subarch .
+.\"
+.It Ic ioconf Ar name
+Used instead of
+.Ic machine
+in config file snippets for kernel modules to generate just the
+.Pa ioconf.c
+definitions.
+The generated file contains subtrees that start with attachments
+declared with
+.Ic pseudo-root .
 .\"
 .It Ic package Ar path
 Simpler version of:
@@ -826,6 +854,24 @@ Removes
 .Ar name
 from the list of kernel binaries to compile from the configuration file.
 .\"
+.It Ic pseudo-root Ar instance
+Used in conjunction with
+.Ic ioconf
+in kernel modules.
+Declares an instance of a device that serves as the root for a subtree
+described in the module config.
+The declared
+.Ar instance
+can then be used as an
+.Ar attachment
+for devices in the kernel module.
+Multiple such attachment points may be declared in the config file.
+.Ar instance
+may name a device
+.Pq e.g. Ql pci*
+an interface attribute
+.Pq e.g. Ql audiobus*
+.\"
 .It Ar instance Ic at Ar attachment Op Ar locator-specifications ...
 Configures an instance of a device attaching at a specific location in the
 device tree.
@@ -880,7 +926,7 @@ Removes support for the specified pseudo-device.
     Ns Op Ic \&, Ar ...
 Adds or appends to a definition in the generated
 .Pa Makefile .
-A definition cannot be overriden, it must be removed before it can be added
+A definition cannot be overridden, it must be removed before it can be added
 again.
 Optionally, if an option
 .Li makeoptions_ Ns Aq Ar name

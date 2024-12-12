@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.rumpnet,v 1.23 2018/11/15 09:38:57 maxv Exp $
+#	$NetBSD: Makefile.rumpnet,v 1.25 2022/09/03 09:41:24 mlelstv Exp $
 #
 
 LIB=		rumpnet
@@ -13,7 +13,7 @@ COMMENT=	Rump kernel networking faction
 	${RUMPTOP}/../netipsec					\
 	${RUMPTOP}/../compat/common
 
-SRCS=	net_stub.c netisr.c rump_net.c
+SRCS=	net_stub.c rump_net.c
 
 SRCS+=	rumpnet_if_wrappers.c
 
@@ -24,7 +24,7 @@ SRCS+=	sys_socket.c uipc_accf.c uipc_domain.c uipc_mbuf.c	\
 	uipc_socket.c uipc_socket2.c uipc_syscalls.c
 
 # sys/net
-SRCS+=	pktqueue.c pfil.c
+SRCS+=	pktqueue.c pfil.c rss_config.c toeplitz.c
 
 # formatters
 SRCS+= at_print.c dl_print.c in_print.c in6_print.c

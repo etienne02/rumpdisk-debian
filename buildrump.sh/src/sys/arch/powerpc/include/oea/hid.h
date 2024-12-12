@@ -1,4 +1,4 @@
-/*	$NetBSD: hid.h,v 1.13 2020/07/06 10:31:23 rin Exp $	*/
+/*	$NetBSD: hid.h,v 1.15 2024/03/10 17:07:31 rillig Exp $	*/
 
 /*-
  * Copyright (c) 2000 Tsubai Masanari.  All rights reserved.
@@ -81,8 +81,8 @@
 #define HID0_DCE	0x00004000  /* Enable d-cache */
 #define HID0_ILOCK	0x00002000  /* i-cache lock */
 #define HID0_DLOCK	0x00001000  /* d-cache lock */
-#define HID0_ICFI	0x00000800  /* i-cache flush invalidate */
-#define HID0_DCFI	0x00000400  /* d-cache flush invalidate */
+#define HID0_ICFI	0x00000800  /* i-cache flash invalidate */
+#define HID0_DCFI	0x00000400  /* d-cache flash invalidate */
 #define HID0_SPD	0x00000200  /* Disable speculative cache access */
 #define HID0_IFEM	0x00000100  /* Enable M-bit for I-fetch */
 #define HID0_XBSEN	0x00000100  /* Extended BAT block size enable (7455+) */
@@ -112,7 +112,7 @@
     "\040EMCP"
 
 #define HID0_970_BITMASK_U "\020" \
-    "\040ONEPPC\036DOSNGL\036ISYNCSC\035SERGP\034res\033res\032res\031DEEPNAP" \
+    "\040ONEPPC\037DOSNGL\036ISYNCSC\035SERGP\034res\033res\032res\031DEEPNAP" \
     "\030DOZE\027NAP\026res\025DPM\024res\023TG\022HNGDIS\021NHR" \
     "\020INORDER\017res\016TBCTRL\015EXTBEN\014res\013res\012CIABREN\011HDICEEN" \
     "\001ENATTN"

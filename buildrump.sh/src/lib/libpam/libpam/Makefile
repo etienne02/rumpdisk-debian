@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.28 2021/08/11 09:12:07 christos Exp $
+# $NetBSD: Makefile,v 1.32 2024/04/05 01:16:00 christos Exp $
 #-
 # Copyright (c) 1998 Juniper Networks, Inc.
 # All rights reserved.
@@ -48,9 +48,10 @@ NOPROFILE=	# Don't build a profiling library
 MKPICLIB=yes
 .endif
 
+SHLIB_MINOR=	1
+
 DIST=   ${NETBSDSRCDIR}/external/bsd/openpam/dist
 LIB=	pam
-NOPROFILE=
 
 WARNS=		6
 LINTFLAGS+=	-w
@@ -202,7 +203,7 @@ PAM_DIR=${.CURDIR}
 .endif
 .for MOD in ${STATIC_MODULES}
 MODOBJDIR!=	cd ${PAM_DIR}/${MODULE_DIR}/${MOD} && ${PRINTOBJDIR}
-STATIC_MODULE_LIBS:= ${STATIC_MODULE_LIBS} ${MODOBJDIR}/lib${MOD}.a
+STATIC_MODULE_LIBS:= ${STATIC_MODULE_LIBS} ${MODOBJDIR}/${MOD}.a
 .endfor
 
 # XXX Using ${.ALLSRC} in the ld command causes openpam_static.c to be
@@ -212,7 +213,7 @@ openpam_static_modules.o: openpam_static.o ${STATIC_MODULE_LIBS}
 	    openpam_static.o ${STATIC_MODULE_LIBS}
 
 CWARNFLAGS.clang+=	-Wno-error=tautological-pointer-compare
-COPTS.openpam_dynamic.c+=	${GCC_NO_CAST_FUNCTION_TYPE}
+COPTS.openpam_dynamic.c+=	${CC_WNO_CAST_FUNCTION_TYPE}
 
 .include <bsd.lib.mk>
 .PATH.h: ${DIST}/include

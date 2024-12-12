@@ -1,4 +1,4 @@
-/*	$NetBSD: socketvar.h,v 1.163 2020/11/23 00:52:53 chs Exp $	*/
+/*	$NetBSD: socketvar.h,v 1.170 2024/11/02 21:33:30 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -74,6 +74,7 @@ struct uio;
 struct lwp;
 struct uidinfo;
 #else
+#include <sys/atomic.h>
 #include <sys/uidinfo.h>
 #endif
 
@@ -236,7 +237,7 @@ do {									\
 		(sb)->sb_mbtail = NULL;					\
 		(sb)->sb_lastrecord = NULL;				\
 	}								\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 extern u_long		sb_max;
 extern int		somaxkva;
@@ -305,7 +306,8 @@ int	soconnect(struct socket *, struct sockaddr *, struct lwp *);
 int	soconnect2(struct socket *, struct socket *);
 int	socreate(int, struct socket **, int, int, struct lwp *,
 		 struct socket *);
-int	fsocreate(int, struct socket **, int, int, int *);
+int	fsocreate(int, struct socket **, int, int, int *, file_t **,
+		struct socket *);
 int	sodisconnect(struct socket *);
 void	sofree(struct socket *);
 int	sogetopt(struct socket *, struct sockopt *);
@@ -424,6 +426,17 @@ sbspace_oob(const struct sockbuf *sb)
 	return lmin(hiwat - sb->sb_cc, sb->sb_mbmax - sb->sb_mbcnt);
 }
 
+/*
+ * How much socket buffer space has been used?
+ */
+static __inline u_long
+sbused(const struct sockbuf *sb)
+{
+
+	KASSERT(solocked(sb->sb_so));
+	return sb->sb_cc;
+}
+
 /* do we have to send all at once on a socket? */
 static __inline int
 sosendallatonce(const struct socket *so)
@@ -509,12 +522,12 @@ solock(struct socket *so)
 {
 	kmutex_t *lock;
 
-	lock = so->so_lock;
+	lock = atomic_load_consume(&so->so_lock);
 	mutex_enter(lock);
-	if (__predict_false(lock != so->so_lock))
+	if (__predict_false(lock != atomic_load_relaxed(&so->so_lock)))
 		solockretry(so, lock);
 }
-	
+
 static __inline void
 sounlock(struct socket *so)
 {
@@ -558,7 +571,7 @@ void	soloanfree(struct mbuf *, void *, size_t, void *);
  *      that should be delivered in their entirety, or not at all.
  *
  * SB_PRIO_OVERDRAFT:  allow a small (2*MLEN) overflow, over and
- *	aboce normal socket limits. Intended messages indicating
+ *	above normal socket limits. Intended messages indicating
  *      buffer overflow in earlier normal/lower-priority messages .
  *
  * SB_PRIO_BESTEFFORT: Ignore  limits entirely.  Intended only for

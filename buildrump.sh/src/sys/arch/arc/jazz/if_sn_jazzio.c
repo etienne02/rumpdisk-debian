@@ -1,4 +1,4 @@
-/*	$NetBSD: if_sn_jazzio.c,v 1.14 2021/02/20 09:36:30 rin Exp $	*/
+/*	$NetBSD: if_sn_jazzio.c,v 1.16 2023/12/20 06:36:02 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -30,17 +30,16 @@
  */
 
 /*
- * Microsoft JAZZ front-end for for the National Semiconductor DP83932
+ * Microsoft JAZZ front-end for the National Semiconductor DP83932
  * Systems-Oriented Network Interface Controller (SONIC).
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_sn_jazzio.c,v 1.14 2021/02/20 09:36:30 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_sn_jazzio.c,v 1.16 2023/12/20 06:36:02 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>

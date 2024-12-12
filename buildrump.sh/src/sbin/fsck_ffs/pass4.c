@@ -1,4 +1,4 @@
-/*	$NetBSD: pass4.c,v 1.28 2013/06/23 22:03:34 dholland Exp $	*/
+/*	$NetBSD: pass4.c,v 1.31 2023/07/04 20:40:53 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)pass4.c	8.4 (Berkeley) 4/28/95";
 #else
-__RCSID("$NetBSD: pass4.c,v 1.28 2013/06/23 22:03:34 dholland Exp $");
+__RCSID("$NetBSD: pass4.c,v 1.31 2023/07/04 20:40:53 riastradh Exp $");
 #endif
 #endif /* not lint */
 
@@ -62,7 +62,9 @@ pass4(void)
 	struct zlncnt *zlnp;
 	union dinode *dp;
 	struct inodesc idesc;
-	int n, i, cg;
+	int n;
+	size_t i;
+	uint32_t cg;
 	struct inostat *info;
 
 	memset(&idesc, 0, sizeof(struct inodesc));
@@ -194,7 +196,7 @@ pass4check(struct inodesc *idesc)
 				n_blks--;
 				if (idesc->id_type != SNAP) {
 					update_uquot(idesc->id_number,
-					    idesc->id_uid, idesc->id_gid, 
+					    idesc->id_uid, idesc->id_gid,
 					    -btodb(sblock->fs_fsize), 0);
 				}
 				if (idesc->id_numfrags != sblock->fs_frag &&

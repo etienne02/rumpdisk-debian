@@ -1,4 +1,4 @@
-/* $NetBSD: extern.h,v 1.32 2020/04/23 07:54:53 simonb Exp $ */
+/* $NetBSD: extern.h,v 1.35 2024/04/24 15:46:20 nia Exp $ */
 
 /*-
  * Copyright (c) 1991, 1993
@@ -291,6 +291,9 @@ void unsetv(Char *);
 void setNS(Char *);
 void shift(Char **, struct command *);
 void plist(struct varent *);
+#ifdef EDIT
+void updateediting(void);
+#endif
 
 /*
  * time.c
@@ -311,6 +314,7 @@ void psecs(long);
 void Free(void *);
 void * Malloc(size_t);
 void *Realloc(void *, size_t);
+void *Reallocarray(void *, size_t, size_t);
 void *Calloc(size_t, size_t);
 
 /*

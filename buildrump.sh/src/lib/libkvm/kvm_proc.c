@@ -1,4 +1,4 @@
-/*	$NetBSD: kvm_proc.c,v 1.95 2021/07/19 10:30:36 christos Exp $	*/
+/*	$NetBSD: kvm_proc.c,v 1.99 2023/08/10 20:38:00 mrg Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -67,7 +67,7 @@
 #if 0
 static char sccsid[] = "@(#)kvm_proc.c	8.3 (Berkeley) 9/23/93";
 #else
-__RCSID("$NetBSD: kvm_proc.c,v 1.95 2021/07/19 10:30:36 christos Exp $");
+__RCSID("$NetBSD: kvm_proc.c,v 1.99 2023/08/10 20:38:00 mrg Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -118,6 +118,7 @@ __RCSID("$NetBSD: kvm_proc.c,v 1.95 2021/07/19 10:30:36 christos Exp $");
 struct miniproc {
 	struct	vmspace *p_vmspace;
 	char	p_stat;
+	vaddr_t p_psstrp;
 	struct	proc *p_paddr;
 	pid_t	p_pid;
 };
@@ -131,7 +132,8 @@ struct miniproc {
 		(p)->p_pid = (kp)->p_pid; \
 		(p)->p_paddr = NULL; \
 		(p)->p_vmspace = (kp)->p_vmspace; \
-	} while (/*CONSTCOND*/0);
+		(p)->p_psstrp = (kp)->p_psstrp; \
+	} while (0);
 
 #define KPTOMINI(kp, p) \
 	do { \
@@ -139,7 +141,7 @@ struct miniproc {
 		(p)->p_pid = (kp)->kp_proc.p_pid; \
 		(p)->p_paddr = (kp)->kp_eproc.e_paddr; \
 		(p)->p_vmspace = (kp)->kp_proc.p_vmspace; \
-	} while (/*CONSTCOND*/0);
+	} while (0);
 
 #define KP2TOMINI(kp, p) \
 	do { \
@@ -147,7 +149,7 @@ struct miniproc {
 		(p)->p_pid = (kp)->p_pid; \
 		(p)->p_paddr = (void *)(long)(kp)->p_paddr; \
 		(p)->p_vmspace = (void *)(long)(kp)->p_vmspace; \
-	} while (/*CONSTCOND*/0);
+	} while (0);
 
 /*
  * NetBSD uses kauth(9) to manage credentials, which are stored in kauth_cred_t,
@@ -978,7 +980,7 @@ kvm_argv(kvm_t *kd, const struct miniproc *p, u_long addr, int narg,
 		if (len + cc > kd->argspc_len) {
 			ptrdiff_t off;
 			char **pp;
-			char *op = kd->argspc;
+			uintptr_t op = (uintptr_t)kd->argspc;
 
 			kd->argspc_len *= 2;
 			kd->argspc = _kvm_realloc(kd, kd->argspc,
@@ -989,7 +991,7 @@ kvm_argv(kvm_t *kd, const struct miniproc *p, u_long addr, int narg,
 			 * Adjust argv pointers in case realloc moved
 			 * the string space.
 			 */
-			off = kd->argspc - op;
+			off = (uintptr_t)kd->argspc - op;
 			for (pp = kd->argv; pp < argv; pp++)
 				*pp += off;
 			ap += off;
@@ -1071,7 +1073,7 @@ kvm_doargv(kvm_t *kd, const struct miniproc *p, int nchr,
 	 */
 	if (p->p_stat == SZOMB)
 		return (NULL);
-	cnt = (int)kvm_ureadm(kd, p, kd->usrstack - sizeof(arginfo),
+	cnt = (int)kvm_ureadm(kd, p, p->p_psstrp,
 	    (void *)&arginfo, sizeof(arginfo));
 	if (cnt != sizeof(arginfo))
 		return (NULL);

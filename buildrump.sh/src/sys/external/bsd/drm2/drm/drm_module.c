@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_module.c,v 1.17 2020/01/03 21:01:16 jmcneill Exp $	*/
+/*	$NetBSD: drm_module.c,v 1.32 2023/09/05 20:15:10 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_module.c,v 1.17 2020/01/03 21:01:16 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_module.c,v 1.32 2023/09/05 20:15:10 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/condvar.h>
@@ -44,11 +44,16 @@ __KERNEL_RCSID(0, "$NetBSD: drm_module.c,v 1.17 2020/01/03 21:01:16 jmcneill Exp
 
 #include <linux/mutex.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_agpsupport.h>
+#include <drm/drm_bridge.h>
+#include <drm/drm_device.h>
 #include <drm/drm_encoder_slave.h>
-#include <drm/drm_internal.h>
-#include <drm/drm_sysctl.h>
 #include <drm/drm_panel.h>
+#include <drm/drm_print.h>
+#include <drm/drm_sysctl.h>
+
+#include "../dist/drm/drm_crtc_internal.h"
+#include "../dist/drm/drm_internal.h"
 
 /*
  * XXX This is stupid.
@@ -84,12 +89,13 @@ __KERNEL_RCSID(0, "$NetBSD: drm_module.c,v 1.17 2020/01/03 21:01:16 jmcneill Exp
  */
 #if defined(__powerpc__) || defined(__i386__) || defined(__x86_64__)
 #include "agp.h"
+#include "drmkms_pci.h"
 #endif
 
 /*
  * XXX I2C stuff should be moved to a separate drmkms_i2c module.
  */
-MODULE(MODULE_CLASS_DRIVER, drmkms, "drmkms_linux");
+MODULE(MODULE_CLASS_DRIVER, drmkms, "drmkms_linux,sysmon_power");
 
 struct mutex	drm_global_mutex;
 
@@ -105,8 +111,11 @@ drm_init(void)
 	if (error)
 		return error;
 
+	extern bool drm_core_init_complete;
+	drm_core_init_complete = true;
+
 	drm_agp_hooks_init();
-#if NAGP > 0
+#if NDRMKMS_PCI > 0 && NAGP > 0
 	extern int drmkms_agp_guarantee_initialized(void);
 	error = drmkms_agp_guarantee_initialized();
 	if (error) {
@@ -116,13 +125,14 @@ drm_init(void)
 #endif
 
 	if (ISSET(boothowto, AB_DEBUG))
-		drm_debug = DRM_UT_CORE | DRM_UT_DRIVER | DRM_UT_KMS;
+		__drm_debug = DRM_UT_DRIVER;
 
 	spin_lock_init(&drm_minor_lock);
 	idr_init(&drm_minors_idr);
+	_init_srcu_struct(&drm_unplug_srcu, "drmunplg");
 	linux_mutex_init(&drm_global_mutex);
+	linux_mutex_init(&drm_kernel_fb_helper_lock);
 	drm_connector_ida_init();
-	drm_global_init();
 	drm_panel_init_lock();
 	drm_bridge_init_lock();
 	drm_sysctl_init(&drm_def);
@@ -151,9 +161,10 @@ drm_fini(void)
 	drm_sysctl_fini(&drm_def);
 	drm_bridge_fini_lock();
 	drm_panel_fini_lock();
-	drm_global_release();
 	drm_connector_ida_destroy();
+	linux_mutex_destroy(&drm_kernel_fb_helper_lock);
 	linux_mutex_destroy(&drm_global_mutex);
+	cleanup_srcu_struct(&drm_unplug_srcu);
 	idr_destroy(&drm_minors_idr);
 	spin_lock_destroy(&drm_minor_lock);
 	drm_agp_hooks_fini();
@@ -196,9 +207,7 @@ drmkms_modcmd(modcmd_t cmd, void *arg __unused)
 
 	case MODULE_CMD_FINI:
 #ifdef _MODULE
-		error = devsw_detach(NULL, &drm_cdevsw);
-		if (error)
-			return error;
+		devsw_detach(NULL, &drm_cdevsw);
 #endif
 		drm_fini();
 		return 0;

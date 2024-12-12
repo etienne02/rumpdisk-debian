@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.120 2018/12/19 13:57:51 maxv Exp $	*/
+/*	$NetBSD: locore.s,v 1.134 2024/09/07 06:17:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -119,7 +119,7 @@ ASENTRY_NOPROFILE(start)
 	movel	%sp@+,%d5		| fphysize -- last page
 	movel	%sp@,%a4		| esym
 
-	RELOC(vectab,%a0)		| set Vector Base Register temporaly
+	RELOC(vectab,%a0)		| set Vector Base Register temporarily
 	movc	%a0,%vbr
 
 #if 0	/* XXX this should be done by the boot loader */
@@ -209,8 +209,10 @@ Lstart1:
 	jra	Lstart2
 1:
 #endif
+#if defined(M68030)
 	movl	#_C_LABEL(busaddrerr2030),%a2@(8)
 	movl	#_C_LABEL(busaddrerr2030),%a2@(12)
+#endif
 
 Lstart2:
 /* initialize source/destination control registers for movs */
@@ -262,10 +264,8 @@ Lstart3:
 	jra	Lstploaddone
 Lmotommu1:
 	RELOC(protorp, %a0)
-	movl	#0x80000202,%a0@	| nolimit + share global + 4 byte PTEs
-	movl	%d1,%a0@(4)		| + segtable address
+	movl	%d1,%a0@(4)		| segtable address
 	pmove	%a0@,%srp		| load the supervisor root pointer
-	movl	#0x80000002,%a0@	| reinit upper half for CRP loads
 Lstploaddone:
 	RELOC(mmutype, %a0)
 	cmpl	#MMU_68040,%a0@		| 68040?
@@ -297,11 +297,7 @@ Ljupiterdone:
 	.long	0x4e7b0007		| movc %d0,%dtt1
 	.word	0xf4d8			| cinva bc
 	.word	0xf518			| pflusha
-#if PGSHIFT == 13
-	movl	#0xc000,%d0
-#else
-	movl	#0x8000,%d0
-#endif
+	movl	#MMU40_TCR_BITS,%d0
 	.long	0x4e7b0003		| movc %d0,%tc
 #ifdef M68060
 	RELOC(cputype, %a0)
@@ -319,11 +315,7 @@ Lnot060cache:
 	jmp	Lenab1
 Lmotommu2:
 	pflusha
-#if PGSHIFT == 13
-	movl	#0x82d08b00,%sp@-	| value to load TC with
-#else
-	movl	#0x82c0aa00,%sp@-	| value to load TC with
-#endif
+	movl	#MMU51_TCR_BITS,%sp@-	| value to load TC with
 	pmove	%sp@,%tc		| load it
 
 /*
@@ -628,9 +620,6 @@ Lbrkpt3:
 	movl	%sp@,%sp		| ... and %sp
 	rte				| all done
 
-/* Use common m68k sigreturn */
-#include <m68k/m68k/sigreturn.s>
-
 /*
  * Provide a generic interrupt dispatcher, only handle hardclock (int6)
  * specially, to improve performance
@@ -647,14 +636,14 @@ ENTRY_NOPROFILE(kbdtimer)
 	rte
 
 ENTRY_NOPROFILE(intiotrap)
-	addql	#1,_C_LABEL(idepth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 	pea	%sp@(16-(FR_HW))	| XXX
 	jbsr	_C_LABEL(intio_intr)
 	addql	#4,%sp
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(idepth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	rei
 
 ENTRY_NOPROFILE(lev1intr)
@@ -663,7 +652,7 @@ ENTRY_NOPROFILE(lev3intr)
 ENTRY_NOPROFILE(lev4intr)
 ENTRY_NOPROFILE(lev5intr)
 ENTRY_NOPROFILE(lev6intr)
-	addql	#1,_C_LABEL(idepth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 Lnotdma:
 	lea	_C_LABEL(intrcnt),%a0
@@ -676,24 +665,23 @@ Lnotdma:
 	addql	#4,%sp			| pop SR
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(idepth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)
 
 ENTRY_NOPROFILE(timertrap)
-	addql	#1,_C_LABEL(idepth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG		| save scratch registers
 	addql	#1,_C_LABEL(intrcnt)+32	| count hardclock interrupts
-	lea	%sp@(16),%a1		| a1 = &clockframe
-	movl	%a1,%sp@-
+	movl	%sp,%sp@-		| push pointer to clockframe
 	jbsr	_C_LABEL(hardclock)	| hardclock(&frame)
 	addql	#4,%sp
 	CPUINFO_INCREMENT(CI_NINTR)	| chalk up another interrupt
 	INTERRUPT_RESTOREREG		| restore scratch registers
-	subql	#1,_C_LABEL(idepth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)		| all done
 
 ENTRY_NOPROFILE(lev7intr)
-	addql	#1,_C_LABEL(idepth)
+	addql	#1,_C_LABEL(intr_depth)
 	addql	#1,_C_LABEL(intrcnt)+28
 	clrl	%sp@-
 	moveml	#0xFFFF,%sp@-		| save registers
@@ -704,7 +692,7 @@ ENTRY_NOPROFILE(lev7intr)
 	movl	%a0,%usp		|   user SP
 	moveml	%sp@+,#0x7FFF		| and remaining registers
 	addql	#8,%sp			| pop SP and stack adjust
-	subql	#1,_C_LABEL(idepth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)		| all done
 
 /*
@@ -721,7 +709,7 @@ ENTRY_NOPROFILE(fdeject)
  * (profiling, scheduling) and software interrupts (network, softclock).
  * We check for ASTs first, just like the VAX.  To avoid excess overhead
  * the T_ASTFLT handling code will also check for software interrupts so we
- * do not have to do it here.  After identifing that we need an AST we
+ * do not have to do it here.  After identifying that we need an AST we
  * drop the IPL to allow device interrupts.
  *
  * This code is complicated by the fact that sendsig may have been called
@@ -769,21 +757,8 @@ Laststkadj:
 	rte				| and do real RTE
 
 /*
- * Use common m68k sigcode.
- */
-#include <m68k/m68k/sigcode.s>
-#ifdef COMPAT_SUNOS
-#include <m68k/m68k/sunos_sigcode.s>
-#endif
-
-/*
  * Primitives
  */
-
-/*
- * Use common m68k support routines.
- */
-#include <m68k/m68k/support.s>
 
 /*
  * Use common m68k process/lwp switch and context save subroutines.
@@ -827,58 +802,16 @@ ENTRY(ecacheoff)
 	rts
 
 /*
- * Load a new user segment table pointer.
- */
-ENTRY(loadustp)
-	movl	%sp@(4),%d0		| new USTP
-	moveq	#PGSHIFT,%d1
-	lsll	%d1,%d0			| convert to addr
-#if defined(M68040) || defined(M68060)
-	cmpl	#MMU_68040,_C_LABEL(mmutype) | 68040?
-	jne	LmotommuC		| no, skip
-	.word	0xf518			| yes, pflusha
-	.long	0x4e7b0806		| movc %d0,%urp
-#ifdef M68060
-	cmpl	#CPU_68060,_C_LABEL(cputype)
-	jne	Lldno60
-	movc	%cacr,%d0
-	orl	#IC60_CUBC,%d0		| clear user branch cache entries
-	movc	%d0,%cacr
-Lldno60:
-#endif
-	rts
-LmotommuC:
-#endif
-	pflusha				| flush entire TLB
-	lea	_C_LABEL(protorp),%a0	| CRP prototype
-	movl	%d0,%a0@(4)		| stash USTP
-	pmove	%a0@,%crp		| load root pointer
-	movl	#CACHE_CLR,%d0
-	movc	%d0,%cacr		| invalidate cache(s)
-	rts
-
-ENTRY(ploadw)
-#if defined(M68030)
-	movl	%sp@(4),%a0		| address to load
-#if defined(M68040) || defined(M68060)
-	cmpl	#MMU_68040,_C_LABEL(mmutype) | 68040?
-	jeq	Lploadwskp		| yes, skip
-#endif
-	ploadw	#1,%a0@			| pre-load translation
-Lploadwskp:
-#endif
-	rts
-
-/*
  * _delay(u_int N)
  *
- * Delay for at least (N/256) microseconds.
+ * Delay for at least N microseconds.
  * This routine depends on the variable:  delay_divisor
  * which should be set based on the CPU clock rate.
  */
 ENTRY_NOPROFILE(_delay)
-	| %d0 = arg = (usecs << 8)
+	| %d0 = (usecs * a certain magnification factor)
 	movl	%sp@(4),%d0
+	lsll	#8,%d0
 	| %d1 = delay_divisor
 	movl	_C_LABEL(delay_divisor),%d1
 L_delay:
@@ -947,9 +880,6 @@ GLOBAL(ectype)
 
 GLOBAL(fputype)
 	.long	FPU_NONE
-
-GLOBAL(protorp)
-	.long	0,0			| prototype root pointer
 
 GLOBAL(intiobase)
 	.long	0			| KVA of base of internal IO space

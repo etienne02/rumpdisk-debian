@@ -1,4 +1,4 @@
-/* $NetBSD: vmparam.h,v 1.18 2021/03/21 07:32:44 skrll Exp $ */
+/* $NetBSD: vmparam.h,v 1.21 2024/06/30 09:36:43 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -130,7 +130,7 @@
  *   0xffff_0000_0000_0000  -   64T  direct mapping
  *   0xffff_4000_0000_0000  -   32T  (KASAN SHADOW MAP)
  *   0xffff_6000_0000_0000  -   32T  (not used)
- *   0xffff_8000_0000_0000  -    1G  EFI_RUNTIME
+ *   0xffff_8000_0000_0000  -    1G  (EFI_RUNTIME - legacy)
  *   0xffff_8000_4000_0000  -   64T  (not used)
  *   0xffff_c000_0000_0000  -   64T  KERNEL VM Space (including text/data/bss)
  *  (0xffff_c000_4000_0000     -1GB) KERNEL VM start of KVM
@@ -141,19 +141,21 @@
 #define VM_MAX_KERNEL_ADDRESS	((vaddr_t) 0xffffffffffe00000L)
 
 /*
- * last 254MB of kernel vm area (0xfffffffff0000000-0xffffffffffe00000)
- * may be used for devmap.  see aarch64/pmap.c:pmap_devmap_*
- */
-#define VM_KERNEL_IO_ADDRESS	0xfffffffff0000000L
-#define VM_KERNEL_IO_SIZE	(VM_MAX_KERNEL_ADDRESS - VM_KERNEL_IO_ADDRESS)
-
-#define VM_KERNEL_VM_BASE	(0xffffc00040000000L)
-#define VM_KERNEL_VM_SIZE	(VM_KERNEL_IO_ADDRESS - VM_KERNEL_VM_BASE)
-/*
- * Reserved space for EFI runtime services
+ * Reserved space for EFI runtime services (legacy)
  */
 #define	EFI_RUNTIME_VA		0xffff800000000000L
 #define	EFI_RUNTIME_SIZE	0x0000000040000000L
+
+
+/*
+ * last 254MB of kernel vm area (0xfffffffff0000000-0xffffffffffe00000)
+ * may be used for devmap.  see aarch64/pmap.c:pmap_devmap_*
+ */
+#define VM_KERNEL_IO_BASE	0xfffffffff0000000L
+#define VM_KERNEL_IO_SIZE	(VM_MAX_KERNEL_ADDRESS - VM_KERNEL_IO_BASE)
+
+#define VM_KERNEL_VM_BASE	(0xffffc00040000000L)
+#define VM_KERNEL_VM_SIZE	(VM_KERNEL_IO_BASE - VM_KERNEL_VM_BASE)
 
 /* virtual sizes (bytes) for various kernel submaps */
 #define USRIOSIZE		(PAGE_SIZE / 8)
@@ -177,7 +179,7 @@
 #define AARCH64_KVA_TO_PA(va)	((paddr_t) ((va) & ~AARCH64_DIRECTMAP_MASK))
 
 /* */
-#define VM_PHYSSEG_MAX		64              /* XXX */
+#define VM_PHYSSEG_MAX		256              /* XXX */
 #define VM_PHYSSEG_STRAT	VM_PSTRAT_BSEARCH
 
 #define VM_NFREELIST		1

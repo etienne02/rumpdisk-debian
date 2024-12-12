@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.214 2021/05/03 11:07:55 simonb Exp $
+#	$NetBSD: Makefile.inc,v 1.221 2024/10/02 18:12:35 christos Exp $
 #	from: @(#)Makefile.inc	8.6 (Berkeley) 5/4/95
 
 # gen sources
@@ -15,7 +15,7 @@ SRCS+=	alarm.c alphasort.c arc4random.c assert.c asysctl.c \
 	errc.c errlist.c errno.c execl.c execle.c execlp.c execv.c execvp.c \
 	exect.c extattr.c fmtcheck.c fmtmsg.c fnmatch.c fstab.c ftok.c \
 	fts.c ftw.c getbsize.c getcap.c getcwd.c \
-	getdevmajor.c getdomainname.c getgrent.c \
+	getdevmajor.c getdomainname.c getentropy.c getgrent.c \
 	getgrouplist.c getgroupmembership.c gethostname.c \
 	getloadavg.c getlogin.c getmntinfo.c \
 	getnetgrent.c getpagesize.c \
@@ -39,6 +39,9 @@ SRCS+=	alarm.c alphasort.c arc4random.c assert.c asysctl.c \
 	warnx.c warnc.c wordexp.c xsyslog.c \
 	vwarn.c vwarnx.c vwarnc.c verr.c verrx.c verrc.c
 
+LINTFLAGS.arc4random.c+=-Ac11	# stdatomic.h
+LINTFLAGS.arc4random.c+=-X 129	# expression has null effect (in atomic macros)
+
 # uses alloca
 COPTS.execvp.c = -Wno-stack-protector
 COPTS.execl.c = -Wno-stack-protector
@@ -61,7 +64,7 @@ MAN+=	alarm.3 arc4random.3 basename.3 bsd_signal.3 bswap.3 \
 	fmtcheck.3 fmtmsg.3 fnmatch.3 fpclassify.3 fpgetmask.3 \
 	ftok.3 fts.3 ftw.3 \
 	getbsize.3 cgetcap.3 getcwd.3 getdevmajor.3 \
-	getdomainname.3 getdiskbyname.3 getfsent.3 \
+	getdomainname.3 getdiskbyname.3 getentropy.3 getfsent.3 \
 	getgrent.3 getgrouplist.3 gethostname.3 getlastlogx.3 getloadavg.3 \
 	getmntinfo.3 getnetgrent.3 getpagesize.3 getpass.3 \
 	getprogname.3 getpwent.3 getttyent.3 getusershell.3 glob.3 \
@@ -73,6 +76,7 @@ MAN+=	alarm.3 arc4random.3 basename.3 bsd_signal.3 bswap.3 \
 	nice.3 nlist.3 \
 	pause.3 popen.3 \
 	posix_spawn.3 posix_spawn_file_actions_addopen.3 \
+	posix_spawn_file_actions_addchdir.3 \
 	posix_spawn_file_actions_init.3 posix_spawnattr_getflags.3 \
 	posix_spawnattr_getpgroup.3 posix_spawnattr_getschedparam.3 \
 	posix_spawnattr_getschedpolicy.3 posix_spawnattr_init.3 \
@@ -159,6 +163,7 @@ MLINKS+=popen.3 popenve.3
 MLINKS+=posix_spawn.3 posix_spawnp.3 \
 	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_addclose.3 \
 	posix_spawn_file_actions_addopen.3 posix_spawn_file_actions_adddup2.3 \
+	posix_spawn_file_actions_addchdir.3 posix_spawn_file_actions_addfchdir.3 \
 	posix_spawn_file_actions_init.3 posix_spawn_file_actions_destroy.3 \
 	posix_spawnattr_getflags.3 posix_spawnattr_setflags.3 \
 	posix_spawnattr_getpgroup.3 posix_spawnattr_setpgroup.3 \
@@ -189,9 +194,11 @@ MLINKS+=sysctl.3 sysctlbyname.3 \
 MLINKS+=syslog.3 closelog.3 syslog.3 openlog.3 syslog.3 setlogmask.3 \
 	syslog.3 vsyslog.3
 MLINKS+=syslog.3 closelog_r.3 syslog.3 openlog_r.3 syslog.3 setlogmask_r.3 \
-	syslog.3 syslog_r.3 syslog.3 vsyslog_r.3
+	syslog.3 syslog_r.3 syslog.3 vsyslog_r.3 \
+	syslog.3 syslog_ss.3 syslog.3 vsyslog_ss.3
 MLINKS+=syslog.3 syslogp.3 syslog.3 syslogp_r.3 \
-	syslog.3 vsyslogp.3 syslog.3 vsyslogp_r.3
+	syslog.3 vsyslogp.3 syslog.3 vsyslogp_r.3 \
+	syslog.3 syslogp_ss.3 syslog.3 vsyslogp_ss.3
 MLINKS+=ttyname.3 isatty.3 ttyname.3 ttyslot.3 ttyname.3 ttyname_r.3
 MLINKS+=unvis.3 strunvis.3 unvis.3 strunvisx.3
 MLINKS+=unvis.3 strnunvis.3 unvis.3 strnunvisx.3
@@ -207,5 +214,11 @@ CPPFLAGS.toupper_.c+=	-I${LIBCDIR}/locale
 
 errlist.c: errlist.awk ${NETBSDSRCDIR}/sys/sys/errno.h
 	${TOOL_AWK} -f ${.ALLSRC} > ${.TARGET}
+
+LINTFLAGS.rb.c += -X 231	# XXX: marked as unused already why?
+LINTFLAGS.siglist.c += -X 351	# XXX: renames
+LINTFLAGS.signame.c += -X 351	# XXX: renames
+# missing atomic decls
+LINTFLAGS.arc4random.c += ${${ACTIVE_CC} == "clang":? -X 215 :}
 
 CLEANFILES+= errlist.c

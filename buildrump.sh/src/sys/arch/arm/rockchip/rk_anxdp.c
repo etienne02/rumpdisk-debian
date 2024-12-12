@@ -1,4 +1,4 @@
-/* $NetBSD: rk_anxdp.c,v 1.4 2021/07/25 11:14:15 jmcneill Exp $ */
+/* $NetBSD: rk_anxdp.c,v 1.6 2021/12/19 12:43:37 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2019 Jonathan A. Kollasch <jakllsch@kollasch.net>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rk_anxdp.c,v 1.4 2021/07/25 11:14:15 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rk_anxdp.c,v 1.6 2021/12/19 12:43:37 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -37,7 +37,7 @@ __KERNEL_RCSID(0, "$NetBSD: rk_anxdp.c,v 1.4 2021/07/25 11:14:15 jmcneill Exp $"
 #include <sys/kernel.h>
 #include <sys/conf.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_crtc_helper.h>
 
 #include <dev/fdt/fdtvar.h>
@@ -117,19 +117,6 @@ rk_anxdp_encoder_prepare(struct drm_encoder *encoder)
 	rk_anxdp_select_input(sc, crtc_index);
 }
 
-static void
-rk_anxdp_encoder_commit(struct drm_encoder *encoder)
-{
-}
-
-static void
-rk_anxdp_encoder_dpms(struct drm_encoder *encoder, int mode)
-{
-	struct rk_anxdp_softc * const sc = to_rk_anxdp_encoder(encoder);
-
-	anxdp_dpms(&sc->sc_base, mode);
-}
-
 static const struct drm_encoder_funcs rk_anxdp_encoder_funcs = {
 	.destroy = drm_encoder_cleanup,
 };
@@ -140,8 +127,6 @@ static const struct drm_encoder_helper_funcs rk_anxdp_encoder_helper_funcs = {
 	.mode_set = rk_anxdp_encoder_mode_set,
 	.enable = rk_anxdp_encoder_enable,
 	.disable = rk_anxdp_encoder_disable,
-	.commit = rk_anxdp_encoder_commit,
-	.dpms = rk_anxdp_encoder_dpms,
 };
 
 static int
@@ -174,7 +159,7 @@ rk_anxdp_ep_activate(device_t dev, struct fdt_endpoint *ep, bool activate)
 
 	sc->sc_encoder.possible_crtcs = 0x2; /* VOPB only */
 	drm_encoder_init(crtc->dev, &sc->sc_encoder, &rk_anxdp_encoder_funcs,
-	    DRM_MODE_ENCODER_TMDS);
+	    DRM_MODE_ENCODER_TMDS, NULL);
 	drm_encoder_helper_add(&sc->sc_encoder, &rk_anxdp_encoder_helper_funcs);
 
 	out_ep = fdt_endpoint_get_from_index(&sc->sc_ports, ANXDP_PORT_OUTPUT, 0);

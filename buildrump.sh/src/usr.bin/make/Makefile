@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.116 2021/07/31 09:30:17 rillig Exp $
+#	$NetBSD: Makefile,v 1.127 2023/12/19 20:08:27 rillig Exp $
 #	@(#)Makefile	5.2 (Berkeley) 12/28/90
 
 PROG=	make
@@ -7,7 +7,6 @@ SRCS+=  buf.c
 SRCS+=  compat.c
 SRCS+=  cond.c
 SRCS+=  dir.c
-SRCS+=  enum.c
 SRCS+=  for.c
 SRCS+=  hash.c
 SRCS+=  job.c
@@ -23,6 +22,7 @@ SRCS+=  targ.c
 SRCS+=  trace.c
 SRCS+=  var.c
 SRCS+=  util.c
+WARNS=	6
 
 # Whether to generate a coverage report after running the tests.
 USE_COVERAGE?=	no		# works only with gcc; clang9 fails to link
@@ -35,8 +35,9 @@ GCOV_PERL+=	} elsif (/^Function '(\S+)'/) {
 GCOV_PERL+=		$$func = $$1;
 GCOV_PERL+=	} elsif (/^Lines executed:(\d+\.\d+)% of (\d+)/ && defined($$file)) {
 GCOV_PERL+=		my ($$percent, $$lines) = ($$1, $$2);
-GCOV_PERL+=		my $$uncovered = $$file =~ /\.h$$/
-GCOV_PERL+=		    ? '?'
+GCOV_PERL+=		my $$uncovered =
+GCOV_PERL+=		    $$percent eq '100.00' ? '0'
+GCOV_PERL+=		    : $$file =~ /\.h$$/ ? '?'
 GCOV_PERL+=		    : `grep -c '\#\#\#\#\#:' < \$$(basename $$file.gcov)`;
 GCOV_PERL+=		chomp($$uncovered);
 GCOV_PERL+=		printf("%7.2f  %4s/%4d  %s%s\n",
@@ -52,39 +53,6 @@ USE_UBSAN?=	no
 .if ${USE_UBSAN} == "yes"
 COPTS+=		-fsanitize=undefined
 LDADD+=		-fsanitize=undefined
-.endif
-
-# Whether to compile with GCC 10 from pkgsrc, during development.
-USE_GCC10?=	no
-.if ${USE_GCC10} == "yes"
-# CC is set further down in this file
-COPTS+=		-Wno-attributes	# for abs and labs
-COPTS.arch.c+=	-Wno-error=format-truncation
-COPTS.dir.c+=	-Wno-error=format-truncation
-COPTS.main.c+=	-Wno-error=format-truncation
-COPTS.meta.c+=	-Wno-error=format-truncation
-.endif
-
-# Whether to compile with GCC 9 from pkgsrc, during development.
-USE_GCC9?=	no
-.if ${USE_GCC9} == "yes"
-# CC is set further down in this file
-COPTS+=		-Wno-attributes	# for abs and labs
-COPTS.arch.c+=	-Wno-error=format-truncation
-COPTS.dir.c+=	-Wno-error=format-truncation
-COPTS.main.c+=	-Wno-error=format-truncation
-COPTS.meta.c+=	-Wno-error=format-truncation
-.endif
-
-# Whether to compile with GCC 8 from pkgsrc, during development.
-USE_GCC8?=	no
-.if ${USE_GCC8} == "yes"
-# CC is set further down in this file
-COPTS+=		-Wno-attributes	# for abs and labs
-COPTS.arch.c+=	-Wno-error=format-truncation
-COPTS.dir.c+=	-Wno-error=format-truncation
-COPTS.main.c+=	-Wno-error=format-truncation
-COPTS.meta.c+=	-Wno-error=format-truncation
 .endif
 
 USE_META?=	yes
@@ -112,7 +80,7 @@ COPTS.filemon_dev.c+= \
 .endif
 
 SUBDIR.roff+=	PSD.doc
-.if make(obj) || make(clean)
+.if make(obj) || make(clean) || make(cleandir)
 SUBDIR+=	unit-tests
 .endif
 
@@ -120,33 +88,14 @@ LINTFLAGS+=	-T	# strict bool mode, available since 2021-01-11
 LINTFLAGS+=	-w	# treat warnings as errors
 CLEANFILES+=	*.o	# for filemon objects
 
-COPTS.arch.c+=	${GCC_NO_FORMAT_TRUNCATION}
-COPTS.dir.c+=	${GCC_NO_FORMAT_TRUNCATION}
-COPTS.job.c+=	-Wno-format-nonliteral
-COPTS.main.c+=	${GCC_NO_FORMAT_TRUNCATION} ${GCC_NO_STRINGOP_TRUNCATION}
-COPTS.meta.c+=	${GCC_NO_FORMAT_TRUNCATION}
-COPTS.parse.c+=	-Wno-format-nonliteral
-COPTS.var.c+=	-Wno-format-nonliteral
+COPTS.arch.c+=	${CC_WNO_FORMAT_TRUNCATION}
+COPTS.dir.c+=	${CC_WNO_FORMAT_TRUNCATION}
+COPTS.job.c+=	-Wno-format-nonliteral	# custom shell templates
+COPTS.main.c+=	${CC_WNO_FORMAT_TRUNCATION} ${CC_WNO_STRINGOP_TRUNCATION}
+COPTS.meta.c+=	${CC_WNO_FORMAT_TRUNCATION}
+COPTS.var.c+=	-Wno-format-nonliteral	# strftime
 
 CPPFLAGS+=	-DMAKE_NATIVE
-
-.if ${USE_GCC10} == "yes"
-GCC10BASE?=	/usr/pkg/gcc10
-LATE_CC=	${GCC10BASE}/bin/gcc
-GCOV=		${GCC10BASE}/bin/gcov
-.endif
-
-.if ${USE_GCC9} == "yes"
-GCC9BASE?=	/usr/pkg/gcc9
-LATE_CC=	${GCC9BASE}/bin/gcc
-GCOV=		${GCC9BASE}/bin/gcov
-.endif
-
-.if ${USE_GCC8} == "yes"
-GCC8BASE?=	/usr/pkg/gcc8
-LATE_CC=	${GCC8BASE}/bin/gcc
-GCOV=		${GCC8BASE}/bin/gcov
-.endif
 
 .if defined(TOOLDIR)
 # This is a native NetBSD build, use libutil rather than the local emalloc etc.
@@ -187,13 +136,21 @@ test-coverage: .PHONY
 	@make -s clean cleandir
 	@env USE_COVERAGE=yes COPTS="-O0 -ggdb" USER_CPPFLAGS="-DCLEANUP" \
 		sh -c 'make -s all -j8 && make -s test'
+	@env USE_COVERAGE=yes make report-coverage > coverage.txt
 
+.if ${USE_COVERAGE} == "yes"
 report-coverage: .PHONY
 	@echo 'covered  uncovered  file'
-	@${GCOV} ${GCOV_OPTS} *.gcda 2>&1 \
+	@${GCOV} ${GCOV_OPTS} *.gcda \
 	| perl -ne ${GCOV_PERL:Q} \
-	| sort -nr
-	@sed -i 's,^\([^:]*\): *[0-9]*:,\1: ,' *.gcov
+	| sort -r -k4 \
+	| sort -nr -k1
+	@sed -i \
+	    -e '1d' \
+	    -e 's,^\([^:]*\): *[0-9]*:,\1: ,' \
+	    -e 's, *$$,,g' \
+	    *.gcov
+.endif
 
 .include <bsd.prog.mk>
 .include <bsd.subdir.mk>
@@ -202,6 +159,3 @@ report-coverage: .PHONY
 CPPFLAGS+=	${USER_CPPFLAGS}
 # For overriding -std=gnu99 or similar options.
 CFLAGS+=	${USER_CFLAGS}
-.if defined(LATE_CC)
-CC=		${LATE_CC}
-.endif

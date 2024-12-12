@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_siginfo.h,v 1.1 2011/11/18 04:08:56 christos Exp $	*/
+/*	$NetBSD: linux32_siginfo.h,v 1.2 2021/09/19 22:30:28 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -32,10 +32,7 @@
 #ifndef _AMD64_LINUX32_SIGINFO_H
 #define _AMD64_LINUX32_SIGINFO_H
 
-typedef union linux32_sigval {
-	int	sival_int;
-	netbsd32_voidp	sival_ptr;
-} linux32_sigval_t;
+#include <compat/linux32/common/linux32_sigevent.h>
 
 #define SI_MAX_SIZE	128
 #define SI_PAD_SIZE	((SI_MAX_SIZE/sizeof(int)) - 3)

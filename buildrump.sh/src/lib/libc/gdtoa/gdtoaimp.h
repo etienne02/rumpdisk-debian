@@ -1,4 +1,4 @@
-/* $NetBSD: gdtoaimp.h,v 1.17 2019/08/07 15:37:46 riastradh Exp $ */
+/* $NetBSD: gdtoaimp.h,v 1.19 2022/04/19 20:32:15 rillig Exp $ */
 
 /****************************************************************
 
@@ -28,7 +28,7 @@ THIS SOFTWARE.
 
 ****************************************************************/
 
-/* This is a variation on dtoa.c that converts arbitary binary
+/* This is a variation on dtoa.c that converts arbitrary binary
    floating-point formats to and from decimal notation.  It uses
    double-precision arithmetic internally, so there are still
    various #ifdefs that adapt the calculations to the native
@@ -505,12 +505,12 @@ extern mutex_t __gdtoa_locks[2];
 	do {							\
 		if (__isthreaded)				\
 			mutex_lock(&__gdtoa_locks[n]);		\
-	} while (/* CONSTCOND */ 0)
+	} while (0)
 #define FREE_DTOA_LOCK(n)	\
 	do {							\
 		if (__isthreaded)				\
 			mutex_unlock(&__gdtoa_locks[n]);	\
-	} while (/* CONSTCOND */ 0)
+	} while (0)
 #endif
 
 #define Kmax (sizeof(size_t) << 3)

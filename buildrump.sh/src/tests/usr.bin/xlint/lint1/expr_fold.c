@@ -1,11 +1,11 @@
-/*	$NetBSD: expr_fold.c,v 1.5 2021/08/23 06:50:01 rillig Exp $	*/
+/*	$NetBSD: expr_fold.c,v 1.16 2024/06/08 06:37:06 rillig Exp $	*/
 # 3 "expr_fold.c"
 
 /*
  * Test folding of constant expressions.
  */
 
-/* lint1-extra-flags: -h */
+/* lint1-extra-flags: -h -X 351 */
 
 /*
  * On ILP32 platforms, the integer constant 2147483648 cannot be represented
@@ -29,20 +29,14 @@ fold_uplus(void)
 {
 	take_int(+(0));
 	take_int(+(2147483647));
-	/* XXX: one of these two messages is redundant */
-	/* expect+2: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	/* expect+1: warning: conversion of 'long' to 'int' is out of range, arg #1 [295] */
 	take_int(+(2147483648));
-	/* XXX: one of these two messages is redundant */
-	/* expect+2: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	/* expect+1: warning: conversion of 'long' to 'int' is out of range, arg #1 [295] */
 	take_int(+(4294967295));
 
 	take_uint(+(0));
 	take_uint(+(2147483647));
-	/* expect+1: warning: argument #1 is converted from 'long' to 'unsigned int' due to prototype [259] */
 	take_uint(+(2147483648));
-	/* expect+1: warning: argument #1 is converted from 'long' to 'unsigned int' due to prototype [259] */
 	take_uint(+(4294967295));
 
 	/*
@@ -60,31 +54,24 @@ fold_uminus(void)
 	take_int(-(0));
 	take_int(-(2147483647));
 
-	/* expect+1: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	take_int(-(2147483648));
 
 	/* The '-' is an operator, it is not part of the integer constant. */
-	/* expect+1: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	take_int(-2147483648);
 
-	/* expect+2: warning: integer overflow detected, op '+' [141] */
-	/* expect+1: warning: integer overflow detected, op '-' [141] */
+	/* expect+1: warning: '2147483647 + 1' overflows 'int' [141] */
 	take_int(-(2147483647 + 1));
-	/* expect+1: warning: integer overflow detected, op '-' [141] */
+	/* expect+1: warning: '-(-2147483648)' overflows 'int' [141] */
 	take_int(-(-2147483647 - 1));
-	/* expect+2: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	/* expect+1: warning: conversion of 'long' to 'int' is out of range, arg #1 [295] */
 	take_int(-(4294967295));
 
 	take_uint(-(0));
-	/* expect+2: warning: conversion of negative constant to unsigned type, arg #1 [296] */
-	/* expect+1: warning: argument #1 is converted from 'int' to 'unsigned int' due to prototype [259] */
+	/* expect+1: warning: conversion of negative constant -2147483647 to unsigned type 'unsigned int', arg #1 [296] */
 	take_uint(-(2147483647));
-	/* expect+2: warning: argument #1 is converted from 'long' to 'unsigned int' due to prototype [259] */
-	/* expect+1: warning: conversion of negative constant to unsigned type, arg #1 [296] */
+	/* expect+1: warning: conversion of negative constant -2147483648 to unsigned type 'unsigned int', arg #1 [296] */
 	take_uint(-(2147483648));
-	/* expect+2: warning: argument #1 is converted from 'long' to 'unsigned int' due to prototype [259] */
-	/* expect+1: warning: conversion of negative constant to unsigned type, arg #1 [296] */
+	/* expect+1: warning: conversion of negative constant -4294967295 to unsigned type 'unsigned int', arg #1 [296] */
 	take_uint(-(4294967295));
 }
 
@@ -93,24 +80,18 @@ fold_compl(void)
 {
 	take_int(~(0));
 	take_int(~(2147483647));
-	/* expect+2: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	/* expect+1: warning: conversion of 'long' to 'int' is out of range, arg #1 [295] */
 	take_int(~(2147483648));
-	/* expect+2: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	/* expect+1: warning: conversion of 'long' to 'int' is out of range, arg #1 [295] */
 	take_int(~(4294967295));
 
-	/* expect+2: warning: conversion of negative constant to unsigned type, arg #1 [296] */
-	/* expect+1: warning: argument #1 is converted from 'int' to 'unsigned int' due to prototype [259] */
+	/* expect+1: warning: conversion of negative constant -1 to unsigned type 'unsigned int', arg #1 [296] */
 	take_uint(~(0));
-	/* expect+2: warning: argument #1 is converted from 'int' to 'unsigned int' due to prototype [259] */
-	/* expect+1: warning: conversion of negative constant to unsigned type, arg #1 [296] */
+	/* expect+1: warning: conversion of negative constant -2147483648 to unsigned type 'unsigned int', arg #1 [296] */
 	take_uint(~(2147483647));
-	/* expect+2: warning: argument #1 is converted from 'long' to 'unsigned int' due to prototype [259] */
-	/* expect+1: warning: conversion of negative constant to unsigned type, arg #1 [296] */
+	/* expect+1: warning: conversion of negative constant -2147483649 to unsigned type 'unsigned int', arg #1 [296] */
 	take_uint(~(2147483648));
-	/* expect+2: warning: argument #1 is converted from 'long' to 'unsigned int' due to prototype [259] */
-	/* expect+1: warning: conversion of negative constant to unsigned type, arg #1 [296] */
+	/* expect+1: warning: conversion of negative constant -4294967296 to unsigned type 'unsigned int', arg #1 [296] */
 	take_uint(~(4294967295));
 }
 
@@ -118,26 +99,23 @@ void
 fold_mult(void)
 {
 	take_int(32767 * 65536);
-	/* expect+1: warning: integer overflow detected, op '*' [141] */
+	/* expect+1: warning: '32768 * 65536' overflows 'int' [141] */
 	take_int(32768 * 65536);
-	/* expect+1: warning: integer overflow detected, op '*' [141] */
+	/* expect+1: warning: '65536 * 65536' overflows 'int' [141] */
 	take_int(65536 * 65536);
 
 	take_uint(32767 * 65536U);
 	take_uint(32768 * 65536U);
-	/* expect+1: warning: integer overflow detected, op '*' [141] */
+	/* expect+1: warning: '65536 * 65536' overflows 'unsigned int' [141] */
 	take_uint(65536 * 65536U);
 }
 
 void
 fold_div(void)
 {
-	/* expect+3: error: division by 0 [139] */
-	/* XXX: The following message is redundant. */
-	/* expect+1: warning: integer overflow detected, op '/' [141] */
+	/* expect+1: error: division by 0 [139] */
 	take_int(0 / 0);
 
-	/* expect+2: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	/* expect+1: warning: conversion of 'long' to 'int' is out of range, arg #1 [295] */
 	take_int(-2147483648 / -1);
 }
@@ -154,20 +132,19 @@ fold_mod(void)
 	/* expect+1: error: modulus by 0 [140] */
 	take_int(0U % 0U);
 
-	/* expect+1: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	take_int(-2147483648 % -1);
 }
 
 void
 fold_plus(void)
 {
-	/* expect+1: warning: integer overflow detected, op '+' [141] */
+	/* expect+1: warning: '2147483647 + 1' overflows 'int' [141] */
 	take_int(2147483647 + 1);
 
 	/* Assume two's complement, so no overflow. */
 	take_int(-2147483647 + -1);
 
-	/* expect+1: warning: integer overflow detected, op '+' [141] */
+	/* expect+1: warning: '-2147483647 + -2' overflows 'int' [141] */
 	take_int(-2147483647 + -2);
 
 	/*
@@ -184,29 +161,27 @@ fold_plus(void)
 void
 fold_minus(void)
 {
-	/* expect+1: warning: integer overflow detected, op '-' [141] */
+	/* expect+1: warning: '2147483647 - -1' overflows 'int' [141] */
 	take_int(2147483647 - -1);
 	/* Assume two's complement. */
 	take_int(-2147483647 - 1);
-	/* expect+1: warning: integer overflow detected, op '-' [141] */
+	/* expect+1: warning: '-2147483647 - 2' overflows 'int' [141] */
 	take_int(-2147483647 - 2);
 
-	/* expect+1: warning: argument #1 is converted from 'long' to 'int' due to prototype [259] */
 	take_int(0 - 2147483648);
-	/* expect+1: warning: integer overflow detected, op '-' [141] */
+	/* expect+1: warning: '0 - 2147483648' overflows 'unsigned int' [141] */
 	take_uint(0 - 2147483648U);
 }
 
 void
 fold_shl(void)
 {
-	/* expect+1: warning: integer overflow detected, op '<<' [141] */
+	/* expect+1: warning: '16777216 << 24' overflows 'int' [141] */
 	take_int(1 << 24 << 24);
 
-	/* expect+1: warning: integer overflow detected, op '<<' [141] */
+	/* expect+1: warning: '16777216 << 24' overflows 'unsigned int' [141] */
 	take_uint(1U << 24 << 24);
 
-	/* FIXME: undefined behavior in 'fold' at 'uint64_t << 104'. */
 	/* expect+1: warning: shift amount 104 is greater than bit-size 32 of 'unsigned int' [122] */
 	take_uint(1U << 24 << 104);
 }
@@ -218,7 +193,6 @@ fold_shr(void)
 
 	take_int(16777216 >> 25);
 
-	/* FIXME: undefined behavior in 'fold' at 'uint64_t >> 104'. */
 	/* expect+1: warning: shift amount 104 is greater than bit-size 32 of 'int' [122] */
 	take_int(16777216 >> 104);
 }
@@ -308,3 +282,15 @@ struct ctassert5_struct {
 		? 1
 		: -1;
 };
+
+/*
+ * Since Makefile.inc 1.21 from 2022-04-08 (which added -ftrapv) and before
+ * tree.c 1.436 from 2022-04-20, lint crashed with an integer overflow when
+ * calculating '-(uint64_t)INT64_MIN' in val_t.u.integer.
+ */
+void
+unary_minus_overflow(unsigned long long val)
+{
+	if (val > -(unsigned long long)(-0x7fffffffffffffffL - 1))
+		return;
+}

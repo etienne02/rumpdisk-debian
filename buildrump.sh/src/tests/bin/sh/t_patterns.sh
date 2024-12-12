@@ -1,4 +1,4 @@
-# $NetBSD: t_patterns.sh,v 1.5 2019/07/10 05:57:43 martin Exp $
+# $NetBSD: t_patterns.sh,v 1.7 2023/05/11 10:08:34 kre Exp $
 #
 # Copyright (c) 2018 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -173,7 +173,7 @@ results()
 ####### End helpers
 
 atf_test_case filename_expansion
-filename_expansion() {
+filename_expansion_head() {
 	atf_set descr "Test correct operation of filename expansion"
 }
 filename_expansion_body() {
@@ -301,8 +301,8 @@ filename_expansion_body() {
 	esac
 	case "${ATF_TEST_SAVE_FILES}" in
 	'')	;;
-	/*)	(cd ../..; tar cf "${ATF_TEST_SAVE_FILES}" D) ;;
-	*)	(cd ../..; tar cf "${TMPDIR:-/tmp}/${ATF_TEST_SAVE_FILES}" D) ;;
+	/*)	(cd ..; tar cf "${ATF_TEST_SAVE_FILES}" .D) ;;
+	*)	(cd ..; tar cf "${TMPDIR:-/tmp}/${ATF_TEST_SAVE_FILES}" .D) ;;
 	esac
 
 	# Now we have lots of files, try some matching

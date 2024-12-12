@@ -1,4 +1,4 @@
-/*	$NetBSD: conf.c,v 1.11 2016/06/25 14:35:58 isaki Exp $	*/
+/*	$NetBSD: conf.c,v 1.13 2022/06/23 12:32:22 isaki Exp $	*/
 
 /*
  * Copyright (c) 2001 Minoura Makoto
@@ -40,8 +40,8 @@
 #include "libx68k.h"
 
 struct devsw devsw[] = {
-	{ "sd",	sdstrategy, sdopen, sdclose, noioctl },
-	{ "cd",	cdstrategy, cdopen, cdclose, noioctl },
+	{ "sd",	sdcdstrategy, sdopen, sdcdclose, noioctl },
+	{ "cd",	sdcdstrategy, cdopen, sdcdclose, noioctl },
 	{ "fd",	fdstrategy, fdopen, fdclose, noioctl },
 	{ "nfs", net_strategy, net_open, net_close, net_ioctl },
 	{ 0, 0, 0, 0, 0 }
@@ -84,5 +84,3 @@ struct netif_driver *netif_drivers[] = {
 };
 
 int n_netif_drivers = sizeof(netif_drivers) / sizeof(netif_drivers[0]);
-
-struct open_file files[SOPEN_MAX];

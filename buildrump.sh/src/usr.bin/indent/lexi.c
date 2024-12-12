@@ -1,4 +1,4 @@
-/*	$NetBSD: lexi.c,v 1.43 2021/08/26 07:03:00 rillig Exp $	*/
+/*	$NetBSD: lexi.c,v 1.242 2023/12/03 21:44:42 rillig Exp $	*/
 
 /*-
  * SPDX-License-Identifier: BSD-4-Clause
@@ -37,97 +37,69 @@
  * SUCH DAMAGE.
  */
 
-#if 0
-#ifndef lint
-static char sccsid[] = "@(#)lexi.c	8.1 (Berkeley) 6/6/93";
-#endif /* not lint */
-#endif
-
 #include <sys/cdefs.h>
-#ifndef lint
-#if defined(__NetBSD__)
-__RCSID("$NetBSD: lexi.c,v 1.43 2021/08/26 07:03:00 rillig Exp $");
-#elif defined(__FreeBSD__)
-__FBSDID("$FreeBSD: head/usr.bin/indent/lexi.c 337862 2018-08-15 18:19:45Z pstef $");
-#endif
-#endif
+__RCSID("$NetBSD: lexi.c,v 1.242 2023/12/03 21:44:42 rillig Exp $");
 
-/*
- * Here we have the token scanner for indent.  It scans off one token and puts
- * it in the global variable "token".  It returns a code, indicating the type
- * of token scanned.
- */
-
-#include <assert.h>
-#include <err.h>
-#include <stdio.h>
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/param.h>
 
 #include "indent.h"
 
-struct templ {
-    const char *rwd;
-    enum rwcode rwcode;
+/* must be sorted alphabetically, is used in binary search */
+static const struct keyword {
+	const char name[12];
+	lexer_symbol lsym;
+} keywords[] = {
+	{"_Bool", lsym_type},
+	{"_Complex", lsym_modifier},
+	{"_Imaginary", lsym_modifier},
+	{"auto", lsym_modifier},
+	{"bool", lsym_type},
+	{"break", lsym_word},
+	{"case", lsym_case},
+	{"char", lsym_type},
+	{"complex", lsym_modifier},
+	{"const", lsym_modifier},
+	{"continue", lsym_word},
+	{"default", lsym_default},
+	{"do", lsym_do},
+	{"double", lsym_type},
+	{"else", lsym_else},
+	{"enum", lsym_tag},
+	{"extern", lsym_modifier},
+	{"float", lsym_type},
+	{"for", lsym_for},
+	{"goto", lsym_word},
+	{"if", lsym_if},
+	{"imaginary", lsym_modifier},
+	{"inline", lsym_modifier},
+	{"int", lsym_type},
+	{"long", lsym_type},
+	{"offsetof", lsym_offsetof},
+	{"register", lsym_modifier},
+	{"restrict", lsym_word},
+	{"return", lsym_return},
+	{"short", lsym_type},
+	{"signed", lsym_type},
+	{"sizeof", lsym_sizeof},
+	{"static", lsym_modifier},
+	{"struct", lsym_tag},
+	{"switch", lsym_switch},
+	{"typedef", lsym_typedef},
+	{"union", lsym_tag},
+	{"unsigned", lsym_type},
+	{"void", lsym_type},
+	{"volatile", lsym_modifier},
+	{"while", lsym_while}
 };
 
-/*
- * This table has to be sorted alphabetically, because it'll be used in binary
- * search.
- */
-const struct templ specials[] =
-{
-    {"_Bool", rw_type},
-    {"_Complex", rw_type},
-    {"_Imaginary", rw_type},
-    {"auto", rw_storage_class},
-    {"bool", rw_type},
-    {"break", rw_jump},
-    {"case", rw_case_or_default},
-    {"char", rw_type},
-    {"complex", rw_type},
-    {"const", rw_type},
-    {"continue", rw_jump},
-    {"default", rw_case_or_default},
-    {"do", rw_do_or_else},
-    {"double", rw_type},
-    {"else", rw_do_or_else},
-    {"enum", rw_struct_or_union_or_enum},
-    {"extern", rw_storage_class},
-    {"float", rw_type},
-    {"for", rw_for_or_if_or_while},
-    {"global", rw_type},
-    {"goto", rw_jump},
-    {"if", rw_for_or_if_or_while},
-    {"imaginary", rw_type},
-    {"inline", rw_inline_or_restrict},
-    {"int", rw_type},
-    {"long", rw_type},
-    {"offsetof", rw_offsetof},
-    {"register", rw_storage_class},
-    {"restrict", rw_inline_or_restrict},
-    {"return", rw_jump},
-    {"short", rw_type},
-    {"signed", rw_type},
-    {"sizeof", rw_sizeof},
-    {"static", rw_storage_class},
-    {"struct", rw_struct_or_union_or_enum},
-    {"switch", rw_switch},
-    {"typedef", rw_typedef},
-    {"union", rw_struct_or_union_or_enum},
-    {"unsigned", rw_type},
-    {"void", rw_type},
-    {"volatile", rw_type},
-    {"while", rw_for_or_if_or_while}
-};
+static struct {
+	const char **items;
+	unsigned int len;
+	unsigned int cap;
+} typenames;
 
-const char **typenames;
-int         typename_count;
-int         typename_top = -1;
-
-/*
+/*-
  * The transition table below was rewritten by hand from lx's output, given
  * the following definitions. lx is Katherine Flavel's lexer generator.
  *
@@ -143,596 +115,612 @@ int         typename_top = -1;
  * HP H* "." H+ P  FS? -> $float;    "0" O*          IS? -> $int;
  * HP H+ "."    P  FS  -> $float;    BP B+           IS? -> $int;
  */
-static char const *table[] = {
-    /*                examples:
-                                     00
-             s                      0xx
-             t                    00xaa
-             a     11       101100xxa..
-             r   11ee0001101lbuuxx.a.pp
-             t.01.e+008bLuxll0Ll.aa.p+0
-    states:  ABCDEFGHIJKLMNOPQRSTUVWXYZ */
-    ['0'] = "CEIDEHHHIJQ  U  Q  VUVVZZZ",
-    ['1'] = "DEIDEHHHIJQ  U  Q  VUVVZZZ",
-    ['7'] = "DEIDEHHHIJ   U     VUVVZZZ",
-    ['9'] = "DEJDEHHHJJ   U     VUVVZZZ",
-    ['a'] = "             U     VUVV   ",
-    ['b'] = "  K          U     VUVV   ",
-    ['e'] = "  FFF   FF   U     VUVV   ",
-    ['f'] = "    f  f     U     VUVV  f",
-    ['u'] = "  MM    M  i  iiM   M     ",
-    ['x'] = "  N                       ",
-    ['p'] = "                    FFX   ",
-    ['L'] = "  LLf  fL  PR   Li  L    f",
-    ['l'] = "  OOf  fO   S P O i O    f",
-    ['+'] = "     G                 Y  ",
-    ['.'] = "B EE    EE   T      W     ",
-    /*       ABCDEFGHIJKLMNOPQRSTUVWXYZ */
-    [0]   = "uuiifuufiuuiiuiiiiiuiuuuuu",
+/* INDENT OFF */
+static const unsigned char lex_number_state[][26] = {
+	/*                examples:
+	                                 00
+	         s                      0xx
+	         t                    00xaa
+	         a     11       101100xxa..
+	         r   11ee0001101lbuuxx.a.pp
+	         t.01.e+008bLuxll0Ll.aa.p+0
+	states:  ABCDEFGHIJKLMNOPQRSTUVWXYZ */
+	[0] =   "uuiifuufiuuiiuiiiiiuiuuuuu",	/* (other) */
+	[1] =   "CEIDEHHHIJQ  U  Q  VUVVZZZ",	/* 0 */
+	[2] =   "DEIDEHHHIJQ  U  Q  VUVVZZZ",	/* 1 */
+	[3] =   "DEIDEHHHIJ   U     VUVVZZZ",	/* 2 3 4 5 6 7 */
+	[4] =   "DEJDEHHHJJ   U     VUVVZZZ",	/* 8 9 */
+	[5] =   "             U     VUVV   ",	/* A a C c D d */
+	[6] =   "  K          U     VUVV   ",	/* B b */
+	[7] =   "  FFF   FF   U     VUVV   ",	/* E e */
+	[8] =   "    f  f     U     VUVV  f",	/* F f */
+	[9] =   "  LLf  fL  PR   Li  L    f",	/* L */
+	[10] =  "  OOf  fO   S P O i O    f",	/* l */
+	[11] =  "                    FFX   ",	/* P p */
+	[12] =  "  MM    M  i  iiM   M     ",	/* U u */
+	[13] =  "  N                       ",	/* X x */
+	[14] =  "     G                 Y  ",	/* + - */
+	[15] =  "B EE    EE   T      W     ",	/* . */
+	/*       ABCDEFGHIJKLMNOPQRSTUVWXYZ */
+};
+/* INDENT ON */
+
+static const unsigned char lex_number_row[] = {
+	['0'] = 1,
+	['1'] = 2,
+	['2'] = 3, ['3'] = 3, ['4'] = 3, ['5'] = 3, ['6'] = 3, ['7'] = 3,
+	['8'] = 4, ['9'] = 4,
+	['A'] = 5, ['a'] = 5, ['C'] = 5, ['c'] = 5, ['D'] = 5, ['d'] = 5,
+	['B'] = 6, ['b'] = 6,
+	['E'] = 7, ['e'] = 7,
+	['F'] = 8, ['f'] = 8,
+	['L'] = 9,
+	['l'] = 10,
+	['P'] = 11, ['p'] = 11,
+	['U'] = 12, ['u'] = 12,
+	['X'] = 13, ['x'] = 13,
+	['+'] = 14, ['-'] = 14,
+	['.'] = 15,
 };
 
-/* Initialize constant transition table */
-void
-init_constant_tt(void)
+
+static bool
+is_identifier_start(char ch)
 {
-    table['-'] = table['+'];
-    table['8'] = table['9'];
-    table['2'] = table['3'] = table['4'] = table['5'] = table['6'] = table['7'];
-    table['A'] = table['C'] = table['D'] = table['c'] = table['d'] = table['a'];
-    table['B'] = table['b'];
-    table['E'] = table['e'];
-    table['U'] = table['u'];
-    table['X'] = table['x'];
-    table['P'] = table['p'];
-    table['F'] = table['f'];
+	return ch_isalpha(ch) || ch == '_' || ch == '$';
 }
 
-static char
-inbuf_peek(void)
+static bool
+is_identifier_part(char ch)
 {
-    return *buf_ptr;
+	return ch_isalnum(ch) || ch == '_' || ch == '$';
 }
 
 static void
-inbuf_skip(void)
+token_add_char(char ch)
 {
-    buf_ptr++;
-    if (buf_ptr >= buf_end)
-	fill_buffer();
+	buf_add_char(&token, ch);
 }
 
-static char
-inbuf_next(void)
+static bool
+skip_line_continuation(void)
 {
-    char ch = inbuf_peek();
-    inbuf_skip();
-    return ch;
+	if (in.p[0] == '\\' && in.p[1] == '\n') {
+		in.p++;
+		inp_skip();
+		in.token_end_line++;
+		return true;
+	}
+	return false;
 }
-
-static void
-check_size_token(size_t desired_size)
-{
-    if (e_token + (desired_size) < l_token)
-        return;
-
-    size_t nsize = l_token - s_token + 400 + desired_size;
-    size_t token_len = e_token - s_token;
-    tokenbuf = realloc(tokenbuf, nsize);
-    if (tokenbuf == NULL)
-	err(1, NULL);
-    e_token = tokenbuf + token_len + 1;
-    l_token = tokenbuf + nsize - 5;
-    s_token = tokenbuf + 1;
-}
-
-static int
-compare_templ_array(const void *key, const void *elem)
-{
-    return strcmp(key, ((const struct templ *)elem)->rwd);
-}
-
-static int
-compare_string_array(const void *key, const void *elem)
-{
-    return strcmp(key, *((const char *const *)elem));
-}
-
-#ifdef debug
-const char *
-token_type_name(token_type tk)
-{
-    static const char *const name[] = {
-	"end_of_file", "newline", "lparen", "rparen", "unary_op",
-	"binary_op", "postfix_op", "question", "case_label", "colon",
-	"semicolon", "lbrace", "rbrace", "ident", "comma",
-	"comment", "switch_expr", "preprocessing", "form_feed", "decl",
-	"keyword_for_if_while", "keyword_do_else",
-	"if_expr", "while_expr", "for_exprs",
-	"stmt", "stmt_list", "keyword_else", "keyword_do", "do_stmt",
-	"if_expr_stmt", "if_expr_stmt_else", "period", "string_prefix",
-	"storage_class", "funcname", "type_def", "keyword_struct_union_enum"
-    };
-
-    assert(0 <= tk && tk < sizeof name / sizeof name[0]);
-
-    return name[tk];
-}
-
-static void
-print_buf(const char *name, const char *s, const char *e)
-{
-    if (s < e) {
-	debug_printf(" %s ", name);
-	debug_vis_range("\"", s, e, "\"");
-    }
-}
-
-static token_type
-lexi_end(token_type code)
-{
-    debug_printf("in line %d, lexi returns '%s'",
-	line_no, token_type_name(code));
-    print_buf("token", s_token, e_token);
-    print_buf("label", s_lab, e_lab);
-    print_buf("code", s_code, e_code);
-    print_buf("comment", s_com, e_com);
-    debug_printf("\n");
-
-    return code;
-}
-#else
-#  define lexi_end(tk) (tk)
-#endif
 
 static void
 lex_number(void)
 {
-    char s;
-    unsigned char i;
+	for (unsigned char s = 'A'; s != 'f' && s != 'i' && s != 'u';) {
+		unsigned char ch = (unsigned char)*in.p;
+		if (skip_line_continuation())
+			continue;
+		if (ch >= array_length(lex_number_row)
+		    || lex_number_row[ch] == 0)
+			break;
 
-    for (s = 'A'; s != 'f' && s != 'i' && s != 'u'; ) {
-	i = (unsigned char)*buf_ptr;
-	if (i >= nitems(table) || table[i] == NULL ||
-	    table[i][s - 'A'] == ' ') {
-	    s = table[0][s - 'A'];
-	    break;
+		unsigned char row = lex_number_row[ch];
+		if (lex_number_state[row][s - 'A'] == ' ') {
+			// lex_number_state[0][s - 'A'] now indicates the type:
+			// f = floating, i = integer, u = unknown
+			return;
+		}
+
+		s = lex_number_state[row][s - 'A'];
+		token_add_char(inp_next());
 	}
-	s = table[i][s - 'A'];
-	check_size_token(1);
-	*e_token++ = inbuf_next();
-    }
-    /* s now indicates the type: f(loating), i(integer), u(nknown) */
 }
 
 static void
 lex_word(void)
 {
-    while (isalnum((unsigned char)*buf_ptr) ||
-	   *buf_ptr == '\\' ||
-	   *buf_ptr == '_' || *buf_ptr == '$') {
-	/* fill_buffer() terminates buffer with newline */
-	if (*buf_ptr == '\\') {
-	    if (buf_ptr[1] == '\n') {
-		buf_ptr += 2;
-		if (buf_ptr >= buf_end)
-		    fill_buffer();
-	    } else
-		break;
+	for (;;) {
+		if (is_identifier_part(*in.p))
+			token_add_char(*in.p++);
+		else if (skip_line_continuation())
+			continue;
+		else
+			return;
 	}
-	check_size_token(1);
-	*e_token++ = inbuf_next();
-    }
 }
 
 static void
 lex_char_or_string(void)
 {
-    char delim;
+	for (char delim = token.s[token.len - 1];;) {
+		if (*in.p == '\n') {
+			diag(1, "Unterminated literal");
+			return;
+		}
 
-    delim = *token;
-    do {			/* copy the string */
-	for (;;) {		/* move one character or [/<char>]<char> */
-	    if (*buf_ptr == '\n') {
-		diag(1, "Unterminated literal");
-		return;
-	    }
-	    check_size_token(2);
-	    *e_token = inbuf_next();
-	    if (*e_token == '\\') {	/* if escape, copy extra char */
-		if (*buf_ptr == '\n')	/* check for escaped newline */
-		    ++line_no;
-		*++e_token = inbuf_next();
-		++e_token;	/* we must increment this again because we
-				 * copied two chars */
-	    } else
-		break;		/* we copied one character */
-	}			/* end of while (1) */
-    } while (*e_token++ != delim);
+		token_add_char(*in.p++);
+		if (token.s[token.len - 1] == delim)
+			return;
+
+		if (token.s[token.len - 1] == '\\') {
+			if (*in.p == '\n')
+				in.token_end_line++;
+			token_add_char(inp_next());
+		}
+	}
 }
 
-token_type
-lexi(struct parser_state *state)
+/* Guess whether the current token is a declared type. */
+static bool
+probably_typename(void)
 {
-    int         unary_delim;	/* this is set to 1 if the current token
-				 * forces a following operator to be unary */
-    token_type  code;		/* internal code to be returned */
-
-    e_token = s_token;		/* point to start of place to save token */
-    unary_delim = false;
-    state->col_1 = state->last_nl;	/* tell world that this token started
-					 * in column 1 iff the last thing
-					 * scanned was a newline */
-    state->last_nl = false;
-
-    while (*buf_ptr == ' ' || *buf_ptr == '\t') {	/* get rid of blanks */
-	state->col_1 = false;	/* leading blanks imply token is not in column
-				 * 1 */
-	inbuf_skip();
-    }
-
-    /* Scan an alphanumeric token */
-    if (isalnum((unsigned char)*buf_ptr) ||
-	*buf_ptr == '_' || *buf_ptr == '$' ||
-	(buf_ptr[0] == '.' && isdigit((unsigned char)buf_ptr[1]))) {
-	/*
-	 * we have a letter or number
-	 */
-	struct templ *p;
-
-	if (isdigit((unsigned char)*buf_ptr) ||
-	    (buf_ptr[0] == '.' && isdigit((unsigned char)buf_ptr[1]))) {
-	    lex_number();
-	} else {
-	    lex_word();
+	if (ps.prev_lsym == lsym_modifier)
+		return true;
+	if (ps.in_init)
+		return false;
+	if (ps.in_stmt_or_decl)	/* XXX: this condition looks incorrect */
+		return false;
+	if (ps.prev_lsym == lsym_semicolon
+	    || ps.prev_lsym == lsym_lbrace
+	    || ps.prev_lsym == lsym_rbrace) {
+		if (in.p[0] == '*' && in.p[1] != '=')
+			return true;
+		/* XXX: is_identifier_start */
+		if (ch_isalpha(in.p[0]))
+			return true;
 	}
-	*e_token = '\0';
+	return false;
+}
 
-	if (s_token[0] == 'L' && s_token[1] == '\0' &&
-	      (*buf_ptr == '"' || *buf_ptr == '\''))
-	    return lexi_end(string_prefix);
+static int
+bsearch_typenames(const char *key)
+{
+	const char **arr = typenames.items;
+	unsigned lo = 0;
+	unsigned hi = typenames.len;
 
-	while (*buf_ptr == ' ' || *buf_ptr == '\t')	/* get rid of blanks */
-	    inbuf_next();
-	state->keyword = rw_0;
-	if (state->last_token == keyword_struct_union_enum &&
-	    !state->p_l_follow) {
-	    /* if last token was 'struct' and we're not in parentheses, then
-	     * this token should be treated as a declaration */
-	    state->last_u_d = true;
-	    return lexi_end(decl);
+	while (lo < hi) {
+		unsigned mid = (lo + hi) / 2;
+		int cmp = strcmp(arr[mid], key);
+		if (cmp < 0)
+			lo = mid + 1;
+		else if (cmp > 0)
+			hi = mid;
+		else
+			return (int)mid;
 	}
-	/*
-	 * Operator after identifier is binary unless last token was 'struct'
-	 */
-	state->last_u_d = (state->last_token == keyword_struct_union_enum);
+	return -1 - (int)lo;
+}
 
-	p = bsearch(s_token, specials, sizeof specials / sizeof specials[0],
-	    sizeof specials[0], compare_templ_array);
-	if (p == NULL) {	/* not a special keyword... */
-	    char *u;
+static bool
+is_typename(void)
+{
+	if (ps.prev_lsym == lsym_tag)
+		return true;
+	if (opt.auto_typedefs &&
+	    token.len >= 2 && memcmp(token.s + token.len - 2, "_t", 2) == 0)
+		return true;
 
-	    /* ... so maybe a type_t or a typedef */
-	    if ((opt.auto_typedefs && ((u = strrchr(s_token, '_')) != NULL) &&
-	        strcmp(u, "_t") == 0) || (typename_top >= 0 &&
-		  bsearch(s_token, typenames, (size_t)typename_top + 1,
-		    sizeof typenames[0], compare_string_array))) {
-		state->keyword = rw_type;
-		state->last_u_d = true;
-	        goto found_typename;
-	    }
-	} else {			/* we have a keyword */
-	    state->keyword = p->rwcode;
-	    state->last_u_d = true;
-	    switch (p->rwcode) {
-	    case rw_switch:
-		return lexi_end(switch_expr);
-	    case rw_case_or_default:
-		return lexi_end(case_label);
-	    case rw_struct_or_union_or_enum:
-	    case rw_type:
-	    found_typename:
-		if (state->p_l_follow) {
-		    /* inside parens: cast, param list, offsetof or sizeof */
-		    state->cast_mask |= (1 << state->p_l_follow) & ~state->not_cast_mask;
-		}
-		if (state->last_token == period || state->last_token == unary_op) {
-		    state->keyword = rw_0;
-		    break;
-		}
-		if (p != NULL && p->rwcode == rw_struct_or_union_or_enum)
-		    return lexi_end(keyword_struct_union_enum);
-		if (state->p_l_follow)
-		    break;
-		return lexi_end(decl);
-
-	    case rw_for_or_if_or_while:
-		return lexi_end(keyword_for_if_while);
-
-	    case rw_do_or_else:
-		return lexi_end(keyword_do_else);
-
-	    case rw_storage_class:
-		return lexi_end(storage_class);
-
-	    case rw_typedef:
-		return lexi_end(type_def);
-
-	    default:		/* all others are treated like any other
-				 * identifier */
-		return lexi_end(ident);
-	    }			/* end of switch */
-	}			/* end of if (found_it) */
-	if (*buf_ptr == '(' && state->tos <= 1 && state->ind_level == 0 &&
-	    state->in_parameter_declaration == 0 && state->block_init == 0) {
-	    char *tp = buf_ptr;
-	    while (tp < buf_end)
-		if (*tp++ == ')' && (*tp == ';' || *tp == ','))
-		    goto not_proc;
-	    strncpy(state->procname, token, sizeof state->procname - 1);
-	    if (state->in_decl)
-		state->in_parameter_declaration = 1;
-	    return lexi_end(funcname);
-    not_proc:;
-	}
-	/*
-	 * The following hack attempts to guess whether or not the current
-	 * token is in fact a declaration keyword -- one that has been
-	 * typedefd
-	 */
-	else if (!state->p_l_follow && !state->block_init &&
-	    !state->in_stmt &&
-	    ((*buf_ptr == '*' && buf_ptr[1] != '=') ||
-		isalpha((unsigned char)*buf_ptr)) &&
-	    (state->last_token == semicolon || state->last_token == lbrace ||
-		state->last_token == rbrace)) {
-	    state->keyword = rw_type;
-	    state->last_u_d = true;
-	    return lexi_end(decl);
-	}
-	if (state->last_token == decl)	/* if this is a declared variable,
-					 * then following sign is unary */
-	    state->last_u_d = true;	/* will make "int a -1" work */
-	return lexi_end(ident);		/* the ident is not in the list */
-    }				/* end of procesing for alpanum character */
-
-    /* Scan a non-alphanumeric token */
-
-    check_size_token(3);	/* things like "<<=" */
-    *e_token++ = inbuf_next();	/* if it is only a one-character token, it is
-				 * moved here */
-    *e_token = '\0';
-
-    switch (*token) {
-    case '\n':
-	unary_delim = state->last_u_d;
-	state->last_nl = true;	/* remember that we just had a newline */
-	code = (had_eof ? end_of_file : newline);
-
-	/*
-	 * if data has been exhausted, the newline is a dummy, and we should
-	 * return code to stop
-	 */
-	break;
-
-    case '\'':
-    case '"':
-    	lex_char_or_string();
-	code = ident;
-	break;
-
-    case '(':
-    case '[':
-	unary_delim = true;
-	code = lparen;
-	break;
-
-    case ')':
-    case ']':
-	code = rparen;
-	break;
-
-    case '#':
-	unary_delim = state->last_u_d;
-	code = preprocessing;
-	break;
-
-    case '?':
-	unary_delim = true;
-	code = question;
-	break;
-
-    case ':':
-	code = colon;
-	unary_delim = true;
-	break;
-
-    case ';':
-	unary_delim = true;
-	code = semicolon;
-	break;
-
-    case '{':
-	unary_delim = true;
-
-	/*
-	 * if (state->in_or_st) state->block_init = 1;
-	 */
-	/* ?	code = state->block_init ? lparen : lbrace; */
-	code = lbrace;
-	break;
-
-    case '}':
-	unary_delim = true;
-	/* ?	code = state->block_init ? rparen : rbrace; */
-	code = rbrace;
-	break;
-
-    case 014:			/* a form feed */
-	unary_delim = state->last_u_d;
-	state->last_nl = true;	/* remember this so we can set 'state->col_1'
-				 * right */
-	code = form_feed;
-	break;
-
-    case ',':
-	unary_delim = true;
-	code = comma;
-	break;
-
-    case '.':
-	unary_delim = false;
-	code = period;
-	break;
-
-    case '-':
-    case '+':			/* check for -, +, --, ++ */
-	code = (state->last_u_d ? unary_op : binary_op);
-	unary_delim = true;
-
-	if (*buf_ptr == token[0]) {
-	    /* check for doubled character */
-	    *e_token++ = *buf_ptr++;
-	    /* buffer overflow will be checked at end of loop */
-	    if (state->last_token == ident || state->last_token == rparen) {
-		code = (state->last_u_d ? unary_op : postfix_op);
-		/* check for following ++ or -- */
-		unary_delim = false;
-	    }
-	} else if (*buf_ptr == '=')
-	    /* check for operator += */
-	    *e_token++ = *buf_ptr++;
-	else if (*buf_ptr == '>') {
-	    /* check for operator -> */
-	    *e_token++ = *buf_ptr++;
-	    unary_delim = false;
-	    code = unary_op;
-	    state->want_blank = false;
-	}
-	break;			/* buffer overflow will be checked at end of
-				 * switch */
-
-    case '=':
-	if (state->in_or_st)
-	    state->block_init = 1;
-	if (*buf_ptr == '=') {	/* == */
-	    *e_token++ = '=';	/* Flip =+ to += */
-	    buf_ptr++;
-	    *e_token = 0;
-	}
-	code = binary_op;
-	unary_delim = true;
-	break;
-	/* can drop thru!!! */
-
-    case '>':
-    case '<':
-    case '!':			/* ops like <, <<, <=, !=, etc */
-	if (*buf_ptr == '>' || *buf_ptr == '<' || *buf_ptr == '=')
-	    *e_token++ = inbuf_next();
-	if (*buf_ptr == '=')
-	    *e_token++ = *buf_ptr++;
-	code = (state->last_u_d ? unary_op : binary_op);
-	unary_delim = true;
-	break;
-
-    case '*':
-	unary_delim = true;
-	if (!state->last_u_d) {
-	    if (*buf_ptr == '=')
-		*e_token++ = *buf_ptr++;
-	    code = binary_op;
-	    break;
-	}
-	while (*buf_ptr == '*' || isspace((unsigned char)*buf_ptr)) {
-	    if (*buf_ptr == '*') {
-		check_size_token(1);
-		*e_token++ = *buf_ptr;
-	    }
-	    inbuf_skip();
-	}
-	if (ps.in_decl) {
-	    char *tp = buf_ptr;
-
-	    while (isalpha((unsigned char)*tp) ||
-		   isspace((unsigned char)*tp)) {
-		if (++tp >= buf_end)
-		    fill_buffer();
-	    }
-	    if (*tp == '(')
-		ps.procname[0] = ' ';
-	}
-	code = unary_op;
-	break;
-
-    default:
-	if (token[0] == '/' && (*buf_ptr == '*' || *buf_ptr == '/')) {
-	    /* it is start of comment */
-	    *e_token++ = inbuf_next();
-
-	    code = comment;
-	    unary_delim = state->last_u_d;
-	    break;
-	}
-	while (e_token[-1] == *buf_ptr || *buf_ptr == '=') {
-	    /*
-	     * handle ||, &&, etc, and also things as in int *****i
-	     */
-	    check_size_token(1);
-	    *e_token++ = inbuf_next();
-	}
-	code = (state->last_u_d ? unary_op : binary_op);
-	unary_delim = true;
-
-
-    }				/* end of switch */
-    if (buf_ptr >= buf_end)	/* check for input buffer empty */
-	fill_buffer();
-    state->last_u_d = unary_delim;
-    check_size_token(1);
-    *e_token = '\0';		/* null terminate the token */
-    return lexi_end(code);
+	return bsearch_typenames(token.s) >= 0;
 }
 
 void
-alloc_typenames(void)
+register_typename(const char *name)
 {
+	if (typenames.len >= typenames.cap) {
+		typenames.cap = 16 + 2 * typenames.cap;
+		typenames.items = nonnull(realloc(typenames.items,
+			sizeof(typenames.items[0]) * typenames.cap));
+	}
 
-    typenames = malloc(sizeof(typenames[0]) * (typename_count = 16));
-    if (typenames == NULL)
-	err(1, NULL);
+	int pos = bsearch_typenames(name);
+	if (pos >= 0)
+		return;		/* already in the list */
+
+	pos = -1 - pos;
+	memmove(typenames.items + pos + 1, typenames.items + pos,
+	    sizeof(typenames.items[0]) * (typenames.len++ - (unsigned)pos));
+	typenames.items[pos] = nonnull(strdup(name));
 }
 
-void
-add_typename(const char *key)
+static int
+cmp_keyword_by_name(const void *key, const void *elem)
 {
-    int comparison;
-    const char *copy;
+	return strcmp(key, ((const struct keyword *)elem)->name);
+}
 
-    if (typename_top + 1 >= typename_count) {
-	typenames = realloc((void *)typenames,
-	    sizeof(typenames[0]) * (typename_count *= 2));
-	if (typenames == NULL)
-	    err(1, NULL);
-    }
-    if (typename_top == -1)
-	typenames[++typename_top] = copy = strdup(key);
-    else if ((comparison = strcmp(key, typenames[typename_top])) >= 0) {
-	/* take advantage of sorted input */
-	if (comparison == 0)	/* remove duplicates */
-	    return;
-	typenames[++typename_top] = copy = strdup(key);
-    } else {
-	int p;
+/*
+ * Looking at the '(', guess whether this starts a function definition or a
+ * function declaration.
+ */
+static bool
+probably_function_definition(const char *p)
+{
+	// TODO: Don't look at characters in comments, see lsym_funcname.c.
+	int paren_level = 0;
+	for (; *p != '\n'; p++) {
+		if (*p == '(')
+			paren_level++;
+		if (*p == ')' && --paren_level == 0) {
+			p++;
 
-	for (p = 0; (comparison = strcmp(key, typenames[p])) > 0; p++)
-	    /* find place for the new key */;
-	if (comparison == 0)	/* remove duplicates */
-	    return;
-	memmove(&typenames[p + 1], &typenames[p],
-	    sizeof(typenames[0]) * (++typename_top - p));
-	typenames[p] = copy = strdup(key);
-    }
+			while (*p != '\n'
+			    && (ch_isspace(*p) || is_identifier_part(*p)))
+				p++;	/* '__dead' or '__unused' */
 
-    if (copy == NULL)
-	err(1, NULL);
+			if (*p == '\n')	/* func(...) */
+				break;
+			if (*p == ';')	/* func(...); */
+				return false;
+			if (*p == ',')	/* double abs(), pi; */
+				return false;
+			if (*p == '(')	/* func(...) __attribute__((...)) */
+				paren_level++;	/* func(...) __printflike(...)
+						 */
+			else
+				break;	/* func(...) { ... */
+		}
+
+		if (paren_level == 1 && p[0] == '*' && p[1] == ',')
+			return false;
+	}
+
+	/*
+	 * To further reduce the cases where indent wrongly treats an
+	 * incomplete function declaration as a function definition, thus
+	 * adding a newline before the function name, it may be worth looking
+	 * for parameter names, as these are often omitted in function
+	 * declarations and only included in function definitions. Or just
+	 * increase the lookahead to more than just the current line of input,
+	 * until the next '{'.
+	 */
+	return true;
+}
+
+static lexer_symbol
+lexi_alnum(void)
+{
+	if (ch_isdigit(in.p[0]) ||
+	    (in.p[0] == '.' && ch_isdigit(in.p[1]))) {
+		lex_number();
+	} else if (is_identifier_start(in.p[0])) {
+		lex_word();
+
+		if (token.len == 1 && token.s[0] == 'L' &&
+		    (in.p[0] == '"' || in.p[0] == '\'')) {
+			token_add_char(*in.p++);
+			lex_char_or_string();
+			ps.next_unary = false;
+			return lsym_word;
+		}
+	} else
+		return lsym_eof;	/* just as a placeholder */
+
+	while (ch_isblank(*in.p))
+		in.p++;
+
+	ps.next_unary = ps.prev_lsym == lsym_tag
+	    || ps.prev_lsym == lsym_typedef
+	    || (ps.prev_lsym == lsym_modifier && *in.p == '*');
+
+	if (ps.prev_lsym == lsym_tag && ps.paren.len == 0)
+		return lsym_type;
+	if (ps.spaced_expr_psym == psym_for_exprs
+	    && ps.prev_lsym == lsym_lparen && ps.paren.len == 1
+	    && *in.p == '*') {
+		ps.next_unary = true;
+		return lsym_type;
+	}
+
+	token_add_char('\0');	// Terminate in non-debug mode as well.
+	token.len--;
+	const struct keyword *kw = bsearch(token.s, keywords,
+	    array_length(keywords), sizeof(keywords[0]), cmp_keyword_by_name);
+	lexer_symbol lsym = lsym_word;
+	if (kw != NULL) {
+		lsym = kw->lsym;
+		ps.next_unary = true;
+		if (lsym == lsym_tag || lsym == lsym_type)
+			goto found_typename;
+		return lsym;
+	}
+
+	if (is_typename()) {
+		lsym = lsym_type;
+		ps.next_unary = true;
+found_typename:
+		if (ps.prev_lsym != lsym_period
+		    && ps.prev_lsym != lsym_unary_op) {
+			if (lsym == lsym_tag)
+				return lsym_tag;
+			if (ps.paren.len == 0)
+				return lsym_type;
+		}
+	}
+
+	const char *p = in.p;
+	if (*p == ')')
+		p++;
+	if (*p == '(' && ps.psyms.len < 3 && ps.ind_level == 0 &&
+	    !ps.in_func_def_params && !ps.in_init) {
+
+		bool maybe_function_definition = *in.p == ')'
+		    ? ps.paren.len == 1 && ps.prev_lsym != lsym_unary_op
+		    : ps.paren.len == 0;
+		if (maybe_function_definition
+		    && probably_function_definition(p)) {
+			ps.line_has_func_def = true;
+			if (ps.in_decl)
+				ps.in_func_def_params = true;
+			return lsym_funcname;
+		}
+
+	} else if (ps.paren.len == 0 && probably_typename()) {
+		ps.next_unary = true;
+		return lsym_type;
+	}
+
+	return lsym;
+}
+
+static void
+check_parenthesized_function_definition(void)
+{
+	const char *p = in.p;
+	while (ch_isblank(*p))
+		p++;
+	if (is_identifier_start(*p))
+		while (is_identifier_part(*p))
+			p++;
+	while (ch_isblank(*p))
+		p++;
+	if (*p == ')') {
+		p++;
+		while (ch_isblank(*p))
+			p++;
+		if (*p == '(' && probably_function_definition(p))
+			ps.line_has_func_def = true;
+	}
+}
+
+static bool
+is_asterisk_unary(void)
+{
+	const char *p = in.p;
+	while (*p == '*' || ch_isblank(*p))
+		p++;
+	if (*p == ')')
+		return true;
+	if (ps.next_unary || ps.in_func_def_params)
+		return true;
+	if (ps.prev_lsym == lsym_word ||
+	    ps.prev_lsym == lsym_rparen ||
+	    ps.prev_lsym == lsym_rbracket)
+		return false;
+	return ps.in_decl && ps.paren.len > 0;
+}
+
+static bool
+probably_in_function_definition(void)
+{
+	for (const char *p = in.p; *p != '\n';) {
+		if (ch_isspace(*p))
+			p++;
+		else if (is_identifier_start(*p)) {
+			p++;
+			while (is_identifier_part(*p))
+				p++;
+		} else
+			return *p == '(';
+	}
+	return false;
+}
+
+static void
+lex_asterisk_unary(void)
+{
+	while (*in.p == '*' || ch_isspace(*in.p)) {
+		if (*in.p == '*')
+			token_add_char('*');
+		if (*in.p == '\n')
+			in.token_end_line++;
+		inp_skip();
+	}
+
+	if (ps.in_decl && probably_in_function_definition())
+		ps.line_has_func_def = true;
+}
+
+static bool
+skip(const char **pp, const char *s)
+{
+	size_t len = strlen(s);
+	while (ch_isblank(**pp))
+		(*pp)++;
+	if (strncmp(*pp, s, len) == 0) {
+		*pp += len;
+		return true;
+	}
+	return false;
+}
+
+static void
+lex_indent_comment(void)
+{
+	const char *p = in.line.s;
+	if (skip(&p, "/*") && skip(&p, "INDENT")) {
+		enum indent_enabled enabled;
+		if (skip(&p, "ON") || *p == '*')
+			enabled = indent_last_off_line;
+		else if (skip(&p, "OFF"))
+			enabled = indent_off;
+		else
+			return;
+		if (skip(&p, "*/\n")) {
+			if (lab.len > 0 || code.len > 0 || com.len > 0)
+				output_line();
+			indent_enabled = enabled;
+		}
+	}
+}
+
+/* Reads the next token, placing it in the global variable "token". */
+lexer_symbol
+lexi(void)
+{
+	buf_clear(&token);
+
+	for (;;) {
+		if (ch_isblank(*in.p))
+			in.p++;
+		else if (skip_line_continuation())
+			continue;
+		else
+			break;
+	}
+	in.token_start_line = in.token_end_line;
+
+	lexer_symbol alnum_lsym = lexi_alnum();
+	if (alnum_lsym != lsym_eof)
+		return alnum_lsym;
+
+	/* Scan a non-alphanumeric token */
+
+	token_add_char(inp_next());
+
+	lexer_symbol lsym;
+	bool next_unary;
+
+	switch (token.s[token.len - 1]) {
+
+	case '#':
+		lsym = lsym_preprocessing;
+		next_unary = ps.next_unary;
+		break;
+
+	case '\n':
+		/* if data has been exhausted, the '\n' is a dummy. */
+		lsym = had_eof ? lsym_eof : lsym_newline;
+		next_unary = ps.next_unary;
+		break;
+
+	/* INDENT OFF */
+	case ')':	lsym = lsym_rparen;	next_unary = false;	break;
+	case '[':	lsym = lsym_lbracket;	next_unary = true;	break;
+	case ']':	lsym = lsym_rbracket;	next_unary = false;	break;
+	case '{':	lsym = lsym_lbrace;	next_unary = true;	break;
+	case '}':	lsym = lsym_rbrace;	next_unary = true;	break;
+	case '.':	lsym = lsym_period;	next_unary = false;	break;
+	case '?':	lsym = lsym_question;	next_unary = true;	break;
+	case ',':	lsym = lsym_comma;	next_unary = true;	break;
+	case ';':	lsym = lsym_semicolon;	next_unary = true;	break;
+	/* INDENT ON */
+
+	case '(':
+		if (in.p == in.line.s + 1)
+			check_parenthesized_function_definition();
+		lsym = lsym_lparen;
+		next_unary = true;
+		break;
+
+	case '+':
+	case '-':
+		lsym = ps.next_unary ? lsym_unary_op : lsym_binary_op;
+		next_unary = true;
+
+		/* '++' or '--' */
+		if (*in.p == token.s[token.len - 1]) {
+			token_add_char(*in.p++);
+			if (ps.prev_lsym == lsym_word ||
+			    ps.prev_lsym == lsym_rparen ||
+			    ps.prev_lsym == lsym_rbracket) {
+				lsym = ps.next_unary
+				    ? lsym_unary_op : lsym_postfix_op;
+				next_unary = false;
+			}
+
+		} else if (*in.p == '=') {	/* '+=' or '-=' */
+			token_add_char(*in.p++);
+
+		} else if (*in.p == '>') {	/* '->' */
+			token_add_char(*in.p++);
+			lsym = lsym_unary_op;
+			next_unary = false;
+			ps.want_blank = false;
+		}
+		break;
+
+	case ':':
+		lsym = ps.quest_level > 0
+		    ? (ps.quest_level--, lsym_question_colon)
+		    : ps.in_var_decl ? lsym_other_colon : lsym_label_colon;
+		next_unary = true;
+		break;
+
+	case '*':
+		if (*in.p == '=') {
+			token_add_char(*in.p++);
+			lsym = lsym_binary_op;
+		} else if (is_asterisk_unary()) {
+			lex_asterisk_unary();
+			lsym = lsym_unary_op;
+		} else
+			lsym = lsym_binary_op;
+		next_unary = true;
+		break;
+
+	case '=':
+		if (ps.in_var_decl)
+			ps.in_init = true;
+		if (*in.p == '=')
+			token_add_char(*in.p++);
+		lsym = lsym_binary_op;
+		next_unary = true;
+		break;
+
+	case '>':
+	case '<':
+	case '!':		/* ops like <, <<, <=, !=, etc. */
+		if (*in.p == '>' || *in.p == '<' || *in.p == '=')
+			token_add_char(*in.p++);
+		if (*in.p == '=')
+			token_add_char(*in.p++);
+		lsym = ps.next_unary ? lsym_unary_op : lsym_binary_op;
+		next_unary = true;
+		break;
+
+	case '\'':
+	case '"':
+		lex_char_or_string();
+		lsym = lsym_word;
+		next_unary = false;
+		break;
+
+	default:
+		if (token.s[token.len - 1] == '/'
+		    && (*in.p == '*' || *in.p == '/')) {
+			enum indent_enabled prev = indent_enabled;
+			lex_indent_comment();
+			if (prev == indent_on && indent_enabled == indent_off)
+				buf_clear(&out.indent_off_text);
+			token_add_char(*in.p++);
+			lsym = lsym_comment;
+			next_unary = ps.next_unary;
+			break;
+		}
+
+		/* punctuation like '%', '&&', '/', '^', '||', '~' */
+		lsym = ps.next_unary ? lsym_unary_op : lsym_binary_op;
+		if (*in.p == token.s[token.len - 1])
+			token_add_char(*in.p++), lsym = lsym_binary_op;
+		if (*in.p == '=')
+			token_add_char(*in.p++), lsym = lsym_binary_op;
+
+		next_unary = true;
+	}
+
+	ps.next_unary = next_unary;
+
+	return lsym;
 }

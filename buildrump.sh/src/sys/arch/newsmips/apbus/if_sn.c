@@ -1,4 +1,4 @@
-/*	$NetBSD: if_sn.c,v 1.49 2020/02/05 13:08:19 martin Exp $	*/
+/*	$NetBSD: if_sn.c,v 1.56 2024/07/05 04:31:49 rin Exp $	*/
 
 /*
  * National Semiconductor  DP8393X SONIC Driver
@@ -16,7 +16,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_sn.c,v 1.49 2020/02/05 13:08:19 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_sn.c,v 1.56 2024/07/05 04:31:49 rin Exp $");
 
 #include "opt_inet.h"
 
@@ -51,9 +51,9 @@ __KERNEL_RCSID(0, "$NetBSD: if_sn.c,v 1.49 2020/02/05 13:08:19 martin Exp $");
 #include <newsmips/apbus/if_snreg.h>
 #include <newsmips/apbus/if_snvar.h>
 
-/* #define SONIC_DEBUG */
+/* #define SNDEBUG */
 
-#ifdef SONIC_DEBUG
+#ifdef SNDEBUG
 # define DPRINTF printf
 #else
 # define DPRINTF while (0) printf
@@ -83,8 +83,6 @@ static inline u_int	sonicput(struct sn_softc *sc, struct mbuf *m0,
     int mtd_next);
 static inline int	sonic_read(struct sn_softc *, void *, int);
 static inline struct mbuf *sonic_get(struct sn_softc *, void *, int);
-
-int sndebug = 0;
 
 /*
  * SONIC buffers need to be aligned 16 or 32 bit aligned.
@@ -202,7 +200,7 @@ snsetup(struct sn_softc	*sc, uint8_t *lladdr)
 
 #ifdef SNDEBUG
 	aprint_debug_dev(sc->sc_dev, "buffers: rra=%p cda=%p rda=%p tda=%p\n",
-	    device_xname(sc->sc_dev), sc->p_rra[0], sc->p_cda,
+	    sc->p_rra[0], sc->p_cda,
 	    sc->p_rda, sc->mtda[0].mtd_txp);
 #endif
 
@@ -307,7 +305,7 @@ snstart(struct ifnet *ifp)
 	struct mbuf	*m;
 	int		mtd_next;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 outloop:
@@ -316,17 +314,15 @@ outloop:
 		mtd_next = 0;
 
 	if (mtd_next == sc->mtd_hw) {
-		ifp->if_flags |= IFF_OACTIVE;
 		return;
 	}
 
-	IF_DEQUEUE(&ifp->if_snd, m);
+	IF_POLL(&ifp->if_snd, m);
 	if (m == 0)
 		return;
 
 	/* We need the header for m_pkthdr.len. */
-	if ((m->m_flags & M_PKTHDR) == 0)
-		panic("%s: snstart: no header mbuf", device_xname(sc->sc_dev));
+	KASSERT(m->m_flags & M_PKTHDR);
 
 	/*
 	 * If bpf is listening on this interface, let it
@@ -336,13 +332,13 @@ outloop:
 
 	/*
 	 * If there is nothing in the o/p queue, and there is room in
-	 * the Tx ring, then send the packet directly.  Otherwise append
-	 * it to the o/p queue.
+	 * the Tx ring, then send the packet directly.  Otherwise it
+	 * stays on the queue.
 	 */
 	if ((sonicput(sc, m, mtd_next)) == 0) {
-		IF_PREPEND(&ifp->if_snd, m);
 		return;
 	}
+	IF_DEQUEUE(&ifp->if_snd, m);
 
 	sc->mtd_prev = sc->mtd_free;
 	sc->mtd_free = mtd_next;
@@ -432,7 +428,6 @@ sninit(struct sn_softc *sc)
 
 	/* flag interface as "running" */
 	sc->sc_if.if_flags |= IFF_RUNNING;
-	sc->sc_if.if_flags &= ~IFF_OACTIVE;
 
 	splx(s);
 	return 0;
@@ -458,8 +453,7 @@ snstop(struct sn_softc *sc)
 	/* free all pending transmit mbufs */
 	while (sc->mtd_hw != sc->mtd_free) {
 		mtd = &sc->mtda[sc->mtd_hw];
-		if (mtd->mtd_mbuf)
-			m_freem(mtd->mtd_mbuf);
+		m_freem(mtd->mtd_mbuf);
 		if (++sc->mtd_hw == NTDA) sc->mtd_hw = 0;
 	}
 
@@ -906,12 +900,8 @@ sonictxint(struct sn_softc *sc)
 		}
 #endif /* SNDEBUG */
 
-		ifp->if_flags &= ~IFF_OACTIVE;
-
-		if (mtd->mtd_mbuf != 0) {
-			m_freem(mtd->mtd_mbuf);
-			mtd->mtd_mbuf = 0;
-		}
+		m_freem(mtd->mtd_mbuf);
+		mtd->mtd_mbuf = NULL;
 		if (++mtd_hw == NTDA) mtd_hw = 0;
 
 		txp_status = SRO(sc->bitmode, txp, TXP_STATUS);
@@ -1038,21 +1028,24 @@ sonic_read(struct sn_softc *sc, void *pkt, int len)
 	struct ifnet *ifp = &sc->sc_if;
 	struct mbuf *m;
 
-#ifdef SNDEBUG
-	{
-		printf("%s: rcvd %p len=%d type=0x%x from %s",
-		    devoce_xname(sc->sc_dev), et, len, htons(et->ether_type),
-		    ether_sprintf(et->ether_shost));
-		printf(" (to %s)\n", ether_sprintf(et->ether_dhost));
-	}
-#endif /* SNDEBUG */
-
 	if (len < (ETHER_MIN_LEN - ETHER_CRC_LEN) ||
 	    len > (ETHER_MAX_LEN - ETHER_CRC_LEN)) {
 		printf("%s: invalid packet length %d bytes\n",
 		    device_xname(sc->sc_dev), len);
 		return 0;
 	}
+
+#ifdef SNDEBUG
+	{       
+		struct ether_header eh_s, *eh = &eh_s;
+		memcpy(eh, pkt, sizeof(*eh));
+		CTASSERT(sizeof(*eh) <= ETHER_MIN_LEN);
+		printf("%s: rcvd %p len=%d type=0x%x from %s",
+		    device_xname(sc->sc_dev), eh, len, htons(eh->ether_type),
+		    ether_sprintf(eh->ether_shost));
+		printf(" (to %s)\n", ether_sprintf(eh->ether_dhost));
+	}       
+#endif /* SNDEBUG */
 
 	m = sonic_get(sc, pkt, len);
 	if (m == NULL)

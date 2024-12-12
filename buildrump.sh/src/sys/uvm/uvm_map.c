@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_map.c,v 1.390 2021/07/01 15:06:01 chs Exp $	*/
+/*	$NetBSD: uvm_map.c,v 1.426 2024/08/16 11:28:01 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_map.c,v 1.390 2021/07/01 15:06:01 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_map.c,v 1.426 2024/08/16 11:28:01 riastradh Exp $");
 
 #include "opt_ddb.h"
 #include "opt_pax.h"
@@ -142,12 +142,6 @@ UVMMAP_EVCNT_DEFINE(mlk_tree)
 UVMMAP_EVCNT_DEFINE(mlk_treeloop)
 
 const char vmmapbsy[] = "vmmapbsy";
-
-/*
- * cache for vmspace structures.
- */
-
-static struct pool_cache uvm_vmspace_cache;
 
 /*
  * cache for dynamically-allocated map entries.
@@ -309,11 +303,23 @@ int _uvm_map_sanity(struct vm_map *);
 int _uvm_tree_sanity(struct vm_map *);
 static vsize_t uvm_rb_maxgap(const struct vm_map_entry *);
 
-#define	ROOT_ENTRY(map)		((struct vm_map_entry *)(map)->rb_tree.rbt_root)
-#define	LEFT_ENTRY(entry)	((struct vm_map_entry *)(entry)->rb_node.rb_left)
-#define	RIGHT_ENTRY(entry)	((struct vm_map_entry *)(entry)->rb_node.rb_right)
-#define	PARENT_ENTRY(map, entry) \
-	(ROOT_ENTRY(map) == (entry) \
+/*
+ * Tree iteration.  We violate the rbtree(9) abstraction for various
+ * things here.  Entries are ascending left to right, so, provided the
+ * child entry in question exists:
+ *
+ *	LEFT_ENTRY(entry)->end <= entry->start
+ *	entry->end <= RIGHT_ENTRY(entry)->start
+ */
+__CTASSERT(offsetof(struct vm_map_entry, rb_node) == 0);
+#define	ROOT_ENTRY(map)							      \
+	((struct vm_map_entry *)(map)->rb_tree.rbt_root)
+#define	LEFT_ENTRY(entry)						      \
+	((struct vm_map_entry *)(entry)->rb_node.rb_left)
+#define	RIGHT_ENTRY(entry)						      \
+	((struct vm_map_entry *)(entry)->rb_node.rb_right)
+#define	PARENT_ENTRY(map, entry)					      \
+	(ROOT_ENTRY(map) == (entry)					      \
 	    ? NULL : (struct vm_map_entry *)RB_FATHER(&(entry)->rb_node))
 
 /*
@@ -931,8 +937,6 @@ uvm_map_init_caches(void)
 	pool_cache_bootstrap(&uvm_map_entry_cache, sizeof(struct vm_map_entry),
 	    coherency_unit, 0, PR_LARGECACHE, "vmmpepl", NULL, IPL_NONE, NULL,
 	    NULL, NULL);
-	pool_cache_bootstrap(&uvm_vmspace_cache, sizeof(struct vmspace),
-	    0, 0, 0, "vmsppl", NULL, IPL_NONE, NULL, NULL, NULL);
 }
 
 /*
@@ -1121,7 +1125,7 @@ uvm_map_prepare(struct vm_map *map, vaddr_t start, vsize_t size,
 	vm_prot_t maxprot = UVM_MAXPROTECTION(flags);
 
 	UVMHIST_FUNC(__func__);
-	UVMHIST_CALLARGS(maphist, "(map=%#jx, start=%#jx, size=%ju, flags=%#jx)",
+	UVMHIST_CALLARGS(maphist, "(map=%#jx, start=%#jx, size=%jx, flags=%#jx)",
 	    (uintptr_t)map, start, size, flags);
 	UVMHIST_LOG(maphist, "  uobj/offset %#jx/%jd", (uintptr_t)uobj,
 	    uoffset,0,0);
@@ -1627,6 +1631,18 @@ done:
 
 /*
  * uvm_map_lookup_entry_bytree: lookup an entry in tree
+ *
+ * => map must at least be read-locked by caller.
+ *
+ * => If address lies in an entry, set *entry to it and return true;
+ *    then (*entry)->start <= address < (*entry)->end.
+
+ * => If address is below all entries in map, return false and set
+ *    *entry to &map->header.
+ *
+ * => Otherwise, return false and set *entry to the highest entry below
+ *    address, so (*entry)->end <= address, and if (*entry)->next is
+ *    not &map->header, address < (*entry)->next->start.
  */
 
 static inline bool
@@ -1636,7 +1652,11 @@ uvm_map_lookup_entry_bytree(struct vm_map *map, vaddr_t address,
 	struct vm_map_entry *prev = &map->header;
 	struct vm_map_entry *cur = ROOT_ENTRY(map);
 
+	KASSERT(rw_lock_held(&map->lock));
+
 	while (cur) {
+		KASSERT(prev == &map->header || prev->end <= address);
+		KASSERT(prev == &map->header || prev->end <= cur->start);
 		UVMMAP_EVCNT_INCR(mlk_treeloop);
 		if (address >= cur->start) {
 			if (address < cur->end) {
@@ -1644,10 +1664,14 @@ uvm_map_lookup_entry_bytree(struct vm_map *map, vaddr_t address,
 				return true;
 			}
 			prev = cur;
+			KASSERT(prev->end <= address);
 			cur = RIGHT_ENTRY(cur);
+			KASSERT(cur == NULL || prev->end <= cur->start);
 		} else
 			cur = LEFT_ENTRY(cur);
 	}
+	KASSERT(prev == &map->header || prev->end <= address);
+	KASSERT(prev->next == &map->header || address < prev->next->start);
 	*entry = prev;
 	return false;
 }
@@ -1655,9 +1679,17 @@ uvm_map_lookup_entry_bytree(struct vm_map *map, vaddr_t address,
 /*
  * uvm_map_lookup_entry: find map entry at or before an address
  *
- * => map must at least be read-locked by caller
- * => entry is returned in "entry"
- * => return value is true if address is in the returned entry
+ * => map must at least be read-locked by caller.
+ *
+ * => If address lies in an entry, set *entry to it and return true;
+ *    then (*entry)->start <= address < (*entry)->end.
+
+ * => If address is below all entries in map, return false and set
+ *    *entry to &map->header.
+ *
+ * => Otherwise, return false and set *entry to the highest entry below
+ *    address, so (*entry)->end <= address, and if (*entry)->next is
+ *    not &map->header, address < (*entry)->next->start.
  */
 
 bool
@@ -1668,6 +1700,8 @@ uvm_map_lookup_entry(struct vm_map *map, vaddr_t address,
 	UVMHIST_FUNC(__func__);
 	UVMHIST_CALLARGS(maphist,"(map=%#jx,addr=%#jx,ent=%#jx)",
 	    (uintptr_t)map, address, (uintptr_t)entry, 0);
+
+	KASSERT(rw_lock_held(&map->lock));
 
 	/*
 	 * make a quick check to see if we are already looking at
@@ -1722,7 +1756,23 @@ static int
 uvm_map_space_avail(vaddr_t *start, vsize_t length, voff_t uoffset,
     vsize_t align, int flags, int topdown, struct vm_map_entry *entry)
 {
+	vaddr_t orig_start = *start;
 	vaddr_t end;
+
+#define	INVARIANTS()							      \
+	KASSERTMSG((topdown						      \
+		? *start <= orig_start					      \
+		: *start >= orig_start),				      \
+	    "[%s] *start=%"PRIxVADDR" orig_start=%"PRIxVADDR		      \
+	    " length=%"PRIxVSIZE" uoffset=%#llx align=%"PRIxVSIZE	      \
+	    " flags=%x entry@%p=[%"PRIxVADDR",%"PRIxVADDR")"		      \
+	    " ncolors=%d colormask=%x",					      \
+	    topdown ? "topdown" : "bottomup", *start, orig_start,	      \
+	    length, (unsigned long long)uoffset, align,			      \
+	    flags, entry, entry->start, entry->end,			      \
+	    uvmexp.ncolors, uvmexp.colormask)
+
+	INVARIANTS();
 
 #ifdef PMAP_PREFER
 	/*
@@ -1730,8 +1780,10 @@ uvm_map_space_avail(vaddr_t *start, vsize_t length, voff_t uoffset,
 	 * we only do this if a valid offset is specified.
 	 */
 
-	if (uoffset != UVM_UNKNOWN_OFFSET)
+	if (uoffset != UVM_UNKNOWN_OFFSET) {
 		PMAP_PREFER(uoffset, start, length, topdown);
+		INVARIANTS();
+	}
 #endif
 	if ((flags & UVM_FLAG_COLORMATCH) != 0) {
 		KASSERT(align < uvmexp.ncolors);
@@ -1751,11 +1803,13 @@ uvm_map_space_avail(vaddr_t *start, vsize_t length, voff_t uoffset,
 						hint += colorsize;
 				}
 				*start = ptoa(hint + align); /* adjust to color */
+				INVARIANTS();
 			}
 		}
 	} else {
 		KASSERT(powerof2(align));
 		uvm_map_align_va(start, align, topdown);
+		INVARIANTS();
 		/*
 		 * XXX Should we PMAP_PREFER() here again?
 		 * eh...i think we're okay
@@ -1766,16 +1820,46 @@ uvm_map_space_avail(vaddr_t *start, vsize_t length, voff_t uoffset,
 	 * Find the end of the proposed new region.  Be sure we didn't
 	 * wrap around the address; if so, we lose.  Otherwise, if the
 	 * proposed new region fits before the next entry, we win.
+	 *
+	 * XXX Should this use vm_map_max(map) as the max?
 	 */
 
-	end = *start + length;
-	if (end < *start)
+	if (length > __type_max(vaddr_t) - *start)
 		return (-1);
+	end = *start + length;
 
 	if (entry->next->start >= end && *start >= entry->end)
 		return (1);
 
 	return (0);
+
+#undef INVARIANTS
+}
+
+static void
+uvm_findspace_invariants(struct vm_map *map, vaddr_t orig_hint, vaddr_t length,
+    struct uvm_object *uobj, voff_t uoffset, vsize_t align, int flags,
+    vaddr_t hint, struct vm_map_entry *entry, int line)
+{
+	const int topdown = map->flags & VM_MAP_TOPDOWN;
+	const int hint_location_ok =
+		topdown ? hint <= orig_hint
+			: hint >= orig_hint;
+
+	KASSERTMSG(hint_location_ok,
+	    "%s map=%p hint=%#" PRIxVADDR " %s orig_hint=%#" PRIxVADDR
+	    " length=%#" PRIxVSIZE " uobj=%p uoffset=%#llx align=%" PRIxVSIZE
+	    " flags=%#x entry@%p=[%" PRIxVADDR ",%" PRIxVADDR ")"
+	    " entry->next@%p=[%" PRIxVADDR ",%" PRIxVADDR ")"
+	    " (uvm_map_findspace line %d)",
+	    topdown ? "topdown" : "bottomup",
+	    map, hint, topdown ? ">" : "<", orig_hint,
+	    length, uobj, (unsigned long long)uoffset, align,
+	    flags, entry, entry ? entry->start : 0, entry ? entry->end : 0,
+	    entry ? entry->next : NULL,
+	    entry && entry->next ? entry->next->start : 0,
+	    entry && entry->next ? entry->next->end : 0,
+	    line);
 }
 
 /*
@@ -1796,13 +1880,19 @@ uvm_map_findspace(struct vm_map *map, vaddr_t hint, vsize_t length,
     vaddr_t *result /* OUT */, struct uvm_object *uobj, voff_t uoffset,
     vsize_t align, int flags)
 {
-	struct vm_map_entry *entry;
+#define	INVARIANTS()							      \
+	uvm_findspace_invariants(map, orig_hint, length, uobj, uoffset, align,\
+	    flags, hint, entry, __LINE__)
+	struct vm_map_entry *entry = NULL;
 	struct vm_map_entry *child, *prev, *tmp;
 	vaddr_t orig_hint __diagused;
 	const int topdown = map->flags & VM_MAP_TOPDOWN;
+	int avail;
 	UVMHIST_FUNC(__func__);
-	UVMHIST_CALLARGS(maphist, "(map=%#jx, hint=%#jx, len=%ju, flags=%#jx)",
+	UVMHIST_CALLARGS(maphist, "(map=%#jx, hint=%#jx, len=%ju, flags=%#jx...",
 	    (uintptr_t)map, hint, length, flags);
+	UVMHIST_LOG(maphist, " uobj=%#jx, uoffset=%#jx, align=%#jx)",
+	    (uintptr_t)uobj, uoffset, align, 0);
 
 	KASSERT((flags & UVM_FLAG_COLORMATCH) != 0 || powerof2(align));
 	KASSERT((flags & UVM_FLAG_COLORMATCH) == 0 || align < uvmexp.ncolors);
@@ -1811,12 +1901,17 @@ uvm_map_findspace(struct vm_map *map, vaddr_t hint, vsize_t length,
 	uvm_map_check(map, "map_findspace entry");
 
 	/*
-	 * remember the original hint.  if we are aligning, then we
-	 * may have to try again with no alignment constraint if
-	 * we fail the first time.
+	 * Clamp the hint to the VM map's min/max address, and remmeber
+	 * the clamped original hint.  Remember the original hint,
+	 * clamped to the min/max address.  If we are aligning, then we
+	 * may have to try again with no alignment constraint if we
+	 * fail the first time.
+	 *
+	 * We use the original hint to verify later that the search has
+	 * been monotonic -- that is, nonincreasing or nondecreasing,
+	 * according to topdown or !topdown respectively.  But the
+	 * clamping is not monotonic.
 	 */
-
-	orig_hint = hint;
 	if (hint < vm_map_min(map)) {	/* check ranges ... */
 		if (flags & UVM_FLAG_FIXED) {
 			UVMHIST_LOG(maphist,"<- VA below map range",0,0,0,0);
@@ -1829,14 +1924,23 @@ uvm_map_findspace(struct vm_map *map, vaddr_t hint, vsize_t length,
 		    hint, vm_map_min(map), vm_map_max(map), 0);
 		return (NULL);
 	}
+	orig_hint = hint;
+	INVARIANTS();
+
+	UVMHIST_LOG(maphist,"<- VA %#jx vs range [%#jx->%#jx]",
+	    hint, vm_map_min(map), vm_map_max(map), 0);
 
 	/*
 	 * hint may not be aligned properly; we need round up or down it
 	 * before proceeding further.
 	 */
-	if ((flags & UVM_FLAG_COLORMATCH) == 0)
+	if ((flags & UVM_FLAG_COLORMATCH) == 0) {
 		uvm_map_align_va(&hint, align, topdown);
+		INVARIANTS();
+	}
 
+	UVMHIST_LOG(maphist,"<- VA %#jx vs range [%#jx->%#jx]",
+	    hint, vm_map_min(map), vm_map_max(map), 0);
 	/*
 	 * Look for the first possible address; if there's already
 	 * something at this address, we have to start after it.
@@ -1863,22 +1967,56 @@ uvm_map_findspace(struct vm_map *map, vaddr_t hint, vsize_t length,
 	 * it, there would be four cases).
 	 */
 
-	if ((flags & UVM_FLAG_FIXED) == 0 && hint == vm_map_min(map)) {
+	if ((flags & UVM_FLAG_FIXED) == 0 &&
+	    hint == (topdown ? vm_map_max(map) : vm_map_min(map))) {
+		/*
+		 * The uvm_map_findspace algorithm is monotonic -- for
+		 * topdown VM it starts with a high hint and returns a
+		 * lower free address; for !topdown VM it starts with a
+		 * low hint and returns a higher free address.  As an
+		 * optimization, start with the first (highest for
+		 * topdown, lowest for !topdown) free address.
+		 *
+		 * XXX This `optimization' probably doesn't actually do
+		 * much in practice unless userland explicitly passes
+		 * the VM map's minimum or maximum address, which
+		 * varies from machine to machine (VM_MAX/MIN_ADDRESS,
+		 * e.g. 0x7fbfdfeff000 on amd64 but 0xfffffffff000 on
+		 * aarch64) and may vary according to other factors
+		 * like sysctl vm.user_va0_disable.  In particular, if
+		 * the user specifies 0 as a hint to mmap, then mmap
+		 * will choose a default address which is usually _not_
+		 * VM_MAX/MIN_ADDRESS but something else instead like
+		 * VM_MAX_ADDRESS - stack size - guard page overhead,
+		 * in which case this branch is never hit.
+		 *
+		 * In fact, this branch appears to have been broken for
+		 * two decades between when topdown was introduced in
+		 * ~2003 and when it was adapted to handle the topdown
+		 * case without violating the monotonicity assertion in
+		 * 2022.  Maybe Someone^TM should either ditch the
+		 * optimization or find a better way to do it.
+		 */
 		entry = map->first_free;
+	} else if (uvm_map_lookup_entry(map, hint, &entry)) {
+		KASSERT(entry->start <= hint);
+		KASSERT(hint < entry->end);
+		/* "hint" address already in use ... */
+		if (flags & UVM_FLAG_FIXED) {
+			UVMHIST_LOG(maphist, "<- fixed & VA in use",
+			    0, 0, 0, 0);
+			return (NULL);
+		}
+		if (topdown)
+			/* Start from lower gap. */
+			entry = entry->prev;
 	} else {
-		if (uvm_map_lookup_entry(map, hint, &entry)) {
-			/* "hint" address already in use ... */
-			if (flags & UVM_FLAG_FIXED) {
-				UVMHIST_LOG(maphist, "<- fixed & VA in use",
-				    0, 0, 0, 0);
-				return (NULL);
-			}
-			if (topdown)
-				/* Start from lower gap. */
-				entry = entry->prev;
-		} else if (flags & UVM_FLAG_FIXED) {
-			if (entry->next->start >= hint + length &&
-			    hint + length > hint)
+		KASSERT(entry == &map->header || entry->end <= hint);
+		KASSERT(entry->next == &map->header ||
+		    hint < entry->next->start);
+		if (flags & UVM_FLAG_FIXED) {
+			if (entry->next->start >= hint &&
+			    length <= entry->next->start - hint)
 				goto found;
 
 			/* "hint" address is gap but too small */
@@ -1889,8 +2027,10 @@ uvm_map_findspace(struct vm_map *map, vaddr_t hint, vsize_t length,
 			/*
 			 * See if given hint fits in this gap.
 			 */
-			switch (uvm_map_space_avail(&hint, length,
-			    uoffset, align, flags, topdown, entry)) {
+			avail = uvm_map_space_avail(&hint, length,
+			    uoffset, align, flags, topdown, entry);
+			INVARIANTS();
+			switch (avail) {
 			case 1:
 				goto found;
 			case -1:
@@ -1920,9 +2060,25 @@ uvm_map_findspace(struct vm_map *map, vaddr_t hint, vsize_t length,
 	/* Try to find the space in the red-black tree */
 
 	/* Check slot before any entry */
-	hint = topdown ? entry->next->start - length : entry->end;
-	switch (uvm_map_space_avail(&hint, length, uoffset, align, flags,
-	    topdown, entry)) {
+	if (topdown) {
+		KASSERTMSG(entry->next->start >= vm_map_min(map),
+		    "map=%p entry=%p entry->next=%p"
+		    " entry->next->start=0x%"PRIxVADDR" min=0x%"PRIxVADDR,
+		    map, entry, entry->next,
+		    entry->next->start, vm_map_min(map));
+		if (length > entry->next->start - vm_map_min(map))
+			hint = vm_map_min(map); /* XXX goto wraparound? */
+		else
+			hint = MIN(orig_hint, entry->next->start - length);
+		KASSERT(hint >= vm_map_min(map));
+	} else {
+		hint = entry->end;
+	}
+	INVARIANTS();
+	avail = uvm_map_space_avail(&hint, length, uoffset, align, flags,
+	    topdown, entry);
+	INVARIANTS();
+	switch (avail) {
 	case 1:
 		goto found;
 	case -1:
@@ -1989,8 +2145,11 @@ nextgap:
 			if (hint < tmp->end)
 				hint = tmp->end;
 		}
-		switch (uvm_map_space_avail(&hint, length, uoffset, align,
-		    flags, topdown, tmp)) {
+		INVARIANTS();
+		avail = uvm_map_space_avail(&hint, length, uoffset, align,
+		    flags, topdown, tmp);
+		INVARIANTS();
+		switch (avail) {
 		case 1:
 			entry = tmp;
 			goto found;
@@ -2011,8 +2170,11 @@ nextgap:
 		KASSERT(orig_hint <= prev->end);
 		hint = prev->end;
 	}
-	switch (uvm_map_space_avail(&hint, length, uoffset, align,
-	    flags, topdown, prev)) {
+	INVARIANTS();
+	avail = uvm_map_space_avail(&hint, length, uoffset, align,
+	    flags, topdown, prev);
+	INVARIANTS();
+	switch (avail) {
 	case 1:
 		entry = prev;
 		goto found;
@@ -2027,7 +2189,10 @@ nextgap:
 	else
 		tmp = RIGHT_ENTRY(prev);
 	for (;;) {
-		KASSERT(tmp && tmp->maxgap >= length);
+		KASSERT(tmp);
+		KASSERTMSG(tmp->maxgap >= length,
+		    "tmp->maxgap=0x%"PRIxVSIZE" length=0x%"PRIxVSIZE,
+		    tmp->maxgap, length);
 		if (topdown)
 			child = RIGHT_ENTRY(tmp);
 		else
@@ -2052,8 +2217,11 @@ nextgap:
 		KASSERT(orig_hint <= tmp->end);
 		hint = tmp->end;
 	}
-	switch (uvm_map_space_avail(&hint, length, uoffset, align,
-	    flags, topdown, tmp)) {
+	INVARIANTS();
+	avail = uvm_map_space_avail(&hint, length, uoffset, align,
+	    flags, topdown, tmp);
+	INVARIANTS();
+	switch (avail) {
 	case 1:
 		entry = tmp;
 		goto found;
@@ -2073,13 +2241,18 @@ nextgap:
 	 *	 entry->next->start = VA of end of current gap
 	 */
 
+	INVARIANTS();
 	for (;;) {
 		/* Update hint for current gap. */
-		hint = topdown ? entry->next->start - length : entry->end;
+		hint = topdown ? MIN(orig_hint, entry->next->start - length)
+		    : entry->end;
+		INVARIANTS();
 
 		/* See if it fits. */
-		switch (uvm_map_space_avail(&hint, length, uoffset, align,
-		    flags, topdown, entry)) {
+		avail = uvm_map_space_avail(&hint, length, uoffset, align,
+		    flags, topdown, entry);
+		INVARIANTS();
+		switch (avail) {
 		case 1:
 			goto found;
 		case -1:
@@ -2108,12 +2281,10 @@ nextgap:
 	SAVE_HINT(map, map->hint, entry);
 	*result = hint;
 	UVMHIST_LOG(maphist,"<- got it!  (result=%#jx)", hint, 0,0,0);
-	KASSERTMSG( topdown || hint >= orig_hint, "hint: %#jx, orig_hint: %#jx",
-	    (uintmax_t)hint, (uintmax_t)orig_hint);
-	KASSERTMSG(!topdown || hint <= orig_hint, "hint: %#jx, orig_hint: %#jx",
-	    (uintmax_t)hint, (uintmax_t)orig_hint);
+	INVARIANTS();
 	KASSERT(entry->end <= hint);
-	KASSERT(hint + length <= entry->next->start);
+	KASSERT(hint <= entry->next->start);
+	KASSERT(length <= entry->next->start - hint);
 	return (entry);
 
  wraparound:
@@ -2125,6 +2296,7 @@ nextgap:
 	UVMHIST_LOG(maphist, "<- failed (notfound)", 0,0,0,0);
 
 	return (NULL);
+#undef INVARIANTS
 }
 
 /*
@@ -2150,6 +2322,8 @@ uvm_unmap_remove(struct vm_map *map, vaddr_t start, vaddr_t end,
 	UVMHIST_CALLARGS(maphist,"(map=%#jx, start=%#jx, end=%#jx)",
 	    (uintptr_t)map, start, end, 0);
 	VM_MAP_RANGE_CHECK(map, start, end);
+
+	KASSERT(vm_map_locked_p(map));
 
 	uvm_map_check(map, "unmap_remove entry");
 
@@ -2280,8 +2454,7 @@ uvm_unmap_remove(struct vm_map *map, vaddr_t start, vaddr_t end,
 		}
 
 		if (VM_MAP_IS_KERNEL(map) && (flags & UVM_FLAG_NOWAIT) == 0) {
-			uvm_km_check_empty(map, entry->start,
-			    entry->end);
+			uvm_km_check_empty(map, entry->start, entry->end);
 		}
 #endif /* defined(UVMDEBUG) */
 
@@ -2584,7 +2757,8 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 	 * REMOVE.
 	 */
 
-	KASSERT((start & PAGE_MASK) == 0 && (len & PAGE_MASK) == 0);
+	KASSERTMSG((start & PAGE_MASK) == 0, "start=0x%"PRIxVADDR, start);
+	KASSERTMSG((len & PAGE_MASK) == 0, "len=0x%"PRIxVADDR, len);
 	KASSERT((flags & UVM_EXTRACT_REMOVE) == 0 ||
 		(flags & (UVM_EXTRACT_CONTIG|UVM_EXTRACT_QREF)) == 0);
 
@@ -2784,7 +2958,7 @@ uvm_map_extract(struct vm_map *srcmap, vaddr_t start, vsize_t len,
 		}
 	} else {
 		copy_ok = 0;
-		/* replace defered until step 7 */
+		/* replace deferred until step 7 */
 	}
 
 	/*
@@ -3783,8 +3957,7 @@ uvm_map_pageable_all(struct vm_map *map, int flags, vsize_t limit)
  * => never a need to flush amap layer since the anonymous memory has
  *	no permanent home, but may deactivate pages there
  * => called from sys_msync() and sys_madvise()
- * => caller must not write-lock map (read OK).
- * => we may sleep while cleaning if SYNCIO [with map read-locked]
+ * => caller must not have map locked
  */
 
 int
@@ -3806,10 +3979,10 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 	KASSERT((flags & (PGO_FREE|PGO_DEACTIVATE)) !=
 		(PGO_FREE|PGO_DEACTIVATE));
 
-	vm_map_lock_read(map);
+	vm_map_lock(map);
 	VM_MAP_RANGE_CHECK(map, start, end);
-	if (uvm_map_lookup_entry(map, start, &entry) == false) {
-		vm_map_unlock_read(map);
+	if (!uvm_map_lookup_entry(map, start, &entry)) {
+		vm_map_unlock(map);
 		return EFAULT;
 	}
 
@@ -3819,22 +3992,24 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 
 	for (current = entry; current->start < end; current = current->next) {
 		if (UVM_ET_ISSUBMAP(current)) {
-			vm_map_unlock_read(map);
+			vm_map_unlock(map);
 			return EINVAL;
 		}
 		if ((flags & PGO_FREE) != 0 && VM_MAPENT_ISWIRED(entry)) {
-			vm_map_unlock_read(map);
+			vm_map_unlock(map);
 			return EBUSY;
 		}
 		if (end <= current->end) {
 			break;
 		}
 		if (current->end != current->next->start) {
-			vm_map_unlock_read(map);
+			vm_map_unlock(map);
 			return EFAULT;
 		}
 	}
 
+	vm_map_busy(map);
+	vm_map_unlock(map);
 	error = 0;
 	for (current = entry; start < end; current = current->next) {
 		amap = current->aref.ar_amap;	/* upper layer */
@@ -3940,8 +4115,8 @@ uvm_map_clean(struct vm_map *map, vaddr_t start, vaddr_t end, int flags)
 		}
 		start += size;
 	}
-	vm_map_unlock_read(map);
-	return (error);
+	vm_map_unbusy(map);
+	return error;
 }
 
 
@@ -4002,7 +4177,7 @@ uvmspace_alloc(vaddr_t vmin, vaddr_t vmax, bool topdown)
 	struct vmspace *vm;
 	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
 
-	vm = pool_cache_get(&uvm_vmspace_cache, PR_WAITOK);
+	vm = kmem_alloc(sizeof(*vm), KM_SLEEP);
 	uvmspace_init(vm, NULL, vmin, vmax, topdown);
 	UVMHIST_LOG(maphist,"<- done (vm=%#jx)", (uintptr_t)vm, 0, 0, 0);
 	return (vm);
@@ -4227,8 +4402,11 @@ uvmspace_free(struct vmspace *vm)
 	UVMHIST_FUNC(__func__);
 	UVMHIST_CALLARGS(maphist,"(vm=%#jx) ref=%jd", (uintptr_t)vm,
 	    vm->vm_refcnt, 0, 0);
+
+	membar_release();
 	if (atomic_dec_uint_nv(&vm->vm_refcnt) > 0)
 		return;
+	membar_acquire();
 
 	/*
 	 * at this point, there should be no other references to the map.
@@ -4243,8 +4421,10 @@ uvmspace_free(struct vmspace *vm)
 		(*uvm_shmexit)(vm);
 
 	if (map->nentries) {
+		vm_map_lock(map);
 		uvm_unmap_remove(map, vm_map_min(map), vm_map_max(map),
 		    &dead_entries, flags);
+		vm_map_unlock(map);
 		if (dead_entries != NULL)
 			uvm_unmap_detach(dead_entries, 0);
 	}
@@ -4255,7 +4435,7 @@ uvmspace_free(struct vmspace *vm)
 	rw_destroy(&map->lock);
 	cv_destroy(&map->cv);
 	pmap_destroy(map->pmap);
-	pool_cache_put(&uvm_vmspace_cache, vm);
+	kmem_free(vm, sizeof(*vm));
 }
 
 static struct vm_map_entry *
@@ -4351,7 +4531,7 @@ uvm_mapent_forkcopy(struct vm_map *new_map, struct vm_map *old_map,
 	 *    process is sharing the amap with another
 	 *    process.  if we do not clear needs_copy here
 	 *    we will end up in a situation where both the
-	 *    parent and child process are refering to the
+	 *    parent and child process are referring to the
 	 *    same amap with "needs_copy" set.  if the
 	 *    parent write-faults, the fault routine will
 	 *    clear "needs_copy" in the parent by allocating
@@ -5079,12 +5259,13 @@ uvm_map_printit(struct vm_map *map, bool full,
 		    entry->aref.ar_pageoff);
 		(*pr)(
 		    "\tsubmap=%c, cow=%c, nc=%c, prot(max)=%d/%d, inh=%d, "
-		    "wc=%d, adv=%d\n",
+		    "wc=%d, adv=%d%s\n",
 		    (entry->etype & UVM_ET_SUBMAP) ? 'T' : 'F',
 		    (entry->etype & UVM_ET_COPYONWRITE) ? 'T' : 'F',
 		    (entry->etype & UVM_ET_NEEDSCOPY) ? 'T' : 'F',
 		    entry->protection, entry->max_protection,
-		    entry->inheritance, entry->wired_count, entry->advice);
+		    entry->inheritance, entry->wired_count, entry->advice,
+		    entry == map->first_free ? " (first_free)" : "");
 	}
 }
 

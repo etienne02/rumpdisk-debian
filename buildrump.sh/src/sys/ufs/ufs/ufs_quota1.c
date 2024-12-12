@@ -1,4 +1,4 @@
-/*	$NetBSD: ufs_quota1.c,v 1.24 2021/06/29 22:40:54 dholland Exp $	*/
+/*	$NetBSD: ufs_quota1.c,v 1.26 2023/02/22 21:49:45 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1990, 1993, 1995
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ufs_quota1.c,v 1.24 2021/06/29 22:40:54 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ufs_quota1.c,v 1.26 2023/02/22 21:49:45 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -91,8 +91,8 @@ chkdq1(struct inode *ip, int64_t change, kauth_cred_t cred, int flags)
 			continue;
 		if ((flags & FORCE) == 0 &&
 		    kauth_authorize_system(cred, KAUTH_SYSTEM_FS_QUOTA,
-		    KAUTH_REQ_SYSTEM_FS_QUOTA_NOLIMIT, KAUTH_ARG(i),
-		    KAUTH_ARG(QL_BLOCK), NULL) != 0) {
+			KAUTH_REQ_SYSTEM_FS_QUOTA_NOLIMIT, KAUTH_ARG(i),
+			KAUTH_ARG(QL_BLOCK), NULL) != 0) {
 			mutex_enter(&dq->dq_interlock);
 			error = chkdqchg(ip, change, cred, i);
 			mutex_exit(&dq->dq_interlock);
@@ -197,9 +197,10 @@ chkiq1(struct inode *ip, int32_t change, kauth_cred_t cred, int flags)
 	for (i = 0; i < MAXQUOTAS; i++) {
 		if ((dq = ip->i_dquot[i]) == NODQUOT)
 			continue;
-		if ((flags & FORCE) == 0 && kauth_authorize_system(cred,
-		    KAUTH_SYSTEM_FS_QUOTA, KAUTH_REQ_SYSTEM_FS_QUOTA_NOLIMIT,
-		    KAUTH_ARG(i), KAUTH_ARG(QL_FILE), NULL) != 0) {
+		if ((flags & FORCE) == 0 &&
+		    kauth_authorize_system(cred, KAUTH_SYSTEM_FS_QUOTA,
+			KAUTH_REQ_SYSTEM_FS_QUOTA_NOLIMIT,
+			KAUTH_ARG(i), KAUTH_ARG(QL_FILE), NULL) != 0) {
 			mutex_enter(&dq->dq_interlock);
 			error = chkiqchg(ip, change, cred, i);
 			mutex_exit(&dq->dq_interlock);
@@ -318,7 +319,7 @@ quota1_handle_cmd_quotaon(struct lwp *l, struct ufsmount *ump, int type,
 		    mp->mnt_stat.f_mntonname);
 		return (EBUSY);
 	}
-		
+
 	if (mp->mnt_wapbl != NULL) {
 		printf("%s: quota v1 cannot be used with -o log\n",
 		    mp->mnt_stat.f_mntonname);
@@ -433,7 +434,6 @@ quota1_handle_cmd_quotaoff(struct lwp *l, struct ufsmount *ump, int type)
 		return (0);
 	}
 	ump->umq1_qflags[type] |= QTF_CLOSING;
-	ump->um_flags &= ~UFS_QUOTA;
 	mutex_exit(&dqlock);
 	/*
 	 * Search vnodes associated with this mount point,
@@ -470,6 +470,8 @@ quota1_handle_cmd_quotaoff(struct lwp *l, struct ufsmount *ump, int type)
 		if (ump->um_quotas[i] != NULLVP)
 			break;
 	ump->umq1_qflags[type] &= ~QTF_CLOSING;
+	if (i == MAXQUOTAS)
+		ump->um_flags &= ~UFS_QUOTA;
 	cv_broadcast(&dqcv);
 	mutex_exit(&dqlock);
 	kauth_cred_free(cred);
@@ -478,7 +480,7 @@ quota1_handle_cmd_quotaoff(struct lwp *l, struct ufsmount *ump, int type)
 	return (error);
 }
 
-int             
+int
 quota1_handle_cmd_get(struct ufsmount *ump, const struct quotakey *qk,
     struct quotaval *qv)
 {
@@ -516,13 +518,13 @@ quota1_handle_cmd_get(struct ufsmount *ump, const struct quotakey *qk,
 	}
 
 	switch (qk->qk_objtype) {
-	    case QUOTA_OBJTYPE_BLOCKS:
+	case QUOTA_OBJTYPE_BLOCKS:
 		*qv = blocks;
 		break;
-	    case QUOTA_OBJTYPE_FILES:
+	case QUOTA_OBJTYPE_FILES:
 		*qv = files;
 		break;
-	    default:
+	default:
 		return EINVAL;
 	}
 
@@ -547,18 +549,18 @@ quota1_handle_cmd_put(struct ufsmount *ump, const struct quotakey *key,
 	int error;
 
 	switch (key->qk_idtype) {
-	    case QUOTA_IDTYPE_USER:
-	    case QUOTA_IDTYPE_GROUP:
+	case QUOTA_IDTYPE_USER:
+	case QUOTA_IDTYPE_GROUP:
 		break;
-	    default:
+	default:
 		return EINVAL;
 	}
 
 	switch (key->qk_objtype) {
-	    case QUOTA_OBJTYPE_BLOCKS:
-	    case QUOTA_OBJTYPE_FILES:
+	case QUOTA_OBJTYPE_BLOCKS:
+	case QUOTA_OBJTYPE_FILES:
 		break;
-	    default:
+	default:
 		return EINVAL;
 	}
 
@@ -656,7 +658,7 @@ setquota1(struct mount *mp, u_long id, int type, struct dqblk *dqb)
 	struct dquot *dq;
 	struct dquot *ndq;
 	struct ufsmount *ump = VFSTOUFS(mp);
-	
+
 
 	if ((error = dqget(NULLVP, id, ump, type, &ndq)) != 0)
 		return (error);

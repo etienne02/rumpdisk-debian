@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_nat.c,v 1.24 2021/05/26 14:48:02 christos Exp $	*/
+/*	$NetBSD: ip_nat.c,v 1.27 2024/09/08 09:36:51 rillig Exp $	*/
 
 /*
  * Copyright (C) 2012 by Darren Reed.
@@ -112,7 +112,7 @@ extern struct ifnet vpnif;
 #if !defined(lint)
 #if defined(__NetBSD__)
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip_nat.c,v 1.24 2021/05/26 14:48:02 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip_nat.c,v 1.27 2024/09/08 09:36:51 rillig Exp $");
 #else
 static const char sccsid[] = "@(#)ip_nat.c	1.11 6/5/96 (C) 1995 Darren Reed";
 static const char rcsid[] = "@(#)Id: ip_nat.c,v 1.1.1.2 2012/07/22 13:45:27 darrenr Exp";
@@ -988,10 +988,9 @@ ipf_nat_ioctl(ipf_main_softc_t *softc, void *data, ioctlcmd_t cmd, int mode,
 
 #if BSD_GE_YEAR(199306) && defined(_KERNEL)
 # if NETBSD_GE_REV(399002000)
-	if ((mode & FWRITE) &&
-	     kauth_authorize_network(curlwp->l_cred, KAUTH_NETWORK_FIREWALL,
-				     KAUTH_REQ_NETWORK_FIREWALL_FW,
-				     NULL, NULL, NULL))
+	if ((mode & FWRITE) && kauth_authorize_network(
+	    kauth_cred_get(), KAUTH_NETWORK_FIREWALL,
+	    KAUTH_REQ_NETWORK_FIREWALL_FW, NULL, NULL, NULL))
 # else
 #  if defined(__FreeBSD_version) && (__FreeBSD_version >= 500034)
 	if (securelevel_ge(curthread->td_ucred, 3) && (mode & FWRITE))
@@ -1735,7 +1734,7 @@ ipf_nat_getsz(ipf_main_softc_t *softc, void *data, int getlock)
 	}
 
 	/*
-	 * Incluse any space required for proxy data structures.
+	 * Include any space required for proxy data structures.
 	 */
 	ng.ng_sz = sizeof(nat_save_t);
 	aps = nat->nat_aps;
@@ -3114,7 +3113,7 @@ ipf_nat_add(fr_info_t *fin, ipnat_t *np, nat_t **natsave, u_int flags,
 		 * In the ICMP query NAT code, we translate the ICMP id fields
 		 * to make them unique. This is indepedent of the ICMP type
 		 * (e.g. in the unlikely event that a host sends an echo and
-		 * an tstamp request with the same id, both packets will have
+		 * a tstamp request with the same id, both packets will have
 		 * their ip address/id field changed in the same way).
 		 */
 		/* The icmp_id field is used by the sender to identify the

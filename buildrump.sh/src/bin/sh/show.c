@@ -1,4 +1,4 @@
-/*	$NetBSD: show.c,v 1.53 2019/02/14 13:27:59 kre Exp $	*/
+/*	$NetBSD: show.c,v 1.59 2024/11/11 22:57:42 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -39,7 +39,7 @@
 #if 0
 static char sccsid[] = "@(#)show.c	8.3 (Berkeley) 5/4/95";
 #else
-__RCSID("$NetBSD: show.c,v 1.53 2019/02/14 13:27:59 kre Exp $");
+__RCSID("$NetBSD: show.c,v 1.59 2024/11/11 22:57:42 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -163,7 +163,7 @@ opentrace(void)
 	 */
 	if (tracefile)
 		(void) fclose(tracefile);	/* also closes tfd */
-	tracefile = fdopen(fd, "a");	/* don't care if it is NULL */
+	tracefile = fdopen(fd, "ae");	/* don't care if it is NULL */
 	if (tracefile)			/* except here... */
 		setlinebuf(tracefile);
 
@@ -185,7 +185,7 @@ opentrace(void)
 		if (tracedata.f != NULL)		\
 			free(tracedata.f);		\
 		tracedata.f = v;			\
-	} while (/*CONSTCOND*/ 0)
+	} while (0)
 
 	replace(tracefile, s);
 
@@ -645,7 +645,7 @@ sharg(union node *arg, TFILE *fp)
 	for (p = arg->narg.text ; *p ; p++) {
 		switch (*p) {
 		case CTLESC:
-			if (BASESYNTAX[p[1]] != CCTL)
+			if (BASESYNTAX[(int)p[1]] != CCTL)
 				trace_putc('\\', fp);
 			trace_putc(*++p, fp);
 			break;
@@ -1075,12 +1075,12 @@ static struct debug_flag {
 	{ 'w',	DBG_WAIT	},	/* waits for processes to finish */
 	{ 'x',	DBG_EXPAND	},	/* word expansion ${} $() $(( )) */
 	{ 'z',	DBG_ERRS	},	/* error control, jumps, cleanup */
- 
+
 	{ '0',	DBG_U0		},	/* ad-hoc temp debug flag #0 */
 	{ '1',	DBG_U1		},	/* ad-hoc temp debug flag #1 */
 	{ '2',	DBG_U2		},	/* ad-hoc temp debug flag #2 */
 	{ '3',	DBG_U3		},	/* ad-hoc temp debug flag #3 */
- 
+
 	{ '@',	DBG_LINE	},	/* prefix trace lines with line# */
 	{ '$',	DBG_PID		},	/* prefix trace lines with sh pid */
 	{ '^',	DBG_NEST	},	/* show shell nesting level */

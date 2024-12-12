@@ -1,5 +1,5 @@
 %{
-/*	$NetBSD: testlang_parse.y,v 1.53 2021/06/13 11:06:20 rillig Exp $	*/
+/*	$NetBSD: testlang_parse.y,v 1.55 2024/07/18 22:10:51 blymn Exp $	*/
 
 /*-
  * Copyright 2009 Brett Lymn <blymn@NetBSD.org>
@@ -55,6 +55,7 @@ extern int master;
 extern struct pollfd readfd;
 extern char *check_path;
 extern char *cur_file;		/* from director.c */
+extern int nofail;		/* from director.c */
 
 int yylex(void);
 
@@ -141,7 +142,7 @@ static void	save_slave_output(bool);
 static void	validate_type(data_enum_t, ct_data_t *, int);
 static void	set_var(data_enum_t, const char *, void *);
 static void	validate_reference(int, void *);
-static char *	numeric_or(char *, char *);
+static char *	numeric_or(const char *, const char *);
 static char *	get_numeric_var(const char *);
 static void	perform_delay(struct timespec *);
 static void	set_cchar(char *, void *);
@@ -517,7 +518,7 @@ get_numeric_var(const char *var)
  * Perform a bitwise OR on two numbers and return the result.
  */
 static char *
-numeric_or(char *n1, char *n2)
+numeric_or(const char *n1, const char *n2)
 {
 	unsigned long i1, i2, result;
 	char *ret;
@@ -1004,7 +1005,7 @@ compare_streams(const char *filename, bool discard)
 					data, (data >= ' ' )? data : '-');
 		}
 
-		if (!create_check_file && ref != data) {
+		if (!nofail && !create_check_file && ref != data) {
 			errx(2, "%s:%zu: refresh data from slave does "
 			    "not match expected from file %s offset %zu "
 			    "[reference 0x%02x (%c) != slave 0x%02x (%c)]",
@@ -1029,7 +1030,7 @@ compare_streams(const char *filename, bool discard)
 	}
 
 	/* discard any excess saved output if required */
-	if (discard) {
+	if (discard || nofail) {
 		saved_output.count = 0;
 		saved_output.readp = 0;
 	}

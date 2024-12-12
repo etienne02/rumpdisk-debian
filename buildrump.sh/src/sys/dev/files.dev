@@ -1,4 +1,4 @@
-#	$NetBSD: files.dev,v 1.7 2021/07/21 23:16:09 jmcneill Exp $
+#	$NetBSD: files.dev,v 1.10 2024/04/02 22:30:03 charlotte Exp $
 
 file	dev/bio.c			bio			needs-flag
 file	dev/ccd.c			ccd
@@ -13,6 +13,7 @@ file	dev/dkwedge/dkwedge_bsdlabel.c	dkwedge_method_bsdlabel
 file	dev/dkwedge/dkwedge_gpt.c	dkwedge_method_gpt
 file	dev/dkwedge/dkwedge_mbr.c	dkwedge_method_mbr
 file	dev/dkwedge/dkwedge_rdb.c	dkwedge_method_rdb
+file	dev/dkwedge/dkwedge_tos.c	dkwedge_method_tos
 file	dev/firmload.c			firmload
 file	dev/fss.c			fss
 file	dev/keylock.c			keylock
@@ -22,8 +23,10 @@ file	dev/mm.c			kern	# XXX
 file	dev/nullcons_subr.c		nullcons		needs-flag
 file	dev/radio.c			radio			needs-flag
 file	dev/random.c			rnd			needs-flag
-file	dev/sequencer.c			sequencer		needs-flag
 file	dev/video.c			video			needs-flag
 file	dev/vnd.c			vnd
 file	dev/ipmi.c			ipmi			needs-flag
 file	dev/smbios.c			smbios
+
+defpseudo efi
+file	dev/efi.c			efi			needs-flag

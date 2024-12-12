@@ -1,4 +1,4 @@
-/*	$NetBSD: minixfs3.c,v 1.8 2019/03/31 20:08:45 christos Exp $	*/
+/*	$NetBSD: minixfs3.c,v 1.13 2022/04/29 07:42:07 rin Exp $	*/
 
 /*-
  * Copyright (c) 2012
@@ -457,7 +457,7 @@ read_sblock(struct open_file *f, struct mfs_sblock *fs)
 		return EINVAL;
 
 	rc = DEV_STRATEGY(f->f_dev)(f->f_devdata, F_READ,
-	    SUPER_BLOCK_OFF / DEV_BSIZE, MINBSIZE, sbbuf, &buf_size);
+	    SUPER_BLOCK_OFF / GETSECSIZE(f), MINBSIZE, sbbuf, &buf_size);
 	if (rc)
 		return rc;
 
@@ -572,7 +572,7 @@ minixfs3_open(const char *path, struct open_file *f)
 		/*
 		 * We note that the number of indirect blocks is always
 		 * a power of 2.  This lets us use shifts and masks instead
-		 * of divide and remainder and avoinds pulling in the
+		 * of divide and remainder and avoids pulling in the
 		 * 64bit division routine into the boot code.
 		 */
 		mult = MFS_NINDIR(fs);

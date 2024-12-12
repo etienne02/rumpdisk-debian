@@ -59,7 +59,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mini2440_lcd.c,v 1.6 2021/08/07 16:18:50 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mini2440_lcd.c,v 1.8 2024/03/06 20:18:42 andvar Exp $");
 
 /*
  * LCD driver for FriendlyARM MINI2440.
@@ -75,7 +75,6 @@ __KERNEL_RCSID(0, "$NetBSD: mini2440_lcd.c,v 1.6 2021/08/07 16:18:50 thorpej Exp
 #include <sys/conf.h>
 #include <sys/event.h>
 #include <sys/uio.h>
-#include <sys/malloc.h>
 
 #include <dev/cons.h>
 #include <dev/wscons/wsconsio.h>
@@ -238,7 +237,7 @@ static const struct s3c24x0_lcd_panel_info nec_NL2432HC22 =
     _(LCDCON3_HFPD, 2) | /*21*/
     _(LCDCON3_HOZVAL, 240),
 
-    /* LCDCON4: horizontaol pulse width */
+    /* LCDCON4: horizontal pulse width */
     _(LCDCON4_HPSW, 6), /* 6 */
 
     /* LCDCON5: signal polarities */

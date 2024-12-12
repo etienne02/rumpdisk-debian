@@ -1,4 +1,4 @@
-/* $NetBSD: uvm_physseg.c,v 1.17 2020/07/15 15:08:26 rin Exp $ */
+/* $NetBSD: uvm_physseg.c,v 1.20 2024/01/13 09:44:42 tnn Exp $ */
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -88,7 +88,9 @@
  */
 struct uvm_physseg {
 	/* used during RB tree lookup for PHYS_TO_VM_PAGE(). */
+#if defined(UVM_HOTPLUG)
 	struct  rb_node rb_node;	/* tree information */
+#endif
 	paddr_t	start;			/* PF# of first page in segment */
 	paddr_t	end;			/* (PF# of last page in segment) + 1 */
 	struct	vm_page *pgs;		/* vm_page structures (from start) */
@@ -98,7 +100,7 @@ struct uvm_physseg {
 	paddr_t	avail_end;		/* (PF# of last free page in segment) +1  */
 	struct  extent *ext;		/* extent(9) structure to manage pgs[] */
 	int	free_list;		/* which free list they belong on */
-	u_int	start_hint;		/* start looking for free pages here */
+	u_long	start_hint;		/* start looking for free pages here */
 #ifdef __HAVE_PMAP_PHYSSEG
 	struct	pmap_physseg pmseg;	/* pmap specific (MD) data */
 #endif
@@ -173,7 +175,8 @@ uvm_physseg_alloc(size_t sz)
 		size_t n = sz / sizeof(struct uvm_physseg);
 		nseg += n;
 
-		KASSERT(nseg > 0 && nseg <= VM_PHYSSEG_MAX);
+		KASSERT(nseg > 0);
+		KASSERT(nseg <= VM_PHYSSEG_MAX);
 
 		return &uvm_physseg[nseg - n];
 	}
@@ -560,8 +563,10 @@ uvm_physseg_find(paddr_t pframe, psize_t *offp)
 #define		HANDLE_TO_PHYSSEG_NODE(h)	(VM_PHYSMEM_PTR((int)h))
 #define		PHYSSEG_NODE_TO_HANDLE(u)	((int)((vsize_t) (u - vm_physmem) / sizeof(struct uvm_physseg)))
 
-static struct uvm_physseg vm_physmem[VM_PHYSSEG_MAX];	/* XXXCDC: uvm.physmem */
-static int vm_nphysseg = 0;				/* XXXCDC: uvm.nphysseg */
+/* XXXCDC: uvm.physmem */
+static struct uvm_physseg vm_physmem[VM_PHYSSEG_MAX] __read_mostly;
+/* XXXCDC: uvm.nphysseg */
+static int vm_nphysseg __read_mostly = 0;
 #define	vm_nphysmem	vm_nphysseg
 
 void
@@ -850,7 +855,7 @@ static inline int vm_physseg_find_linear(struct uvm_physseg *, int, paddr_t, psi
 /*
  * vm_physseg_find: find vm_physseg structure that belongs to a PA
  */
-int
+inline int
 uvm_physseg_find(paddr_t pframe, psize_t *offp)
 {
 
@@ -942,6 +947,40 @@ vm_physseg_find_linear(struct uvm_physseg *segs, int nsegs, paddr_t pframe, psiz
 #endif
 #endif /* UVM_HOTPLUG */
 
+/*
+ * PHYS_TO_VM_PAGE: find vm_page for a PA.  used by MI code to get vm_pages
+ * back from an I/O mapping (ugh!).  used in some MD code as well.  it can
+ * be prominent in flamegraphs, so optimise it and try to make it easy for
+ * the compiler by including next to the inline lookup routines.
+ */
+struct vm_page *
+uvm_phys_to_vm_page(paddr_t pa)
+{
+#if VM_PHYSSEG_STRAT != VM_PSTRAT_BSEARCH
+	/* 'contig' and linear cases */
+	KASSERT(vm_nphysseg > 0);
+	struct uvm_physseg *ps = &vm_physmem[0];
+	struct uvm_physseg *end = &vm_physmem[vm_nphysseg];
+	paddr_t pframe = atop(pa);
+	do {
+		if (pframe >= ps->start && pframe < ps->end) {
+			return &ps->pgs[pframe - ps->start];
+		}
+	} while (VM_PHYSSEG_MAX > 1 && __predict_false(++ps < end));
+	return NULL;
+#else
+	/* binary search for it */
+	paddr_t pf = atop(pa);
+	paddr_t	off;
+	uvm_physseg_t	upm;
+
+	upm = uvm_physseg_find(pf, &off);
+	if (upm != UVM_PHYSSEG_TYPE_INVALID)
+		return uvm_physseg_get_pg(upm, off);
+	return(NULL);
+#endif
+}
+
 bool
 uvm_physseg_valid_p(uvm_physseg_t upm)
 {
@@ -1012,7 +1051,8 @@ uvm_physseg_set_avail_start(uvm_physseg_t upm, paddr_t avail_start)
 	paddr_t avail_end;
 	avail_end = uvm_physseg_get_avail_end(upm);
 	KASSERT(uvm_physseg_valid_p(upm));
-	KASSERT(avail_start < avail_end && avail_start >= ps->start);
+	KASSERT(avail_start < avail_end);
+	KASSERT(avail_start >= ps->start);
 #endif
 
 	ps->avail_start = avail_start;
@@ -1027,7 +1067,8 @@ uvm_physseg_set_avail_end(uvm_physseg_t upm, paddr_t avail_end)
 	paddr_t avail_start;
 	avail_start = uvm_physseg_get_avail_start(upm);
 	KASSERT(uvm_physseg_valid_p(upm));
-	KASSERT(avail_end > avail_start && avail_end <= ps->end);
+	KASSERT(avail_end > avail_start);
+	KASSERT(avail_end <= ps->end);
 #endif
 
 	ps->avail_end = avail_end;
@@ -1044,7 +1085,7 @@ uvm_physseg_get_avail_end(uvm_physseg_t upm)
 	return HANDLE_TO_PHYSSEG_NODE(upm)->avail_end;
 }
 
-struct vm_page *
+inline struct vm_page *
 uvm_physseg_get_pg(uvm_physseg_t upm, paddr_t idx)
 {
 	KASSERT(uvm_physseg_valid_p(upm));
@@ -1067,7 +1108,7 @@ uvm_physseg_get_free_list(uvm_physseg_t upm)
 	return HANDLE_TO_PHYSSEG_NODE(upm)->free_list;
 }
 
-u_int
+u_long
 uvm_physseg_get_start_hint(uvm_physseg_t upm)
 {
 	KASSERT(uvm_physseg_valid_p(upm));
@@ -1075,7 +1116,7 @@ uvm_physseg_get_start_hint(uvm_physseg_t upm)
 }
 
 bool
-uvm_physseg_set_start_hint(uvm_physseg_t upm, u_int start_hint)
+uvm_physseg_set_start_hint(uvm_physseg_t upm, u_long start_hint)
 {
 	if (uvm_physseg_valid_p(upm) == false)
 		return false;
@@ -1093,7 +1134,8 @@ uvm_physseg_init_seg(uvm_physseg_t upm, struct vm_page *pgs)
 	struct uvm_physseg *seg;
 	struct vm_page *pg;
 
-	KASSERT(upm != UVM_PHYSSEG_TYPE_INVALID && pgs != NULL);
+	KASSERT(upm != UVM_PHYSSEG_TYPE_INVALID);
+	KASSERT(pgs != NULL);
 
 	seg = HANDLE_TO_PHYSSEG_NODE(upm);
 	KASSERT(seg != NULL);

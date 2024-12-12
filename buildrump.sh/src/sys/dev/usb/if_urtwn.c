@@ -1,4 +1,4 @@
-/*	$NetBSD: if_urtwn.c,v 1.96 2021/03/02 22:21:38 nat Exp $	*/
+/*	$NetBSD: if_urtwn.c,v 1.111 2024/11/10 19:01:25 riastradh Exp $	*/
 /*	$OpenBSD: if_urtwn.c,v 1.42 2015/02/10 23:25:46 mpi Exp $	*/
 
 /*-
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_urtwn.c,v 1.96 2021/03/02 22:21:38 nat Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_urtwn.c,v 1.111 2024/11/10 19:01:25 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -95,7 +95,13 @@ __KERNEL_RCSID(0, "$NetBSD: if_urtwn.c,v 1.96 2021/03/02 22:21:38 nat Exp $");
 #define	DBG_RF		__BIT(5)
 #define	DBG_REG		__BIT(6)
 #define	DBG_ALL		0xffffffffU
-u_int urtwn_debug = 0;
+
+#ifndef URTWN_DEBUG_DEFAULT
+#define URTWN_DEBUG_DEFAULT 0
+#endif
+
+u_int urtwn_debug = URTWN_DEBUG_DEFAULT;
+
 #define DPRINTFN(n, fmt, a, b, c, d) do {			\
 	if (urtwn_debug & (n)) {				\
 		KERNHIST_LOG(usbhist, fmt, a, b, c, d);		\
@@ -203,16 +209,19 @@ static const struct urtwn_dev {
 	URTWN_DEV(TPLINK,	RTL8192CU),
 	URTWN_DEV(TRENDNET,	RTL8188CU),
 	URTWN_DEV(TRENDNET,	RTL8192CU),
+	URTWN_DEV(TRENDNET,	TEW648UBM),
 	URTWN_DEV(ZYXEL,	RTL8192CU),
 
 	/* URTWN_RTL8188E */
 	URTWN_RTL8188E_DEV(DLINK, DWA125D1),
 	URTWN_RTL8188E_DEV(ELECOM, WDC150SU2M),
+	URTWN_RTL8188E_DEV(MERCUSYS, MW150USV2),
 	URTWN_RTL8188E_DEV(REALTEK, RTL8188ETV),
 	URTWN_RTL8188E_DEV(REALTEK, RTL8188EU),
 	URTWN_RTL8188E_DEV(ABOCOM, RTL8188EU),
 	URTWN_RTL8188E_DEV(TPLINK, RTL8188EU),
 	URTWN_RTL8188E_DEV(DLINK, DWA121B1),
+	URTWN_RTL8188E_DEV(EDIMAX, EW7811UNV2),
 
 	/* URTWN_RTL8192EU */
 	URTWN_RTL8192EU_DEV(DLINK,	DWA131E),
@@ -317,11 +326,12 @@ static void	urtwn_cam_init(struct urtwn_softc *);
 static void	urtwn_pa_bias_init(struct urtwn_softc *);
 static void	urtwn_rxfilter_init(struct urtwn_softc *);
 static void	urtwn_edca_init(struct urtwn_softc *);
-static void	urtwn_write_txpower(struct urtwn_softc *, int, uint16_t[]);
+static void	urtwn_write_txpower(struct urtwn_softc *, int,
+		    uint16_t[URTWN_RIDX_COUNT]);
 static void	urtwn_get_txpower(struct urtwn_softc *, size_t, u_int, u_int,
-		    uint16_t[]);
+		    uint16_t[URTWN_RIDX_COUNT]);
 static void	urtwn_r88e_get_txpower(struct urtwn_softc *, size_t, u_int,
-		    u_int, uint16_t[]);
+		    u_int, uint16_t[URTWN_RIDX_COUNT]);
 static void	urtwn_set_txpower(struct urtwn_softc *, u_int, u_int);
 static void	urtwn_set_chan(struct urtwn_softc *, struct ieee80211_channel *,
 		    u_int);
@@ -862,6 +872,24 @@ urtwn_tx_beacon(struct urtwn_softc *sc, struct mbuf *m,
 }
 
 static void
+urtwn_cmdq_invariants(struct urtwn_softc *sc)
+{
+	struct urtwn_host_cmd_ring *const ring = &sc->cmdq;
+
+	KASSERT(mutex_owned(&sc->sc_task_mtx));
+	KASSERTMSG((ring->cur >= 0 && ring->cur < URTWN_HOST_CMD_RING_COUNT),
+	    "%s: cur=%d next=%d queued=%d",
+	    device_xname(sc->sc_dev), ring->cur, ring->next, ring->queued);
+	KASSERTMSG((ring->next >= 0 && ring->next < URTWN_HOST_CMD_RING_COUNT),
+	    "%s: cur=%d next=%d queued=%d",
+	    device_xname(sc->sc_dev), ring->cur, ring->next, ring->queued);
+	KASSERTMSG((ring->queued >= 0 &&
+		ring->queued <= URTWN_HOST_CMD_RING_COUNT),
+	    "%s: %d commands queued",
+	    device_xname(sc->sc_dev), ring->queued);
+}
+
+static void
 urtwn_task(void *arg)
 {
 	struct urtwn_softc *sc = arg;
@@ -893,7 +921,11 @@ urtwn_task(void *arg)
 	/* Process host commands. */
 	s = splusb();
 	mutex_spin_enter(&sc->sc_task_mtx);
+	urtwn_cmdq_invariants(sc);
 	while (ring->next != ring->cur) {
+		KASSERTMSG(ring->queued > 0, "%s: cur=%d next=%d queued=%d",
+		    device_xname(sc->sc_dev),
+		    ring->cur, ring->next, ring->queued);
 		cmd = &ring->cmd[ring->next];
 		mutex_spin_exit(&sc->sc_task_mtx);
 		splx(s);
@@ -901,6 +933,10 @@ urtwn_task(void *arg)
 		cmd->cb(sc, cmd->data);
 		s = splusb();
 		mutex_spin_enter(&sc->sc_task_mtx);
+		urtwn_cmdq_invariants(sc);
+		KASSERTMSG(ring->queued > 0, "%s: cur=%d next=%d queued=%d",
+		    device_xname(sc->sc_dev),
+		    ring->cur, ring->next, ring->queued);
 		ring->queued--;
 		ring->next = (ring->next + 1) % URTWN_HOST_CMD_RING_COUNT;
 	}
@@ -915,6 +951,7 @@ urtwn_do_async(struct urtwn_softc *sc, void (*cb)(struct urtwn_softc *, void *),
 {
 	struct urtwn_host_cmd_ring *ring = &sc->cmdq;
 	struct urtwn_host_cmd *cmd;
+	bool schedtask = false;
 	int s;
 
 	URTWNHIST_FUNC();
@@ -923,19 +960,27 @@ urtwn_do_async(struct urtwn_softc *sc, void (*cb)(struct urtwn_softc *, void *),
 
 	s = splusb();
 	mutex_spin_enter(&sc->sc_task_mtx);
+	urtwn_cmdq_invariants(sc);
 	cmd = &ring->cmd[ring->cur];
 	cmd->cb = cb;
 	KASSERT(len <= sizeof(cmd->data));
 	memcpy(cmd->data, arg, len);
 	ring->cur = (ring->cur + 1) % URTWN_HOST_CMD_RING_COUNT;
 
-	/* If there is no pending command already, schedule a task. */
-	if (!sc->sc_dying && ++ring->queued == 1) {
-		mutex_spin_exit(&sc->sc_task_mtx);
-		usb_add_task(sc->sc_udev, &sc->sc_task, USB_TASKQ_DRIVER);
-	} else
-		mutex_spin_exit(&sc->sc_task_mtx);
+	/*
+	 * Schedule a task to process the command if need be.
+	 */
+	if (!sc->sc_dying) {
+		if (ring->queued == URTWN_HOST_CMD_RING_COUNT)
+			device_printf(sc->sc_dev, "command queue overflow\n");
+		else if (ring->queued++ == 0)
+			schedtask = true;
+	}
+	mutex_spin_exit(&sc->sc_task_mtx);
 	splx(s);
+
+	if (schedtask)
+		usb_add_task(sc->sc_udev, &sc->sc_task, USB_TASKQ_DRIVER);
 }
 
 static void
@@ -1106,17 +1151,17 @@ urtwn_fw_cmd(struct urtwn_softc *sc, uint8_t id, const void *buf, int len)
 	mutex_enter(&sc->sc_fwcmd_mtx);
 	fwcur = sc->fwcur;
 	sc->fwcur = (sc->fwcur + 1) % R92C_H2C_NBOX;
-	mutex_exit(&sc->sc_fwcmd_mtx);
 
 	/* Wait for current FW box to be empty. */
 	for (ntries = 0; ntries < 100; ntries++) {
 		if (!(urtwn_read_1(sc, R92C_HMETFR) & (1 << fwcur)))
 			break;
-		DELAY(2000);
+		urtwn_delay_ms(sc, 2);
 	}
 	if (ntries == 100) {
 		aprint_error_dev(sc->sc_dev,
 		    "could not send firmware command %d\n", id);
+		mutex_exit(&sc->sc_fwcmd_mtx);
 		return ETIMEDOUT;
 	}
 
@@ -1145,6 +1190,7 @@ urtwn_fw_cmd(struct urtwn_softc *sc, uint8_t id, const void *buf, int len)
 	} else {
 		urtwn_write_region(sc, R92C_HMEBOX(fwcur), cp, len);
 	}
+	mutex_exit(&sc->sc_fwcmd_mtx);
 
 	return 0;
 }
@@ -1195,16 +1241,16 @@ urtwn_rf_read(struct urtwn_softc *sc, int chain, uint8_t addr)
 
 	urtwn_bb_write(sc, R92C_HSSI_PARAM2(0),
 	    reg[0] & ~R92C_HSSI_PARAM2_READ_EDGE);
-	DELAY(1000);
+	urtwn_delay_ms(sc, 1);
 
 	urtwn_bb_write(sc, R92C_HSSI_PARAM2(chain),
 	    RW(reg[chain], R92C_HSSI_PARAM2_READ_ADDR, addr) |
 	    R92C_HSSI_PARAM2_READ_EDGE);
-	DELAY(1000);
+	urtwn_delay_ms(sc, 1);
 
 	urtwn_bb_write(sc, R92C_HSSI_PARAM2(0),
 	    reg[0] | R92C_HSSI_PARAM2_READ_EDGE);
-	DELAY(1000);
+	urtwn_delay_ms(sc, 1);
 
 	if (urtwn_bb_read(sc, R92C_HSSI_PARAM1(chain)) & R92C_HSSI_PARAM1_PI) {
 		val = urtwn_bb_read(sc, R92C_HSPI_READBACK(chain));
@@ -2436,6 +2482,7 @@ urtwn_rx_frame(struct urtwn_softc *sc, uint8_t *buf, int pktlen)
 		if_statinc(ifp, if_ierrors);
 		return;
 	}
+	MCLAIM(m, &sc->sc_ec.ec_rx_mowner);
 	if (pktlen > (int)MHLEN) {
 		MCLGET(m, M_DONTWAIT);
 		if (__predict_false(!(m->m_flags & M_EXT))) {
@@ -2621,7 +2668,8 @@ urtwn_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 				struct usbd_pipe *pipe = sc->tx_pipe[pidx];
 				usbd_clear_endpoint_stall_async(pipe);
 			}
-			device_printf(sc->sc_dev, "device timeout\n");
+			device_printf(sc->sc_dev, "transmit failed, %s\n",
+			    usbd_errstr(status));
 			if_statinc(ifp, if_oerrors);
 		}
 		splx(s);
@@ -3087,6 +3135,7 @@ urtwn_r92c_power_on(struct urtwn_softc *sc)
 
 	/* Unlock ISO/CLK/Power control register. */
 	urtwn_write_1(sc, R92C_RSV_CTRL, 0);
+	DELAY(5);
 	/* Move SPS into PWM mode. */
 	urtwn_write_1(sc, R92C_SPS0_CTRL, 0x2b);
 	DELAY(5);
@@ -3152,6 +3201,9 @@ urtwn_r92c_power_on(struct urtwn_softc *sc)
 	urtwn_write_2(sc, R92C_CR, reg);
 
 	urtwn_write_1(sc, 0xfe10, 0x19);
+
+	urtwn_delay_ms(sc, 1);
+
 	return 0;
 }
 
@@ -3361,7 +3413,10 @@ urtwn_fw_reset(struct urtwn_softc *sc)
 	KASSERT(mutex_owned(&sc->sc_write_mtx));
 
 	/* Tell 8051 to reset itself. */
+	mutex_enter(&sc->sc_fwcmd_mtx);
 	urtwn_write_1(sc, R92C_HMETFR + 3, 0x20);
+	sc->fwcur = 0;
+	mutex_exit(&sc->sc_fwcmd_mtx);
 
 	/* Wait until 8051 resets by itself. */
 	for (ntries = 0; ntries < 100; ntries++) {
@@ -3402,6 +3457,11 @@ urtwn_r88e_fw_reset(struct urtwn_softc *sc)
 		urtwn_write_2(sc,R92C_RSV_CTRL, reg);
 	}
 	DELAY(50);
+
+	mutex_enter(&sc->sc_fwcmd_mtx);
+	/* Init firmware commands ring. */
+	sc->fwcur = 0;
+	mutex_exit(&sc->sc_fwcmd_mtx);
 
 }
 
@@ -4780,7 +4840,7 @@ urtwn_init(struct ifnet *ifp)
 
 	/* Init interrupts. */
 	if (ISSET(sc->chip, URTWN_CHIP_88E) ||
-	     ISSET(sc->chip, URTWN_CHIP_92EU)) {
+	    ISSET(sc->chip, URTWN_CHIP_92EU)) {
 		urtwn_write_4(sc, R88E_HISR, 0xffffffff);
 		urtwn_write_4(sc, R88E_HIMR, R88E_HIMR_CPWM | R88E_HIMR_CPWM2 |
 		    R88E_HIMR_TBDER | R88E_HIMR_PSTIMEOUT);

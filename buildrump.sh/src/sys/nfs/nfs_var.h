@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_var.h,v 1.95 2021/06/04 10:44:58 hannken Exp $	*/
+/*	$NetBSD: nfs_var.h,v 1.97 2024/12/07 02:05:55 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -29,13 +29,16 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * XXX needs <nfs/rpcv2.h> and <nfs/nfs.h> because of typedefs
- */
+#ifndef _NFS_NFS_VAR_H_
+#define	_NFS_NFS_VAR_H_
 
 #ifdef _KERNEL
+
 #include <sys/mallocvar.h>
 #include <sys/pool.h>
+
+#include <nfs/nfsproto.h>
+#include <nfs/rpcv2.h>
 
 struct vnode;
 struct uio;
@@ -271,8 +274,8 @@ void nfs_delayedtruncate(struct vnode *);
 int nfs_check_wccdata(struct nfsnode *, const struct timespec *,
 	struct timespec *, bool);
 int nfs_namei(struct nameidata *, nfsrvfh_t *, uint32_t, struct nfssvc_sock *,
-	struct mbuf *, struct mbuf **, char **, struct vnode **, struct lwp *,
-	int, int);
+	struct mbuf *, struct mbuf **, char **, struct vnode **,
+	int *, struct vattr *, struct lwp *, int, int);
 void nfs_zeropad(struct mbuf *, int, int);
 void nfsm_srvwcc(struct nfsrv_descript *, int, struct vattr *, int,
 	struct vattr *, struct mbuf **, char **);
@@ -364,4 +367,7 @@ void netexport_rdunlock(void);
 void netexport_init(void);
 void netexport_fini(void);
 bool netexport_hasexports(void);
+
 #endif /* _KERNEL */
+
+#endif	/* _NFS_NFS_VAR_H_ */

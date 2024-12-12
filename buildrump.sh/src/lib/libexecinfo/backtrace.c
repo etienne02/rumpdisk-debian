@@ -1,4 +1,4 @@
-/*	$NetBSD: backtrace.c,v 1.6 2015/09/25 19:27:31 christos Exp $	*/
+/*	$NetBSD: backtrace.c,v 1.8 2022/06/25 06:51:37 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -29,7 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: backtrace.c,v 1.6 2015/09/25 19:27:31 christos Exp $");
+__RCSID("$NetBSD: backtrace.c,v 1.8 2022/06/25 06:51:37 skrll Exp $");
 
 #include <sys/param.h>
 #include <assert.h>
@@ -45,6 +45,7 @@ __RCSID("$NetBSD: backtrace.c,v 1.6 2015/09/25 19:27:31 christos Exp $");
 #include <elf.h>
 
 #include "execinfo.h"
+#include "symbol.h"
 #include "symtab.h"
 
 #ifdef __linux__
@@ -93,7 +94,7 @@ rasprintf(char **buf, size_t *bufsiz, size_t offs, const char *fmt, ...)
 			nbufsiz = MAX(*bufsiz + 512, (size_t)len + 1);
 		} else
 			nbufsiz = MAX(offs, *bufsiz) + 512;
-			
+
 		nbuf = realloc(*buf, nbufsiz);
 		if (nbuf == NULL)
 			return -1;
@@ -114,7 +115,8 @@ static ssize_t
 format_string(char **buf, size_t *bufsiz, size_t offs, const char *fmt,
     Dl_info *dli, const void *addr)
 {
-	ptrdiff_t diff = (const char *)addr - (const char *)dli->dli_saddr;
+	const uintptr_t symaddr = SYMBOL_CANONICALIZE(dli->dli_saddr);
+	ptrdiff_t diff = (const char *)addr - (const char *)symaddr;
 	size_t o = offs;
 	int len;
 

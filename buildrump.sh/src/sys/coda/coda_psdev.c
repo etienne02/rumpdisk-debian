@@ -1,4 +1,4 @@
-/*	$NetBSD: coda_psdev.c,v 1.59 2020/12/19 22:11:57 thorpej Exp $	*/
+/*	$NetBSD: coda_psdev.c,v 1.65 2024/05/17 23:57:46 thorpej Exp $	*/
 
 /*
  *
@@ -54,14 +54,13 @@
 /* These routines are the device entry points for Venus. */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: coda_psdev.c,v 1.59 2020/12/19 22:11:57 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: coda_psdev.c,v 1.65 2024/05/17 23:57:46 thorpej Exp $");
 
 extern int coda_nc_initialized;    /* Set if cache has been initialized */
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/mount.h>
 #include <sys/file.h>
@@ -313,7 +312,7 @@ vc_nb_write(dev_t dev, struct uio *uiop, int flag)
 
     vcp = &coda_mnttbl[minor(dev)].mi_vcomm;
 
-    /* Peek at the opcode, unique without transfering the data. */
+    /* Peek at the opcode, unique without transferring the data. */
     uiop->uio_rw = UIO_WRITE;
     error = uiomove(tbuf, sizeof(int) * 2, uiop);
     if (error) {
@@ -487,7 +486,7 @@ filt_vc_nb_read(struct knote *kn, long hint)
 }
 
 static const struct filterops vc_nb_read_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_vc_nb_detach,
 	.f_event = filt_vc_nb_read,
@@ -702,7 +701,7 @@ coda_call(struct coda_mntinfo *mntinfo, int inSize, int *outSize,
 /*??? rvb */	svmp->vm_outSize = sizeof (struct coda_in_hdr);
 
 		if (codadebug)
-		    myprintf(("coda_call: enqueing signal msg (%d, %d)\n",
+		    myprintf(("coda_call: enqueuing signal msg (%d, %d)\n",
 			   svmp->vm_opcode, svmp->vm_unique));
 
 		/* insert at head of queue */
@@ -712,9 +711,10 @@ coda_call(struct coda_mntinfo *mntinfo, int inSize, int *outSize,
 	}
 
 	else {	/* If venus died (!VC_OPEN(vcp)) */
-	    if (codadebug)
-		myprintf(("vcclose woke op %d.%d flags %d\n",
-		       vmp->vm_opcode, vmp->vm_unique, vmp->vm_flags));
+		if (codadebug) {
+			myprintf(("vcclose woke op %d.%d flags %d\n",
+			       vmp->vm_opcode, vmp->vm_unique, vmp->vm_flags));
+		}
 
 		error = ENODEV;
 	}
@@ -758,7 +758,7 @@ vcoda_modcmd(modcmd_t cmd, void *arg)
 				if (VC_OPEN(vcp))
 					return EBUSY;
 			}
-			return devsw_detach(NULL, &vcoda_cdevsw);
+			devsw_detach(NULL, &vcoda_cdevsw);
 		}
 #endif
 		break;

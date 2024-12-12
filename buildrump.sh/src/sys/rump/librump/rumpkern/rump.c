@@ -1,4 +1,4 @@
-/*	$NetBSD: rump.c,v 1.353 2021/01/17 22:32:25 chs Exp $	*/
+/*	$NetBSD: rump.c,v 1.361 2023/10/05 19:41:07 ad Exp $	*/
 
 /*
  * Copyright (c) 2007-2011 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rump.c,v 1.353 2021/01/17 22:32:25 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rump.c,v 1.361 2023/10/05 19:41:07 ad Exp $");
 
 #include <sys/systm.h>
 #define ELFSIZE ARCH_ELFSIZE
@@ -38,6 +38,7 @@ __KERNEL_RCSID(0, "$NetBSD: rump.c,v 1.353 2021/01/17 22:32:25 chs Exp $");
 #include <sys/conf.h>
 #include <sys/cpu.h>
 #include <sys/device.h>
+#include <sys/device_impl.h>
 #include <sys/evcnt.h>
 #include <sys/event.h>
 #include <sys/exec_elf.h>
@@ -83,8 +84,6 @@ __KERNEL_RCSID(0, "$NetBSD: rump.c,v 1.353 2021/01/17 22:32:25 chs Exp $");
 #include <rump-sys/vfs.h>
 
 #include <rump/rumpuser.h>
-
-#include <secmodel/suser/suser.h>
 
 #include <prop/proplib.h>
 
@@ -294,8 +293,6 @@ rump_init_callback(void (*cpuinit_callback) (void))
 	uvm_ra_init();
 	uao_init();
 
-	mutex_obj_init();
-	rw_obj_init();
 	callout_startup();
 
 	kprintf_init();
@@ -330,7 +327,7 @@ rump_init_callback(void (*cpuinit_callback) (void))
 	chgproccnt(0, 1);
 
 	l->l_proc = &proc0;
-	lwp_update_creds(l);
+	l->l_cred = kauth_cred_hold(l->l_proc->p_cred);
 
 	lwpinit_specificdata();
 	lwp_initspecific(&lwp0);

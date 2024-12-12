@@ -1,4 +1,4 @@
-/* $NetBSD: csh.c,v 1.53 2020/08/09 00:53:38 dholland Exp $ */
+/* $NetBSD: csh.c,v 1.56 2022/09/15 11:35:06 martin Exp $ */
 
 /*-
  * Copyright (c) 1980, 1991, 1993
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1980, 1991, 1993\
 #if 0
 static char sccsid[] = "@(#)csh.c	8.2 (Berkeley) 10/12/93";
 #else
-__RCSID("$NetBSD: csh.c,v 1.53 2020/08/09 00:53:38 dholland Exp $");
+__RCSID("$NetBSD: csh.c,v 1.56 2022/09/15 11:35:06 martin Exp $");
 #endif
 #endif /* not lint */
 
@@ -1139,6 +1139,9 @@ process(int catch)
 	    pnote();
 	if (intty && prompt && evalvec == 0) {
 	    mailchk();
+#ifdef EDIT
+	    updateediting();
+#endif
 	    /*
 	     * If we are at the end of the input buffer then we are going to
 	     * read fresh stuff. Otherwise, we are rereading input and don't
@@ -1152,6 +1155,7 @@ process(int catch)
 	    free(seterr);
 	    seterr = NULL;
 	}
+
 
 	/*
 	 * Echo not only on VERBOSE, but also with history expansion. If there

@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_cache.c,v 1.14 2020/09/05 07:45:44 maxv Exp $	*/
+/*	$NetBSD: drm_cache.c,v 1.19 2022/07/19 23:19:27 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_cache.c,v 1.14 2020/09/05 07:45:44 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_cache.c,v 1.19 2022/07/19 23:19:27 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -38,11 +38,12 @@ __KERNEL_RCSID(0, "$NetBSD: drm_cache.c,v 1.14 2020/09/05 07:45:44 maxv Exp $");
 
 #include <uvm/uvm_extern.h>
 
+#include <linux/highmem.h>
 #include <linux/mm_types.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_cache.h>
 
-#if !defined(__arm__) && !defined(__aarch64__)
+#if !defined(__arm__) && !defined(__aarch64__) && !defined(__alpha__)
 #define DRM_CLFLUSH	1
 #endif
 
@@ -71,39 +72,13 @@ drm_clflush_pages(struct page **pages, unsigned long npages)
 }
 
 void
-drm_clflush_pglist(struct pglist *list)
+drm_clflush_sg(struct sg_table *sgt)
 {
-#if defined(DRM_CLFLUSH)
-	if (drm_md_clflush_finegrained_p()) {
-		struct vm_page *page;
-
-		drm_md_clflush_begin();
-		TAILQ_FOREACH(page, list, pageq.queue)
-			drm_md_clflush_page(container_of(page, struct page,
-				p_vmp));
-		drm_md_clflush_commit();
-	} else {
-		drm_md_clflush_all();
-	}
-#endif
+	drm_clflush_pages(sgt->sgl->sg_pgs, sgt->sgl->sg_npgs);
 }
 
 void
-drm_clflush_page(struct page *page)
-{
-#if defined(DRM_CLFLUSH)
-	if (drm_md_clflush_finegrained_p()) {
-		drm_md_clflush_begin();
-		drm_md_clflush_page(page);
-		drm_md_clflush_commit();
-	} else {
-		drm_md_clflush_all();
-	}
-#endif
-}
-
-void
-drm_clflush_virt_range(const void *vaddr, size_t nbytes)
+drm_clflush_virt_range(void *vaddr, unsigned long nbytes)
 {
 #if defined(DRM_CLFLUSH)
 	if (drm_md_clflush_finegrained_p()) {

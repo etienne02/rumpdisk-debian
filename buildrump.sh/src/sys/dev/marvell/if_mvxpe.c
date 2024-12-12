@@ -1,4 +1,4 @@
-/*	$NetBSD: if_mvxpe.c,v 1.35 2021/08/13 21:04:44 andvar Exp $	*/
+/*	$NetBSD: if_mvxpe.c,v 1.41 2024/02/10 18:43:52 andvar Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -25,7 +25,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_mvxpe.c,v 1.35 2021/08/13 21:04:44 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_mvxpe.c,v 1.41 2024/02/10 18:43:52 andvar Exp $");
 
 #include "opt_multiprocessor.h"
 
@@ -449,7 +449,7 @@ mvxpe_attach(device_t parent, device_t self, void *aux)
 	strlcpy(ifp->if_xname, device_xname(sc->sc_dev), sizeof(ifp->if_xname));
 
 	/*
-	 * Enable DMA engines and Initiazlie Device Registers.
+	 * Enable DMA engines and Initialize Device Registers.
 	 */
 	MVXPE_WRITE(sc, MVXPE_PRXINIT, 0x00000000);
 	MVXPE_WRITE(sc, MVXPE_PTXINIT, 0x00000000);
@@ -482,7 +482,8 @@ mvxpe_attach(device_t parent, device_t self, void *aux)
 	 * we assume phyaddress == MAC unit number here,
 	 * but some boards may not.
 	 */
-	mii_attach(self, mii, 0xffffffff, MII_PHY_ANY, sc->sc_dev->dv_unit, 0);
+	mii_attach(self, mii, 0xffffffff, MII_PHY_ANY, device_unit(sc->sc_dev),
+	    0);
 	child = LIST_FIRST(&mii->mii_phys);
 	if (child == NULL) {
 		aprint_error_dev(self, "no PHY found!\n");
@@ -875,7 +876,7 @@ mvxpe_initreg(struct ifnet *ifp)
 	/* Tx MTU Limit */
 	MVXPE_WRITE(sc, MVXPE_TXMTU, MVXPE_MTU);
 
-	/* Check SGMII or SERDES(asume IPL/U-BOOT initialize this) */
+	/* Check SGMII or SERDES(assume IPL/U-BOOT initialize this) */
 	reg = MVXPE_READ(sc, MVXPE_PMACC0);
 	if ((reg & MVXPE_PMACC0_PORTTYPE) != 0)
 		serdes = 1;
@@ -1447,7 +1448,7 @@ mvxpe_rxtxth_intr(void *arg)
 
 	DPRINTIFNET(ifp, 2, "PRXTXTIC: %#x\n", ic);
 
-	/* ack maintance interrupt first */
+	/* ack maintenance interrupt first */
 	if (ic & MVXPE_PRXTXTI_PTXERRORSUMMARY) {
 		DPRINTIFNET(ifp, 1, "PRXTXTIC: +PTXERRORSUMMARY\n");
 		MVXPE_EVCNT_INCR(&sc->sc_ev.ev_rxtxth_txerr);
@@ -1600,15 +1601,15 @@ mvxpe_rxtx_intr(void *arg)
 			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_rxtx_tbrq);
 		}
 		if (prxtxic & MVXPE_PRXTXI_PRXTXTHICSUMMARY) {
-			DPRINTIFNET(ifp, 1, "PRXTXTHIC Sumary\n");
+			DPRINTIFNET(ifp, 1, "PRXTXTHIC Summary\n");
 			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_rxtx_rxtxth);
 		}
 		if (prxtxic & MVXPE_PRXTXI_PTXERRORSUMMARY) {
-			DPRINTIFNET(ifp, 1, "PTXERROR Sumary\n");
+			DPRINTIFNET(ifp, 1, "PTXERROR Summary\n");
 			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_rxtx_txerr);
 		}
 		if (prxtxic & MVXPE_PRXTXI_PMISCICSUMMARY) {
-			DPRINTIFNET(ifp, 1, "PMISCIC Sumary\n");
+			DPRINTIFNET(ifp, 1, "PMISCIC Summary\n");
 			MVXPE_EVCNT_INCR(&sc->sc_ev.ev_rxtx_misc);
 		}
 	}
@@ -2610,7 +2611,7 @@ mvxpe_rx_queue_add(struct mvxpe_softc *sc, int q)
 		return ENOBUFS;
 	}
 
-	/* Add the packet to descritor */
+	/* Add the packet to descriptor */
 	KASSERT(MVXPE_RX_PKTBUF(sc, q, rx->rx_cpu) == NULL);
 	MVXPE_RX_PKTBUF(sc, q, rx->rx_cpu) = chunk;
 	mvxpbm_dmamap_sync(chunk, BM_SYNC_ALL, BUS_DMASYNC_PREREAD);

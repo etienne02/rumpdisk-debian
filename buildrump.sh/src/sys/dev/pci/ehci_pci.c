@@ -1,4 +1,4 @@
-/*	$NetBSD: ehci_pci.c,v 1.72 2021/08/07 16:19:14 thorpej Exp $	*/
+/*	$NetBSD: ehci_pci.c,v 1.77 2024/03/24 03:29:02 mrg Exp $	*/
 
 /*
  * Copyright (c) 2001, 2002 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ehci_pci.c,v 1.72 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ehci_pci.c,v 1.77 2024/03/24 03:29:02 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -85,10 +85,12 @@ struct ehci_pci_softc {
 	void 			*sc_ih;		/* interrupt vectoring */
 	enum {
 		EHCI_INIT_NONE,
+		EHCI_INIT_OWNER,
 		EHCI_INIT_INITED
 	} sc_init_state;
 };
 
+static void ehci_pci_release_resources(struct ehci_pci_softc *);
 static int ehci_sb700_match(const struct pci_attach_args *);
 static int ehci_apply_amd_quirks(struct ehci_pci_softc *);
 static enum ehci_pci_quirk_flags ehci_pci_lookup_quirkdata(pci_vendor_id_t,
@@ -144,7 +146,22 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_pc = pc;
 	sc->sc_tag = tag;
-	sc->sc.sc_bus.ub_dmatag = pa->pa_dmat;
+
+	const uint32_t hccparams = EREAD4(&sc->sc, EHCI_HCCPARAMS);
+
+	if (EHCI_HCC_64BIT(hccparams)) {
+		aprint_verbose_dev(self, "64-bit DMA");
+		if (pci_dma64_available(pa)) {
+			sc->sc.sc_bus.ub_dmatag = pa->pa_dmat64;
+			aprint_verbose("\n");
+		} else {
+			aprint_verbose(" - limited\n");
+			sc->sc.sc_bus.ub_dmatag = pa->pa_dmat;
+		}
+	} else {
+		aprint_verbose_dev(self, "32-bit DMA\n");
+		sc->sc.sc_bus.ub_dmatag = pa->pa_dmat;
+	}
 
 	/* Disable interrupts, so we don't get any spurious ones. */
 	sc->sc.sc_offs = EREAD1(&sc->sc, EHCI_CAPLENGTH);
@@ -181,12 +198,10 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	 * Allocate IRQ
 	 */
 	intrstr = pci_intr_string(pc, sc->sc_pihp[0], intrbuf, sizeof(intrbuf));
+	pci_intr_setattr(pc, &sc->sc_pihp[0], PCI_INTR_MPSAFE, true);
 	sc->sc_ih = pci_intr_establish_xname(pc, sc->sc_pihp[0], IPL_USB,
 	    ehci_intr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
-		pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
-		sc->sc_pihp = NULL;
-
 		aprint_error_dev(self, "couldn't establish interrupt");
 		if (intrstr != NULL)
 			aprint_error(" at %s", intrstr);
@@ -242,6 +257,7 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	sc->sc.sc_ncomp = ncomp;
 
 	ehci_get_ownership(&sc->sc, pc, tag);
+	sc->sc_init_state = EHCI_INIT_OWNER;
 
 	int err = ehci_init(&sc->sc);
 	if (err) {
@@ -250,9 +266,8 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	}
 	sc->sc_init_state = EHCI_INIT_INITED;
 
-	if (!pmf_device_register1(self, ehci_pci_suspend, ehci_pci_resume,
-	    ehci_shutdown))
-		aprint_error_dev(self, "couldn't establish power handler\n");
+	pmf_device_register1(self, ehci_pci_suspend, ehci_pci_resume,
+	    ehci_shutdown);
 
 	/* Attach usb device. */
 	sc->sc.sc_child = config_found(self, &sc->sc.sc_bus, usbctlprint,
@@ -260,15 +275,31 @@ ehci_pci_attach(device_t parent, device_t self, void *aux)
 	return;
 
 fail:
+	ehci_pci_release_resources(sc);
+	pmf_device_register(self, NULL, NULL);
+}
+
+static void
+ehci_pci_release_resources(struct ehci_pci_softc *sc)
+{
+	if (sc->sc_init_state >= EHCI_INIT_OWNER)
+		ehci_release_ownership(&sc->sc, sc->sc_pc, sc->sc_tag);
+
 	if (sc->sc_ih) {
 		pci_intr_disestablish(sc->sc_pc, sc->sc_ih);
 		sc->sc_ih = NULL;
 	}
+	if (sc->sc_pihp != NULL) {
+		pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
+		sc->sc_pihp = NULL;
+	}
+
 	if (sc->sc.sc_size) {
-		ehci_release_ownership(&sc->sc, sc->sc_pc, sc->sc_tag);
 		bus_space_unmap(sc->sc.iot, sc->sc.ioh, sc->sc.sc_size);
 		sc->sc.sc_size = 0;
 	}
+
+	sc->sc_init_state = EHCI_INIT_NONE;
 }
 
 static int
@@ -286,30 +317,19 @@ ehci_pci_detach(device_t self, int flags)
 	pmf_device_deregister(self);
 	ehci_shutdown(self, flags);
 
-	/* disable interrupts */
-	EOWRITE4(&sc->sc, EHCI_USBINTR, 0);
-	/* XXX grotty hack to flush the write */
-	(void)EOREAD4(&sc->sc, EHCI_USBINTR);
-
-	if (sc->sc_ih != NULL) {
-		pci_intr_disestablish(sc->sc_pc, sc->sc_ih);
-		sc->sc_ih = NULL;
+	if (sc->sc_init_state >= EHCI_INIT_INITED) {
+		/* disable interrupts */
+		EOWRITE4(&sc->sc, EHCI_USBINTR, 0);
+		/* XXX grotty hack to flush the write */
+		(void)EOREAD4(&sc->sc, EHCI_USBINTR);
 	}
 
-	if (sc->sc_pihp != NULL) {
-		pci_intr_release(sc->sc_pc, sc->sc_pihp, 1);
-		sc->sc_pihp = NULL;
-	}
-
-	if (sc->sc.sc_size) {
-		ehci_release_ownership(&sc->sc, sc->sc_pc, sc->sc_tag);
-		bus_space_unmap(sc->sc.iot, sc->sc.ioh, sc->sc.sc_size);
-		sc->sc.sc_size = 0;
-	}
+	ehci_pci_release_resources(sc);
 
 #if 1
 	/* XXX created in ehci.c */
 	if (sc->sc_init_state >= EHCI_INIT_INITED) {
+		mutex_destroy(&sc->sc.sc_rhlock);
 		mutex_destroy(&sc->sc.sc_lock);
 		mutex_destroy(&sc->sc.sc_intr_lock);
 		softint_disestablish(sc->sc.sc_doorbell_si);

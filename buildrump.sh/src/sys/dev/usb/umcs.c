@@ -1,4 +1,4 @@
-/* $NetBSD: umcs.c,v 1.17 2021/08/07 16:19:17 thorpej Exp $ */
+/* $NetBSD: umcs.c,v 1.22 2024/02/09 22:08:37 andvar Exp $ */
 /* $FreeBSD: head/sys/dev/usb/serial/umcs.c 260559 2014-01-12 11:44:28Z hselasky $ */
 
 /*-
@@ -36,12 +36,12 @@
  * http://www.moschip.com.  The datasheets don't contain full
  * programming information for the chip.
  *
- * It is nornal to have only two enabled ports in devices, based on
+ * It is normal to have only two enabled ports in devices, based on
  * quad-port mos7840.
  *
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: umcs.c,v 1.17 2021/08/07 16:19:17 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: umcs.c,v 1.22 2024/02/09 22:08:37 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -226,8 +226,8 @@ umcs7840_attach(device_t parent, device_t self, void *aux)
 	 *
 	 * Also, see notes in header file for these constants.
 	 */
-	umcs7840_get_reg(sc, MCS7840_DEV_REG_GPIO, &data);
-	if (data & MCS7840_DEV_GPIO_4PORTS) {
+	error = umcs7840_get_reg(sc, MCS7840_DEV_REG_GPIO, &data);
+	if (error == 0 && (data & MCS7840_DEV_GPIO_4PORTS) != 0) {
 		sc->sc_numports = 4;
 		/* physical port no are : 0, 1, 2, 3 */
 	} else {
@@ -244,7 +244,7 @@ umcs7840_attach(device_t parent, device_t self, void *aux)
 	aprint_verbose_dev(self, "found %d active ports\n", sc->sc_numports);
 
 	if (!umcs7840_get_reg(sc, MCS7840_DEV_REG_MODE, &data)) {
-		aprint_verbose_dev(self, "On-die confguration: RST: active %s, "
+		aprint_verbose_dev(self, "On-die configuration: RST: active %s, "
 		    "HRD: %s, PLL: %s, POR: %s, Ports: %s, EEPROM write %s, "
 		    "IrDA is %savailable\n",
 		    (data & MCS7840_DEV_MODE_RESET) ? "low" : "high",
@@ -276,6 +276,12 @@ umcs7840_attach(device_t parent, device_t self, void *aux)
 		sc->sc_dying = true;
 		return;
 	}
+	if (sc->sc_intr_buflen == 0) {
+		aprint_error_dev(self, "invalid interrupt endpoint"
+		    " (addr %d)\n", intr_addr);
+		sc->sc_dying = true;
+		return;
+	}
 	sc->sc_intr_buf = kmem_alloc(sc->sc_intr_buflen, KM_SLEEP);
 
 	error = usbd_open_pipe_intr(sc->sc_iface, intr_addr,
@@ -283,7 +289,7 @@ umcs7840_attach(device_t parent, device_t self, void *aux)
 		    sc->sc_intr_buflen, umcs7840_intr, 100);
 	if (error) {
 		aprint_error_dev(self, "cannot open interrupt pipe "
-		    "(addr %d)\n", intr_addr);
+		    "(addr %d): error %d\n", intr_addr, error);
 		sc->sc_dying = true;
 		return;
 	}
@@ -452,7 +458,7 @@ umcs7840_set_baudrate(struct umcs7840_softc *sc, uint8_t portno,
 	}
 	DPRINTF(("Port %d set speed: %d (%02x / %d)\n", portno, rate, clk, divisor));
 
-	/* Set clock source for standard BAUD frequences */
+	/* Set clock source for standard BAUD frequencies */
 	err = umcs7840_get_reg(sc, spreg, &data);
 	if (err)
 		return err;
@@ -486,7 +492,7 @@ umcs7840_set_baudrate(struct umcs7840_softc *sc, uint8_t portno,
 static int
 umcs7840_calc_baudrate(uint32_t rate, uint16_t *divisor, uint8_t *clk)
 {
-	/* Maximum speeds for standard frequences, when PLL is not used */
+	/* Maximum speeds for standard frequencies, when PLL is not used */
 	static const uint32_t umcs7840_baudrate_divisors[] =
 	    {0, 115200, 230400, 403200, 460800, 806400, 921600,
 	     1572864, 3145728,};

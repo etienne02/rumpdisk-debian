@@ -1,4 +1,4 @@
-/*	$NetBSD: hil.c,v 1.5 2021/08/07 16:19:11 thorpej Exp $	*/
+/*	$NetBSD: hil.c,v 1.8 2024/05/06 13:27:49 tsutsui Exp $	*/
 /*	$OpenBSD: hil.c,v 1.24 2010/11/20 16:45:46 miod Exp $	*/
 /*
  * Copyright (c) 2003, 2004, Miodrag Vallat.
@@ -139,6 +139,9 @@ void
 hil_attach(struct hil_softc *sc, int *hil_is_console)
 {
 
+	rnd_attach_source(&sc->sc_rndsource, device_xname(sc->sc_dev),
+	    RND_TYPE_TTY, RND_FLAG_DEFAULT);
+
 	aprint_normal("\n");
 
 	/*
@@ -150,6 +153,7 @@ hil_attach(struct hil_softc *sc, int *hil_is_console)
 	sc->sc_cmdbp = sc->sc_cmdbuf;
 	sc->sc_pollbp = sc->sc_pollbuf;
 	sc->sc_console = hil_is_console;
+	sc->sc_status = HIL_STATUS_BUSY;
 }
 
 /*
@@ -269,9 +273,6 @@ hil_intr(void *v)
 	struct hil_softc *sc = v;
 	uint8_t c, stat;
 
-	if (cold)
-		return 0;
-
 	stat = bus_space_read_1(sc->sc_bst, sc->sc_bsh, HILP_STAT);
 
 	/*
@@ -289,6 +290,8 @@ hil_intr(void *v)
 
 	if (sc->sc_status != HIL_STATUS_BUSY)
 		hil_process_pending(sc);
+
+	rnd_add_uint32(&sc->sc_rndsource, (stat << 8) | c);
 
 	return 1;
 }
@@ -390,7 +393,7 @@ hil_process_poll(struct hil_softc *sc, uint8_t stat, uint8_t c)
 			case HIL_UNPLUGGED:
 				/*
 				 * Remember that an unplugged event
-				 * occured; it will be processed upon
+				 * occurred; it will be processed upon
 				 * leaving polled mode...
 				 */
 				sc->sc_pending = HIL_PENDING_UNPLUGGED;

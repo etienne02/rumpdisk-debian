@@ -1,7 +1,7 @@
-/*	$NetBSD: cpu_in_cksum.S,v 1.5 2015/01/06 17:43:16 christos Exp $	*/
+/*	$NetBSD: cpu_in_cksum.S,v 1.12 2024/02/07 04:20:27 msaitoh Exp $	*/
 
 /*-
- * Copyright (c) 2000 SHIMIZU Ryo <ryo@misakimix.org>
+ * Copyright (c) 2000 SHIMIZU Ryo
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,10 +34,9 @@
 #include <machine/asm.h>
 #include "assym.h"
 
-__KERNEL_RCSID(0, "$NetBSD: cpu_in_cksum.S,v 1.5 2015/01/06 17:43:16 christos Exp $")
+__KERNEL_RCSID(0, "$NetBSD: cpu_in_cksum.S,v 1.12 2024/02/07 04:20:27 msaitoh Exp $")
 
 
-#define	reg_tmp0		r0
 #define	reg_byte_swapped	r1
 #define	reg_mlen		r2
 #define	reg_tmp3		r3
@@ -49,45 +48,45 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_in_cksum.S,v 1.5 2015/01/06 17:43:16 christos Ex
 
 
 #define	REDUCE	\
-	swap.w	reg_sum,reg_tmp0	; \
-	extu.w	reg_sum,reg_sum		; \
-	extu.w	reg_tmp0,reg_tmp0	; \
-	add	reg_tmp0,reg_sum
+	swap.w	reg_sum, r0		; \
+	extu.w	reg_sum, reg_sum	; \
+	extu.w	r0, r0			; \
+	add	r0, reg_sum
 
 #define	ROL	\
 	shll8	reg_sum
 
 #if _BYTE_ORDER == BIG_ENDIAN
 #define	ADDB	\
-	mov.b	@reg_w+,reg_tmp0	; \
-	ROL				; \
-	extu.b	reg_tmp0,reg_tmp0	; \
-	add	reg_tmp0,reg_sum	; \
-	not	reg_byte_swapped,reg_byte_swapped
+	mov.b	@reg_w+, r0	; \
+	ROL			; \
+	extu.b	r0, r0		; \
+	add	r0, reg_sum	; \
+	not	reg_byte_swapped, reg_byte_swapped
 #else
 #define	ADDB	\
-	mov.b	@reg_w+,reg_tmp0	; \
-	extu.b	reg_tmp0,reg_tmp0	; \
-	add	reg_tmp0,reg_sum	; \
-	ROL				; \
-	not	reg_byte_swapped,reg_byte_swapped
+	mov.b	@reg_w+, r0	; \
+	extu.b	r0, r0		; \
+	add	r0, reg_sum	; \
+	ROL			; \
+	not	reg_byte_swapped, reg_byte_swapped
 #endif
 
 
 #define	ADDS	\
-	mov.w	@reg_w+,reg_tmp0	; \
-	extu.w	reg_tmp0,reg_tmp0	; \
-	add	reg_tmp0,reg_sum
+	mov.w	@reg_w+, r0	; \
+	extu.w	r0, r0		; \
+	add	r0, reg_sum
 
 #define	ADDCL	\
-	mov.l	@reg_w+,reg_tmp0	; \
-	addc	reg_tmp0,reg_sum
+	mov.l	@reg_w+, r0	; \
+	addc	r0, reg_sum
 
 #define	FORWARD1	\
-	add	#-1,reg_mlen
+	add	#-1, reg_mlen
 
 #define	FORWARD2	\
-	add	#-2,reg_mlen
+	add	#-2, reg_mlen
 
 
 /*
@@ -97,7 +96,8 @@ __KERNEL_RCSID(0, "$NetBSD: cpu_in_cksum.S,v 1.5 2015/01/06 17:43:16 christos Ex
  * LINTSTUB: Func: int cpu_in_cksum(struct mbuf *m, int len, int off, uint32_t initial_sum);
  */
 ENTRY(cpu_in_cksum)
-	sts.l	pr,@-sp
+	sts.l	pr, @-sp
+	PIC_PROLOGUE(.L_got)
 
 	tst	reg_len, reg_len
 	bt/s	mbuf_loop_done
@@ -127,13 +127,13 @@ ENTRY(cpu_in_cksum)
 
 
 mbuf_loop:
-	tst	reg_m,reg_m
+	tst	reg_m, reg_m
 	bt	out_of_mbufs
 
-	mov.l	@(M_LEN,reg_m),reg_mlen
-	tst	reg_mlen,reg_mlen
+	mov.l	@(M_LEN, reg_m), reg_mlen
+	tst	reg_mlen, reg_mlen
 	bt/s	mbuf_loop_continue
-	mov.l	@(M_DATA,reg_m),reg_w
+	mov.l	@(M_DATA, reg_m), reg_w
 
 
 	!! Entry point for mbuf loop.  We jump here after we have
@@ -141,45 +141,45 @@ mbuf_loop:
 	!! offset.  reg_mlen and reg_w were adjusted to point at the
 	!! first interesting byte of data.
 .L_mbuf_loop_enter:
-	cmp/ge	reg_mlen,reg_len
+	cmp/ge	reg_mlen, reg_len
 	bt	1f
-	mov	reg_len,reg_mlen
+	mov	reg_len, reg_mlen
 1:
-	sub	reg_mlen,reg_len
+	sub	reg_mlen, reg_len
 
 
-	mov	reg_w,reg_tmp0
-	tst	#1,reg_tmp0
+	mov	reg_w, r0
+	tst	#1, r0
 	bt/s	1f
-	REDUCE		/* 1st instruction break only reg_tmp0(r0) */
+	REDUCE		/* 1st instruction break only r0 */
 	ADDB
 	FORWARD1
 1:
 
 
-	mov	#1,reg_tmp0
-	cmp/gt	reg_tmp0,reg_mlen
+	mov	#1, r0
+	cmp/gt	r0, reg_mlen
 	bf/s	1f
-	mov	reg_w,reg_tmp0
-	tst	#2,reg_tmp0
+	mov	reg_w, r0
+	tst	#2, r0
 	bt/s	1f
-	REDUCE		/* 1st instruction break only reg_tmp0(r0) */
+	REDUCE		/* 1st instruction break only r0 */
 	ADDS
 	FORWARD2
 1:
 
 
 
-	mov	#127,reg_tmp0
-	cmp/hi	reg_tmp0,reg_mlen
+	mov	#127, r0
+	cmp/hi	r0, reg_mlen
 	bf	1f
 
 do_cksum128:
 	bsr	cksum128
 	 nop
 
-	mov	#127,reg_tmp0
-	cmp/hi	reg_tmp0,reg_mlen
+	mov	#127, r0
+	cmp/hi	r0, reg_mlen
 	bt	do_cksum128
 1:
 
@@ -189,31 +189,31 @@ do_cksum128:
 
 	REDUCE
 
-	mov	#1,reg_tmp0
-	cmp/gt	reg_tmp0,reg_mlen
+	mov	#1, r0
+	cmp/gt	r0, reg_mlen
 	bf	1f
 	ADDS
 	FORWARD2
 1:
 
-	mov	reg_mlen,r0
-	tst	#1,r0
+	mov	reg_mlen, r0
+	tst	#1, r0
 	bt	1f
 	ADDB
 1:
 
 
 mbuf_loop_continue:
-	mov.l	@(M_NEXT,reg_m),reg_m
+	mov.l	@(M_NEXT, reg_m), reg_m
 
-	tst	reg_len,reg_len
+	tst	reg_len, reg_len
 	bf/s	mbuf_loop
 mbuf_loop_done:
 
 
-	tst	reg_byte_swapped,reg_byte_swapped
+	tst	reg_byte_swapped, reg_byte_swapped
 	bt/s	1f
-	REDUCE		/* 1st instruction break only reg_tmp0(r0) */
+	REDUCE		/* 1st instruction break only r0 */
 	ROL
 1:
 
@@ -221,27 +221,30 @@ mbuf_loop_done:
 	REDUCE
 
 in_cksum_return:
-	not	reg_sum,r0
-	lds.l	@sp+,pr
+	not	reg_sum, r0
+	PIC_EPILOGUE
+	lds.l	@sp+, pr
 	rts
-	 extu.w	r0,r0
+	 extu.w	r0, r0
 
 
 out_of_mbufs:
-	mova	.L_message_out_of_data,reg_tmp0
-	mov.l	.L_printf,reg_tmp3
+	mova	.L_message_out_of_data, r0
+	mov.l	.L_printf, reg_tmp3
 
-	mov.l	reg_sum,@-sp	/* save: call clobbered register */
+	mov.l	reg_sum, @-sp	/* save: call clobbered register */
 
-	jsr	@reg_tmp3
-	 mov	reg_tmp0,r4
+1:	CALL	reg_tmp3
+	 mov	r0, r4
 
 	bra	in_cksum_return
-	 mov.l	@sp+,reg_sum	/* restore */
+	 mov.l	@sp+, reg_sum	/* restore */
 
 	.align 2
+.L_got:
+	PIC_GOT_DATUM
 .L_printf:
-	.long	_C_LABEL(printf)
+	CALL_DATUM(_C_LABEL(printf), 1b)
 
 	.align 2	/* mova target */
 .L_message_out_of_data:
@@ -252,23 +255,19 @@ out_of_mbufs:
 
 	.align	2
 cksum128mod:
-	mov	reg_mlen,reg_tmp0
-	and	#124,reg_tmp0
-	sub	reg_tmp0,reg_mlen
+	mov	reg_mlen, r0
+	and	#124, r0
+	sub	r0, reg_mlen
+	mov	r0, reg_tmp3
 
-	mov.l	.L_cksum128_tail_p,reg_tmp3
-	sub	reg_tmp0,reg_tmp3
-	jmp	@reg_tmp3
+	mova	cksum128_tail, r0
+	sub	reg_tmp3, r0
+	jmp	@r0
 	 clrt
 
 	.align	2
-.L_cksum128_tail_p:
-	.long	cksum128_tail
-
-
-	.align	2
 cksum128:
-	add	#-128,reg_mlen
+	add	#-128, reg_mlen
 	clrt
 
 cksum128_unroll:
@@ -305,6 +304,6 @@ cksum128_unroll:
 	ADDCL
 	ADDCL
 cksum128_tail:
-	mov	#0,reg_tmp0
+	mov	#0, r0
 	rts
-	 addc	reg_tmp0,reg_sum
+	 addc	r0, reg_sum

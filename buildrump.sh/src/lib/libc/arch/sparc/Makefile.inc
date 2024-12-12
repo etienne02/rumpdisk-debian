@@ -1,6 +1,8 @@
-#	$NetBSD: Makefile.inc,v 1.15 2014/07/12 19:21:48 nakayama Exp $
+#	$NetBSD: Makefile.inc,v 1.17 2023/09/03 21:41:45 mrg Exp $
 
-SRCS+=	__sigaction14_sigtramp.c __sigtramp2.S
+SRCS+=	__sigtramp2.S
+
+CPPFLAGS.assym.h+=	-I${LIBCDIR}/arch/sparc/gen
 
 .if ${MACHINE} != "sparc64"
 # `source' files built from m4 source

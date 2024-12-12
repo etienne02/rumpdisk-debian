@@ -1,4 +1,4 @@
-/*	$NetBSD: sbicvar.h,v 1.25 2019/12/27 09:41:49 msaitoh Exp $	*/
+/*	$NetBSD: sbicvar.h,v 1.27 2023/12/20 00:40:42 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1990 The Regents of the University of California.
@@ -35,7 +35,7 @@
  */
 #ifndef _SBICVAR_H_
 #define _SBICVAR_H_
-#include <sys/malloc.h>
+
 #include <sys/callout.h>
 
 /*
@@ -54,7 +54,7 @@ struct	dma_chain {
 /*
  * ACB. Holds additional information for each SCSI command Comments: We
  * need a separate scsi command block because we may need to overwrite it
- * with a request sense command.  Basicly, we refrain from fiddling with
+ * with a request sense command.  Basically, we refrain from fiddling with
  * the scsipi_xfer struct (except do the expected updating of return values).
  * We'll generally update: xs->{flags,resid,error,sense,status} and
  * occasionally xs->retries.

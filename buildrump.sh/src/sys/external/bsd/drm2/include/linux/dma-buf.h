@@ -1,4 +1,4 @@
-/*	$NetBSD: dma-buf.h,v 1.4 2018/08/27 15:25:13 riastradh Exp $	*/
+/*	$NetBSD: dma-buf.h,v 1.12 2021/12/19 12:01:40 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -36,7 +36,10 @@
 #include <sys/bus.h>
 #include <sys/mutex.h>
 
-#include <linux/reservation.h>
+#include <linux/err.h>
+#include <linux/dma-mapping.h>
+#include <linux/dma-resv.h>
+#include <linux/scatterlist.h>
 
 struct device;
 struct dma_buf;
@@ -45,20 +48,14 @@ struct dma_buf_export_info;
 struct dma_buf_ops;
 struct file;
 struct module;
-struct reservation_object;
+struct dma_resv;
 struct sg_table;
 struct uvm_object;
 
-enum dma_data_direction {
-	DMA_NONE		= 0,
-	DMA_TO_DEVICE		= 1,
-	DMA_FROM_DEVICE		= 2,
-	DMA_BIDIRECTIONAL	= 3,
-};
-
 struct dma_buf_ops {
-	int	(*attach)(struct dma_buf *, struct device *,
-		    struct dma_buf_attachment *);
+	bool	cache_sgt_mapping;
+	bool	dynamic_mapping;
+	int	(*attach)(struct dma_buf *, struct dma_buf_attachment *);
 	void	(*detach)(struct dma_buf *, struct dma_buf_attachment *);
 	struct sg_table *
 		(*map_dma_buf)(struct dma_buf_attachment *,
@@ -66,14 +63,8 @@ struct dma_buf_ops {
 	void	(*unmap_dma_buf)(struct dma_buf_attachment *,
 		    struct sg_table *, enum dma_data_direction);
 	void	(*release)(struct dma_buf *);
-	int	(*begin_cpu_access)(struct dma_buf *, size_t, size_t,
-		    enum dma_data_direction);
-	int	(*end_cpu_access)(struct dma_buf *, size_t, size_t,
-		    enum dma_data_direction);
-	void *	(*kmap_atomic)(struct dma_buf *, unsigned long);
-	void	(*kunmap_atomic)(struct dma_buf *, unsigned long, void *);
-	void *	(*kmap)(struct dma_buf *, unsigned long);
-	void	(*kunmap)(struct dma_buf *, unsigned long, void *);
+	int	(*begin_cpu_access)(struct dma_buf *, enum dma_data_direction);
+	int	(*end_cpu_access)(struct dma_buf *, enum dma_data_direction);
 	int	(*mmap)(struct dma_buf *, off_t *, size_t, int, int *,
 		    int *, struct uvm_object **, int *);
 	void *	(*vmap)(struct dma_buf *);
@@ -84,17 +75,19 @@ struct dma_buf {
 	void				*priv;
 	const struct dma_buf_ops	*ops;
 	size_t				size;
-	struct reservation_object	*resv;
+	struct dma_resv			*resv;
 
 	kmutex_t			db_lock;
 	volatile unsigned		db_refcnt;
-	struct reservation_poll		db_resv_poll;
-	struct reservation_object	db_resv_int[];
+	struct dma_resv_poll		db_resv_poll;
+	struct dma_resv			db_resv_int[];
 };
 
 struct dma_buf_attachment {
 	void				*priv;
 	struct dma_buf			*dmabuf;
+	bus_dma_tag_t			dev; /* XXX expedient misnomer */
+	bool				dynamic_mapping;
 };
 
 struct dma_buf_export_info {
@@ -105,7 +98,7 @@ struct dma_buf_export_info {
 	const struct dma_buf_ops	*ops;
 	size_t				size;
 	int				flags;
-	struct reservation_object	*resv;
+	struct dma_resv			*resv;
 	void				*priv;
 };
 
@@ -114,6 +107,7 @@ struct dma_buf_export_info {
 
 #define	dma_buf_attach		linux_dma_buf_attach
 #define	dma_buf_detach		linux_dma_buf_detach
+#define	dma_buf_dynamic_attach	linux_dma_buf_dynamic_attach
 #define	dma_buf_export		linux_dma_buf_export
 #define	dma_buf_fd		linux_dma_buf_fd
 #define	dma_buf_get		linux_dma_buf_get
@@ -132,7 +126,9 @@ void	get_dma_buf(struct dma_buf *);
 void	dma_buf_put(struct dma_buf *);
 
 struct dma_buf_attachment *
-	dma_buf_attach(struct dma_buf *, struct device *);
+	dma_buf_attach(struct dma_buf *, bus_dma_tag_t);
+struct dma_buf_attachment *
+	dma_buf_dynamic_attach(struct dma_buf *, bus_dma_tag_t, bool);
 void	dma_buf_detach(struct dma_buf *, struct dma_buf_attachment *);
 
 struct sg_table *

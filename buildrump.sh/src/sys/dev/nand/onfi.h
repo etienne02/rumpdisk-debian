@@ -1,4 +1,4 @@
-/*	$NetBSD: onfi.h,v 1.2 2019/12/26 04:53:12 msaitoh Exp $	*/
+/*	$NetBSD: onfi.h,v 1.4 2022/06/03 12:10:51 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2010 Department of Software Engineering,
@@ -140,9 +140,9 @@ struct onfi_parameter_page {
 	uint16_t param_lun_maxbad; /* M: maximum badblocks per LUN */
 	uint16_t param_block_endurance; /* M: block endurance */
 	uint8_t param_guaranteed_blocks; /* M: guaranteed valid blocks at
-					  begginning of target */
+					  beginning of target */
 	uint16_t param_guaranteed_endurance; /* M: block endurance of
-					      guranteed blocks */
+					      guaranteed blocks */
 	uint8_t param_programs_per_page; /* M: number of programs per page */
 	uint8_t param_partial_programming_attr; /* O: obsolete */
 	uint8_t param_ecc_correctable_bits;     /* M: number of bits

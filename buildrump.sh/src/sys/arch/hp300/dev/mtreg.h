@@ -1,4 +1,4 @@
-/*	$NetBSD: mtreg.h,v 1.6 2019/05/28 08:59:33 msaitoh Exp $	*/
+/*	$NetBSD: mtreg.h,v 1.9 2023/08/19 17:32:02 andvar Exp $	*/
 
 /*
  * Copyright (c) 1992, The University of Utah and
@@ -115,7 +115,7 @@
 
 
 struct	mt_stat {
-	u_char	m_stat[6];
+	uint8_t	m_stat[6];
 };
 
 /* sc_flags */
@@ -226,7 +226,7 @@ struct	mt_stat {
  *	 64	Tape mark timeout (no gap following tape mark)
  * (POSITION or SERVO ERRORS) - these are ALL internal to tape drive
  *	 81	Servo unresponsive
- *	 82	Servo didn't respond with corect state
+ *	 82	Servo didn't respond with correct state
  *	 83	Servo shutdown
  *	 84	Servo detected hardware failure
  *	 85	Servo protocol error
@@ -249,7 +249,7 @@ struct	mt_stat {
  *	110	Formatter <--> data buffer byte count mismatch
  * (CONTROLLER ERROR) - these are ALL internal to drive
  *	121	Transaction ID mismatch (device vs. controller)
- *	122	Devoce report has no coorepinding command
+ *	122	Device report has no corresponding command
  *	123	Invalid device report
  *	124	Repost queue overflow
  *	125	Unknown command from device
@@ -261,7 +261,7 @@ struct	mt_stat {
  *	132	Bad message type from device
  *	133	Abort between HPIB interface and channel program
  *	134	Unknown HPIB interface exception
- *	137	Illegal access to servo conntroller registers
+ *	137	Illegal access to servo controller registers
  *	138	Device program firmware error
  *	139	Hardware utilities firmware error
  *	140	Channel program firmware error

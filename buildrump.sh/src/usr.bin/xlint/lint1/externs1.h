@@ -1,4 +1,4 @@
-/*	$NetBSD: externs1.h,v 1.138 2021/08/31 17:51:30 rillig Exp $	*/
+/*	$NetBSD: externs1.h,v 1.238 2024/12/08 17:12:01 rillig Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Jochen Pohl
@@ -14,7 +14,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -31,357 +31,412 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * main.c
- */
-extern	int	aflag;
-extern	bool	bflag;
-extern	bool	cflag;
-extern	bool	c11flag;
-extern	bool	eflag;
-extern	bool	Fflag;
-extern	bool	gflag;
-extern	bool	hflag;
-extern	bool	pflag;
-extern	bool	rflag;
-extern	bool	sflag;
-extern	bool	tflag;
-extern	bool	uflag;
-extern	bool	vflag;
-extern	bool	yflag;
-extern	bool	wflag;
-extern	bool	zflag;
-extern	bool	Sflag;
-extern	bool	Tflag;
-extern	bool	Pflag;
+#include <signal.h>
 
-extern	void	norecover(void);
+/*
+ * main1.c
+ */
+extern bool Fflag;
+extern bool Pflag;
+extern bool Tflag;
+extern int aflag;
+extern bool bflag;
+extern bool cflag;
+extern bool eflag;
+extern bool hflag;
+extern bool pflag;
+extern bool rflag;
+extern bool vflag;
+extern bool wflag;
+extern bool yflag;
+extern bool zflag;
+
+extern bool allow_trad;
+extern bool allow_c90;
+extern bool allow_c99;
+extern bool allow_c11;
+extern bool allow_c23;
+extern bool allow_gcc;
+
+extern sig_atomic_t fpe;
+
+void norecover(void);
 
 /*
  * cgram.y
  */
-extern	int	block_level;
-extern	int	mem_block_level;
-extern	int	yydebug;
+extern int block_level;
+extern size_t mem_block_level;
+extern int yydebug;
 
-extern	int	yyerror(const char *);
-extern	int	yyparse(void);
+int yyerror(const char *);
+int yyparse(void);
+extern char *yytext;
 
 /*
- * scan.l
+ * lex.c
  */
-extern  bool	attron;
-extern	pos_t	curr_pos;
-extern	pos_t	csrc_pos;
-extern	bool	in_system_header;
-extern	symt_t	symtyp;
-extern	FILE	*yyin;
+extern bool in_gcc_attribute;
+extern pos_t curr_pos;
+extern pos_t csrc_pos;
+extern bool in_system_header;
+extern symbol_kind sym_kind;
+extern FILE *yyin;
 
-extern	void	initscan(void);
-extern	int64_t	convert_integer(int64_t, tspec_t, unsigned int);
-extern	void	clear_warn_flags(void);
-extern	sym_t	*getsym(sbuf_t *);
-extern	void	cleanup(void);
-extern	sym_t	*pushdown(const sym_t *);
-extern	sym_t	*mktempsym(type_t *);
-extern	void	rmsym(sym_t *);
-extern	void	rmsyms(sym_t *);
-extern	void	inssym(int, sym_t *);
-extern	void	freeyyv(void *, int);
-extern	int	yylex(void);
+void init_lex(void);
+int64_t convert_integer(int64_t, tspec_t, unsigned int);
+void reset_suppressions(void);
+sym_t *getsym(sbuf_t *);
+void clean_up_after_error(void);
+sym_t *pushdown(const sym_t *);
+sym_t *mktempsym(type_t *);
+void symtab_remove_forever(sym_t *);
+void symtab_remove_level(sym_t *);
+void inssym(int, sym_t *);
+void freeyyv(void *, int);
+int yylex(void);
 
 /*
  * mem1.c
  */
-extern	const	char *record_filename(const char *, size_t);
-extern	int	get_filename_id(const char *);
-extern	void	add_directory_replacement(char *);
-extern	const char *transform_filename(const char *, size_t);
+const char *record_filename(const char *, size_t);
+int get_filename_id(const char *);
+void add_directory_replacement(char *);
+const char *transform_filename(const char *, size_t);
 
-extern	void	initmem(void);
+#ifdef DEBUG_MEM
+void *block_zero_alloc(size_t, const char *);
+void *level_zero_alloc(size_t, size_t, const char *);
+#else
+void *block_zero_alloc(size_t);
+void *level_zero_alloc(size_t, size_t);
+#define block_zero_alloc(size, descr) (block_zero_alloc)(size)
+#define level_zero_alloc(level, size, descr) (level_zero_alloc)(level, size)
+#endif
+void level_free_all(size_t);
 
-extern	void	*getblk(size_t);
-extern	void	*getlblk(size_t, size_t);
-extern	void	freeblk(void);
-extern	void	freelblk(int);
-
-extern	void	*expr_zalloc(size_t);
-extern	tnode_t	*expr_zalloc_tnode(void);
-extern	void	expr_free_all(void);
-extern	struct	memory_block *expr_save_memory(void);
-extern	void	expr_restore_memory(struct memory_block *);
+#ifdef DEBUG_MEM
+void *expr_zero_alloc(size_t, const char *);
+#else
+void *expr_zero_alloc(size_t);
+#define expr_zero_alloc(size, descr) (expr_zero_alloc)(size)
+#endif
+tnode_t *expr_alloc_tnode(void);
+void expr_free_all(void);
+memory_pool expr_save_memory(void);
+void expr_restore_memory(memory_pool);
 
 /*
  * debug.c
  */
 
 #ifdef DEBUG
-void	debug_node(const tnode_t *);
-void	debug_printf(const char *fmt, ...) __printflike(1, 2);
-void	debug_indent(void);
-void	debug_indent_inc(void);
-void	debug_indent_dec(void);
-void	debug_enter(const char *);
-void	debug_step(const char *fmt, ...) __printflike(1, 2);
-void	debug_leave(const char *);
-#define	debug_enter()		(debug_enter)(__func__)
-#define	debug_leave()		(debug_leave)(__func__)
+extern bool debug_enabled;
+const char *decl_level_kind_name(decl_level_kind);
+const char *scl_name(scl_t);
+const char *symbol_kind_name(symbol_kind);
+const char *type_qualifiers_string(type_qualifiers);
+const char *type_attributes_string(type_attributes);
+const char *function_specifier_name(function_specifier);
+const char *named_constant_name(named_constant);
+void debug_dcs(void);
+void debug_dcs_all(void);
+void debug_node(const tnode_t *);
+void debug_type(const type_t *);
+void debug_sym(const char *, const sym_t *, const char *);
+void debug_symtab(void);
+void debug_printf(const char *fmt, ...) __printflike(1, 2);
+void debug_skip_indent(void);
+void debug_indent_inc(void);
+void debug_indent_dec(void);
+bool debug_push_indented(bool);
+void debug_pop_indented(bool);
+void debug_enter_func(const char *);
+void debug_step(const char *fmt, ...) __printflike(1, 2);
+void debug_leave_func(const char *);
+void debug_attribute_list(const attribute_list *);
+#define	debug_enter()		debug_enter_func(__func__)
+#define	debug_leave()		debug_leave_func(__func__)
 #else
 #define	debug_noop()		do { } while (false)
+#define	debug_dcs()		debug_noop()
+#define	debug_dcs_all()		debug_noop()
+#define	debug_sym(p, sym, s)	debug_noop()
+#define	debug_symtab()		debug_noop()
 #define	debug_node(tn)		debug_noop()
+#define	debug_type(tp)		debug_noop()
 #define	debug_printf(...)	debug_noop()
-#define	debug_indent()		debug_noop()
-#define	debug_step(...)		debug_noop()
-#define	debug_indent()		debug_noop()
+#define	debug_skip_indent()	debug_noop()
 #define	debug_indent_inc()	debug_noop()
 #define	debug_indent_dec()	debug_noop()
+#define debug_push_indented(c)	true
+#define debug_pop_indented(c)	(void)(c)
 #define	debug_enter()		debug_noop()
+#define	debug_step(...)		debug_noop()
 #define	debug_leave()		debug_noop()
+#define	debug_attribute_list(list) debug_noop()
 #endif
 
 /*
  * err.c
  */
-extern	int	nerr;
-extern	int	sytxerr;
-extern	const char *const msgs[];
+extern bool seen_error;
+extern bool seen_warning;
+extern int sytxerr;
+extern bool any_query_enabled;
+extern bool is_query_enabled[];
 
-extern	void	msglist(void);
-extern	void	error_at(int, const pos_t *, ...);
-extern	void	warning_at(int, const pos_t *, ...);
-extern	void	message_at(int, const pos_t *, ...);
-extern	void	error(int, ...);
-extern	void	warning(int, ...);
-extern	void	gnuism(int, ...);
-extern	void	c99ism(int, ...);
-extern	void	c11ism(int, ...);
-extern	void	internal_error(const char *, int, const char *, ...)
-     __attribute__((__noreturn__,__format__(__printf__, 3, 4)));
-extern	void	assert_failed(const char *, int, const char *, const char *)
-		__attribute__((__noreturn__));
-extern	void	update_location(const char *, int, bool, bool);
+void msglist(void);
+void error_at(int, const pos_t *, ...);
+void warning_at(int, const pos_t *, ...);
+void message_at(int, const pos_t *, ...);
+void error(int, ...);
+void warning(int, ...);
+bool gnuism(int, ...);
+void c99ism(int, ...);
+void c11ism(int, ...);
+void c23ism(int, ...);
+void assert_failed(const char *, int, const char *, const char *) __dead;
+void update_location(const char *, int, bool, bool);
+void suppress_messages(const char *);
+
+void query_message(int, ...);
+void enable_queries(const char *);
 
 /*
  * decl.c
  */
-extern	dinfo_t	*dcs;
-extern	const	char *unnamed;
-extern	int	enumval;
+extern decl_level *dcs;
+extern const char unnamed[];
+extern int enumval;
 
-extern	void	initdecl(void);
-extern	type_t	*gettyp(tspec_t);
-extern	type_t	*dup_type(const type_t *);
-extern	type_t	*expr_dup_type(const type_t *);
-extern	type_t	*expr_unqualified_type(const type_t *);
-extern	bool	is_incomplete(const type_t *);
-extern	void	setcomplete(type_t *, bool);
-extern	void	add_storage_class(scl_t);
-extern	void	add_type(type_t *);
-extern	void	add_qualifier(tqual_t);
-extern	void	addpacked(void);
-extern	void	add_attr_used(void);
-extern	void	begin_declaration_level(scl_t);
-extern	void	end_declaration_level(void);
-extern	void	setasm(void);
-extern	void	begin_type(void);
-extern	void	end_type(void);
-extern	int	length(const type_t *, const char *);
-extern	unsigned int alignment_in_bits(const type_t *);
-extern	sym_t	*lnklst(sym_t *, sym_t *);
-extern	void	check_type(sym_t *);
-extern	sym_t	*declarator_1_struct_union(sym_t *);
-extern	sym_t	*bitfield(sym_t *, int);
-extern	qual_ptr *merge_qualified_pointer(qual_ptr *, qual_ptr *);
-extern	sym_t	*add_pointer(sym_t *, qual_ptr *);
-extern	sym_t	*add_array(sym_t *, bool, int);
-extern	sym_t	*add_function(sym_t *, sym_t *);
-extern	void	check_function_definition(sym_t *, bool);
-extern	sym_t	*declarator_name(sym_t *);
-extern	sym_t	*old_style_function_name(sym_t *);
-extern	type_t	*mktag(sym_t *, tspec_t, bool, bool);
-extern	const	char *storage_class_name(scl_t);
-extern	type_t	*complete_tag_struct_or_union(type_t *, sym_t *);
-extern	type_t	*complete_tag_enum(type_t *, sym_t *);
-extern	sym_t	*enumeration_constant(sym_t *, int, bool);
-extern	void	declare(sym_t *, bool, sbuf_t *);
-extern	void	copy_usage_info(sym_t *, sym_t *);
-extern	bool	check_redeclaration(sym_t *, bool *);
-extern	bool	eqptrtype(const type_t *, const type_t *, bool);
-extern	bool	eqtype(const type_t *, const type_t *, bool, bool, bool *);
-extern	void	complete_type(sym_t *, sym_t *);
-extern	sym_t	*declare_argument(sym_t *, bool);
-extern	void	check_func_lint_directives(void);
-extern	void	check_func_old_style_arguments(void);
+void init_decl(void);
+type_t *gettyp(tspec_t);
+type_t *block_dup_type(const type_t *);
+type_t *expr_dup_type(const type_t *);
+type_t *expr_unqualified_type(const type_t *);
+bool is_incomplete(const type_t *);
+void dcs_add_function_specifier(function_specifier);
+void dcs_add_storage_class(scl_t);
+void dcs_add_type(type_t *);
+void dcs_add_qualifiers(type_qualifiers);
+void dcs_add_alignas(tnode_t *);
+void dcs_add_packed(void);
+void dcs_set_used(void);
+void begin_declaration_level(decl_level_kind);
+void end_declaration_level(void);
+void dcs_set_asm(void);
+void dcs_begin_type(void);
+void dcs_end_type(void);
+int length_in_bits(const type_t *, const char *);
+unsigned int alignment(const type_t *);
+sym_t *concat_symbols(sym_t *, sym_t *);
+void check_type(sym_t *);
+sym_t *declare_unnamed_member(void);
+sym_t *declare_member(sym_t *);
+sym_t *set_bit_field_width(sym_t *, int);
+void add_type_qualifiers(type_qualifiers *, type_qualifiers);
+qual_ptr *append_qualified_pointer(qual_ptr *, qual_ptr *);
+sym_t *add_pointer(sym_t *, qual_ptr *);
+sym_t *add_array(sym_t *, bool, int);
+sym_t *add_function(sym_t *, parameter_list);
+void check_extern_declaration(const sym_t *);
+void check_function_definition(sym_t *, bool);
+sym_t *declarator_name(sym_t *);
+sym_t *old_style_function_parameter_name(sym_t *);
+type_t *make_tag_type(sym_t *, tspec_t, bool, bool);
+type_t *complete_struct_or_union(sym_t *);
+type_t *complete_enum(sym_t *);
+sym_t *enumeration_constant(sym_t *, int, bool);
+void declare(sym_t *, bool, sbuf_t *);
+void copy_usage_info(sym_t *, const sym_t *);
+bool check_redeclaration(sym_t *, bool *);
+bool pointer_types_are_compatible(const type_t *, const type_t *, bool);
+bool types_compatible(const type_t *, const type_t *, bool, bool, bool *);
+void complete_type(sym_t *, const sym_t *);
+sym_t *declare_parameter(sym_t *, bool);
+void check_func_lint_directives(void);
+void check_func_old_style_parameters(void);
 
-extern	void	declare_local(sym_t *, bool);
-extern	sym_t	*abstract_name(void);
-extern	void	global_clean_up(void);
-extern	sym_t	*declare_1_abstract(sym_t *);
-extern	void	check_size(sym_t *);
-extern	void	mark_as_set(sym_t *);
-extern	void	mark_as_used(sym_t *, bool, bool);
-extern	void	check_usage(dinfo_t *);
-extern	void	check_usage_sym(bool, sym_t *);
-extern	void	check_global_symbols(void);
-extern	void	print_previous_declaration(int, const sym_t *);
-extern	int	to_int_constant(tnode_t *, bool);
-extern	const char *scl_name(scl_t);
+void declare_local(sym_t *, bool);
+sym_t *abstract_name(void);
+sym_t *abstract_enclosing_name(void);
+void global_clean_up(void);
+sym_t *declare_abstract_type(sym_t *);
+void check_size(const sym_t *);
+void mark_as_set(sym_t *);
+void mark_as_used(sym_t *, bool, bool);
+void check_usage(const decl_level *);
+void check_usage_sym(bool, const sym_t *);
+void end_translation_unit(void);
+void print_previous_declaration(const sym_t *);
+int to_int_constant(tnode_t *, bool);
 
 /*
  * tree.c
  */
-extern	const tnode_t *before_conversion(const tnode_t *);
-extern	type_t	*derive_type(type_t *, tspec_t);
-extern	type_t	*expr_derive_type(type_t *, tspec_t);
-extern	bool	is_compiler_builtin(const char *);
-extern	tnode_t	*build_constant(type_t *, val_t *);
-extern	tnode_t	*build_name(sym_t *, int);
-extern	tnode_t	*build_string(strg_t *);
-extern	sym_t	*struct_or_union_member(tnode_t *, op_t, sym_t *);
-extern	tnode_t	*build_generic_selection(const tnode_t *,
+const tnode_t *before_conversion(const tnode_t *);
+type_t *block_derive_type(type_t *, tspec_t);
+type_t *expr_derive_type(type_t *, tspec_t);
+bool is_compiler_builtin(const char *);
+tnode_t *build_constant(type_t *, val_t *);
+tnode_t *build_name(sym_t *, bool);
+tnode_t *build_string(buffer *);
+tnode_t *build_generic_selection(const tnode_t *,
 		    struct generic_association *);
 
-extern	tnode_t	*build_binary(tnode_t *, op_t, tnode_t *);
-extern	tnode_t	*build_unary(op_t, tnode_t *);
-extern	tnode_t	*build_member_access(tnode_t *, op_t, sbuf_t *);
-extern	tnode_t	*cconv(tnode_t *);
-extern	bool	is_typeok_bool_operand(const tnode_t *);
-extern	bool	typeok(op_t, int, const tnode_t *, const tnode_t *);
-extern	tnode_t	*promote(op_t, bool, tnode_t *);
-extern	tnode_t	*convert(op_t, int, type_t *, tnode_t *);
-extern	void	convert_constant(op_t, int, const type_t *, val_t *, val_t *);
-extern	tnode_t	*build_sizeof(const type_t *);
-extern	tnode_t	*build_offsetof(const type_t *, const sym_t *);
-extern	tnode_t	*build_alignof(const type_t *);
-extern	tnode_t	*cast(tnode_t *, type_t *);
-extern	tnode_t	*build_function_argument(tnode_t *, tnode_t *);
-extern	tnode_t	*build_function_call(tnode_t *, tnode_t *);
-extern	val_t	*constant(tnode_t *, bool);
-extern	void	expr(tnode_t *, bool, bool, bool, bool);
-extern	void	check_expr_misc(const tnode_t *, bool, bool, bool,
-		    bool, bool, bool);
-extern	bool	constant_addr(const tnode_t *, const sym_t **, ptrdiff_t *);
-extern	strg_t	*cat_strings(strg_t *, strg_t *);
-extern  unsigned int type_size_in_bits(const type_t *);
+tnode_t *build_binary(tnode_t *, op_t, bool, tnode_t *);
+tnode_t *build_unary(op_t, bool, tnode_t *);
+tnode_t *build_member_access(tnode_t *, op_t, bool, sbuf_t *);
+tnode_t *cconv(tnode_t *);
+bool is_typeok_bool_compares_with_zero(const tnode_t *, bool);
+bool typeok(op_t, int, const tnode_t *, const tnode_t *);
+tnode_t *promote(op_t, bool, tnode_t *);
+tnode_t *convert(op_t, int, type_t *, tnode_t *);
+void convert_constant(op_t, int, const type_t *, val_t *, val_t *);
+tnode_t *build_sizeof(const type_t *);
+tnode_t *build_offsetof(const type_t *, designation);
+tnode_t *build_alignof(const type_t *);
+tnode_t *cast(tnode_t *, bool, type_t *);
+void add_function_argument(function_call *, tnode_t *);
+tnode_t *build_function_call(tnode_t *, bool, function_call *);
+val_t *integer_constant(tnode_t *, bool);
+void expr(tnode_t *, bool, bool, bool, bool, const char *);
+void check_expr_misc(const tnode_t *, bool, bool, bool, bool, bool, bool);
+bool constant_addr(const tnode_t *, const sym_t **, ptrdiff_t *);
+buffer *cat_strings(buffer *, buffer *);
+unsigned int type_size_in_bits(const type_t *);
+sym_t *find_member(const struct_or_union *, const char *);
+uint64_t possible_bits(const tnode_t *);
+bool attributes_contain(const attribute_list *, const char *);
+
+void begin_statement_expr(void);
+void do_statement_expr(tnode_t *);
+tnode_t *end_statement_expr(void);
+bool in_statement_expr(void);
 
 /*
  * func.c
  */
-extern	sym_t	*funcsym;
-extern	bool	reached;
-extern	bool	warn_about_unreachable;
-extern	bool	seen_fallthrough;
-extern	int	nargusg;
-extern	pos_t	argsused_pos;
-extern	int	nvararg;
-extern	pos_t	vapos;
-extern	int	printflike_argnum;
-extern	pos_t	printflike_pos;
-extern	int	scanflike_argnum;
-extern	pos_t	scanflike_pos;
-extern	bool	constcond_flag;
-extern	bool	llibflg;
-extern	int	lwarn;
-extern	bool	bitfieldtype_ok;
-extern	bool	plibflg;
-extern	bool	quadflg;
+extern sym_t *funcsym;
+extern bool reached;
+extern bool warn_about_unreachable;
+extern bool suppress_fallthrough;
+extern int nargusg;
+extern pos_t argsused_pos;
+extern int nvararg;
+extern pos_t vapos;
+extern int printflike_argnum;
+extern pos_t printflike_pos;
+extern int scanflike_argnum;
+extern pos_t scanflike_pos;
+extern bool suppress_constcond;
+extern bool llibflg;
+extern int lwarn;
+extern bool suppress_bitfieldtype;
+extern bool plibflg;
+extern bool suppress_longlong;
 
-extern	void	begin_control_statement(control_statement_kind);
-extern	void	end_control_statement(control_statement_kind);
-extern	void	check_statement_reachable(void);
-extern	void	funcdef(sym_t *);
-extern	void	funcend(void);
-extern	void	named_label(sym_t *);
-extern	void	case_label(tnode_t *);
-extern	void	default_label(void);
-extern	void	if1(tnode_t *);
-extern	void	if2(void);
-extern	void	if3(bool);
-extern	void	switch1(tnode_t *);
-extern	void	switch2(void);
-extern	void	while1(tnode_t *);
-extern	void	while2(void);
-extern	void	do1(void);
-extern	void	do2(tnode_t *);
-extern	void	for1(tnode_t *, tnode_t *, tnode_t *);
-extern	void	for2(void);
-extern	void	do_goto(sym_t *);
-extern	void	do_continue(void);
-extern	void	do_break(void);
-extern	void	do_return(tnode_t *);
-extern	void	global_clean_up_decl(bool);
-extern	void	argsused(int);
-extern	void	constcond(int);
-extern	void	fallthru(int);
-extern	void	not_reached(int);
-extern	void	lintlib(int);
-extern	void	linted(int);
-extern	void	varargs(int);
-extern	void	printflike(int);
-extern	void	scanflike(int);
-extern	void	protolib(int);
-extern	void	longlong(int);
-extern	void	bitfieldtype(int);
+void begin_control_statement(control_statement_kind);
+void end_control_statement(control_statement_kind);
+void check_statement_reachable(const char *);
+void begin_function(sym_t *);
+void end_function(void);
+void named_label(sym_t *);
+void case_label(tnode_t *);
+void default_label(void);
+void stmt_if_expr(tnode_t *);
+void stmt_if_then_stmt(void);
+void stmt_if_else_stmt(bool);
+void stmt_switch_expr(tnode_t *);
+void stmt_switch_expr_stmt(void);
+void stmt_while_expr(tnode_t *);
+void stmt_while_expr_stmt(void);
+void stmt_do(void);
+void stmt_do_while_expr(tnode_t *);
+void stmt_for_exprs(tnode_t *, tnode_t *, tnode_t *);
+void stmt_for_exprs_stmt(void);
+void stmt_goto(sym_t *);
+void stmt_continue(void);
+void stmt_break(void);
+void stmt_return(bool, tnode_t *);
+void stmt_call_noreturn(void);
+void global_clean_up_decl(bool);
+void handle_lint_comment(lint_comment, int);
 
 /*
  * init.c
  */
-extern	void	begin_initialization(sym_t *);
-extern	void	end_initialization(void);
-extern	sym_t	**current_initsym(void);
+void begin_initialization(sym_t *);
+void end_initialization(void);
+sym_t *current_initsym(void);
 
-extern	void	init_rbrace(void);
-extern	void	init_lbrace(void);
-extern	void	init_expr(tnode_t *);
-extern	void	add_designator_member(sbuf_t *);
-extern	void	add_designator_subscript(range_t);
+void init_rbrace(void);
+void init_lbrace(void);
+void init_expr(tnode_t *);
+void begin_designation(void);
+void add_designator_member(sbuf_t *);
+void add_designator_subscript(range_t);
+void designation_push(designation *, designator_kind, const sym_t *, size_t);
 
 /*
  * emit.c
  */
-extern	void	outtype(const type_t *);
-extern	void	outsym(const sym_t *, scl_t, def_t);
-extern	void	outfdef(const sym_t *, const pos_t *, bool, bool,
-		    const sym_t *);
-extern	void	outcall(const tnode_t *, bool, bool);
-extern	void	outusg(const sym_t *);
+void outtype(const type_t *);
+void outsym(const sym_t *, scl_t, def_t);
+void outfdef(const sym_t *, const pos_t *, bool, bool, const sym_t *);
+void outcall(const tnode_t *, bool, bool);
+void outusg(const sym_t *);
 
 /*
  * lex.c
  */
-extern	int	lex_name(const char *, size_t);
-extern	int	lex_integer_constant(const char *, size_t, int);
-extern	int	lex_floating_constant(const char *, size_t);
-extern	int	lex_operator(int, op_t);
-extern	int	lex_string(void);
-extern	int	lex_wide_string(void);
-extern	int	lex_character_constant(void);
-extern	int	lex_wide_character_constant(void);
-extern	void	lex_directive(const char *);
-extern	void	lex_next_line(void);
-extern	void	lex_comment(void);
-extern	void	lex_slash_slash_comment(void);
-extern	void	lex_unknown_character(int);
-extern	int	lex_input(void);
+void lex_pp_begin(void);
+void lex_pp_identifier(const char *);
+void lex_pp_number(const char *);
+void lex_pp_character_constant(void);
+void lex_pp_string_literal(void);
+void lex_pp_punctuator(const char *);
+void lex_pp_comment(void);
+void lex_pp_whitespace(void);
+void lex_pp_end(void);
+int lex_name(const char *, size_t);
+int lex_integer_constant(const char *, size_t, int);
+int lex_floating_constant(const char *, size_t);
+int lex_operator(int, op_t);
+int lex_string(void);
+int lex_wide_string(void);
+int lex_character_constant(void);
+int lex_wide_character_constant(void);
+void lex_next_line(void);
+void lex_comment(void);
+void lex_slash_slash_comment(void);
+void lex_unknown_character(int);
+int lex_input(void);
+bool quoted_next(const buffer *, quoted_iterator *);
+balanced_token_sequence lex_balanced(void);
 
 /*
  * ckbool.c
  */
-extern	bool	typeok_scalar_strict_bool(op_t, const mod_t *, int,
+bool typeok_scalar_strict_bool(op_t, const mod_t *, int,
 		    const tnode_t *, const tnode_t *);
-extern	bool	fallback_symbol_strict_bool(sym_t *);
+bool fallback_symbol_strict_bool(sym_t *);
 
 /*
  * ckctype.c
  */
-extern	void	check_ctype_function_call(const tnode_t *, const tnode_t *);
-extern	void	check_ctype_macro_invocation(const tnode_t *, const tnode_t *);
+void check_ctype_function_call(const function_call *);
+void check_ctype_macro_invocation(const tnode_t *, const tnode_t *);
 
 /*
  * ckgetopt.c
  */
-extern	void	check_getopt_begin_while(const tnode_t *);
-extern	void	check_getopt_begin_switch(void);
-extern	void	check_getopt_case_label(int64_t);
-extern	void	check_getopt_end_switch(void);
-extern	void	check_getopt_end_while(void);
+void check_getopt_begin_while(const tnode_t *);
+void check_getopt_begin_switch(void);
+void check_getopt_case_label(int64_t);
+void check_getopt_end_switch(void);
+void check_getopt_end_while(void);
+
+/* cksnprintb.c */
+void check_snprintb(const function_call *);

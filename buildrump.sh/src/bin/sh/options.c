@@ -1,4 +1,4 @@
-/*	$NetBSD: options.c,v 1.55 2020/02/05 14:56:25 kre Exp $	*/
+/*	$NetBSD: options.c,v 1.62 2024/10/14 09:10:35 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)options.c	8.2 (Berkeley) 5/4/95";
 #else
-__RCSID("$NetBSD: options.c,v 1.55 2020/02/05 14:56:25 kre Exp $");
+__RCSID("$NetBSD: options.c,v 1.62 2024/10/14 09:10:35 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -122,6 +122,10 @@ procargs(int argc, char **argv)
 	if (debug == 2)
 		debug = 1;
 #endif
+	arg0 = argv[0];
+	if (loginsh == 2 && arg0 != NULL && arg0[0] == '-')
+		loginsh = 1;
+
 	/*
 	 * Any options not dealt with as special cases just above,
 	 * and which were not set on the command line, are set to
@@ -136,7 +140,6 @@ procargs(int argc, char **argv)
 		optlist[i].dflt = optlist[i].val;
 	}
 
-	arg0 = argv[0];
 	if (sflag == 0 && minusc == NULL) {
 		commandname = argv[0];
 		arg0 = *argptr++;
@@ -171,6 +174,13 @@ optschanged(void)
 	histedit();
 #endif
 	setjobctl(mflag);
+
+	if (privileged && !pflag) {
+		setuid(getuid());
+		setgid(getgid());
+		privileged = 0;
+		setvarsafe("PSc", (getuid() == 0 ? "#" : "$"), 0);
+	}
 }
 
 /*
@@ -234,6 +244,10 @@ options(int cmdline)
 				else
 					set_debug("*$", val);
 #endif
+			} else if (cmdline && c == 'r') {
+				out1fmt("NetBSD shell: %s\n",
+				    lookupvar("NETBSD_SHELL"));
+				sh_exit(0);
 			} else {
 				setoption(c, val);
 			}
@@ -318,7 +332,7 @@ minus_o(char *name, int val)
 #endif
 				return;
 			}
-		error("Illegal option %co %s", "+-"[val], name);
+		error("Unknown option %co %s", "+-"[val], name);
 	}
 }
 
@@ -337,7 +351,7 @@ setoption(int flag, int val)
 #endif
 			return;
 		}
-	error("Illegal option %c%c", "+-"[val], flag);
+	error("Unknown option %c%c", "+-"[val], flag);
 	/* NOTREACHED */
 }
 
@@ -405,17 +419,78 @@ freeparam(volatile struct shparam *param)
  * The shift builtin command.
  */
 
+#ifndef TINY
+/* first the rotate variant */
+static inline int
+rotatecmd(int argc, char **argv)
+{
+	int n;
+	char **ap1, **ap2, **ss;
+
+	(void) nextopt(NULL);	/* ignore '--' as leading option */
+
+	/*
+	 * half this is just in case it ever becomes
+	 * a separate named command, while it remains
+	 * puerly an inline inside shift, the compiler
+	 * should optimise most of it to nothingness
+	 */
+	if (argptr[0] && argptr[1])
+		error("Usage: rotate [n]");
+	n = 1;
+	if (*argptr) {
+		if (**argptr == '-')
+			n = number(*argptr + 1);
+		else		/* anti-clockwise n == clockwise $# - n */
+			n = shellparam.nparam - number(*argptr);
+	}
+
+	if (n == 0 || n == shellparam.nparam)		/* nothing to do */
+		return 0;
+
+	if (n < 0 || n > shellparam.nparam)
+		error("can't rotate that many");
+
+	ap2 = ss = (char **)stalloc(n * sizeof(char *));
+	INTOFF;
+	for (ap1 = shellparam.p + shellparam.nparam - n;
+	     ap1 < shellparam.p + shellparam.nparam; )
+		*ap2++ = *ap1++;
+	for (ap2 = shellparam.p + shellparam.nparam, ap1 = ap2 - n;
+	     ap1 > shellparam.p; )
+		*--ap2 = *--ap1;
+	for (ap1 = ss + n; ap1 > ss; )
+		*--ap2 = *--ap1;
+	shellparam.optnext = NULL;
+	INTON;
+	stunalloc(ss);
+
+	return 0;
+}
+#endif
+
 int
 shiftcmd(int argc, char **argv)
 {
 	int n;
 	char **ap1, **ap2;
 
-	if (argc > 2)
+	(void) nextopt(NULL);	/* ignore '--' as leading option */
+
+	if (argptr[0] && argptr[1])
 		error("Usage: shift [n]");
+
+#ifndef TINY
+	if (*argptr && **argptr == '-') {
+		argptr = argv + 1;	/* reinit nextopt() */
+		optptr = NULL;
+		return rotatecmd(argc, argv);
+	}
+#endif
+
 	n = 1;
-	if (argc > 1)
-		n = number(argv[1]);
+	if (*argptr)
+		n = number(*argptr);
 	if (n > shellparam.nparam)
 		error("can't shift that many");
 	INTOFF;
@@ -455,7 +530,7 @@ setcmd(int argc, char **argv)
 
 
 void
-getoptsreset(const char *value)
+getoptsreset(char *value, int flags __unused)
 {
 	/*
 	 * This is just to detect the case where OPTIND=1
@@ -533,7 +608,7 @@ atend:
 				s[1] = '\0';
 				err |= setvarsafe("OPTARG", s, 0);
 			} else {
-				outfmt(&errout, "Illegal option -%c\n", c);
+				outfmt(&errout, "Unknown option -%c\n", c);
 				(void) unsetvar("OPTARG", 0);
 			}
 			c = '?';
@@ -624,7 +699,7 @@ nextopt(const char *optstring)
 	c = *p++;
 	for (q = optstring ; *q != c ; ) {
 		if (*q == '\0')
-			error("Illegal option -%c", c);
+			error("Unknown option -%c", c);
 		if (*++q == ':')
 			q++;
 	}

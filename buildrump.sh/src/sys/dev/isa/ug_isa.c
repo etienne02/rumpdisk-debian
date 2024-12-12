@@ -1,4 +1,4 @@
-/* $NetBSD: ug_isa.c,v 1.8 2020/06/24 19:24:44 jdolecek Exp $ */
+/* $NetBSD: ug_isa.c,v 1.10 2022/09/25 17:09:36 thorpej Exp $ */
 
 /*
  * Copyright (c) 2007 Mihai Chelaru <kefren@netbsd.ro>
@@ -32,14 +32,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ug_isa.c,v 1.8 2020/06/24 19:24:44 jdolecek Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ug_isa.c,v 1.10 2022/09/25 17:09:36 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/errno.h>
 #include <sys/conf.h>
 #include <sys/envsys.h>
@@ -148,6 +147,7 @@ ug_isa_attach(device_t parent, device_t self, void *aux)
 		if (sysmon_envsys_sensor_attach(sc->sc_sme,
 						&sc->sc_sensor[i])) {
 			sysmon_envsys_destroy(sc->sc_sme);
+			sc->sc_sme = NULL;
 			goto out;
 		}
 	}
@@ -158,6 +158,7 @@ ug_isa_attach(device_t parent, device_t self, void *aux)
 	if (sysmon_envsys_register(sc->sc_sme)) {
 		aprint_error_dev(self, "unable to register with sysmon\n");
 		sysmon_envsys_destroy(sc->sc_sme);
+		sc->sc_sme = NULL;
 		goto out;
 	}
 
@@ -173,7 +174,8 @@ ug_isa_detach(device_t self, int flags)
 {
 	struct ug_softc *sc = device_private(self);
 
-	sysmon_envsys_unregister(sc->sc_sme);
+	if (sc->sc_sme != NULL)
+		sysmon_envsys_unregister(sc->sc_sme);
 	bus_space_unmap(sc->sc_iot, sc->sc_ioh, 8);
 	return 0;
 }

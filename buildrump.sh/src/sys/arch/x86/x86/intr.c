@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.c,v 1.155 2021/08/09 21:20:50 andvar Exp $	*/
+/*	$NetBSD: intr.c,v 1.169 2024/09/11 05:17:45 mrg Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2009, 2019 The NetBSD Foundation, Inc.
@@ -133,11 +133,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: intr.c,v 1.155 2021/08/09 21:20:50 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: intr.c,v 1.169 2024/09/11 05:17:45 mrg Exp $");
 
+#include "opt_acpi.h"
 #include "opt_intrdebug.h"
 #include "opt_multiprocessor.h"
-#include "opt_acpi.h"
+#include "opt_pci.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -149,10 +150,10 @@ __KERNEL_RCSID(0, "$NetBSD: intr.c,v 1.155 2021/08/09 21:20:50 andvar Exp $");
 #include <sys/errno.h>
 #include <sys/intr.h>
 #include <sys/cpu.h>
-#include <sys/atomic.h>
 #include <sys/xcall.h>
 #include <sys/interrupt.h>
 #include <sys/reboot.h> /* for AB_VERBOSE */
+#include <sys/sdt.h>
 
 #include <sys/kauth.h>
 #include <sys/conf.h>
@@ -161,6 +162,8 @@ __KERNEL_RCSID(0, "$NetBSD: intr.c,v 1.155 2021/08/09 21:20:50 andvar Exp $");
 
 #include <machine/i8259.h>
 #include <machine/pio.h>
+
+#include <x86/intr_private.h>
 
 #include "ioapic.h"
 #include "lapic.h"
@@ -196,6 +199,8 @@ extern void Xrecurse_hyperv_hypercall(void);
 #if NPCI == 0 || !defined(__HAVE_PCI_MSI_MSIX)
 #define msipic_is_msi_pic(PIC)	(false)
 #endif
+
+#include <ddb/db_active.h>
 
 #ifdef DDB
 #include <ddb/db_output.h>
@@ -244,6 +249,16 @@ static void intr_activate_xcall(void *, void *);
 static void intr_deactivate_xcall(void *, void *);
 static void intr_get_affinity(struct intrsource *, kcpuset_t *);
 static int intr_set_affinity(struct intrsource *, const kcpuset_t *);
+
+SDT_PROBE_DEFINE3(sdt, kernel, intr, entry,
+    "int (*)(void *)"/*func*/,
+    "void *"/*arg*/,
+    "struct intrhand *"/*ih*/);
+SDT_PROBE_DEFINE4(sdt, kernel, intr, return,
+    "int (*)(void *)"/*func*/,
+    "void *"/*arg*/,
+    "struct intrhand *"/*ih*/,
+    "int"/*handled*/);
 
 /*
  * Fill in default interrupt table (in case of spurious interrupt
@@ -458,7 +473,7 @@ intr_allocate_slot_cpu(struct cpu_info *ci, struct pic *pic, int pin,
 			start = NUM_LEGACY_IRQS;
 		/* don't step over Xen's slots */
 		if (vm_guest == VM_GUEST_XENPVH)
-			max = SIR_XENIPL_VM; 
+			max = SIR_XENIPL_VM;
 		/*
 		 * intr_allocate_slot has checked for an existing mapping.
 		 * Now look for a free slot.
@@ -508,7 +523,6 @@ intr_allocate_slot(struct pic *pic, int pin, int level,
 	struct cpu_info *ci, *lci;
 	struct intrsource *isp;
 	int slot = 0, idtvec, error;
-	struct idt_vec *iv;
 
 	KASSERT(mutex_owned(&cpu_lock));
 
@@ -555,7 +569,7 @@ intr_allocate_slot(struct pic *pic, int pin, int level,
 #if 0
 			if (ci == NULL ||
 			    ci->ci_nintrhand > lci->ci_nintrhand) {
-			    	ci = lci;
+				ci = lci;
 			}
 #else
 			ci = &cpu_info_primary;
@@ -606,10 +620,12 @@ intr_allocate_slot(struct pic *pic, int pin, int level,
 		 * are used by a device using MSI multiple vectors must be
 		 * continuous.
 		 */
+		struct idt_vec *iv;
+
 		iv = idt_vec_ref(&ci->ci_idtvec);
 		idtvec = idt_vec_alloc(iv, APIC_LEVEL(level), IDT_INTR_HIGH);
 	}
-	if (idtvec == 0) {
+	if (idtvec < 0) {
 		evcnt_detach(&ci->ci_isources[slot]->is_evcnt);
 		ci->ci_isources[slot]->is_evname[0] = '\0';
 		ci->ci_isources[slot] = NULL;
@@ -643,26 +659,79 @@ intr_source_free(struct cpu_info *ci, int slot, struct pic *pic, int idtvec)
 
 #ifdef MULTIPROCESSOR
 static int intr_biglock_wrapper(void *);
+static int intr_wrapper(void *);
 
 /*
+ * intr_wrapper: perform diagnostic checks before and after calling the
+ * real handler.
  * intr_biglock_wrapper: grab biglock and call a real interrupt handler.
  */
 
 static int
-intr_biglock_wrapper(void *vp)
+intr_wrapper(void *vp)
 {
 	struct intrhand *ih = vp;
+	struct lwp *l = curlwp;
+	int locks;
+	int nopreempt;
+	int ret;
+
+	locks = curcpu()->ci_biglock_count;
+	nopreempt = l->l_nopreempt;
+	SDT_PROBE3(sdt, kernel, intr, entry,
+	    ih->ih_realfun, ih->ih_realarg, ih);
+	ret = (*ih->ih_realfun)(ih->ih_realarg);
+	SDT_PROBE4(sdt, kernel, intr, return,
+	    ih->ih_realfun, ih->ih_realarg, ih, ret);
+	KASSERTMSG(locks == curcpu()->ci_biglock_count,
+	    "%s @ %p slipped locks %d -> %d",
+	    ih->ih_xname, ih->ih_realfun, locks, curcpu()->ci_biglock_count);
+	KASSERTMSG(nopreempt == l->l_nopreempt,
+	    "%s @ %p slipped nopreempt %d -> %d lwp %p/%p func %p",
+	    ih->ih_xname, ih->ih_realfun, nopreempt, l->l_nopreempt, l, curlwp,
+	    ih->ih_realfun);
+
+	return ret;
+}
+
+static int
+intr_biglock_wrapper(void *vp)
+{
 	int ret;
 
 	KERNEL_LOCK(1, NULL);
 
-	ret = (*ih->ih_realfun)(ih->ih_realarg);
+	ret = intr_wrapper(vp);
 
 	KERNEL_UNLOCK_ONE(NULL);
 
 	return ret;
 }
+
 #endif /* MULTIPROCESSOR */
+
+#ifdef KDTRACE_HOOKS
+static int
+intr_kdtrace_wrapper(void *vp)
+{
+	struct intrhand *ih = vp;
+	struct lwp *l = curlwp;
+	int ret;
+
+	int nopreempt;
+	nopreempt = l->l_nopreempt;
+	SDT_PROBE3(sdt, kernel, intr, entry,
+	    ih->ih_realfun, ih->ih_realarg, ih);
+	ret = (*ih->ih_realfun)(ih->ih_realarg);
+	SDT_PROBE4(sdt, kernel, intr, return,
+	    ih->ih_realfun, ih->ih_realarg, ih, ret);
+	KASSERTMSG(nopreempt == l->l_nopreempt,
+	    "%s @ %p slipped nopreempt %d -> %d  lwp %p/%p",
+	    ih->ih_xname, ih->ih_realfun, nopreempt, l->l_nopreempt, l, curlwp);
+
+	return ret;
+}
+#endif
 
 /*
  * Append device name to intrsource. If device A and device B share IRQ number,
@@ -843,6 +912,8 @@ intr_establish_xname(int legacy_irq, struct pic *pic, int pin, int type,
 		/* FALLTHROUGH */
 	case IST_PULSE:
 		if (type != IST_NONE) {
+			int otype = source->is_type;
+
 			intr_source_free(ci, slot, pic, idt_vec);
 			intr_free_io_intrsource_direct(chained);
 			mutex_exit(&cpu_lock);
@@ -850,7 +921,7 @@ intr_establish_xname(int legacy_irq, struct pic *pic, int pin, int type,
 			printf("%s: pic %s pin %d: can't share "
 			       "type %d with %d\n",
 				__func__, pic->pic_name, pin,
-				source->is_type, type);
+				otype, type);
 			return NULL;
 		}
 		break;
@@ -903,10 +974,34 @@ intr_establish_xname(int legacy_irq, struct pic *pic, int pin, int type,
 	ih->ih_pin = pin;
 	ih->ih_cpu = ci;
 	ih->ih_slot = slot;
+	strlcpy(ih->ih_xname, xname, sizeof(ih->ih_xname));
+#ifdef KDTRACE_HOOKS
+	/*
+	 * XXX i8254_clockintr is special -- takes a magic extra
+	 * argument.  This should be fixed properly in some way that
+	 * doesn't involve sketchy function pointer casts.  See also
+	 * the comments in x86/isa/clock.c.
+	 */
+	if (handler != __FPTRCAST(int (*)(void *), i8254_clockintr)) {
+		ih->ih_fun = intr_kdtrace_wrapper;
+		ih->ih_arg = ih;
+	}
+#endif
 #ifdef MULTIPROCESSOR
 	if (!mpsafe) {
+		KASSERT(handler !=			/* XXX */
+		    __FPTRCAST(int (*)(void *), i8254_clockintr));
 		ih->ih_fun = intr_biglock_wrapper;
 		ih->ih_arg = ih;
+	} else {
+		if (handler !=
+		    __FPTRCAST(int (*)(void *), i8254_clockintr)) { /* XXX */
+#ifdef DIAGNOSTIC
+			/* wrap all interrupts */
+			ih->ih_fun = intr_wrapper;
+			ih->ih_arg = ih;
+#endif
+		}
 	}
 #endif /* MULTIPROCESSOR */
 
@@ -938,7 +1033,7 @@ intr_establish_xname(int legacy_irq, struct pic *pic, int pin, int type,
 		    pic->pic_name, type == IST_EDGE ? "edge" : "level", pin,
 		    level, device_xname(ci->ci_dev), slot, idt_vec);
 
-	return (ih);
+	return ih;
 }
 
 void *
@@ -998,9 +1093,9 @@ intr_mask_xcall(void *arg1, void *arg2)
 			 * For level-sensitive interrupts, the hardware
 			 * will let us know.  For everything else, we
 			 * need to explicitly handle interrupts that
-			 * happened when when the source was masked.
+			 * happened when the source was masked.
 			 */
-			const uint32_t bit = (1U << ih->ih_slot);
+			const uint64_t bit = (1U << ih->ih_slot);
 			if (ci->ci_imasked & bit) {
 				ci->ci_imasked &= ~bit;
 				if (source->is_type != IST_LEVEL) {
@@ -1108,7 +1203,13 @@ intr_disestablish_xcall(void *arg1, void *arg2)
 	idtvec = source->is_idtvec;
 
 	(*pic->pic_hwmask)(pic, ih->ih_pin);
-	atomic_and_32(&ci->ci_ipending, ~(1 << ih->ih_slot));
+
+	/*
+	 * ci_pending is stable on the current CPU while interrupts are
+	 * blocked, and we only need to synchronize with interrupt
+	 * vectors on the same CPU, so no need for atomics or membars.
+	 */
+	ci->ci_ipending &= ~(1ULL << ih->ih_slot);
 
 	/*
 	 * Remove the handler from the chain.
@@ -1302,18 +1403,13 @@ redzone_const_or_zero(int x)
 void
 cpu_intr_init(struct cpu_info *ci)
 {
-#if (NLAPIC > 0) || defined(MULTIPROCESSOR) || \
-    (NHYPERV > 0)
-	struct intrsource *isp;
-#endif
 #if NLAPIC > 0
+	struct intrsource *isp;
 	static int first = 1;
 #if defined(MULTIPROCESSOR)
 	int i;
 #endif
-#endif
 
-#if NLAPIC > 0
 	isp = kmem_zalloc(sizeof(*isp), KM_SLEEP);
 	isp->is_recurse = Xrecurse_lapic_ltimer;
 	isp->is_resume = Xresume_lapic_ltimer;
@@ -1340,7 +1436,7 @@ cpu_intr_init(struct cpu_info *ci)
 	for (i = 0; i < X86_NIPI; i++)
 		evcnt_attach_dynamic(&ci->ci_ipi_events[i], EVCNT_TYPE_MISC,
 		    NULL, device_xname(ci->ci_dev), x86_ipi_names[i]);
-#endif
+#endif /* MULTIPROCESSOR */
 
 #if NHYPERV > 0
 	if (hyperv_hypercall_enabled()) {
@@ -1354,8 +1450,8 @@ cpu_intr_init(struct cpu_info *ci)
 		evcnt_attach_dynamic(&isp->is_evcnt, EVCNT_TYPE_INTR, NULL,
 		    device_xname(ci->ci_dev), "Hyper-V hypercall");
 	}
-#endif
-#endif
+#endif /* NHYPERV > 0 */
+#endif /* NLAPIC > 0 */
 
 #if defined(__HAVE_PREEMPTION)
 	x86_init_preempt(ci);
@@ -1405,7 +1501,6 @@ intr_printconfig(void)
 
 	pr = printf;
 #ifdef DDB
-	extern int db_active;
 	if (db_active) {
 		pr = db_printf;
 	}
@@ -1414,8 +1509,8 @@ intr_printconfig(void)
 	for (CPU_INFO_FOREACH(cii, ci)) {
 		(*pr)("%s: interrupt masks:\n", device_xname(ci->ci_dev));
 		for (i = 0; i < NIPL; i++)
-			(*pr)("IPL %d mask %08lx unmask %08lx\n", i,
-			    (u_long)ci->ci_imask[i], (u_long)ci->ci_iunmask[i]);
+			(*pr)("IPL %d mask %016"PRIx64" unmask %016"PRIx64"\n",
+			    i, ci->ci_imask[i], ci->ci_iunmask[i]);
 		for (i = 0; i < MAX_INTR_SOURCES; i++) {
 			isp = ci->ci_isources[i];
 			if (isp == NULL)
@@ -1799,9 +1894,9 @@ intr_deactivate_xcall(void *arg1, void *arg2)
 
 	x86_intr_calculatemasks(ci);
 
-	if (idt_vec > 0 && idt_vec_is_pcpu()) {
+	if (idt_vec_is_pcpu()) {
 		idt_vec_free(&ci->ci_idtvec, idt_vec);
-	} else  {
+	} else {
 		/*
 		 * Skip unsetgate(), because the same idt[] entry is
 		 * overwritten in intr_activate_xcall().
@@ -1898,13 +1993,14 @@ intr_set_affinity(struct intrsource *isp, const kcpuset_t *cpuset)
 
 	old_idtvec = isp->is_idtvec;
 
-	if (isp->is_idtvec > 0 && idt_vec_is_pcpu()) {
+	if (idt_vec_is_pcpu()) {
 		new_idtvec = idt_vec_alloc(&newci->ci_idtvec,
 		    APIC_LEVEL(ih->ih_level), IDT_INTR_HIGH);
 		if (new_idtvec == 0)
 			return EBUSY;
 		DPRINTF(("interrupt from cpu%d vec %d to cpu%d vec %d\n",
-		    cpu_index(oldci), old_idtvec, cpu_index(newci), new_idtvec));
+		    cpu_index(oldci), old_idtvec, cpu_index(newci),
+			new_idtvec));
 	} else {
 		new_idtvec = isp->is_idtvec;
 	}
@@ -1914,8 +2010,10 @@ intr_set_affinity(struct intrsource *isp, const kcpuset_t *cpuset)
 
 	pin = isp->is_pin;
 	(*pic->pic_hwmask)(pic, pin); /* for ci_ipending check */
-	while (oldci->ci_ipending & (1 << oldslot)) {
+	membar_sync();
+	while (oldci->ci_ipending & (1ULL << oldslot)) {
 		(void)kpause("intrdist", false, 1, &cpu_lock);
+		membar_sync();
 	}
 
 	kpreempt_disable();
@@ -2104,7 +2202,7 @@ interrupt_get_assigned(const char *intrid, kcpuset_t *cpuset)
 
 	mutex_enter(&cpu_lock);
 	isp = intr_get_io_intrsource(intrid);
-	if (isp != NULL) 
+	if (isp != NULL)
 		isp->is_pic->pic_intr_get_assigned(intrid, cpuset);
 	mutex_exit(&cpu_lock);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: undefined.c,v 1.67 2020/09/21 10:35:12 skrll Exp $	*/
+/*	$NetBSD: undefined.c,v 1.75 2023/10/05 19:41:03 ad Exp $	*/
 
 /*
  * Copyright (c) 2001 Ben Harris.
@@ -44,31 +44,24 @@
  * Created      : 06/01/95
  */
 
-#define FAST_FPE
-
+#include "opt_cputypes.h"
 #include "opt_ddb.h"
 #include "opt_dtrace.h"
 #include "opt_kgdb.h"
 
+#include <sys/cdefs.h>
+__KERNEL_RCSID(0, "$NetBSD: undefined.c,v 1.75 2023/10/05 19:41:03 ad Exp $");
+
 #include <sys/param.h>
+#include <sys/cpu.h>
 #ifdef KGDB
 #include <sys/kgdb.h>
 #endif
-
-__KERNEL_RCSID(0, "$NetBSD: undefined.c,v 1.67 2020/09/21 10:35:12 skrll Exp $");
-
 #include <sys/kmem.h>
+#include <sys/proc.h>
 #include <sys/queue.h>
 #include <sys/signal.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
-#include <sys/syslog.h>
-#include <sys/vmmeter.h>
-#include <sys/cpu.h>
-#ifdef FAST_FPE
-#include <sys/acct.h>
-#endif
-#include <sys/userret.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -78,7 +71,9 @@ __KERNEL_RCSID(0, "$NetBSD: undefined.c,v 1.67 2020/09/21 10:35:12 skrll Exp $")
 #include <machine/pcb.h>
 #include <machine/trap.h>
 
+#ifdef VERBOSE_ARM32
 #include <arch/arm/arm/disassem.h>
+#endif
 
 #ifdef DDB
 #include <ddb/db_output.h>
@@ -102,6 +97,13 @@ install_coproc_handler(int coproc, undef_handler_t handler)
 	uh->uh_handler = handler;
 	install_coproc_handler_static(coproc, uh);
 	return uh;
+}
+
+void
+replace_coproc_handler(int coproc, undef_handler_t handler)
+{
+	LIST_INIT(&undefined_handlers[coproc]);
+	install_coproc_handler(coproc, handler);
 }
 
 void
@@ -207,10 +209,41 @@ gdb_trapper(u_int addr, u_int insn, struct trapframe *tf, int code)
 	return 1;
 }
 
-static struct undefined_handler cp15_uh;
-static struct undefined_handler gdb_uh;
+#ifdef FPU_VFP
+/*
+ * Used to test for a VFP. The following function is installed as a coproc10
+ * handler on the undefined instruction vector and then we issue a VFP
+ * instruction. If ci_vfd_id is set to zero then the VFP did not handle
+ * the instruction so must be absent, or disabled.
+ */
+
+static int
+vfp_test(u_int address, u_int insn, trapframe_t *frame, int fault_code)
+{
+	struct cpu_info * const ci = curcpu();
+
+	frame->tf_pc += INSN_SIZE;
+	ci->ci_vfp_id = 0;
+
+	return 0;
+}
+#endif
+
+static struct undefined_handler cp15_uh = {
+	.uh_handler = cp15_trapper,
+};
+static struct undefined_handler gdb_uh = {
+	.uh_handler = gdb_trapper,
+};
 #ifdef THUMB_CODE
-static struct undefined_handler gdb_uh_thumb;
+static struct undefined_handler gdb_uh_thumb = {
+	.uh_handler = gdb_trapper,
+};
+#endif
+#ifdef FPU_VFP
+struct undefined_handler vfptest_uh = {
+	.uh_handler = vfp_test,
+};
 #endif
 
 #ifdef KDTRACE_HOOKS
@@ -254,15 +287,15 @@ undefined_init(void)
 		LIST_INIT(&undefined_handlers[loop]);
 
 	/* Install handler for CP15 emulation */
-	cp15_uh.uh_handler = cp15_trapper;
 	install_coproc_handler_static(SYSTEM_COPROC, &cp15_uh);
 
 	/* Install handler for GDB breakpoints */
-	gdb_uh.uh_handler = gdb_trapper;
 	install_coproc_handler_static(CORE_UNKNOWN_HANDLER, &gdb_uh);
 #ifdef THUMB_CODE
-	gdb_uh_thumb.uh_handler = gdb_trapper;
 	install_coproc_handler_static(THUMB_UNKNOWN_HANDLER, &gdb_uh_thumb);
+#endif
+#ifdef FPU_VFP
+	install_coproc_handler_static(VFP_COPROC, &vfptest_uh);
 #endif
 }
 
@@ -276,9 +309,6 @@ undefinedinstruction(trapframe_t *tf)
 	int coprocessor;
 	int user;
 	struct undefined_handler *uh;
-#ifdef VERBOSE_ARM32
-	int s;
-#endif
 
 	curcpu()->ci_und_ev.ev_count++;
 
@@ -310,7 +340,6 @@ undefinedinstruction(trapframe_t *tf)
 
 	if ((tf->tf_spsr & PSR_MODE) == PSR_USR32_MODE) {
 		user = 1;
-		LWP_CACHE_CREDS(l, l->l_proc);
 	} else
 		user = 0;
 
@@ -352,7 +381,6 @@ undefinedinstruction(trapframe_t *tf)
 		fault_instruction = read_insn(fault_pc, user);
 	}
 
-	/* Update vmmeter statistics */
 	curcpu()->ci_data.cpu_ntrap++;
 
 #ifdef THUMB_CODE
@@ -411,7 +439,7 @@ undefinedinstruction(trapframe_t *tf)
 		ksiginfo_t ksi;
 
 #ifdef VERBOSE_ARM32
-		s = spltty();
+		int s = spltty();
 
 		if ((fault_instruction & 0x0f000010) == 0x0e000000) {
 			printf("CDP\n");

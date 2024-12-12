@@ -1,5 +1,5 @@
-/*	$Id: at91twireg.h,v 1.2 2008/07/03 01:15:38 matt Exp $	*/
-/*	$NetBSD: at91twireg.h,v 1.2 2008/07/03 01:15:38 matt Exp $	*/
+/*	$Id: at91twireg.h,v 1.4 2024/09/23 18:52:55 andvar Exp $	*/
+/*	$NetBSD: at91twireg.h,v 1.4 2024/09/23 18:52:55 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2007 Embedtronics Oy.
@@ -54,7 +54,7 @@
 #define	TWI_RHR		0x30U	/* 0x30: Receive Holding Register	*/
 #define	TWI_THR		0x34U	/* 0x34: Transmit Holding Register	*/
 
-/* Control Registre bits: */
+/* Control Register bits: */
 #define	TWI_CR_SWRST	0x80U	/* 1 = do software reset		*/
 #define	TWI_CR_MSDIS	0x08U	/* 1 = disable master mode		*/
 #define	TWI_CR_MSEN	0x04U	/* 1 = enable master mode		*/
@@ -82,7 +82,7 @@
 #define	TWI_SR_UNRE	0x080U		/* 1 = underrun error		*/
 #define	TWI_SR_OVRE	0x040U		/* 1 = overrun error		*/
 #define	TWI_SR_TXRDY	0x004U		/* 1 = transmit holding reg rdy	*/
-#define	TWI_SR_RXRDY	0x002U		/* 1 = receive hodling reg rdy	*/
+#define	TWI_SR_RXRDY	0x002U		/* 1 = receive holding reg rdy	*/
 #define	TWI_SR_TXCOMP	0x001U		/* 1 = transmission completed	*/
 
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: ext2fs_lookup.c,v 1.91 2020/05/16 18:31:53 christos Exp $	*/
+/*	$NetBSD: ext2fs_lookup.c,v 1.95 2024/09/08 09:36:52 rillig Exp $	*/
 
 /*
  * Modified for NetBSD 1.2E
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ext2fs_lookup.c,v 1.91 2020/05/16 18:31:53 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ext2fs_lookup.c,v 1.95 2024/09/08 09:36:52 rillig Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -252,7 +252,7 @@ ext2fs_readdir(void *v)
  * exists, lookup returns both the target and its parent directory locked.
  * When creating or renaming and LOCKPARENT is specified, the target may
  * not be ".".  When deleting and LOCKPARENT is specified, the target may
- * be "."., but the caller must check to ensure it does an vrele and vput
+ * be ".", but the caller must check to ensure it does a vrele and vput
  * instead of two vputs.
  *
  * Overall outline of ext2fs_lookup:
@@ -313,7 +313,7 @@ ext2fs_lookup(void *v)
 	*vpp = NULL;
 
 	/*
-	 * Check accessiblity of directory.
+	 * Check accessibility of directory.
 	 */
 	if ((error = VOP_ACCESS(vdp, VEXEC, cred)) != 0)
 		return error;
@@ -399,7 +399,7 @@ ext2fs_lookup(void *v)
 		struct ext2fs_searchslot ss;
 		numdirpasses = 1;
 		entryoffsetinblock = 0;
-		
+
 		int htree_lookup_ret = ext2fs_htree_lookup(dp, cnp->cn_nameptr,
 		    cnp->cn_namelen, &bp, &entryoffsetinblock, &i_offset,
 		    &prevoff, &enduseful, &ss);
@@ -715,7 +715,7 @@ found:
 }
 static void
 ext2fs_accumulatespace (struct ext2fs_searchslot *ssp, struct ext2fs_direct *ep,
-    doff_t *offp) 
+    doff_t *offp)
 {
 	int size = ep->e2d_reclen;
 
@@ -905,7 +905,7 @@ ext2fs_direnter(struct inode *ip, struct vnode *dvp,
 		}
 		return error;
 	}
-	
+
 	/*
 	 * TODO check if Htree index is not created for the directory then
 	 * create one if directory entries get overflew the first dir-block
@@ -944,7 +944,7 @@ ext2fs_direnter(struct inode *ip, struct vnode *dvp,
 	}
 
 	error = ext2fs_add_entry(dvp, &newdir, ulr, newentrysize);
-	
+
 	if (!error && ulr->ulr_endoff && ulr->ulr_endoff < ext2fs_size(dp))
 		error = ext2fs_truncate(dvp, (off_t)ulr->ulr_endoff, IO_SYNC,
 		    cnp->cn_cred);
@@ -958,8 +958,8 @@ ext2fs_direnter(struct inode *ip, struct vnode *dvp,
 
 int
 ext2fs_add_entry(struct vnode* dvp, struct ext2fs_direct *entry,
-    const struct ufs_lookup_results *ulr, size_t newentrysize) 
-{	
+    const struct ufs_lookup_results *ulr, size_t newentrysize)
+{
 	struct ext2fs_direct *ep, *nep;
 	struct inode *dp;
 	struct buf *bp;
@@ -1126,8 +1126,8 @@ int
 ext2fs_dirempty(struct inode *ip, ino_t parentino, kauth_cred_t cred)
 {
 	off_t off;
-	struct ext2fs_dirtemplate dbuf;
-	struct ext2fs_direct *dp = (struct ext2fs_direct *)&dbuf;
+	struct ext2fs_direct dbuf;
+	struct ext2fs_direct *dp = &dbuf;
 	int error, namlen;
 	size_t count;
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: line.c,v 1.16 2020/07/01 02:57:01 uwe Exp $	*/
+/*	$NetBSD: line.c,v 1.18 2024/09/08 09:36:47 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1998-1999 Brett Lymn
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: line.c,v 1.16 2020/07/01 02:57:01 uwe Exp $");
+__RCSID("$NetBSD: line.c,v 1.18 2024/09/08 09:36:47 rillig Exp $");
 #endif				/* not lint */
 
 #include <string.h>
@@ -121,7 +121,7 @@ vline(chtype ch, int count)
 
 /*
  * mvvline --
- *	Move to the given location an draw a vertical line of character ch.
+ *	Move to the given location and draw a vertical line of character ch.
  */
 int
 mvvline(int y, int x, chtype ch, int count)
@@ -226,17 +226,13 @@ int whline_set(WINDOW *win, const cchar_t *wch, int n)
 	if ( ( win->maxx - win->curx ) < cw )
 		return ERR;
 	wcn = min( n, ( win->maxx - win->curx ) / cw );
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "whline_set: line of %d\n", wcn);
-#endif /* DEBUG */
 	ocury = win->cury;
 	ocurx = win->curx;
 
 	for (i = 0; i < wcn; i++ ) {
-#ifdef DEBUG
 		__CTRACE(__CTRACE_LINE, "whline_set: (%d,%d)\n",
 		   ocury, ocurx + i * cw);
-#endif /* DEBUG */
 		mvwadd_wch(win, ocury, ocurx + i * cw, &cc);
 	}
 
@@ -285,9 +281,7 @@ int wvline_set(WINDOW *win, const cchar_t *wch, int n)
 	cchar_t cc;
 
 	wcn = min(n, win->maxy - win->cury);
-#ifdef DEBUG
 	__CTRACE(__CTRACE_LINE, "wvline_set: line of %d\n", wcn);
-#endif /* DEBUG */
 	ocury = win->cury;
 	ocurx = win->curx;
 
@@ -298,10 +292,8 @@ int wvline_set(WINDOW *win, const cchar_t *wch, int n)
 	}
 	for (i = 0; i < wcn; i++) {
 		mvwadd_wch(win, ocury + i, ocurx, &cc);
-#ifdef DEBUG
 		__CTRACE(__CTRACE_LINE, "wvline_set: (%d,%d)\n",
 		    ocury + i, ocurx);
-#endif /* DEBUG */
 	}
 
 	wmove(win, ocury, ocurx);

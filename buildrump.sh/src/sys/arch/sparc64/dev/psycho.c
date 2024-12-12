@@ -1,4 +1,4 @@
-/*	$NetBSD: psycho.c,v 1.135 2021/08/07 16:19:05 thorpej Exp $	*/
+/*	$NetBSD: psycho.c,v 1.138 2024/09/08 09:36:49 rillig Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Matthew R. Green
@@ -55,7 +55,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: psycho.c,v 1.135 2021/08/07 16:19:05 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: psycho.c,v 1.138 2024/09/08 09:36:49 rillig Exp $");
 
 #include "opt_ddb.h"
 
@@ -175,7 +175,7 @@ CFATTACH_DECL_NEW(psycho, sizeof(struct psycho_softc),
  * "sabre" is the UltraSPARC IIi onboard UPA to PCI bridge.  It manages a
  * single PCI bus and does not have a streaming buffer.  It often has an APB
  * (advanced PCI bridge) connected to it, which was designed specifically for
- * the IIi.  The APB let's the IIi handle two independednt PCI buses, and
+ * the IIi.  The APB lets the IIi handle two independent PCI buses, and
  * appears as two "simba"'s underneath the sabre.
  *
  * "psycho" and "psycho+" is a dual UPA to PCI bridge.  It sits on the UPA bus
@@ -587,7 +587,7 @@ found:
 		 * of a pair of psycho's to arrive here.
 		 *
 		 * We should calculate a TSB size based on amount of RAM
-		 * and number of bus controllers and number an type of
+		 * and number of bus controllers and number and type of
 		 * child devices.
 		 *
 		 * For the moment, 32KB should be more than enough.
@@ -685,7 +685,7 @@ found:
 	pba.pba_pc = pp->pp_pc;
 
 	config_found(self, &pba, psycho_print,
-	    CFARGS(.devhandle = prom_node_to_devhandle(sc->sc_node)));
+	    CFARGS(.devhandle = device_handle(self)));
 }
 
 static	int

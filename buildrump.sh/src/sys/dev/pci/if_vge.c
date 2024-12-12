@@ -1,4 +1,4 @@
-/* $NetBSD: if_vge.c,v 1.81 2021/07/24 21:31:37 andvar Exp $ */
+/* $NetBSD: if_vge.c,v 1.89 2024/07/05 04:31:51 rin Exp $ */
 
 /*-
  * Copyright (c) 2004
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_vge.c,v 1.81 2021/07/24 21:31:37 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_vge.c,v 1.89 2024/07/05 04:31:51 rin Exp $");
 
 /*
  * VIA Networking Technologies VT612x PCI gigabit ethernet NIC driver.
@@ -94,7 +94,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_vge.c,v 1.81 2021/07/24 21:31:37 andvar Exp $");
 #include <sys/device.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 
@@ -975,7 +974,7 @@ vge_attach(device_t parent, device_t self, void *aux)
 	if (pci_dma64_available(pa)) {
 		if (bus_dmatag_subregion(pa->pa_dmat64,
 					 0,
-					 (bus_addr_t)(1ULL << 48),
+					 (bus_addr_t)__MASK(48),
 					 &sc->sc_dmat,
 					 BUS_DMA_WAITOK) != 0) {
 			aprint_error_dev(self,
@@ -1161,8 +1160,7 @@ vge_newbuf(struct vge_softc *sc, int idx, struct mbuf *m)
 
 	return 0;
  out:
-	if (m_new != NULL)
-		m_freem(m_new);
+	m_freem(m_new);
 	return ENOMEM;
 }
 
@@ -1382,26 +1380,22 @@ vge_txeof(struct vge_softc *sc)
 		}
 
 		txs = &sc->sc_txsoft[idx];
-		m_freem(txs->txs_mbuf);
-		txs->txs_mbuf = NULL;
 		bus_dmamap_sync(sc->sc_dmat, txs->txs_dmamap, 0,
 		    txs->txs_dmamap->dm_mapsize, BUS_DMASYNC_POSTWRITE);
 		bus_dmamap_unload(sc->sc_dmat, txs->txs_dmamap);
+		m_freem(txs->txs_mbuf);
+		txs->txs_mbuf = NULL;
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (txstat & (VGE_TDSTS_EXCESSCOLL | VGE_TDSTS_COLL))
-			if_statinc_ref(nsr, if_collisions);
+			if_statinc_ref(ifp, nsr, if_collisions);
 		if (txstat & VGE_TDSTS_TXERR)
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 		else
-			if_statinc_ref(nsr, if_opackets);
+			if_statinc_ref(ifp, nsr, if_opackets);
 		IF_STAT_PUTREF(ifp);
 	}
 
 	sc->sc_tx_considx = idx;
-
-	if (sc->sc_tx_free > 0) {
-		ifp->if_flags &= ~IFF_OACTIVE;
-	}
 
 	/*
 	 * If not all descriptors have been released reaped yet,
@@ -1647,7 +1641,7 @@ vge_start(struct ifnet *ifp)
 	sc = ifp->if_softc;
 
 	if (!sc->sc_link ||
-	    (ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING) {
+	    (ifp->if_flags & IFF_RUNNING) == 0) {
 		return;
 	}
 
@@ -1661,19 +1655,11 @@ vge_start(struct ifnet *ifp)
 	 * until we drain the queue, or use up all available transmit
 	 * descriptors.
 	 */
-	for (;;) {
+	while (sc->sc_tx_free != 0) {
 		/* Grab a packet off the queue. */
 		IFQ_POLL(&ifp->if_snd, m_head);
 		if (m_head == NULL)
 			break;
-
-		if (sc->sc_tx_free == 0) {
-			/*
-			 * All slots used, stop for now.
-			 */
-			ifp->if_flags |= IFF_OACTIVE;
-			break;
-		}
 
 		txs = &sc->sc_txsoft[idx];
 		KASSERT(txs->txs_mbuf == NULL);
@@ -1691,8 +1677,6 @@ vge_start(struct ifnet *ifp)
 			/*
 			 * Short on resources, just stop for now.
 			 */
-			if (error == ENOBUFS)
-				ifp->if_flags |= IFF_OACTIVE;
 			break;
 		}
 
@@ -1870,7 +1854,7 @@ vge_init(struct ifnet *ifp)
 
 	/*
 	 * Configure one-shot timer for microsecond
-	 * resulution and load it for 500 usecs.
+	 * resolution and load it for 500 usecs.
 	 */
 	CSR_SETBIT_1(sc, VGE_DIAGCTL, VGE_DIAGCTL_TIMER0_RES);
 	CSR_WRITE_2(sc, VGE_SSTIMER, 400);
@@ -1926,7 +1910,6 @@ vge_init(struct ifnet *ifp)
 		goto out;
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	sc->sc_if_flags = 0;
 	sc->sc_link = 0;
@@ -2071,7 +2054,7 @@ vge_stop(struct ifnet *ifp, int disable)
 	s = splnet();
 	ifp->if_timer = 0;
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 #ifdef DEVICE_POLLING
 	ether_poll_deregister(ifp);
 #endif /* DEVICE_POLLING */

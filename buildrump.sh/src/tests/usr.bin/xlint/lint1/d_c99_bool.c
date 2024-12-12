@@ -1,4 +1,4 @@
-/*	$NetBSD: d_c99_bool.c,v 1.7 2021/03/30 14:25:28 rillig Exp $	*/
+/*	$NetBSD: d_c99_bool.c,v 1.11 2023/07/03 09:37:14 rillig Exp $	*/
 # 3 "d_c99_bool.c"
 
 /*
@@ -9,102 +9,80 @@
  * invoke undefined behavior.
  */
 
-/* Below, each false statement produces "negative array dimension" [20]. */
+/* lint1-extra-flags: -X 351 */
 
-int int_0_converts_to_false[(_Bool)0 ? -1 : 1];
-int int_0_converts_to_true_[(_Bool)0 ? 1 : -1];			/* expect: 20 */
+/* expect+1: error: negative array dimension (-2) [20] */
+int int_0[(_Bool)0 ? -1 : -2];
 
-int int_1_converts_to_false[(_Bool)1 ? -1 : 1];			/* expect: 20 */
-int int_1_converts_to_true_[(_Bool)1 ? 1 : -1];
+/* expect+1: error: negative array dimension (-1) [20] */
+int int_1[(_Bool)1 ? -1 : -2];
 
-int int_2_converts_to_false[(_Bool)2 ? -1 : 1];			/* expect: 20 */
-int int_2_converts_to_true_[(_Bool)2 ? 1 : -1];
+/* expect+1: error: negative array dimension (-1) [20] */
+int int_2[(_Bool)2 ? -1 : -2];
 
-int int_256_converts_to_false[(_Bool)256 ? -1 : 1];		/* expect: 20 */
-int int_256_converts_to_true_[(_Bool)256 ? 1 : -1];
+/* expect+1: error: negative array dimension (-1) [20] */
+int int_256[(_Bool)256 ? -1 : -2];
 
-int null_pointer_converts_to_false[(_Bool)(void *)0 ? -1 : 1];
-int null_pointer_converts_to_true_[(_Bool)(void *)0 ? 1 : -1];	/* expect: 20 */
+/* expect+1: error: negative array dimension (-2) [20] */
+int null_pointer[(_Bool)(void *)0 ? -1 : -2];
 
 /*
- * XXX: lint does not treat the address of a global variable as a constant
- * expression.  This goes against C99 6.6p7 but is probably not too relevant
- * in practice.
+ * XXX: In initializers for global variables, taking the address of a variable
+ * is allowed and may be modified by a constant offset.  This is not a constant
+ * expression though.
  *
- * The call to constant(tn, 0) defaults to 1, then.  This is why neither of
- * the following array declarations generates an error message.
+ * In such a case, the grammar rule array_size_opt calls to_int_constant, which
+ * returns 1 for the array size without reporting an error.  This is why
+ * neither of the following array declarations generates an error message.
  */
 char ch;
 int nonnull_pointer_converts_to_false[(_Bool)&ch ? -1 : 1];
 int nonnull_pointer_converts_to_true_[(_Bool)&ch ? 1 : -1];
 
-int double_minus_1_0_converts_to_false[(_Bool)-1.0 ? -1 : 1];	/* expect: 20 */
-int double_minus_1_0_converts_to_true_[(_Bool)-1.0 ? 1 : -1];
+/* expect+1: error: negative array dimension (-1) [20] */
+int double_minus_1_0[(_Bool)-1.0 ? -1 : -2];
 
-int double_minus_0_5_converts_to_false[(_Bool)-0.5 ? -1 : 1];	/* expect: 20 */
-int double_minus_0_5_converts_to_true_[(_Bool)-0.5 ? 1 : -1];
+/* expect+1: error: negative array dimension (-1) [20] */
+int double_minus_0_5[(_Bool)-0.5 ? -1 : -2];
 
-int double_minus_0_0_converts_to_false[(_Bool)-0.0 ? -1 : 1];
-int double_minus_0_0_converts_to_true_[(_Bool)-0.0 ? 1 : -1];	/* expect: 20 */
+/* expect+1: error: negative array dimension (-2) [20] */
+int double_minus_0_0[(_Bool)-0.0 ? -1 : -2];
 
-int double_0_0_converts_to_false[(_Bool)0.0 ? -1 : 1];
-int double_0_0_converts_to_true_[(_Bool)0.0 ? 1 : -1];		/* expect: 20 */
+/* expect+1: error: negative array dimension (-2) [20] */
+int double_0_0[(_Bool)0.0 ? -1 : -2];
 
 /* The C99 rationale explains in 6.3.1.2 why (_Bool)0.5 is true. */
-int double_0_5_converts_to_false[(_Bool)0.5 ? -1 : 1];		/* expect: 20 */
-int double_0_5_converts_to_true_[(_Bool)0.5 ? 1 : -1];
+/* expect+1: error: negative array dimension (-1) [20] */
+int double_0_5_converts_to_false[(_Bool)0.5 ? -1 : -2];
 
-int double_1_0_converts_to_false[(_Bool)1.0 ? -1 : 1];		/* expect: 20 */
-int double_1_0_converts_to_true_[(_Bool)1.0 ? 1 : -1];
-
-_Bool
-bool_to_bool(_Bool b)
-{
-	return b;
-}
+/* expect+1: error: negative array dimension (-1) [20] */
+int double_1_0_converts_to_false[(_Bool)1.0 ? -1 : -2];
 
 _Bool
-char_to_bool(char c)
+convert_to_bool(int selector)
 {
-	return c;
-}
+	static struct variant {
+		_Bool b;
+		char c;
+		int i;
+		double d;
+		enum color {
+			RED
+		} e;
+		const char *pcc;
+		void (*f)(void);
+		double _Complex dc;
+	} v = { .i = 0 };
 
-_Bool
-int_to_bool(int i)
-{
-	return i;
-}
-
-_Bool
-double_to_bool(double d)
-{
-	return d;
-}
-
-enum color {
-	RED
-};
-
-_Bool
-enum_to_bool(enum color e)
-{
-	return e;
-}
-
-_Bool
-pointer_to_bool(const char *p)
-{
-	return p;
-}
-
-_Bool
-function_pointer_to_bool(void (*f)(void))
-{
-	return f;
-}
-
-_Bool
-complex_to_bool(double _Complex c)
-{
-	return c;
+	switch (selector) {
+	case 0: return v.b;
+	case 1: return v.c;
+	case 2: return v.i;
+	case 3: return v.d;
+	case 4: return v.e;
+	case 5: return v.pcc;
+	case 6: return v.f;
+	case 7: return v.dc;
+	default: return v.b;
+	}
 }

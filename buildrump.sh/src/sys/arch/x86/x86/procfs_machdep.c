@@ -1,4 +1,4 @@
-/*	$NetBSD: procfs_machdep.c,v 1.41 2021/07/10 17:33:28 msaitoh Exp $ */
+/*	$NetBSD: procfs_machdep.c,v 1.49 2024/10/06 15:36:05 msaitoh Exp $ */
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: procfs_machdep.c,v 1.41 2021/07/10 17:33:28 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: procfs_machdep.c,v 1.49 2024/10/06 15:36:05 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -113,18 +113,17 @@ static const char * const x86_features[][32] = {
 	"perfctr_llc", "mwaitx", NULL, NULL},
 
 	{ /* (7) Linux mapping */
-	NULL, NULL, "cpb", "ebp", NULL, "pln", "pts", "dtherm",
-	"hw_pstate", "proc_feedback", NULL, NULL,
-	NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, "ibrs", "ibpb", "stibp", NULL, NULL, NULL, NULL},
+	"ring3mwait", "cpuid_fault", "cpb", "epb",
+	"cat_l3", "cat_l2", "cdp_l3", "invpcid_single",
+	"hw_pstate", "proc_feedback", NULL, "pti",
+	NULL, NULL, "intel_ppin", "cdp_l2",
+	NULL, "ssbd", "mba", NULL, "perfmon_v2", NULL, NULL, NULL,
+	NULL, "ibrs", "ibpb", "stibp", NULL, NULL, "ibrs_enhanced", NULL},
 
 	{ /* (8) Linux mapping */
-	"tpr_shadow", "vnmi", "flexpriority", "ept",
-	"vpid", "npt", "lbrv", "svm_lock",
-	"nrip_save", "tsc_scale", "vmcb_clean", "flushbyasid",
-	"decodeassists", "pausefilter", "pfthreshold", "vmmcall",
-	NULL, "ept_ad", NULL, NULL, NULL, NULL, NULL, NULL,
+	"tpr_shadow", "flexpriority", "ept", "vpid", NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, "vmmcall",
+	NULL, "ept_ad", NULL, NULL, NULL, NULL, "tdx_guest", NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
 	{ /* (9) Intel-defined: 00000007 ebx */
@@ -141,30 +140,31 @@ static const char * const x86_features[][32] = {
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
-	{ /* (11) 0x0000000f:0 edx */
-	NULL, "cqm_llc", NULL, NULL, NULL, NULL, NULL, NULL,
+	{ /* (11) Linux mapping */
+	"cqm_llc", "cqm_occup_llc", "cqm_mbm_total", "cqm_mbm_local",
+	NULL, NULL, "split_lock_detect", NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
-	{ /* (12) 0x0000000f:1 edx */
-	"cqm_occup_llc", "cqm_mbm_total", "cqm_mbm_local", NULL,
+	{ /* (12) Intel-defined 0x00000007:1 eax */
 	NULL, NULL, NULL, NULL,
+	"avx_vnni", "avx512_bf16", NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+	NULL, NULL, "lam", NULL, NULL, NULL, NULL, NULL},
 
 	{ /* (13) AMD 0x80000008 ebx */
 	"clzero", "irperf", "xsaveerptr", NULL, "rdpru", NULL, NULL, NULL,
 	NULL, "wbnoinvd", NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, "ppin",
-	NULL, "virt_ssbd", NULL, NULL, NULL, NULL, NULL, NULL},
+	NULL, "virt_ssbd", NULL, "cppc", NULL, NULL, NULL, "brs"},
 
 	{ /* (14) 0x00000006 eax */
 	"dtherm", "ida", "arat", NULL, "pln", NULL, "pts", "hwp",
 	"hwp_notify", "hwp_act_window", "hwp_epp","hwp_pkg_req",
 	NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, "hfi", NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 
 	{ /* (15) AMD 0x8000000a edx */
@@ -172,8 +172,8 @@ static const char * const x86_features[][32] = {
 	"tsc_scale", "vmcb_clean", "flushbyasid", "decodeassists",
 	NULL, NULL, "pausefilter", NULL, "pfthreshold", "avic", NULL,
 	"v_vmsave_vmload",
-	"vgif", NULL, NULL, NULL, "v_spec_ctrl", NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+	"vgif", NULL, "x2avic", NULL, "v_spec_ctrl", NULL, NULL, NULL,
+	NULL, "vnmi", NULL, NULL, NULL, NULL, NULL, NULL},
 
 	{ /* (16) 0x00000007:0 ecx */
 	NULL, "avx512vbmi", "umip", "pku",
@@ -181,9 +181,10 @@ static const char * const x86_features[][32] = {
 	"gfni", "vaes", "vpclmulqdq", "avx512_vnni",
 	"avx512_bitalg", "tme", "avx512_vpopcntdq", NULL,
 	"la57", NULL, NULL, NULL, NULL, NULL, "rdpid", NULL,
-	NULL, "cldemote", NULL, "movdiri", "movdir64b", NULL, "sgx_lc", NULL},
+	NULL, "cldemote", NULL, "movdiri",
+	"movdir64b", "enqcmd", "sgx_lc", NULL},
 
-	{ /* (17) 0x80000007 ebx */
+	{ /* (17) AMD 0x80000007 ebx */
 	"overflow_recov", "succor", NULL, "smca", NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
@@ -192,15 +193,16 @@ static const char * const x86_features[][32] = {
 	{ /* (18) Intel 0x00000007 edx */
 	NULL, NULL, "avx512_4vnniw", "avx512_4fmaps", "fsrm", NULL, NULL, NULL,
 	"vp2intersect", NULL, "md_clear", NULL, NULL, NULL, "serialize", NULL,
-	"tsxldtrk", NULL, "pconfig", NULL, NULL, NULL, NULL, "avx512_fp16",
-	NULL, NULL, NULL, NULL,
-	"flush_l1d", "arch_capabilities", NULL, "ssbd"},
+	"tsxldtrk", NULL, "pconfig", "arch_lbr",
+	"ibt", NULL, "amx_bf16", "avx512_fp16",
+	"amx_tile", "amx_int8", NULL, NULL,
+	"flush_l1d", "arch_capabilities", NULL, NULL},
 
 	{ /* (19) AMD 0x8000001f eax */
 	"sme", "sev", NULL, "sev_es", NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
+	NULL, NULL, NULL, NULL, "svsm", NULL, NULL, NULL},
 };
 
 static int	procfs_getonecpu(int, struct cpu_info *, char *, size_t *);
@@ -280,7 +282,7 @@ procfs_getonecpufeatures(struct cpu_info *ci, char *p, size_t *left)
 
 	/* x86_features[2] is for Transmeta */
 	/* x86_features[3] is Linux defined mapping */
-	
+
 	procfs_getonefeatreg(ci->ci_feat_val[1], x86_features[4], p + diff,
 	    left);
 	diff = last - *left;
@@ -307,14 +309,11 @@ procfs_getonecpufeatures(struct cpu_info *ci, char *p, size_t *left)
 		diff = last - *left;
 	}
 
-	if (ci->ci_max_cpuid >= 0x0f) {
-		x86_cpuid2(0x0f, 0, descs);
-		procfs_getonefeatreg(descs[3], x86_features[11], p + diff,
-		    left);
-		diff = last - *left;
+	/* x86_features[11] is Linux defined mapping */
 
-		x86_cpuid2(0x0f, 1, descs);
-		procfs_getonefeatreg(descs[3], x86_features[12], p + diff,
+	if (ci->ci_max_cpuid >= 0x07) {
+		x86_cpuid2(0x07, 1, descs);
+		procfs_getonefeatreg(descs[0], x86_features[12], p + diff,
 		    left);
 		diff = last - *left;
 	}

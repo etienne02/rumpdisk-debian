@@ -1,4 +1,4 @@
-/*	$NetBSD: scroll.c,v 1.26 2019/06/09 07:40:14 blymn Exp $	*/
+/*	$NetBSD: scroll.c,v 1.28 2024/12/05 04:08:12 blymn Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)scroll.c	8.3 (Berkeley) 5/4/94";
 #else
-__RCSID("$NetBSD: scroll.c,v 1.26 2019/06/09 07:40:14 blymn Exp $");
+__RCSID("$NetBSD: scroll.c,v 1.28 2024/12/05 04:08:12 blymn Exp $");
 #endif
 #endif				/* not lint */
 
@@ -76,6 +76,17 @@ setscrreg(int top, int bottom)
 	return wsetscrreg(stdscr, top, bottom);
 }
 
+/*
+ * getscrreg --
+ *	Get the top and bottom of the scrolling region for stdscr.
+ */
+int
+getscrreg(int *top, int *bottom)
+{
+
+	return wgetscrreg(stdscr, top, bottom);
+}
+
 #endif
 
 /*
@@ -87,9 +98,7 @@ wscrl(WINDOW *win, int nlines)
 {
 	int     oy, ox;
 
-#ifdef DEBUG
 	__CTRACE(__CTRACE_WINDOW, "wscrl: (%p) lines=%d\n", win, nlines);
-#endif
 
 	if (!(win->flags & __SCROLLOK))
 		return ERR;
@@ -97,9 +106,7 @@ wscrl(WINDOW *win, int nlines)
 		return OK;
 
 	getyx(win, oy, ox);
-#ifdef DEBUG
 	__CTRACE(__CTRACE_WINDOW, "wscrl: y=%d\n", oy);
-#endif
 	wmove(win, win->scr_t, 1);
 	winsdelln(win, 0 - nlines);
 	wmove(win, oy, ox);
@@ -108,9 +115,7 @@ wscrl(WINDOW *win, int nlines)
 		__cputchar('\n');
 		if (!__NONL)
 			win->curx = 0;
-#ifdef DEBUG
 		__CTRACE(__CTRACE_WINDOW, "scroll: win == curscr\n");
-#endif
 	}
 	return OK;
 }
@@ -126,6 +131,18 @@ wsetscrreg(WINDOW *win, int top, int bottom)
 		return ERR;
 	win->scr_t = top;
 	win->scr_b = bottom;
+	return OK;
+}
+
+/*
+ * wgetscrreg --
+ *	Get the top and bottom of the scrolling region for win.
+ */
+int
+wgetscrreg(WINDOW *win, int *top, int *bottom)
+{
+	*top = win->scr_t;
+	*bottom = win->scr_b;
 	return OK;
 }
 

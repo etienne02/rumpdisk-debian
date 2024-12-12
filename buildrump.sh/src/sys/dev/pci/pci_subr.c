@@ -1,4 +1,4 @@
-/*	$NetBSD: pci_subr.c,v 1.229 2021/08/17 22:00:31 andvar Exp $	*/
+/*	$NetBSD: pci_subr.c,v 1.244 2024/04/19 21:24:00 andvar Exp $	*/
 
 /*
  * Copyright (c) 1997 Zubin D. Dittia.  All rights reserved.
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pci_subr.c,v 1.229 2021/08/17 22:00:31 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pci_subr.c,v 1.244 2024/04/19 21:24:00 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_pci.h"
@@ -155,6 +155,17 @@ static const struct pci_class pci_subclass_prehistoric[] = {
  * Mass storage controller
  */
 
+/* SCSI programming interface */
+static const struct pci_class pci_interface_scsi[] = {
+	{ "vendor-specific",	PCI_INTERFACE_SCSI_VND,		NULL,	},
+	{ "PQI storage",	PCI_INTERFACE_SCSI_PQI_STORAGE,	NULL,	},
+	{ "PQI controller",	PCI_INTERFACE_SCSI_PQI_CNTRL,	NULL,	},
+	{ "PQI storage and controller",	PCI_INTERFACE_SCSI_PQI_STORAGE_CNTRL,
+	  NULL,	},
+	{ "NVME",		PCI_INTERFACE_SCSI_NVME,	NULL,	},
+	{ NULL,			0,				NULL,	},
+};
+
 /* ATA programming interface */
 static const struct pci_class pci_interface_ata[] = {
 	{ "with single DMA",	PCI_INTERFACE_ATA_SINGLEDMA,	NULL,	},
@@ -164,7 +175,7 @@ static const struct pci_class pci_interface_ata[] = {
 
 /* SATA programming interface */
 static const struct pci_class pci_interface_sata[] = {
-	{ "vendor specific",	PCI_INTERFACE_SATA_VND,		NULL,	},
+	{ "vendor-specific",	PCI_INTERFACE_SATA_VND,		NULL,	},
 	{ "AHCI 1.0",		PCI_INTERFACE_SATA_AHCI10,	NULL,	},
 	{ "Serial Storage Bus Interface", PCI_INTERFACE_SATA_SSBI, NULL, },
 	{ NULL,			0,				NULL,	},
@@ -172,26 +183,37 @@ static const struct pci_class pci_interface_sata[] = {
 
 /* Flash programming interface */
 static const struct pci_class pci_interface_nvm[] = {
-	{ "vendor specific",	PCI_INTERFACE_NVM_VND,		NULL,	},
+	{ "vendor-specific",	PCI_INTERFACE_NVM_VND,		NULL,	},
 	{ "NVMHCI 1.0",		PCI_INTERFACE_NVM_NVMHCI10,	NULL,	},
-	{ "NVMe",		PCI_INTERFACE_NVM_NVME,		NULL,	},
+	{ "NVMe I/O",		PCI_INTERFACE_NVM_NVME_IO,	NULL,	},
+	{ "NVMe admin",		PCI_INTERFACE_NVM_NVME_ADMIN,	NULL,	},
+	{ NULL,			0,				NULL,	},
+};
+
+/* UFS programming interface */
+static const struct pci_class pci_interface_ufs[] = {
+	{ "vendor-specific",	PCI_INTERFACE_UFS_VND,		NULL,	},
+	{ "UFSHCI",		PCI_INTERFACE_UFS_UFSHCI,	NULL,	},
 	{ NULL,			0,				NULL,	},
 };
 
 /* Subclasses */
 static const struct pci_class pci_subclass_mass_storage[] = {
-	{ "SCSI",		PCI_SUBCLASS_MASS_STORAGE_SCSI,	NULL,	},
+	{ "SCSI",		PCI_SUBCLASS_MASS_STORAGE_SCSI,
+	  pci_interface_scsi },
 	{ "IDE",		PCI_SUBCLASS_MASS_STORAGE_IDE,	NULL,	},
 	{ "floppy",		PCI_SUBCLASS_MASS_STORAGE_FLOPPY, NULL, },
 	{ "IPI",		PCI_SUBCLASS_MASS_STORAGE_IPI,	NULL,	},
 	{ "RAID",		PCI_SUBCLASS_MASS_STORAGE_RAID,	NULL,	},
 	{ "ATA",		PCI_SUBCLASS_MASS_STORAGE_ATA,
-	  pci_interface_ata, },
+	  pci_interface_ata },
 	{ "SATA",		PCI_SUBCLASS_MASS_STORAGE_SATA,
-	  pci_interface_sata, },
+	  pci_interface_sata },
 	{ "SAS",		PCI_SUBCLASS_MASS_STORAGE_SAS,	NULL,	},
 	{ "Flash",		PCI_SUBCLASS_MASS_STORAGE_NVM,
 	  pci_interface_nvm,	},
+	{ "UFS",		PCI_SUBCLASS_MASS_STORAGE_UFS,
+	  pci_interface_ufs,	},
 	{ "miscellaneous",	PCI_SUBCLASS_MASS_STORAGE_MISC,	NULL,	},
 	{ NULL,			0,				NULL,	},
 };
@@ -208,6 +230,8 @@ static const struct pci_class pci_subclass_network[] = {
 	{ "ISDN",		PCI_SUBCLASS_NETWORK_ISDN,	NULL,	},
 	{ "WorldFip",		PCI_SUBCLASS_NETWORK_WORLDFIP,	NULL,	},
 	{ "PCMIG Multi Computing", PCI_SUBCLASS_NETWORK_PCIMGMULTICOMP, NULL, },
+	{ "InfiniBand",		PCI_SUBCLASS_NETWORK_INFINIBAND, NULL, },
+	{ "Host fabric",	PCI_SUBCLASS_NETWORK_HFC,	NULL, },
 	{ "miscellaneous",	PCI_SUBCLASS_NETWORK_MISC,	NULL,	},
 	{ NULL,			0,				NULL,	},
 };
@@ -236,11 +260,20 @@ static const struct pci_class pci_subclass_display[] = {
  * Class 0x04.
  * Multimedia device.
  */
+
+/* HD Audio programming interface */
+static const struct pci_class pci_interface_hda[] = {
+	{ "HD Audio 1.0",	PCI_INTERFACE_HDAUDIO,		NULL,	},
+	{ "HD Audio 1.0 + vendor-ext",	PCI_INTERFACE_HDAUDIO_VND, NULL, },
+	{ NULL,			0,				NULL,	},
+};
+
 static const struct pci_class pci_subclass_multimedia[] = {
 	{ "video",		PCI_SUBCLASS_MULTIMEDIA_VIDEO,	NULL,	},
 	{ "audio",		PCI_SUBCLASS_MULTIMEDIA_AUDIO,	NULL,	},
 	{ "telephony",		PCI_SUBCLASS_MULTIMEDIA_TELEPHONY, NULL,},
-	{ "mixed mode",		PCI_SUBCLASS_MULTIMEDIA_HDAUDIO, NULL, },
+	{ "mixed mode",		PCI_SUBCLASS_MULTIMEDIA_HDAUDIO,
+	  pci_interface_hda, },
 	{ "miscellaneous",	PCI_SUBCLASS_MULTIMEDIA_MISC,	NULL,	},
 	{ NULL,			0,				NULL,	},
 };
@@ -289,13 +322,13 @@ static const struct pci_class pci_subclass_bridge[] = {
 	{ "EISA",		PCI_SUBCLASS_BRIDGE_EISA,	NULL,	},
 	{ "MicroChannel",	PCI_SUBCLASS_BRIDGE_MC,		NULL,	},
 	{ "PCI",		PCI_SUBCLASS_BRIDGE_PCI,
-	  pci_interface_pcibridge,	},
+	  pci_interface_pcibridge },
 	{ "PCMCIA",		PCI_SUBCLASS_BRIDGE_PCMCIA,	NULL,	},
 	{ "NuBus",		PCI_SUBCLASS_BRIDGE_NUBUS,	NULL,	},
 	{ "CardBus",		PCI_SUBCLASS_BRIDGE_CARDBUS,	NULL,	},
 	{ "RACEway",		PCI_SUBCLASS_BRIDGE_RACEWAY,	NULL,	},
 	{ "Semi-transparent PCI", PCI_SUBCLASS_BRIDGE_STPCI,
-	  pci_interface_stpci,	},
+	  pci_interface_stpci, },
 	{ "InfiniBand",		PCI_SUBCLASS_BRIDGE_INFINIBAND,	NULL,	},
 	{ "advanced switching",	PCI_SUBCLASS_BRIDGE_ADVSW,
 	  pci_interface_advsw,	},
@@ -476,6 +509,7 @@ static const struct pci_class pci_interface_usb[] = {
 	{ "OHCI",		PCI_INTERFACE_USB_OHCI,		NULL,	},
 	{ "EHCI",		PCI_INTERFACE_USB_EHCI,		NULL,	},
 	{ "xHCI",		PCI_INTERFACE_USB_XHCI,		NULL,	},
+	{ "USB4 HCI",		PCI_INTERFACE_USB_USB4HCI,	NULL,	},
 	{ "other HC",		PCI_INTERFACE_USB_OTHERHC,	NULL,	},
 	{ "device",		PCI_INTERFACE_USB_DEVICE,	NULL,	},
 	{ NULL,			0,				NULL,	},
@@ -505,6 +539,7 @@ static const struct pci_class pci_subclass_serialbus[] = {
 	  pci_interface_ipmi, },
 	{ "SERCOS",		PCI_SUBCLASS_SERIALBUS_SERCOS,	NULL,	},
 	{ "CANbus",		PCI_SUBCLASS_SERIALBUS_CANBUS,	NULL,	},
+	{ "MIPI I3C",		PCI_SUBCLASS_SERIALBUS_MIPI_I3C, NULL,	},
 	{ "miscellaneous",	PCI_SUBCLASS_SERIALBUS_MISC,	NULL,	},
 	{ NULL,			0,				NULL,	},
 };
@@ -521,6 +556,8 @@ static const struct pci_class pci_subclass_wireless[] = {
 	{ "broadband",		PCI_SUBCLASS_WIRELESS_BROADBAND, NULL,	},
 	{ "802.11a (5 GHz)",	PCI_SUBCLASS_WIRELESS_802_11A,	NULL,	},
 	{ "802.11b (2.4 GHz)",	PCI_SUBCLASS_WIRELESS_802_11B,	NULL,	},
+	{ "Cellular",		PCI_SUBCLASS_WIRELESS_CELL,	NULL,	},
+	{ "Cellular + Ethernet", PCI_SUBCLASS_WIRELESS_CELL_E,	NULL,	},
 	{ "miscellaneous",	PCI_SUBCLASS_WIRELESS_MISC,	NULL,	},
 	{ NULL,			0,				NULL,	},
 };
@@ -569,7 +606,7 @@ static const struct pci_class pci_subclass_crypto[] = {
 
 /*
  * Class 0x11.
- * Data aquuisition and signal processing controller.
+ * Data acquisition and signal processing controller.
  */
 static const struct pci_class pci_subclass_dasp[] = {
 	{ "DPIO",		PCI_SUBCLASS_DASP_DPIO,		NULL,	},
@@ -889,7 +926,7 @@ pci_conf_print_common(
 
 		if (pci_conf_find_cap(regs, PCI_CAP_PCIEXPRESS, &pcie_capoff)) {
 			reg = regs[o2i(pcie_capoff + PCIE_XCAP)];
-			if (PCIE_XCAP_TYPE(reg) == PCIE_XCAP_TYPE_ROOT_EVNTC)
+			if (PCIE_XCAP_TYPE(reg) == PCIE_XCAP_TYPE_RC_EVNTC)
 				subclass = PCI_SUBCLASS_SYSTEM_RCEC;
 		}
 	}
@@ -1743,7 +1780,9 @@ pci_print_pcie_compl_timeout(uint32_t val)
 	}
 }
 
-static const char * const pcie_linkspeeds[] = {"2.5", "5.0", "8.0", "16.0"};
+static const char * const pcie_linkspeeds[] = {
+	"2.5", "5.0", "8.0", "16.0", "32.0"
+};
 
 /*
  * Print link speed. This function is used for the following register bits:
@@ -1806,6 +1845,45 @@ pci_print_pcie_link_deemphasis(pcireg_t val)
 	}
 }
 
+static const struct _pcie_link_preset_preshoot_deemphasis {
+	const char *preshoot;
+	const char *deemphasis;
+} pcie_link_preset_preshoot_deemphasis[] = {
+	{ "0.0",	"-6.0+-1.5" },	/* P0 */
+	{ "0.0",	"-3.5+-1" },	/* P1 */
+	{ "0.0",	"-4.4+-1.5" },	/* P2 */
+	{ "0.0",	"-2.5+-1" },	/* P3 */
+	{ "0.0",	"0.0" },	/* P4 */
+	{ "1.9+-1",	"0.0" },	/* P5 */
+	{ "2.5+-1",	"0.0" },	/* P6 */
+	{ "3.5+-1",	"-6.0+-1.5" },	/* P7 */
+	{ "3.5+-1",	"-3.5+-1" },	/* P8 */
+	{ "3.5+-1",	"0.0" },	/* P9 */
+	{ "0.0",	NULL }		/* P10 */
+};
+
+static void
+pci_print_pcie_link_preset_preshoot_deemphasis(pcireg_t val)
+{
+	const char *deemphasis;
+
+	if (val >= __arraycount(pcie_link_preset_preshoot_deemphasis)) {
+		/*
+		 * This may be printed because the default value of some
+		 * register fields is 0b1111.
+		 */
+		printf("reserved value (0x%x)", val);
+		return;
+	}
+
+	printf("Preshoot %sdB",
+	    pcie_link_preset_preshoot_deemphasis[val].preshoot);
+	deemphasis = pcie_link_preset_preshoot_deemphasis[val].deemphasis;
+
+	if (deemphasis != NULL)
+		printf(", De-emphasis %sdB", deemphasis);
+}
+
 static void
 pci_conf_print_pcie_cap(const pcireg_t *regs, int capoff)
 {
@@ -1834,7 +1912,7 @@ pci_conf_print_pcie_cap(const pcireg_t *regs, int capoff)
 		printf("Legacy PCI Express Endpoint device\n");
 		check_upstreamport = true;
 		break;
-	case PCIE_XCAP_TYPE_ROOT:	/* 0x4 */
+	case PCIE_XCAP_TYPE_RP:		/* 0x4 */
 		printf("Root Port of PCI Express Root Complex\n");
 		check_slot = true;
 		break;
@@ -1855,10 +1933,10 @@ pci_conf_print_pcie_cap(const pcireg_t *regs, int capoff)
 		/* Upstream port is not PCIe */
 		check_slot = true;
 		break;
-	case PCIE_XCAP_TYPE_ROOT_INTEP:	/* 0x9 */
+	case PCIE_XCAP_TYPE_RCIEP:	/* 0x9 */
 		printf("Root Complex Integrated Endpoint\n");
 		break;
-	case PCIE_XCAP_TYPE_ROOT_EVNTC:	/* 0xa */
+	case PCIE_XCAP_TYPE_RC_EVNTC:	/* 0xa */
 		printf("Root Complex Event Collector\n");
 		break;
 	default:
@@ -2339,8 +2417,8 @@ pci_conf_print_pcie_cap(const pcireg_t *regs, int capoff)
 		    PCIREG_SHIFTOUT(reg,  PCIE_LCSR2_TX_MARGIN));
 		onoff("Enter Modified Compliance", reg, PCIE_LCSR2_EN_MCOMP);
 		onoff("Compliance SOS", reg, PCIE_LCSR2_COMP_SOS);
-		printf("      Compliance Present/De-emphasis: ");
-		pci_print_pcie_link_deemphasis(
+		printf("      Compliance Preset/De-emphasis: ");
+		pci_print_pcie_link_preset_preshoot_deemphasis(
 			PCIREG_SHIFTOUT(reg, PCIE_LCSR2_COMP_DEEMP));
 		printf("\n");
 
@@ -2481,10 +2559,10 @@ pci_conf_print_ea_cap_prop(unsigned int prop)
 		printf("I/O Space\n");
 		break;
 	case PCI_EA_PROP_VF_MEM_NONPREF:
-		printf("Resorce for VF use, Memory Space, Non-Prefetchable\n");
+		printf("Resource for VF use, Memory Space, Non-Prefetchable\n");
 		break;
 	case PCI_EA_PROP_VF_MEM_PREF:
-		printf("Resorce for VF use, Memory Space, Prefetch\n");
+		printf("Resource for VF use, Memory Space, Prefetch\n");
 		break;
 	case PCI_EA_PROP_BB_MEM_NONPREF:
 		printf("Behind the Bridge, Memory Space, Non-Pref\n");
@@ -2903,8 +2981,8 @@ pci_conf_print_aer_cap(const pcireg_t *regs, int extcapoff)
 	    extcapoff + PCI_AER_ROOTERR_CMD);
 
 	switch (pcie_devtype) {
-	case PCIE_XCAP_TYPE_ROOT: /* Root Port of PCI Express Root Complex */
-	case PCIE_XCAP_TYPE_ROOT_EVNTC:	/* Root Complex Event Collector */
+	case PCIE_XCAP_TYPE_RP:	/* Root Port of PCI Express Root Complex */
+	case PCIE_XCAP_TYPE_RC_EVNTC:	/* Root Complex Event Collector */
 		reg = regs[o2i(extcapoff + PCI_AER_ROOTERR_CMD)];
 		printf("    Root Error Command register: 0x%08x\n", reg);
 		pci_conf_print_aer_cap_rooterr_cmd(reg);
@@ -3872,7 +3950,7 @@ pci_conf_print_sec_pcie_cap(const pcireg_t *regs, int extcapoff)
 		reg = regs[o2i(pcie_capoff + PCIE_LCAP)];
 		maxlinkwidth = PCIREG_SHIFTOUT(reg, PCIE_LCAP_MAX_WIDTH);
 	} else {
-		printf("error: falied to get PCIe capablity\n");
+		printf("error: failed to get PCIe capability\n");
 		return;
 	}
 	for (i = 0; i < maxlinkwidth; i++) {
@@ -4122,7 +4200,7 @@ pci_conf_print_l1pm_cap(const pcireg_t *regs, int extcapoff)
 	if (pci_conf_find_cap(regs, PCI_CAP_PCIEXPRESS, &pcie_capoff)) {
 		uint32_t t = regs[o2i(pcie_capoff)];
 
-		if ((t == PCIE_XCAP_TYPE_ROOT) || (t == PCIE_XCAP_TYPE_DOWN))
+		if ((t == PCIE_XCAP_TYPE_RP) || (t == PCIE_XCAP_TYPE_DOWN))
 			onoff("Link Activation Supported", reg,
 			    PCI_L1PM_CAP_LA);
 	}
@@ -4238,6 +4316,179 @@ pci_conf_print_dlf_cap(const pcireg_t *regs, int extcapoff)
 	onoff("Remote DLF supported Valid", reg, PCI_DLF_STAT_RMTVALID);
 }
 
+static void
+pci_conf_print_pl16g_cap(const pcireg_t *regs, int extcapoff)
+{
+	pcireg_t reg, lwidth;
+	int pcie_capoff;
+	unsigned int i, j;
+
+	printf("\n  Physical Layer 16.0 GT/s\n");
+	reg = regs[o2i(extcapoff + PCI_PL16G_CAP)];
+	printf("    Capability register: 0x%08x\n", reg);
+
+	reg = regs[o2i(extcapoff + PCI_PL16G_CTL)];
+	printf("    Control register: 0x%08x\n", reg);
+
+	reg = regs[o2i(extcapoff + PCI_PL16G_STAT)];
+	printf("    Status register: 0x%08x\n", reg);
+	onoff("Equalization 16.0 GT/s Complete", reg, PCI_PL16G_STAT_EQ_COMPL);
+	onoff("Equalization 16.0 GT/s Phase 1 Successful", reg,
+	    PCI_PL16G_STAT_EQ_P1S);
+	onoff("Equalization 16.0 GT/s Phase 2 Successful", reg,
+	    PCI_PL16G_STAT_EQ_P2S);
+	onoff("Equalization 16.0 GT/s Phase 3 Successful", reg,
+	    PCI_PL16G_STAT_EQ_P3S);
+
+	reg = regs[o2i(extcapoff + PCI_PL16G_LDPMS)];
+	printf("    Local Data Parity Mismatch Status register: 0x%08x\n",
+	    reg);
+
+	reg = regs[o2i(extcapoff + PCI_PL16G_FRDPMS)];
+	printf("    First Retimer Data Parity Mismatch Status register:"
+	    " 0x%08x\n", reg);
+
+	reg = regs[o2i(extcapoff + PCI_PL16G_SRDPMS)];
+	printf("    Second Retimer Data Parity Mismatch Status register:"
+	    " 0x%08x\n", reg);
+
+	if (pci_conf_find_cap(regs, PCI_CAP_PCIEXPRESS, &pcie_capoff) == 0)
+		return; /* error */
+
+	reg = regs[o2i(pcie_capoff + PCIE_LCAP)];
+	lwidth = PCIREG_SHIFTOUT(reg, PCIE_LCAP_MAX_WIDTH);
+
+	for (i = 0; i < lwidth;) {
+		reg = regs[o2i(extcapoff + PCI_PL16G_LEC + i)];
+
+		for (j = 0; j < 4; j++) {
+			pcireg_t up, down;
+
+			down = reg & 0x0000000f;
+			up = (reg >> 4) & 0x0000000f;
+			printf("      Lane %d downstream: ", i);
+			pci_print_pcie_link_preset_preshoot_deemphasis(down);
+			printf("\n      Lane %d upstream:   ", i);
+			pci_print_pcie_link_preset_preshoot_deemphasis(up);
+			printf("\n");
+
+			reg >>= 8;
+			i++;
+			if (i >= lwidth)
+				break;
+		}
+	}
+}
+
+static const char * const pcie_receive_number_dp[] = {
+	[0] = ("Broadcast "
+	    "(Downstream Port Receiver and all Retimer Pseudo Port Receiver)"),
+	[1] =  "Rx(A) (Downstream Port Receiver)",
+	[2] = "Rx(B) (Retimer X or Z Upstream Pseudo Port Receiver)",
+	[3] = "Rx(C) (Retimer X or Z Downstream Pseudo Port Receiver)",
+	[4] = "Rx(D) (Retimer Y Upstream Pseudo Port Receiver)",
+	[5] = "Rx(E) (Retimer Y Downstream Pseudo Port Receiver)",
+	[6] = "Reserved",
+	[7] = "Reserved"
+};
+
+static const char * const pcie_receive_number_up[] = {
+	"Broadcast (Upstream Port Receiver)",
+	"Reserved",
+	"Reserved",
+	"Reserved",
+	"Reserved",
+	"Reserved",
+	"Rx(F) (Upstream Port Receiver)",
+	"Reserved"
+};
+
+/*
+ * Print PCI_LMR_LANECSR. This function is used for both control and status
+ * register. The reg argument in the lower 16bit has the control or status
+ * register. The encoding is the same except the receive number, so use _LCTL_
+ * macro.
+ */
+static void
+pci_conf_print_lmr_lcsr(pcireg_t reg, bool up, bool dp)
+{
+	int rnum;
+
+ 	printf("      Receive Number: ");
+	rnum = PCIREG_SHIFTOUT(reg, PCI_LMR_LCTL_RNUM);
+	if (up)
+		printf("%s\n", pcie_receive_number_up[rnum]);
+	else if (dp)
+		printf("%s\n", pcie_receive_number_dp[rnum]);
+	else
+		printf("%x\n", rnum);
+
+	printf("      Margin Type: %x\n",
+	    PCIREG_SHIFTOUT(reg, PCI_LMR_LCTL_MTYPE));
+	printf("      Usage Model: %s\n",
+	    (PCIREG_SHIFTOUT(reg, PCI_LMR_LCTL_UMODEL) == 0)
+	    ? "Lane Margining at Receiver" : "Reserved Encoding");
+	printf("      Margin Payload: 0x%02x\n",
+	    PCIREG_SHIFTOUT(reg, PCI_LMR_LCTL_MPAYLOAD));
+}
+
+static void
+pci_conf_print_lmr_cap(const pcireg_t *regs, int extcapoff)
+{
+	pcireg_t reg, lwidth;
+	int pcie_capoff;
+	int pcie_devtype;
+	unsigned int i;
+	bool up, dp;
+
+	printf("\n  Lane Margining at the Receiver\n");
+	reg = regs[o2i(extcapoff + PCI_LMR_PCAPSTAT)];
+	printf("    Port Capability register: 0x%04x\n", reg & 0xffff);
+	onoff("Margining uses Driver Software", reg, PCI_LMR_PCAP_MUDS);
+	printf("    Port Status register: 0x%04x\n", (reg >> 16) & 0xffff);
+	onoff("Margining Ready", reg, PCI_LMR_PSTAT_MR);
+	onoff("Margining Software Ready", reg, PCI_LMR_PSTAT_MSR);
+
+	if (pci_conf_find_cap(regs, PCI_CAP_PCIEXPRESS, &pcie_capoff) == 0)
+		return; /* error */
+
+	up = dp = false;
+	reg = regs[o2i(pcie_capoff)];
+	pcie_devtype = PCIE_XCAP_TYPE(reg);
+	switch (pcie_devtype) {
+	case PCIE_XCAP_TYPE_PCIE_DEV:	/* 0x0 */
+	case PCIE_XCAP_TYPE_PCI_DEV:	/* 0x1 */
+	case PCIE_XCAP_TYPE_UP:		/* 0x5 */
+	case PCIE_XCAP_TYPE_PCIE2PCI:	/* 0x7 */
+		up = true;
+		break;
+	case PCIE_XCAP_TYPE_RP:		/* 0x4 */
+	case PCIE_XCAP_TYPE_DOWN:	/* 0x6 */
+		dp = true;
+		break;
+	default:
+		printf("neither upstream nor downstream?(%x)\n", pcie_devtype);
+		break;
+	}
+
+	reg = regs[o2i(pcie_capoff + PCIE_LCAP)];
+	lwidth = PCIREG_SHIFTOUT(reg, PCIE_LCAP_MAX_WIDTH);
+
+	for (i = 0; i < lwidth; i++) {
+		pcireg_t lctl, lstat;
+
+		reg = regs[o2i(extcapoff + PCI_LMR_LANECSR + (i * 4))];
+
+		lctl = reg & 0xffff;
+		printf("    Lane %d control: 0x%04x\n", i, lctl);
+		pci_conf_print_lmr_lcsr(lctl, up, dp);
+
+		lstat = (reg >> 16) & 0xffff;
+		printf("    Lane %d status: 0x%04x\n", i, lstat);
+		pci_conf_print_lmr_lcsr(lstat, up, dp);
+	}
+}
+
 /* XXX pci_conf_print_hierarchyid_cap */
 /* XXX pci_conf_print_npem_cap */
 
@@ -4324,12 +4575,20 @@ static struct {
 	  NULL },
 	{ PCI_EXTCAP_VF_RESIZBAR, "VF Resizable BARs",
 	  NULL },
-	{ PCI_EXTCAP_DLF, "Data link Feature", pci_conf_print_dlf_cap },
-	{ PCI_EXTCAP_PYSLAY_16GT, "Physical Layer 16.0 GT/s", NULL },
-	{ 0x27, "unknown", NULL },
+	{ PCI_EXTCAP_DLF,	"Data link Feature", pci_conf_print_dlf_cap },
+	{ PCI_EXTCAP_PL16G,	"Physical Layer 16.0 GT/s",
+	  pci_conf_print_pl16g_cap },
+	{ PCI_EXTCAP_LMR,	"Lane Margining at the Receiver",
+	  pci_conf_print_lmr_cap },
 	{ PCI_EXTCAP_HIERARCHYID, "Hierarchy ID",
 	  NULL },
 	{ PCI_EXTCAP_NPEM,	"Native PCIe Enclosure Management",
+	  NULL },
+	{ PCI_EXTCAP_PL32G,	"Physical Layer 32.0 GT/s",
+	  NULL },
+	{ PCI_EXTCAP_AP,	"Alternate Protocol",
+	  NULL },
+	{ PCI_EXTCAP_SFI,	"System Firmware Intermediary",
 	  NULL },
 };
 

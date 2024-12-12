@@ -1,33 +1,33 @@
-/*	$NetBSD: db_trace.c,v 1.59 2015/10/18 17:13:32 maxv Exp $	*/
+/*	$NetBSD: db_trace.c,v 1.63 2023/09/26 14:33:55 tsutsui Exp $	*/
 
-/* 
+/*
  * Mach Operating System
  * Copyright (c) 1992 Carnegie Mellon University
  * All Rights Reserved.
- * 
+ *
  * Permission to use, copy, modify and distribute this software and its
  * documentation is hereby granted, provided that both the copyright
  * notice and this permission notice appear in all copies of the
  * software, derivative works or modified versions, and any portions
  * thereof, and that both notices appear in supporting documentation.
- * 
+ *
  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND FOR
  * ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
- * 
+ *
  * Carnegie Mellon requests users of this software to return to
- * 
+ *
  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
- * 
- * any improvements or extensions that they make and grant Carnegie Mellon 
+ *
+ * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_trace.c,v 1.59 2015/10/18 17:13:32 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_trace.c,v 1.63 2023/09/26 14:33:55 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -66,7 +66,7 @@ const struct db_variable db_regs[] = {
 	{ "a6",	(long *)&ddb_regs.tf_regs[8+6],	FCN_NULL, NULL },
 	{ "sp",	(long *)&ddb_regs.tf_regs[8+7],	FCN_NULL, NULL },
 	/* misc. */
-	{ "pc",	(long *)&ddb_regs.tf_pc, 	FCN_NULL, NULL },
+	{ "pc",	(long *)&ddb_regs.tf_pc,	FCN_NULL, NULL },
 	{ "sr",	(long *)&ddb_regs.tf_sr,	db_var_short, NULL }
 };
 const struct db_variable * const db_eregs =
@@ -393,6 +393,7 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 	const char *	name;
 	struct stackpos pos;
 	struct pcb	*pcb;
+	struct lwp	*l;
 #ifdef _KERNEL
 	bool		kernel_only = true;
 #endif
@@ -417,12 +418,14 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 		}
 	}
 
+#ifdef _KERNEL
+	l = curlwp;
+#endif
 	if (!have_addr)
 		stacktop(&ddb_regs, &pos, pr);
 	else {
 		if (trace_thread) {
 			struct proc *p;
-			struct lwp *l;
 
 			if (lwpaddr) {
 				l = (struct lwp *)addr;
@@ -549,12 +552,12 @@ db_stack_trace_print(db_expr_t addr, bool have_addr, db_expr_t count,
 		else
 			(*pr)(") + %lx\n", val);
 
-#if _KERNEL
+#ifdef _KERNEL
 		/*
 		 * Stop tracing if frame ptr no longer points into kernel
 		 * stack.
 		 */
-		pcb = lwp_getpcb(curlwp);
+		pcb = lwp_getpcb(l);
 		if (kernel_only && !INKERNEL(pos.k_fp, pcb))
 			break;
 		if (nextframe(&pos, pcb, kernel_only, pr) == 0)

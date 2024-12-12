@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.83 2019/11/23 19:40:34 ad Exp $	*/
+/*	$NetBSD: cpu.h,v 1.88 2024/01/20 00:15:30 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -52,54 +52,6 @@
 
 #if defined(_KERNEL)
 /*
- * Exported definitions unique to amiga/68k cpu support.
- */
-#define	M68K_MMU_MOTOROLA
-
-extern volatile unsigned int interrupt_depth;
-/*
- * Arguments to hardclock and gatherstats encapsulate the previous
- * machine state in an opaque clockframe.  On the amiga, we use
- * what the hardware pushes on an interrupt (frame format 0).
- */
-struct clockframe {
-	u_short	sr;		/* sr at time of interrupt */
-	u_long	pc;		/* pc at time of interrupt */
-	u_short	vo;		/* vector offset (4-word frame) */
-};
-
-#define	CLKF_USERMODE(framep)	(((framep)->sr & PSL_S) == 0)
-#define	CLKF_PC(framep)		((framep)->pc)
-#define	CLKF_INTR(framep)	(interrupt_depth > 1)
-
-
-/*
- * Preempt the current process if in interrupt from user mode,
- * or after the current trap/syscall if in system mode.
- */
-#define	cpu_need_resched(ci,l,flags)	do {	\
-	__USE(flags); 				\
-	setsoftast();				\
-} while (/*CONSTCOND*/0)
-
-/*
- * Give a profiling tick to the current process from the softclock
- * interrupt.  On the amiga, request an ast to send us through trap(),
- * marking the proc as needing a profiling tick.
- */
-#define	profile_tick(l, framep)	((l)->l_pflag |= LP_OWEUPC, setsoftast())
-#define	cpu_need_proftick(l)	((l)->l_pflag |= LP_OWEUPC, setsoftast())
-
-/*
- * Notify the current process (p) that it has a signal pending,
- * process as soon as possible.
- */
-#define	cpu_signotify(l)	setsoftast()
-
-extern int astpending;		/* need trap before returning to user mode */
-#define setsoftast()		(astpending = 1)
-
-/*
  * The rest of this should probably be moved to ../amiga/amigacpu.h,
  * although some of it could probably be put into generic 68k headers.
  */
@@ -148,7 +100,6 @@ void	drsc_handler(void);
  */
 void	clearseg(vm_offset_t);
 void	doboot(void) __attribute__((__noreturn__));
-void	loadustp(int);
 void	physcopyseg(vm_offset_t, vm_offset_t);
 u_int	probeva(u_int, u_int);
 

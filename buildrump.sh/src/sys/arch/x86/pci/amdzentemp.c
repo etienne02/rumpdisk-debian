@@ -1,4 +1,4 @@
-/*      $NetBSD: amdzentemp.c,v 1.14 2021/06/06 11:35:22 nonaka Exp $ */
+/*      $NetBSD: amdzentemp.c,v 1.22 2024/10/17 14:16:48 msaitoh Exp $ */
 /*      $OpenBSD: kate.c,v 1.2 2008/03/27 04:52:03 cnst Exp $   */
 
 /*
@@ -53,7 +53,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: amdzentemp.c,v 1.14 2021/06/06 11:35:22 nonaka Exp $ ");
+__KERNEL_RCSID(0, "$NetBSD: amdzentemp.c,v 1.22 2024/10/17 14:16:48 msaitoh Exp $ ");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -74,7 +74,6 @@ __KERNEL_RCSID(0, "$NetBSD: amdzentemp.c,v 1.14 2021/06/06 11:35:22 nonaka Exp $
 #include "amdsmn.h"
 
 #define	AMD_CURTMP_RANGE_ADJUST	49000000	/* in microKelvins (ie, 49C) */
-#define	AMD_CURTMP_RANGE_CHECK	__BIT(19)
 #define	F10_TEMP_CURTMP		__BITS(31,21)	/* XXX same as amdtemp.c */
 #define	F10_TEMP_CURTMP_MASK	0x7ff
 #define	F15M60_CURTMP_TJSEL	__BITS(17,16)
@@ -96,14 +95,7 @@ __KERNEL_RCSID(0, "$NetBSD: amdzentemp.c,v 1.14 2021/06/06 11:35:22 nonaka Exp $
  * to -49..206C.
  */
 #define	AMD_17H_CUR_TMP			0x59800
-
-/*
- * The following register set was discovered experimentally by Ondrej Čerman
- * and collaborators, but is not (yet) documented in a PPR/OSRR (other than
- * the M70H PPR SMN memory map showing [0x59800, +0x314] as allocated to
- * SMU::THM).  It seems plausible and the Linux sensor folks have adopted it.
- */
-#define	AMD_17H_CCD_TMP_BASE		0x59954
+#define	AMD_17H_CUR_TMP_RANGE_SEL	__BIT(19)
 #define	AMD_17H_CCD_TMP_VALID		__BIT(11)
 
 struct amdzentemp_softc {
@@ -114,6 +106,7 @@ struct amdzentemp_softc {
 	size_t sc_sensor_len;
 	size_t sc_numsensors;
 	int32_t sc_offset;
+	int32_t sc_ccd_offset;
 };
 
 enum {
@@ -128,6 +121,10 @@ enum {
 	CCD5,
 	CCD6,
 	CCD7,
+	CCD8,
+	CCD9,
+	CCD10,
+	CCD11,
 	CCD_MAX,
 	NUM_CCDS = CCD_MAX - CCD_BASE
 };
@@ -211,6 +208,7 @@ amdzentemp_attach(device_t parent, device_t self, void *aux)
 		break;
 	case 0x17:
 	case 0x19:
+	case 0x1a:
 		sc->sc_sme->sme_refresh = amdzentemp_family17_refresh;
 		break;
 	default:
@@ -338,14 +336,16 @@ amdzentemp_family17_refresh(struct sysmon_envsys *sme, envsys_data_t *edata)
 			edata->state = ENVSYS_SINVALID;
 			return;
 		}
-		minus49 = (temp & AMD_CURTMP_RANGE_CHECK) ? true : false;
+		minus49 = (temp & AMD_17H_CUR_TMP_RANGE_SEL) ?
+		    true : false;
 		temp = __SHIFTOUT(temp, F10_TEMP_CURTMP);
 		break;
 	case CCD_BASE ... (CCD_MAX - 1):
 		/* Tccd */
 		i = edata->private - CCD_BASE;
 		error = amdsmn_read(sc->sc_smn,
-		    AMD_17H_CCD_TMP_BASE + (i * sizeof(temp)), &temp);
+		    AMD_17H_CUR_TMP + sc->sc_ccd_offset + (i * sizeof(temp)),
+		    &temp);
 		if (error || !ISSET(temp, AMD_17H_CCD_TMP_VALID)) {
 			edata->state = ENVSYS_SINVALID;
 			return;
@@ -373,11 +373,17 @@ amdzentemp_probe_ccd_sensors17h(struct amdzentemp_softc *sc, int model)
 
 	switch (model) {
 	case 0x00 ... 0x2f: /* Zen1, Zen+ */
+		sc->sc_ccd_offset = 0x154;
 		maxreg = 4;
 		break;
 	case 0x30 ... 0x3f: /* Zen2 TR (Castle Peak)/EPYC (Rome) */
 	case 0x60 ... 0x7f: /* Zen2 Ryzen (Renoir APU, Matisse) */
 	case 0x90 ... 0x9f: /* Zen2 Ryzen (Van Gogh APU) */
+		sc->sc_ccd_offset = 0x154;
+		maxreg = 8;
+		break;
+	case 0xa0 ... 0xaf: /* Zen2 Ryzen (Mendocino APU) */
+		sc->sc_ccd_offset = 0x300;
 		maxreg = 8;
 		break;
 	default:
@@ -397,6 +403,53 @@ amdzentemp_probe_ccd_sensors19h(struct amdzentemp_softc *sc, int model)
 	switch (model) {
 	case 0x00 ... 0x0f: /* Zen3 EPYC "Milan" */
 	case 0x20 ... 0x2f: /* Zen3 Ryzen "Vermeer" */
+	case 0x50 ... 0x5f: /* Zen3 Ryzen "Cezanne" */
+		sc->sc_ccd_offset = 0x154;
+		maxreg = 8;
+		break;
+	case 0x60 ... 0x6f: /* Zen4 Ryzen "Raphael" */
+	case 0x70 ... 0x7f: /* Zen4 Ryzen "Phoenix" */
+		sc->sc_ccd_offset = 0x308;
+		maxreg = 8;
+		break;
+	case 0x40 ... 0x4f: /* Zen3+ "Rembrandt" */
+		sc->sc_ccd_offset = 0x300;
+		maxreg = 8;
+		break;
+	case 0x10 ... 0x1f: /* Zen4 "Genoa" */
+	case 0xa0 ... 0xaf: /* Zen4 "Siena" */
+		sc->sc_ccd_offset = 0x300;
+		maxreg = 12;
+		break;
+	default:
+		aprint_error_dev(sc->sc_dev,
+		    "Unrecognized Family 19h Model: %02xh\n", model);
+		return 0;
+	}
+
+	return maxreg;
+}
+
+static int
+amdzentemp_probe_ccd_sensors1ah(struct amdzentemp_softc *sc, int model)
+{
+	int maxreg;
+
+	switch (model) {
+	case 0x00 ... 0x0f: /* Zen5 "Turin Classic" */
+		sc->sc_ccd_offset = 0x300;
+		maxreg = 16;
+		break;
+	case 0x10 ... 0x1f: /* Zen5 "Turin Dense" */
+		sc->sc_ccd_offset = 0x300;
+		maxreg = 12;
+		break;
+	case 0x20 ... 0x2f: /* Zen5 "Strix Point" */
+		sc->sc_ccd_offset = 0x300;
+		maxreg = 8;
+		break;
+	case 0x40 ... 0x4f: /* Zen5 "Granite Ridge "*/
+		sc->sc_ccd_offset = 0x300;
 		maxreg = 8;
 		break;
 	default:
@@ -420,6 +473,9 @@ amdzentemp_probe_ccd_sensors(struct amdzentemp_softc *sc, int family, int model)
 	case 0x19:
 		nccd = amdzentemp_probe_ccd_sensors19h(sc, model);
 		break;
+	case 0x1a:
+		nccd = amdzentemp_probe_ccd_sensors1ah(sc, model);
+		break;
 	default:
 		return 0;
 	}
@@ -437,7 +493,8 @@ amdzentemp_setup_ccd_sensors(struct amdzentemp_softc *sc)
 
 	for (i = 0; i < sc->sc_numsensors - 1; i++) {
 		error = amdsmn_read(sc->sc_smn,
-		    AMD_17H_CCD_TMP_BASE + (i * sizeof(temp)), &temp);
+		    AMD_17H_CUR_TMP + sc->sc_ccd_offset + (i * sizeof(temp)),
+		    &temp);
 		if (error || !ISSET(temp, AMD_17H_CCD_TMP_VALID))
 			continue;
 

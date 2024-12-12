@@ -1,4 +1,4 @@
-/*	$NetBSD: tls.c,v 1.17 2019/10/24 08:21:18 hannken Exp $	*/
+/*	$NetBSD: tls.c,v 1.21 2022/11/08 01:05:10 uwe Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: tls.c,v 1.17 2019/10/24 08:21:18 hannken Exp $");
+__RCSID("$NetBSD: tls.c,v 1.21 2022/11/08 01:05:10 uwe Exp $");
 
 #ifndef DISABLE_TLS
 #include <sys/stat.h>
@@ -57,6 +57,7 @@ __RCSID("$NetBSD: tls.c,v 1.17 2019/10/24 08:21:18 hannken Exp $");
 
 static unsigned getVerifySetting(const char *x509verifystring);
 
+#ifndef NDEBUG
 /* to output SSL error codes */
 static const char *SSL_ERRCODE[] = {
 	"SSL_ERROR_NONE",
@@ -81,6 +82,7 @@ static const char *TLS_CONN_STATES[] = {
 	"ST_CLOSING0",
 	"ST_CLOSING1",
 	"ST_CLOSING2"};
+#endif	/* !NDEBUG */
 
 DH *get_dh1024(void);
 /* DH parameter precomputed with "openssl dhparam -C -2 1024" */
@@ -123,7 +125,7 @@ out:
 		    TLS_CONN_STATES[x], TLS_CONN_STATES[y]);	\
 		(x) = (y);					\
 	}							\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 static unsigned
 getVerifySetting(const char *x509verifystring)
@@ -141,7 +143,7 @@ getVerifySetting(const char *x509verifystring)
 /*
  * init OpenSSL lib and one context.
  * returns NULL if global context already exists.
- * returns a status message on successfull init (to be free()d by caller).
+ * returns a status message on successful init (to be free()d by caller).
  * calls die() on serious error.
  */
 char*
@@ -336,7 +338,7 @@ get_fingerprint(const X509 *cert, char **returnstring, const char *alg_name)
 	 *
 	 * Intended behaviour is to prefer the IANA names,
 	 * but allow the user to use OpenSSL names as well
-	 * (e.g. for "RIPEMD160" wich has no IANA name)
+	 * (e.g. for "RIPEMD160" which has no IANA name)
 	 */
 	static const struct hash_alg_namemap {
 		const char *iana;

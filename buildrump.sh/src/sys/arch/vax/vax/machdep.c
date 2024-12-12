@@ -1,4 +1,4 @@
-/* $NetBSD: machdep.c,v 1.196 2020/06/11 19:20:46 ad Exp $	 */
+/* $NetBSD: machdep.c,v 1.200 2024/05/17 21:37:07 thorpej Exp $	 */
 
 /*
  * Copyright (c) 1982, 1986, 1990 The Regents of the University of California.
@@ -83,7 +83,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.196 2020/06/11 19:20:46 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.200 2024/05/17 21:37:07 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_compat_netbsd.h"
@@ -130,6 +130,7 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.196 2020/06/11 19:20:46 ad Exp $");
 #include <ddb/db_extern.h>
 #endif
 
+#include "leds.h"
 #include "smg.h"
 #include "ksyms.h"
 
@@ -339,11 +340,6 @@ cpu_reboot(int howto, char *b)
 	if ((howto & RB_NOSYNC) == 0 && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr will be out of
-		 * synch; adjust it now.
-		 */
-		resettodr();
 	}
 	splhigh();		/* extreme priority */
 	if (howto & RB_HALT) {
@@ -700,6 +696,14 @@ cpu_setmcontext(struct lwp *l, const mcontext_t *mcp, unsigned int flags)
 		lwp_setprivate(l, tlsbase);
 		tf->tf_sp += sizeof(tlsbase);
 	}
+
+	mutex_enter(l->l_proc->p_lock);
+	if (flags & _UC_SETSTACK)
+		l->l_sigstk.ss_flags |= SS_ONSTACK;
+	if (flags & _UC_CLRSTACK)
+		l->l_sigstk.ss_flags &= ~SS_ONSTACK;
+	mutex_exit(l->l_proc->p_lock);
+
 	return 0;
 }
 
@@ -772,6 +776,6 @@ mm_md_readwrite(dev_t dev, struct uio *uio)
 void
 machdep_init(void)
 {
-	proc0.p_rlimit[RLIMIT_AS].rlim_cur = DFLDSIZ;
+	proc0.p_rlimit[RLIMIT_AS].rlim_cur = MAXDSIZ;
 	proc0.p_rlimit[RLIMIT_AS].rlim_max = MAXDSIZ;
 }

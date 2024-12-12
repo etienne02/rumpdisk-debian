@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_motorola.c,v 1.74 2021/04/16 00:13:48 mrg Exp $        */
+/*	$NetBSD: pmap_motorola.c,v 1.89 2024/01/19 03:35:31 thorpej Exp $        */
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -69,6 +69,7 @@
  *
  * Supports:
  *	68020 with 68851 MMU
+ *	68020 with HP MMU
  *	68030 with on-chip MMU
  *	68040 with on-chip MMU
  *	68060 with on-chip MMU
@@ -119,12 +120,11 @@
 #include "opt_m68k_arch.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap_motorola.c,v 1.74 2021/04/16 00:13:48 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap_motorola.c,v 1.89 2024/01/19 03:35:31 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/malloc.h>
 #include <sys/pool.h>
 #include <sys/cpu.h>
 #include <sys/atomic.h>
@@ -136,6 +136,10 @@ __KERNEL_RCSID(0, "$NetBSD: pmap_motorola.c,v 1.74 2021/04/16 00:13:48 mrg Exp $
 #include <uvm/uvm_physseg.h>
 
 #include <m68k/cacheops.h>
+
+#if !defined(M68K_MMU_MOTOROLA) && !defined(M68K_MMU_HP)
+#error Hit the road, Jack...
+#endif
 
 #ifdef DEBUG
 #define PDB_FOLLOW	0x0001
@@ -276,7 +280,7 @@ TAILQ_HEAD(pv_page_list, pv_page) pv_page_freelist;
 int		pv_nfree;
 
 #ifdef CACHE_HAVE_VAC
-u_int		pmap_aliasmask;	/* seperation at which VA aliasing ok */
+u_int		pmap_aliasmask;	/* separation at which VA aliasing ok */
 #endif
 #if defined(M68040) || defined(M68060)
 u_int		protostfree;	/* prototype (default) free ST map */
@@ -298,7 +302,7 @@ pa_to_pvh(paddr_t pa)
 {
 	uvm_physseg_t bank = 0;	/* XXX gcc4 -Wuninitialized */
 	psize_t pg = 0;
-	
+
 	bank = uvm_physseg_find(atop((pa)), &pg);
 	return &uvm_physseg_get_pmseg(bank)->pvheader[pg];
 }
@@ -309,7 +313,7 @@ pa_to_pvh(paddr_t pa)
 void	pmap_remove_mapping(pmap_t, vaddr_t, pt_entry_t *, int,
 			    struct pv_entry **);
 bool	pmap_testbit(paddr_t, int);
-bool	pmap_changebit(paddr_t, int, int);
+bool	pmap_changebit(paddr_t, pt_entry_t, pt_entry_t);
 int	pmap_enter_ptpage(pmap_t, vaddr_t, bool);
 void	pmap_ptpage_addref(vaddr_t);
 int	pmap_ptpage_delref(vaddr_t);
@@ -325,6 +329,26 @@ void pmap_check_wiring(const char *, vaddr_t);
 #define	PRM_TFLUSH	0x01
 #define	PRM_CFLUSH	0x02
 #define	PRM_KEEPPTPAGE	0x04
+
+#define	active_pmap(pm) \
+	((pm) == pmap_kernel() || (pm) == curproc->p_vmspace->vm_map.pmap)
+
+#define	active_user_pmap(pm) \
+	(curproc && \
+	 (pm) != pmap_kernel() && (pm) == curproc->p_vmspace->vm_map.pmap)
+
+static void (*pmap_load_urp_func)(paddr_t);
+
+/*
+ * pmap_load_urp:
+ *
+ *	Load the user root table into the MMU.
+ */
+static inline void
+pmap_load_urp(paddr_t urp)
+{
+	(*pmap_load_urp_func)(urp);
+}
 
 /*
  * pmap_bootstrap_finalize:	[ INTERFACE ]
@@ -574,19 +598,64 @@ pmap_init(void)
 		paddr_t paddr;
 
 		while (kptp) {
-			pmap_changebit(kptp->kpt_pa, PG_CI, ~PG_CCB);
+			pmap_changebit(kptp->kpt_pa, PG_CI,
+				       (pt_entry_t)~PG_CCB);
 			kptp = kptp->kpt_next;
 		}
 
 		paddr = (paddr_t)Segtabzeropa;
 		while (paddr < (paddr_t)Segtabzeropa + M68K_STSIZE) {
-			pmap_changebit(paddr, PG_CI, ~PG_CCB);
+			pmap_changebit(paddr, PG_CI,
+				       (pt_entry_t)~PG_CCB);
 			paddr += PAGE_SIZE;
 		}
 
 		DCIS();
 	}
 #endif
+
+	/*
+	 * Set up the routine that loads the MMU root table pointer.
+	 */
+	switch (cputype) {
+#if defined(M68020)
+	case CPU_68020:
+#ifdef M68K_MMU_MOTOROLA
+		if (mmutype == MMU_68851) {
+			protorp[0] = MMU51_CRP_BITS;
+			pmap_load_urp_func = mmu_load_urp51;
+		}
+#endif
+#ifdef M68K_MMU_HP
+		if (mmutype == MMU_HP) {
+			pmap_load_urp_func = mmu_load_urp20hp;
+		}
+#endif
+		break;
+#endif /* M68020 */
+#if defined(M68030)
+	case CPU_68030:
+		protorp[0] = MMU51_CRP_BITS;
+		pmap_load_urp_func = mmu_load_urp51;
+		break;
+#endif /* M68030 */
+#if defined(M68040)
+	case CPU_68040:
+		pmap_load_urp_func = mmu_load_urp40;
+		break;
+#endif /* M68040 */
+#if defined(M68060)
+	case CPU_68060:
+		pmap_load_urp_func = mmu_load_urp60;
+		break;
+#endif /* M68060 */
+	default:
+		break;
+	}
+	if (pmap_load_urp_func == NULL) {
+		panic("pmap_init: No mmu_load_*() for cpu=%d mmu=%d",
+		    cputype, mmutype);
+	}
 
 	/*
 	 * Now it is safe to enable pv_table recording.
@@ -696,7 +765,7 @@ pmap_destroy(pmap_t pmap)
 /*
  * pmap_release:
  *
- *	Relese the resources held by a pmap.
+ *	Release the resources held by a pmap.
  *
  *	Note: THIS FUNCTION SHOULD BE MOVED INTO pmap_destroy().
  */
@@ -754,8 +823,15 @@ pmap_activate(struct lwp *l)
 	PMAP_DPRINTF(PDB_FOLLOW|PDB_SEGTAB,
 	    ("pmap_activate(%p)\n", l));
 
-	PMAP_ACTIVATE(pmap, (curlwp->l_flag & LW_IDLE) != 0 ||
-	    l->l_proc == curproc);
+	KASSERT(l == curlwp);
+
+	/*
+	 * Because the kernel has a separate root pointer, we don't
+	 * need to activate the kernel pmap.
+	 */
+	if (pmap != pmap_kernel()) {
+		pmap_load_urp((paddr_t)pmap->pm_stpa);
+	}
 }
 
 /*
@@ -863,7 +939,7 @@ pmap_remove(pmap_t pmap, vaddr_t sva, vaddr_t eva)
 	/*
 	 * In a couple of cases, we don't need to worry about flushing
 	 * the VAC:
-	 * 	1. if this is a kernel mapping,
+	 *	1. if this is a kernel mapping,
 	 *	   we have already done it
 	 *	2. if it is a user mapping not for the current process,
 	 *	   it won't be there
@@ -1076,7 +1152,7 @@ pmap_enter(pmap_t pmap, vaddr_t va, paddr_t pa, vm_prot_t prot, u_int flags)
 	if (pmap->pm_ptab == NULL) {
 		pmap->pm_ptab = (pt_entry_t *)
 		    uvm_km_alloc(pt_map, M68K_MAX_PTSIZE, 0,
-		    UVM_KMF_VAONLY | 
+		    UVM_KMF_VAONLY |
 		    (can_fail ? UVM_KMF_NOWAIT : UVM_KMF_WAITVA));
 		if (pmap->pm_ptab == NULL)
 			return ENOMEM;
@@ -1495,7 +1571,7 @@ pmap_kremove(vaddr_t va, vsize_t size)
 	/*
 	 * In a couple of cases, we don't need to worry about flushing
 	 * the VAC:
-	 * 	1. if this is a kernel mapping,
+	 *	1. if this is a kernel mapping,
 	 *	   we have already done it
 	 *	2. if it is a user mapping not for the current process,
 	 *	   it won't be there
@@ -1575,6 +1651,22 @@ pmap_extract(pmap_t pmap, vaddr_t va, paddr_t *pap)
 		printf("failed\n");
 #endif
 	return false;
+}
+
+/*
+ * vtophys:		[ INTERFACE-ish ]
+ *
+ *	Kernel virtual to physical.  Use with caution.
+ */
+paddr_t
+vtophys(vaddr_t va)
+{
+	paddr_t pa;
+
+	if (pmap_extract(pmap_kernel(), va, &pa))
+		return pa;
+	KASSERT(0);
+	return (paddr_t) -1;
 }
 
 /*
@@ -1813,7 +1905,7 @@ pmap_zero_page(paddr_t phys)
 void
 pmap_copy_page(paddr_t src, paddr_t dst)
 {
-	int npte1, npte2;
+	pt_entry_t npte1, npte2;
 
 	PMAP_DPRINTF(PDB_FOLLOW, ("pmap_copy_page(%lx, %lx)\n", src, dst));
 
@@ -1877,7 +1969,7 @@ pmap_clear_modify(struct vm_page *pg)
 
 	PMAP_DPRINTF(PDB_FOLLOW, ("pmap_clear_modify(%p)\n", pg));
 
-	return pmap_changebit(pa, 0, ~PG_M);
+	return pmap_changebit(pa, 0, (pt_entry_t)~PG_M);
 }
 
 /*
@@ -1892,7 +1984,7 @@ pmap_clear_reference(struct vm_page *pg)
 
 	PMAP_DPRINTF(PDB_FOLLOW, ("pmap_clear_reference(%p)\n", pg));
 
-	return pmap_changebit(pa, 0, ~PG_U);
+	return pmap_changebit(pa, 0, (pt_entry_t)~PG_U);
 }
 
 /*
@@ -2180,7 +2272,7 @@ pmap_remove_mapping(pmap_t pmap, vaddr_t va, pt_entry_t *pte, int flags,
 		PMAP_DPRINTF(PDB_CACHE,
 		    ("remove: clearing CI for pa %lx\n", pa));
 		pvh->pvh_attrs &= ~PVH_CI;
-		pmap_changebit(pa, 0, ~PG_CI);
+		pmap_changebit(pa, 0, (pt_entry_t)~PG_CI);
 #ifdef DEBUG
 		if ((pmapdebug & (PDB_CACHE|PDB_PVDUMP)) ==
 		    (PDB_CACHE|PDB_PVDUMP))
@@ -2249,15 +2341,13 @@ pmap_remove_mapping(pmap_t pmap, vaddr_t va, pt_entry_t *pte, int flags,
 #endif
 					ptpmap->pm_stfree = protostfree;
 #endif
-
 				/*
-				 * XXX may have changed segment table
-				 * pointer for current process so
-				 * update now to reload hardware.
+				 * Segment table has changed; reload the
+				 * MMU if it's the active user pmap.
 				 */
-
-				if (active_user_pmap(ptpmap))
-					PMAP_ACTIVATE(ptpmap, 1);
+				if (active_user_pmap(ptpmap)) {
+					pmap_load_urp((paddr_t)ptpmap->pm_stpa);
+				}
 			}
 		}
 		pvh->pvh_attrs &= ~PVH_PTPAGE;
@@ -2341,7 +2431,7 @@ pmap_testbit(paddr_t pa, int bit)
  */
 /* static */
 bool
-pmap_changebit(paddr_t pa, int set, int mask)
+pmap_changebit(paddr_t pa, pt_entry_t set, pt_entry_t mask)
 {
 	struct pv_header *pvh;
 	struct pv_entry *pv;
@@ -2475,11 +2565,12 @@ pmap_enter_ptpage(pmap_t pmap, vaddr_t va, bool can_fail)
 		}
 #endif
 		/*
-		 * XXX may have changed segment table pointer for current
-		 * process so update now to reload hardware.
+		 * Segment table has changed; reload the
+		 * MMU if it's the active user pmap.
 		 */
-		if (active_user_pmap(pmap))
-			PMAP_ACTIVATE(pmap, 1);
+		if (active_user_pmap(pmap)) {
+			pmap_load_urp((paddr_t)pmap->pm_stpa);
+		}
 
 		PMAP_DPRINTF(PDB_ENTER|PDB_PTPAGE|PDB_SEGTAB,
 		    ("enter: pmap %p stab %p(%p)\n",
@@ -2585,6 +2676,10 @@ pmap_enter_ptpage(pmap_t pmap, vaddr_t va, bool can_fail)
 					   va - vm_map_min(kernel_map),
 					   NULL, UVM_PGA_ZERO)) == NULL) {
 			rw_exit(uvm_kernel_object->vmobjlock);
+			if (can_fail) {
+				pmap->pm_sref--;
+				return ENOMEM;
+			}
 			uvm_wait("ptpage");
 			rw_enter(uvm_kernel_object->vmobjlock, RW_WRITER);
 		}
@@ -2613,7 +2708,7 @@ pmap_enter_ptpage(pmap_t pmap, vaddr_t va, bool can_fail)
 			    pmap == pmap_kernel() ? "Kernel" : "User",
 			    va, ptpa, pte, *pte);
 #endif
-		if (pmap_changebit(ptpa, PG_CI, ~PG_CCB))
+		if (pmap_changebit(ptpa, PG_CI, (pt_entry_t)~PG_CCB))
 			DCIS();
 	}
 #endif
@@ -2753,15 +2848,18 @@ _pmap_set_page_cacheable(pmap_t pmap, vaddr_t va)
 #if defined(M68020) || defined(M68030)
 	if (mmutype == MMU_68040) {
 #endif
-	if (pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), PG_CCB, ~PG_CI))
+	if (pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), PG_CCB,
+			   (pt_entry_t)~PG_CI))
 		DCIS();
 
 #if defined(M68020) || defined(M68030)
 	} else
-		pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), 0, ~PG_CI);
+		pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), 0,
+			       (pt_entry_t)~PG_CI);
 #endif
 #else
-	pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), 0, ~PG_CI);
+	pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), 0,
+		       (pt_entry_t)~PG_CI);
 #endif
 }
 
@@ -2776,7 +2874,8 @@ _pmap_set_page_cacheinhibit(pmap_t pmap, vaddr_t va)
 #if defined(M68020) || defined(M68030)
 	if (mmutype == MMU_68040) {
 #endif
-	if (pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), PG_CI, ~PG_CCB))
+	if (pmap_changebit(pmap_pte_pa(pmap_pte(pmap, va)), PG_CI,
+			   (pt_entry_t)~PG_CCB))
 		DCIS();
 #if defined(M68020) || defined(M68030)
 	} else
@@ -2852,3 +2951,48 @@ pmap_check_wiring(const char *str, vaddr_t va)
 		       str, va, pg->wire_count, count);
 }
 #endif /* DEBUG */
+
+/*
+ * XXX XXX XXX These are legacy remants and should go away XXX XXX XXX
+ * (Cribbed from vm_machdep.c because they're tied to this pmap impl.)
+ */
+
+/*      
+ * Map `size' bytes of physical memory starting at `paddr' into
+ * kernel VA space at `vaddr'.  Read/write and cache-inhibit status
+ * are specified by `prot'.
+ */
+void
+physaccess(void *vaddr, void *paddr, int size, int prot)
+{
+	pt_entry_t *pte;
+	u_int page;
+
+	pte = kvtopte(vaddr);
+	page = (u_int)paddr & PG_FRAME;
+	for (size = btoc(size); size; size--) {
+		*pte++ = PG_V | prot | page;
+		page += PAGE_SIZE;
+	}
+	TBIAS();
+}
+
+void
+physunaccess(void *vaddr, int size)
+{
+	 pt_entry_t *pte;
+
+	 pte = kvtopte(vaddr);
+	 for (size = btoc(size); size; size--)
+	 	*pte++ = PG_NV;
+	TBIAS();
+}
+
+/*
+ * Convert kernel VA to physical address
+ */
+int
+kvtop(void *addr)
+{
+	return (int)vtophys((vaddr_t)addr);
+}

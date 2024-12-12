@@ -1,4 +1,4 @@
-/*	$NetBSD: pcmcom.c,v 1.43 2021/08/07 16:19:15 thorpej Exp $	*/
+/*	$NetBSD: pcmcom.c,v 1.45 2023/05/10 00:12:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2000, 2004 The NetBSD Foundation, Inc.
@@ -44,13 +44,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcmcom.c,v 1.43 2021/08/07 16:19:15 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcmcom.c,v 1.45 2023/05/10 00:12:12 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/termios.h>
-#include <sys/malloc.h>
 
 #include <sys/bus.h>
 #include <sys/intr.h>
@@ -203,23 +202,16 @@ int
 pcmcom_detach(device_t self, int flags)
 {
 	struct pcmcom_softc *sc = device_private(self);
-	int slave, error;
+	int error;
+
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
 	if (sc->sc_state != PCMCOM_ATTACHED)
-		return (0);
-
-	for (slave = sc->sc_nslaves - 1; slave >= 0; slave--) {
-		if (sc->sc_slaves[slave]) {
-			/* Detach the child. */
-			error = config_detach(sc->sc_slaves[slave], flags);
-			if (error)
-				return (error);
-		}
-	}
-
+		return 0;
 	pcmcia_function_unconfigure(sc->sc_pf);
-
-	return (0);
+	return 0;
 }
 
 int

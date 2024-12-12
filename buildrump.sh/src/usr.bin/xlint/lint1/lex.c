@@ -1,4 +1,4 @@
-/* $NetBSD: lex.c,v 1.80 2021/08/29 09:29:32 rillig Exp $ */
+/* $NetBSD: lex.c,v 1.232 2024/12/08 17:12:01 rillig Exp $ */
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All Rights Reserved.
@@ -15,8 +15,8 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
- *      The NetBSD Project.
+ *	This product includes software developed by Jochen Pohl for
+ *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
  *
@@ -37,8 +37,8 @@
 #endif
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: lex.c,v 1.80 2021/08/29 09:29:32 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: lex.c,v 1.232 2024/12/08 17:12:01 rillig Exp $");
 #endif
 
 #include <ctype.h>
@@ -56,470 +56,501 @@ __RCSID("$NetBSD: lex.c,v 1.80 2021/08/29 09:29:32 rillig Exp $");
 
 
 /* Current position (it's also updated when an included file is parsed) */
-pos_t	curr_pos = { "", 1, 0 };
+pos_t curr_pos = { "", 1, 0 };
 
 /*
  * Current position in C source (not updated when an included file is
  * parsed).
  */
-pos_t	csrc_pos = { "", 1, 0 };
+pos_t csrc_pos = { "", 1, 0 };
 
-/* Are we parsing a gcc attribute? */
-bool attron;
-
-bool in_system_header = false;
-
-static	sbuf_t *allocsb(void);
-static	void	freesb(sbuf_t *);
-static	int	inpc(void);
-static	unsigned int hash(const char *);
-static	sym_t *	search(sbuf_t *);
-static	int	keyw(sym_t *);
-static	int	get_escaped_char(int);
-
-void
-lex_next_line(void)
-{
-	curr_pos.p_line++;
-	curr_pos.p_uniq = 0;
-	debug_step("parsing %s:%d", curr_pos.p_file, curr_pos.p_line);
-	if (curr_pos.p_file == csrc_pos.p_file) {
-		csrc_pos.p_line++;
-		csrc_pos.p_uniq = 0;
-	}
-}
-
-void
-lex_unknown_character(int c)
-{
-
-	/* unknown character \%o */
-	error(250, c);
-}
-
-#define kwdef(name, token, scl, tspec, tqual,	c89, c99, gcc, attr, deco) \
-	{ \
-		name, token, scl, tspec, tqual, \
-		(c89) > 0, (c99) > 0, (gcc) > 0, (attr) > 0, \
-		((deco) & 1) != 0, ((deco) & 2) != 0, ((deco) & 4) != 0, \
-	}
-#define kwdef_token(name, token,		c89, c99, gcc, attr, deco) \
-	kwdef(name, token, 0, 0, 0,		c89, c99, gcc, attr, deco)
-#define kwdef_sclass(name, sclass,		c89, c99, gcc, attr, deco) \
-	kwdef(name, T_SCLASS, sclass, 0, 0,	c89, c99, gcc, attr, deco)
-#define kwdef_type(name, tspec,			c89, c99, gcc, attr, deco) \
-	kwdef(name, T_TYPE, 0, tspec, 0,	c89, c99, gcc, attr, deco)
-#define kwdef_tqual(name, tqual,		c89, c99, gcc, attr, deco) \
-	kwdef(name, T_QUAL, 0, 0, tqual,	c89, c99, gcc, attr, deco)
-#define kwdef_keyword(name, token) \
-	kwdef(name, token, 0, 0, 0,		0, 0, 0, 0, 1)
-#define kwdef_gcc_attr(name, token) \
-	kwdef(name, token, 0, 0, 0,		0, 0, 1, 1, 5)
+bool in_gcc_attribute;
+bool in_system_header;
 
 /*
- * Keywords.
- * During initialization they are written to the symbol table.
+ * Define a keyword that cannot be overridden by identifiers.
+ *
+ * Valid values for 'since' are 78, 90, 99, 11, 23.
+ *
+ * The C11 keywords are all taken from the reserved namespace.  They are added
+ * in C99 mode as well, to make the parse error messages more useful.  For
+ * example, if the keyword '_Generic' were not defined, it would be interpreted
+ * as an implicit function call, leading to a parse error.
+ *
+ * The C23 keywords are not made available in earlier modes, as they may
+ * conflict with user-defined identifiers.
  */
-static	struct	kwtab {
-	const	char *kw_name;	/* keyword */
-	int	kw_token;	/* token returned by yylex() */
-	scl_t	kw_scl;		/* storage class if kw_token T_SCLASS */
-	tspec_t	kw_tspec;	/* type spec. if kw_token
-				 * T_TYPE or T_STRUCT_OR_UNION */
-	tqual_t	kw_tqual;	/* type qual. if kw_token T_QUAL */
-	bool	kw_c89 : 1;	/* C89 keyword */
-	bool	kw_c99 : 1;	/* C99 keyword */
-	bool	kw_gcc : 1;	/* GCC keyword */
-	bool	kw_attr : 1;	/* GCC attribute, keyword */
-	bool	kw_plain : 1;	/* 'name' */
-	bool	kw_leading : 1;	/* '__name' */
-	bool	kw_both : 1;	/* '__name__' */
-} kwtab[] = {
-	kwdef_gcc_attr(	"alias",	T_AT_ALIAS),
+#define kwdef(name, token, detail,	since, gcc, deco) \
+	{ /* CONSTCOND */ \
+		name, token, detail, \
+		(since) == 90, \
+		(since) == 99 || (since) == 11, \
+		(since) == 23, \
+		(gcc) > 0, \
+		((deco) & 1) != 0, ((deco) & 2) != 0, ((deco) & 4) != 0, \
+	}
+#define kwdef_token(name, token,		since, gcc, deco) \
+	kwdef(name, token, {false},		since, gcc, deco)
+#define kwdef_sclass(name, sclass,		since, gcc, deco) \
+	kwdef(name, T_SCLASS, .u.kw_scl = (sclass), since, gcc, deco)
+#define kwdef_type(name, tspec,			since) \
+	kwdef(name, T_TYPE, .u.kw_tspec = (tspec), since, 0, 1)
+#define kwdef_tqual(name, tqual,		since, gcc, deco) \
+	kwdef(name, T_QUAL, .u.kw_tqual = {.tqual = true}, since, gcc, deco)
+#define kwdef_const(name, named_constant,	since, gcc, deco) \
+	kwdef(name, T_NAMED_CONSTANT, \
+	    .u.kw_named_constant = (named_constant), since, gcc, deco)
+#define kwdef_keyword(name, token) \
+	kwdef(name, token, {false},		78, 0, 1)
+
+/* During initialization, these keywords are written to the symbol table. */
+static const struct keyword {
+	const	char kw_name[20];
+	int	kw_token;	/* token to be returned by yylex() */
+	union {
+		bool kw_dummy;
+		scl_t kw_scl;		/* if kw_token is T_SCLASS */
+		tspec_t kw_tspec;	/* if kw_token is T_TYPE or
+					 * T_STRUCT_OR_UNION */
+		type_qualifiers kw_tqual;	/* if kw_token is T_QUAL */
+		function_specifier kw_fs;	/* if kw_token is
+						 * T_FUNCTION_SPECIFIER */
+		named_constant kw_named_constant;
+	} u;
+	bool	kw_added_in_c90:1;
+	bool	kw_added_in_c99_or_c11:1;
+	bool	kw_added_in_c23:1;
+	bool	kw_gcc:1;	/* available in GCC mode */
+	bool	kw_plain:1;	/* 'name' */
+	bool	kw_leading:1;	/* '__name' */
+	bool	kw_both:1;	/* '__name__' */
+} keywords[] = {
+	// TODO: _Alignas is not available in C99.
 	kwdef_keyword(	"_Alignas",	T_ALIGNAS),
+	// TODO: _Alignof is not available in C99.
 	kwdef_keyword(	"_Alignof",	T_ALIGNOF),
-	kwdef_gcc_attr(	"aligned",	T_AT_ALIGNED),
-	kwdef_token(	"__alignof__",	T_ALIGNOF,		0,0,0,0,1),
-	kwdef_gcc_attr(	"alloc_size",	T_AT_ALLOC_SIZE),
-	kwdef_gcc_attr(	"always_inline",T_AT_ALWAYS_INLINE),
-	kwdef_token(	"asm",		T_ASM,			0,0,1,0,7),
-	kwdef_token(	"attribute",	T_ATTRIBUTE,		0,0,1,0,6),
-	kwdef_sclass(	"auto",		AUTO,			0,0,0,0,1),
-	kwdef_type(	"_Bool",	BOOL,			0,1,0,0,1),
-	kwdef_gcc_attr(	"bounded",	T_AT_BOUNDED),
+	// TODO: alignof is not available in C99.
+	kwdef_token(	"alignof",	T_ALIGNOF,		78,0,6),
+	kwdef_token(	"asm",		T_ASM,			78,1,7),
+	kwdef_token(	"_Atomic",	T_ATOMIC,		11,0,1),
+	kwdef("__auto_type", T_TYPE, .u.kw_tspec = AUTO_TYPE,	99,1,1),
+	kwdef_token(	"attribute",	T_ATTRIBUTE,		78,1,6),
+	kwdef_sclass(	"auto",		AUTO,			78,0,1),
+	kwdef_type(	"_Bool",	BOOL,			99),
+	kwdef_type(	"bool",		BOOL,			23),
 	kwdef_keyword(	"break",	T_BREAK),
-	kwdef_gcc_attr(	"buffer",	T_AT_BUFFER),
-	kwdef_token(	"__builtin_offsetof", T_BUILTIN_OFFSETOF, 0,0,1,0,1),
+	kwdef_token(	"__builtin_offsetof", T_BUILTIN_OFFSETOF, 78,1,1),
 	kwdef_keyword(	"case",		T_CASE),
-	kwdef_type(	"char",		CHAR,			0,0,0,0,1),
-	kwdef_gcc_attr(	"cold",		T_AT_COLD),
-	kwdef_gcc_attr(	"common",	T_AT_COMMON),
-	kwdef_type(	"_Complex",	COMPLEX,		0,1,0,0,1),
-	kwdef_tqual(	"const",	CONST,			1,0,0,0,7),
-	kwdef_gcc_attr(	"constructor",	T_AT_CONSTRUCTOR),
+	kwdef_type(	"char",		CHAR,			78),
+	kwdef_type(	"_Complex",	COMPLEX,		99),
+	kwdef_tqual(	"const",	tq_const,		90,0,7),
 	kwdef_keyword(	"continue",	T_CONTINUE),
 	kwdef_keyword(	"default",	T_DEFAULT),
-	kwdef_gcc_attr(	"deprecated",	T_AT_DEPRECATED),
-	kwdef_gcc_attr(	"destructor",	T_AT_DESTRUCTOR),
 	kwdef_keyword(	"do",		T_DO),
-	kwdef_type(	"double",	DOUBLE,			0,0,0,0,1),
+	kwdef_type(	"double",	DOUBLE,			78),
 	kwdef_keyword(	"else",		T_ELSE),
+	// XXX: enum is not available in traditional C.
 	kwdef_keyword(	"enum",		T_ENUM),
-	kwdef_token(	"__extension__",T_EXTENSION,		0,0,1,0,1),
-	kwdef_sclass(	"extern",	EXTERN,			0,0,0,0,1),
-	kwdef_gcc_attr(	"fallthrough",	T_AT_FALLTHROUGH),
-	kwdef_type(	"float",	FLOAT,			0,0,0,0,1),
+	kwdef_token(	"__extension__",T_EXTENSION,		78,1,1),
+	kwdef_sclass(	"extern",	EXTERN,			78,0,1),
+	kwdef_const(	"false",	NC_FALSE,		23,0,1),
+	kwdef_type(	"float",	FLOAT,			78),
 	kwdef_keyword(	"for",		T_FOR),
-	kwdef_gcc_attr(	"format",	T_AT_FORMAT),
-	kwdef_gcc_attr(	"format_arg",	T_AT_FORMAT_ARG),
-	kwdef_token(	"_Generic",	T_GENERIC,		0,1,0,0,1),
-	kwdef_gcc_attr(	"gnu_inline",	T_AT_GNU_INLINE),
-	kwdef_gcc_attr(	"gnu_printf",	T_AT_FORMAT_GNU_PRINTF),
+	kwdef_token(	"_Generic",	T_GENERIC,		11,0,1),
 	kwdef_keyword(	"goto",		T_GOTO),
-	kwdef_gcc_attr(	"hot",		T_AT_HOT),
 	kwdef_keyword(	"if",		T_IF),
-	kwdef_token(	"__imag__",	T_IMAG,			0,0,1,0,1),
-	kwdef_sclass(	"inline",	INLINE,			0,1,0,0,7),
-	kwdef_type(	"int",		INT,			0,0,0,0,1),
+	kwdef_token(	"__imag__",	T_IMAG,			78,1,1),
+	kwdef("inline",	T_FUNCTION_SPECIFIER, .u.kw_fs = FS_INLINE, 99,0,7),
+	kwdef_type(	"int",		INT,			78),
 #ifdef INT128_SIZE
-	kwdef_type(	"__int128_t",	INT128,			0,1,0,0,1),
+	kwdef_type(	"__int128_t",	INT128,			99),
 #endif
-	kwdef_type(	"long",		LONG,			0,0,0,0,1),
-	kwdef_gcc_attr(	"malloc",	T_AT_MALLOC),
-	kwdef_gcc_attr(	"may_alias",	T_AT_MAY_ALIAS),
-	kwdef_gcc_attr(	"minbytes",	T_AT_MINBYTES),
-	kwdef_gcc_attr(	"mode",		T_AT_MODE),
-	kwdef_gcc_attr("no_instrument_function",
-					T_AT_NO_INSTRUMENT_FUNCTION),
-	kwdef_gcc_attr(	"noinline",	T_AT_NOINLINE),
-	kwdef_gcc_attr(	"nonnull",	T_AT_NONNULL),
-	kwdef_gcc_attr(	"nonstring",	T_AT_NONSTRING),
-	kwdef_token(	"_Noreturn",	T_NORETURN,		0,1,0,0,1),
-	kwdef_gcc_attr(	"noreturn",	T_AT_NORETURN),
-	kwdef_gcc_attr(	"nothrow",	T_AT_NOTHROW),
-	kwdef_gcc_attr(	"optimize",	T_AT_OPTIMIZE),
-	kwdef_gcc_attr(	"packed",	T_AT_PACKED),
-	kwdef_token(	"__packed",	T_PACKED,		0,0,0,0,1),
-	kwdef_gcc_attr(	"pcs",		T_AT_PCS),
-	kwdef_gcc_attr(	"printf",	T_AT_FORMAT_PRINTF),
-	kwdef_gcc_attr(	"pure",		T_AT_PURE),
-	kwdef_token(	"__real__",	T_REAL,			0,0,1,0,1),
-	kwdef_sclass(	"register",	REG,			0,0,0,0,1),
-	kwdef_gcc_attr(	"regparm",	T_AT_REGPARM),
-	kwdef_tqual(	"restrict",	RESTRICT,		0,1,0,0,5),
+	kwdef_type(	"long",		LONG,			78),
+	kwdef("_Noreturn", T_FUNCTION_SPECIFIER, .u.kw_fs = FS_NORETURN, 11,0,1),
+	kwdef_const(	"nullptr",	NC_NULLPTR,		23,0,1),
+	// XXX: __packed is GCC-specific.
+	kwdef_token(	"__packed",	T_PACKED,		78,0,1),
+	kwdef_token(	"__real__",	T_REAL,			78,1,1),
+	kwdef_sclass(	"register",	REG,			78,0,1),
+	kwdef_tqual(	"restrict",	tq_restrict,		99,0,7),
 	kwdef_keyword(	"return",	T_RETURN),
-	kwdef_gcc_attr(	"returns_nonnull",T_AT_RETURNS_NONNULL),
-	kwdef_gcc_attr(	"returns_twice",T_AT_RETURNS_TWICE),
-	kwdef_gcc_attr(	"scanf",	T_AT_FORMAT_SCANF),
-	kwdef_token(	"section",	T_AT_SECTION,		0,0,1,1,7),
-	kwdef_gcc_attr(	"sentinel",	T_AT_SENTINEL),
-	kwdef_type(	"short",	SHORT,			0,0,0,0,1),
-	kwdef_type(	"signed",	SIGNED,			1,0,0,0,3),
+	kwdef_type(	"short",	SHORT,			78),
+	kwdef(		"signed", T_TYPE, .u.kw_tspec = SIGNED,	90,0,3),
 	kwdef_keyword(	"sizeof",	T_SIZEOF),
-	kwdef_sclass(	"static",	STATIC,			0,0,0,0,1),
-	kwdef_gcc_attr(	"strfmon",	T_AT_FORMAT_STRFMON),
-	kwdef_gcc_attr(	"strftime",	T_AT_FORMAT_STRFTIME),
-	kwdef_gcc_attr(	"string",	T_AT_STRING),
-	kwdef("struct",	T_STRUCT_OR_UNION, 0,	STRUCT,	0,	0,0,0,0,1),
+	kwdef_sclass(	"static",	STATIC,			78,0,1),
+	// XXX: _Static_assert was added in C11.
+	kwdef_keyword(	"_Static_assert",	T_STATIC_ASSERT),
+	kwdef("struct",	T_STRUCT_OR_UNION, .u.kw_tspec = STRUCT, 78,0,1),
 	kwdef_keyword(	"switch",	T_SWITCH),
-	kwdef_token(	"__symbolrename",	T_SYMBOLRENAME,	0,0,0,0,1),
-	kwdef_gcc_attr(	"syslog",	T_AT_FORMAT_SYSLOG),
-	kwdef_tqual(	"__thread",	THREAD,			0,0,1,0,1),
-	kwdef_tqual(	"_Thread_local", THREAD,		0,1,0,0,1),
-	kwdef_gcc_attr(	"tls_model",	T_AT_TLS_MODEL),
-	kwdef_gcc_attr(	"transparent_union", T_AT_TUNION),
-	kwdef_sclass(	"typedef",	TYPEDEF,		0,0,0,0,1),
-	kwdef_token(	"typeof",	T_TYPEOF,		0,0,1,0,7),
+	kwdef_token(	"__symbolrename",	T_SYMBOLRENAME,	78,0,1),
+	kwdef_sclass(	"__thread",	THREAD_LOCAL,		78,1,1),
+	kwdef_sclass(	"_Thread_local", THREAD_LOCAL,		11,0,1),
+	kwdef_sclass(	"thread_local", THREAD_LOCAL,		23,0,1),
+	kwdef_const(	"true",		NC_TRUE,		23,0,1),
+	kwdef_sclass(	"typedef",	TYPEDEF,		78,0,1),
+	kwdef_token(	"typeof",	T_TYPEOF,		78,1,7),
 #ifdef INT128_SIZE
-	kwdef_type(	"__uint128_t",	UINT128,		0,1,0,0,1),
+	kwdef_type(	"__uint128_t",	UINT128,		99),
 #endif
-	kwdef("union",	T_STRUCT_OR_UNION, 0,	UNION,	0,	0,0,0,0,1),
-	kwdef_type(	"unsigned",	UNSIGN,			0,0,0,0,1),
-	kwdef_gcc_attr(	"unused",	T_AT_UNUSED),
-	kwdef_gcc_attr(	"used",		T_AT_USED),
-	kwdef_gcc_attr(	"visibility",	T_AT_VISIBILITY),
-	kwdef_type(	"void",		VOID,			0,0,0,0,1),
-	kwdef_tqual(	"volatile",	VOLATILE,		1,0,0,0,7),
-	kwdef_gcc_attr(	"warn_unused_result", T_AT_WARN_UNUSED_RESULT),
-	kwdef_gcc_attr(	"weak",		T_AT_WEAK),
+	kwdef("union",	T_STRUCT_OR_UNION, .u.kw_tspec = UNION,	78,0,1),
+	kwdef_type(	"unsigned",	UNSIGN,			78),
+	// XXX: void is not available in traditional C.
+	kwdef_type(	"void",		VOID,			78),
+	kwdef_tqual(	"volatile",	tq_volatile,		90,0,7),
 	kwdef_keyword(	"while",	T_WHILE),
-	kwdef(NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0),
 #undef kwdef
 #undef kwdef_token
 #undef kwdef_sclass
 #undef kwdef_type
 #undef kwdef_tqual
 #undef kwdef_keyword
-#undef kwdef_gcc_attr
 };
 
-/* Symbol table */
-static	sym_t	*symtab[HSHSIZ1];
-
-/* free list for sbuf structures */
-static	sbuf_t	 *sbfrlst;
-
-/* type of next expected symbol */
-symt_t	symtyp;
-
-
-static void
-symtab_add(sym_t *sym)
-{
-	size_t h;
-
-	h = hash(sym->s_name);
-	if ((sym->s_link = symtab[h]) != NULL)
-		symtab[h]->s_rlink = &sym->s_link;
-	sym->s_rlink = &symtab[h];
-	symtab[h] = sym;
-}
-
-static void
-symtab_remove(sym_t *sym)
-{
-
-	if ((*sym->s_rlink = sym->s_link) != NULL)
-		sym->s_link->s_rlink = sym->s_rlink;
-	sym->s_link = NULL;
-}
-
-
-static void
-add_keyword(const struct kwtab *kw, bool leading, bool trailing)
-{
-	sym_t *sym;
-	char buf[256];
-	const char *name;
-
-	if (!leading && !trailing) {
-		name = kw->kw_name;
-	} else {
-		(void)snprintf(buf, sizeof(buf), "%s%s%s",
-		    leading ? "__" : "", kw->kw_name, trailing ? "__" : "");
-		name = xstrdup(buf);
-	}
-
-	sym = getblk(sizeof(*sym));
-	sym->s_name = name;
-	sym->s_keyword = kw;
-	sym->s_value.v_quad = kw->kw_token;
-	if (kw->kw_token == T_TYPE || kw->kw_token == T_STRUCT_OR_UNION) {
-		sym->s_tspec = kw->kw_tspec;
-	} else if (kw->kw_token == T_SCLASS) {
-		sym->s_scl = kw->kw_scl;
-	} else if (kw->kw_token == T_QUAL) {
-		sym->s_tqual = kw->kw_tqual;
-	}
-
-	symtab_add(sym);
-}
+/*
+ * The symbol table containing all keywords, identifiers and labels. The hash
+ * entries are linked via sym_t.s_symtab_next.
+ */
+static sym_t *symtab[503];
 
 /*
- * All keywords are written to the symbol table. This saves us looking
- * in an extra table for each name we found.
+ * The kind of the next expected symbol, to distinguish the namespaces of
+ * members, labels, type tags and other identifiers.
  */
-void
-initscan(void)
-{
-	struct	kwtab *kw;
+symbol_kind sym_kind;
 
-	for (kw = kwtab; kw->kw_name != NULL; kw++) {
-		if ((kw->kw_c89 || kw->kw_c99) && tflag)
-			continue;
-		if (kw->kw_c99 && !(Sflag || gflag))
-			continue;
-		if (kw->kw_gcc && !gflag)
-			continue;
-		if (kw->kw_plain)
-			add_keyword(kw, false, false);
-		if (kw->kw_leading)
-			add_keyword(kw, true, false);
-		if (kw->kw_both)
-			add_keyword(kw, true, true);
-	}
-}
-
-/*
- * Get a free sbuf structure, if possible from the free list
- */
-static sbuf_t *
-allocsb(void)
-{
-	sbuf_t	*sb;
-
-	if ((sb = sbfrlst) != NULL) {
-		sbfrlst = sb->sb_next;
-#ifdef BLKDEBUG
-		(void)memset(sb, 0, sizeof(*sb));
-#else
-		sb->sb_next = NULL;
-#endif
-	} else {
-		sb = xmalloc(sizeof(*sb));
-		(void)memset(sb, 0, sizeof(*sb));
-	}
-	return sb;
-}
-
-/*
- * Put a sbuf structure to the free list
- */
-static void
-freesb(sbuf_t *sb)
-{
-
-	(void)memset(sb, ZERO, sizeof(*sb));
-	sb->sb_next = sbfrlst;
-	sbfrlst = sb;
-}
-
-/*
- * Read a character and ensure that it is positive (except EOF).
- * Increment line count(s) if necessary.
- */
-static int
-inpc(void)
-{
-	int	c;
-
-	if ((c = lex_input()) == EOF)
-		return c;
-	c &= CHAR_MASK;
-	if (c == '\0')
-		return EOF;	/* lex returns 0 on EOF. */
-	if (c == '\n')
-		lex_next_line();
-	return c;
-}
 
 static unsigned int
 hash(const char *s)
 {
-	unsigned int v;
-	const char *p;
-
-	v = 0;
-	for (p = s; *p != '\0'; p++) {
+	unsigned int v = 0;
+	for (const char *p = s; *p != '\0'; p++) {
 		v = (v << 4) + (unsigned char)*p;
 		v ^= v >> 28;
 	}
-	return v % HSHSIZ1;
+	return v % (sizeof(symtab) / sizeof(symtab[0]));
 }
 
-/*
- * Lex has found a letter followed by zero or more letters or digits.
- * It looks for a symbol in the symbol table with the same name. This
- * symbol must either be a keyword or a symbol of the type required by
- * symtyp (label, member, tag, ...).
- *
- * If it is a keyword, the token is returned. In some cases it is described
- * more deeply by data written to yylval.
- *
- * If it is a symbol, T_NAME is returned and the pointer to a sbuf struct
- * is stored in yylval. This struct contains the name of the symbol, its
- * length and hash value. If there is already a symbol of the same name
- * and type in the symbol table, the sbuf struct also contains a pointer
- * to the symbol table entry.
- */
-extern int
-lex_name(const char *yytext, size_t yyleng)
+static void
+symtab_add(sym_t *sym)
 {
-	char	*s;
-	sbuf_t	*sb;
-	sym_t	*sym;
-	int	tok;
-
-	sb = allocsb();
-	sb->sb_name = yytext;
-	sb->sb_len = yyleng;
-	if ((sym = search(sb)) != NULL && sym->s_keyword != NULL) {
-		freesb(sb);
-		return keyw(sym);
-	}
-
-	sb->sb_sym = sym;
-
-	if (sym != NULL) {
-		lint_assert(block_level >= sym->s_block_level);
-		sb->sb_name = sym->s_name;
-		sb->sb_len = strlen(sym->s_name);
-		tok = sym->s_scl == TYPEDEF ? T_TYPENAME : T_NAME;
-	} else {
-		s = getblk(yyleng + 1);
-		(void)memcpy(s, yytext, yyleng + 1);
-		sb->sb_name = s;
-		sb->sb_len = yyleng;
-		tok = T_NAME;
-	}
-
-	yylval.y_name = sb;
-	return tok;
+	unsigned int h = hash(sym->s_name);
+	if ((sym->s_symtab_next = symtab[h]) != NULL)
+		symtab[h]->s_symtab_ref = &sym->s_symtab_next;
+	sym->s_symtab_ref = &symtab[h];
+	symtab[h] = sym;
 }
 
 static sym_t *
-search(sbuf_t *sb)
+symtab_search(const char *name)
 {
-	unsigned int h;
-	sym_t *sym;
-	const struct kwtab *kw;
 
-	h = hash(sb->sb_name);
-	for (sym = symtab[h]; sym != NULL; sym = sym->s_link) {
-		if (strcmp(sym->s_name, sb->sb_name) != 0)
+	unsigned int h = hash(name);
+	for (sym_t *sym = symtab[h]; sym != NULL; sym = sym->s_symtab_next) {
+		if (strcmp(sym->s_name, name) != 0)
 			continue;
-		kw = sym->s_keyword;
-
-		if (kw != NULL && !kw->kw_attr)
-			return sym;
-		if (kw != NULL && attron)
-			return sym;
-		if (kw == NULL && !attron && sym->s_kind == symtyp)
+		if (sym->s_keyword != NULL ||
+		    sym->s_kind == sym_kind ||
+		    in_gcc_attribute)
 			return sym;
 	}
 
 	return NULL;
 }
 
-static int
-keyw(sym_t *sym)
+static void
+symtab_remove(sym_t *sym)
 {
-	int	t;
 
-	if ((t = (int)sym->s_value.v_quad) == T_SCLASS) {
-		yylval.y_scl = sym->s_scl;
-	} else if (t == T_TYPE || t == T_STRUCT_OR_UNION) {
-		yylval.y_tspec = sym->s_tspec;
-	} else if (t == T_QUAL) {
-		yylval.y_tqual = sym->s_tqual;
+	if ((*sym->s_symtab_ref = sym->s_symtab_next) != NULL)
+		sym->s_symtab_next->s_symtab_ref = sym->s_symtab_ref;
+	sym->s_symtab_next = NULL;
+}
+
+static void
+symtab_remove_locals(void)
+{
+
+	for (size_t i = 0; i < sizeof(symtab) / sizeof(symtab[0]); i++) {
+		for (sym_t *sym = symtab[i]; sym != NULL; ) {
+			sym_t *next = sym->s_symtab_next;
+			if (sym->s_block_level >= 1)
+				symtab_remove(sym);
+			sym = next;
+		}
 	}
-	return t;
+}
+
+#ifdef DEBUG
+static int
+sym_by_name(const void *va, const void *vb)
+{
+	const sym_t *a = *(const sym_t *const *)va;
+	const sym_t *b = *(const sym_t *const *)vb;
+
+	return strcmp(a->s_name, b->s_name);
+}
+
+struct syms {
+	const sym_t **items;
+	size_t len;
+	size_t cap;
+};
+
+static void
+syms_add(struct syms *syms, const sym_t *sym)
+{
+	if (syms->len >= syms->cap) {
+		syms->cap *= 2;
+		syms->items = xrealloc(syms->items,
+		    syms->cap * sizeof(syms->items[0]));
+	}
+	syms->items[syms->len++] = sym;
+}
+
+void
+debug_symtab(void)
+{
+	struct syms syms = { xcalloc(64, sizeof(syms.items[0])), 0, 64 };
+
+	debug_enter();
+	for (int level = -1;; level++) {
+		bool more = false;
+		size_t n = sizeof(symtab) / sizeof(symtab[0]);
+
+		syms.len = 0;
+		for (size_t i = 0; i < n; i++) {
+			for (sym_t *sym = symtab[i]; sym != NULL;) {
+				if (sym->s_block_level == level &&
+				    sym->s_keyword == NULL)
+					syms_add(&syms, sym);
+				if (sym->s_block_level > level)
+					more = true;
+				sym = sym->s_symtab_next;
+			}
+		}
+
+		if (syms.len > 0) {
+			debug_step("symbol table level %d", level);
+			debug_indent_inc();
+			qsort(syms.items, syms.len, sizeof(syms.items[0]),
+			    sym_by_name);
+			for (size_t i = 0; i < syms.len; i++)
+				debug_sym("", syms.items[i], "\n");
+			debug_indent_dec();
+
+			lint_assert(level != -1);
+		}
+
+		if (!more)
+			break;
+	}
+	debug_leave();
+
+	free(syms.items);
+}
+#endif
+
+static void
+register_keyword(const struct keyword *kw, bool leading, bool trailing)
+{
+
+	const char *name;
+	if (!leading && !trailing) {
+		name = kw->kw_name;
+	} else {
+		char buf[256];
+		(void)snprintf(buf, sizeof(buf), "%s%s%s",
+		    leading ? "__" : "", kw->kw_name, trailing ? "__" : "");
+		name = xstrdup(buf);
+	}
+
+	sym_t *sym = block_zero_alloc(sizeof(*sym), "sym");
+	sym->s_name = name;
+	sym->s_keyword = kw;
+	int tok = kw->kw_token;
+	sym->u.s_keyword.sk_token = tok;
+	if (tok == T_TYPE || tok == T_STRUCT_OR_UNION)
+		sym->u.s_keyword.u.sk_tspec = kw->u.kw_tspec;
+	if (tok == T_SCLASS)
+		sym->s_scl = kw->u.kw_scl;
+	if (tok == T_QUAL)
+		sym->u.s_keyword.u.sk_type_qualifier = kw->u.kw_tqual;
+	if (tok == T_FUNCTION_SPECIFIER)
+		sym->u.s_keyword.u.function_specifier = kw->u.kw_fs;
+	if (tok == T_NAMED_CONSTANT)
+		sym->u.s_keyword.u.named_constant = kw->u.kw_named_constant;
+
+	symtab_add(sym);
+}
+
+static bool
+is_keyword_known(const struct keyword *kw)
+{
+
+	if (kw->kw_added_in_c23 && !allow_c23)
+		return false;
+	if ((kw->kw_added_in_c90 || kw->kw_added_in_c99_or_c11) && !allow_c90)
+		return false;
+
+	/*
+	 * In the 1990s, GCC defined several keywords that were later
+	 * incorporated into C99, therefore in GCC mode, all C99 keywords are
+	 * made available.  The C11 keywords are made available as well, but
+	 * there are so few that they don't matter practically.
+	 */
+	if (allow_gcc)
+		return true;
+	if (kw->kw_gcc)
+		return false;
+
+	if (kw->kw_added_in_c99_or_c11 && !allow_c99)
+		return false;
+	return true;
+}
+
+/* Write all keywords to the symbol table. */
+void
+init_lex(void)
+{
+
+	size_t n = sizeof(keywords) / sizeof(keywords[0]);
+	for (size_t i = 0; i < n; i++) {
+		const struct keyword *kw = keywords + i;
+		if (!is_keyword_known(kw))
+			continue;
+		if (kw->kw_plain)
+			register_keyword(kw, false, false);
+		if (kw->kw_leading)
+			register_keyword(kw, true, false);
+		if (kw->kw_both)
+			register_keyword(kw, true, true);
+	}
 }
 
 /*
- * Convert a string representing an integer into internal representation.
- * Return T_CON, storing the numeric value in yylval, for yylex.
+ * When scanning the remainder of a long token (see lex_input), read a byte
+ * and return it as an unsigned char or as EOF.
+ *
+ * Increment the line counts if necessary.
  */
-int
-lex_integer_constant(const char *yytext, size_t yyleng, int base)
+static int
+read_byte(void)
 {
-	int	l_suffix, u_suffix;
-	size_t	len;
-	const	char *cp;
-	char	c, *eptr;
-	tspec_t	typ;
-	bool	ansiu;
-	bool	warned = false;
-	uint64_t uq = 0;
+	int c = lex_input();
 
-	/* C11 6.4.4.1p5 */
-	static const tspec_t suffix_type[2][3] = {
-		{ INT,  LONG,  QUAD, },
-		{ UINT, ULONG, UQUAD, }
-	};
+	if (c == '\n')
+		lex_next_line();
+	return c == '\0' ? EOF : c;	/* lex returns 0 on EOF. */
+}
 
-	cp = yytext;
-	len = yyleng;
+static int
+lex_keyword(sym_t *sym)
+{
+	int tok = sym->u.s_keyword.sk_token;
+
+	if (tok == T_SCLASS)
+		yylval.y_scl = sym->s_scl;
+	if (tok == T_TYPE || tok == T_STRUCT_OR_UNION)
+		yylval.y_tspec = sym->u.s_keyword.u.sk_tspec;
+	if (tok == T_QUAL)
+		yylval.y_type_qualifiers =
+		    sym->u.s_keyword.u.sk_type_qualifier;
+	if (tok == T_FUNCTION_SPECIFIER)
+		yylval.y_function_specifier =
+		    sym->u.s_keyword.u.function_specifier;
+	if (tok == T_NAMED_CONSTANT)
+		yylval.y_named_constant = sym->u.s_keyword.u.named_constant;
+	return tok;
+}
+
+/*
+ * Look up the definition of a name in the symbol table. This symbol must
+ * either be a keyword or a symbol of the type required by sym_kind (label,
+ * member, tag, ...).
+ */
+extern int
+lex_name(const char *text, size_t len)
+{
+
+	sym_t *sym = symtab_search(text);
+	if (sym != NULL && sym->s_keyword != NULL)
+		return lex_keyword(sym);
+
+	sbuf_t *sb = xmalloc(sizeof(*sb));
+	sb->sb_len = len;
+	sb->sb_sym = sym;
+	yylval.y_name = sb;
+
+	if (sym != NULL) {
+		lint_assert(block_level >= sym->s_block_level);
+		sb->sb_name = sym->s_name;
+		return sym->s_scl == TYPEDEF ? T_TYPENAME : T_NAME;
+	}
+
+	char *name = block_zero_alloc(len + 1, "string");
+	(void)memcpy(name, text, len + 1);
+	sb->sb_name = name;
+	return T_NAME;
+}
+
+static tspec_t
+integer_constant_type_signed(unsigned ls, uint64_t ui, int base, bool warned)
+{
+	if (ls == 0 && ui <= TARG_INT_MAX)
+		return INT;
+	if (ls == 0 && ui <= TARG_UINT_MAX && base != 10 && allow_c90)
+		return UINT;
+	if (ls == 0 && ui <= TARG_LONG_MAX)
+		return LONG;
+
+	if (ls <= 1 && ui <= TARG_LONG_MAX)
+		return LONG;
+	if (ls <= 1 && ui <= TARG_ULONG_MAX && base != 10)
+		return allow_c90 ? ULONG : LONG;
+	if (ls <= 1 && !allow_c99) {
+		if (!warned)
+			/* integer constant out of range */
+			warning(252);
+		return allow_c90 ? ULONG : LONG;
+	}
+
+	if (ui <= TARG_LLONG_MAX)
+		return LLONG;
+	if (ui <= TARG_ULLONG_MAX && base != 10)
+		return allow_c90 ? ULLONG : LLONG;
+	if (!warned)
+		/* integer constant out of range */
+		warning(252);
+	return allow_c90 ? ULLONG : LLONG;
+}
+
+static tspec_t
+integer_constant_type_unsigned(unsigned l, uint64_t ui, bool warned)
+{
+	if (l == 0 && ui <= TARG_UINT_MAX)
+		return UINT;
+
+	if (l <= 1 && ui <= TARG_ULONG_MAX)
+		return ULONG;
+	if (l <= 1 && !allow_c99) {
+		if (!warned)
+			/* integer constant out of range */
+			warning(252);
+		return ULONG;
+	}
+
+	if (ui <= TARG_ULLONG_MAX)
+		return ULLONG;
+	if (!warned)
+		/* integer constant out of range */
+		warning(252);
+	return ULLONG;
+}
+
+int
+lex_integer_constant(const char *text, size_t len, int base)
+{
+	const char *cp = text;
 
 	/* skip 0[xX] or 0[bB] */
 	if (base == 16 || base == 2) {
@@ -528,16 +559,15 @@ lex_integer_constant(const char *yytext, size_t yyleng, int base)
 	}
 
 	/* read suffixes */
-	l_suffix = u_suffix = 0;
-	for (;;) {
-		if ((c = cp[len - 1]) == 'l' || c == 'L') {
+	unsigned l_suffix = 0, u_suffix = 0;
+	for (;; len--) {
+		char c = cp[len - 1];
+		if (c == 'l' || c == 'L')
 			l_suffix++;
-		} else if (c == 'u' || c == 'U') {
+		else if (c == 'u' || c == 'U')
 			u_suffix++;
-		} else {
+		else
 			break;
-		}
-		len--;
 	}
 	if (l_suffix > 2 || u_suffix > 1) {
 		/* malformed integer constant */
@@ -547,15 +577,14 @@ lex_integer_constant(const char *yytext, size_t yyleng, int base)
 		if (u_suffix > 1)
 			u_suffix = 1;
 	}
-	if (tflag && u_suffix != 0) {
-		/* suffix U is illegal in traditional C */
+	if (!allow_c90 && u_suffix > 0)
+		/* suffix 'U' is illegal in traditional C */
 		warning(97);
-	}
-	typ = suffix_type[u_suffix][l_suffix];
 
+	bool warned = false;
 	errno = 0;
-
-	uq = strtoull(cp, &eptr, base);
+	char *eptr;
+	uint64_t ui = (uint64_t)strtoull(cp, &eptr, base);
 	lint_assert(eptr == cp + len);
 	if (errno != 0) {
 		/* integer constant out of range */
@@ -563,192 +592,91 @@ lex_integer_constant(const char *yytext, size_t yyleng, int base)
 		warned = true;
 	}
 
-	/*
-	 * If the value is too big for the current type, we must choose
-	 * another type.
-	 */
-	ansiu = false;
-	switch (typ) {
-	case INT:
-		if (uq <= TARG_INT_MAX) {
-			/* ok */
-		} else if (uq <= TARG_UINT_MAX && base != 10) {
-			typ = UINT;
-		} else if (uq <= TARG_LONG_MAX) {
-			typ = LONG;
-		} else {
-			typ = ULONG;
-			if (uq > TARG_ULONG_MAX && !warned) {
-				/* integer constant out of range */
-				warning(252);
-			}
-		}
-		if (typ == UINT || typ == ULONG) {
-			if (tflag) {
-				typ = LONG;
-			} else if (!sflag) {
-				/*
-				 * Remember that the constant is unsigned
-				 * only in ANSI C
-				 */
-				ansiu = true;
-			}
-		}
-		break;
-	case UINT:
-		if (uq > TARG_UINT_MAX) {
-			typ = ULONG;
-			if (uq > TARG_ULONG_MAX && !warned) {
-				/* integer constant out of range */
-				warning(252);
-			}
-		}
-		break;
-	case LONG:
-		if (uq > TARG_LONG_MAX && !tflag) {
-			typ = ULONG;
-			if (!sflag)
-				ansiu = true;
-			if (uq > TARG_ULONG_MAX && !warned) {
-				/* integer constant out of range */
-				warning(252);
-			}
-		}
-		break;
-	case ULONG:
-		if (uq > TARG_ULONG_MAX && !warned) {
-			/* integer constant out of range */
-			warning(252);
-		}
-		break;
-	case QUAD:
-		if (uq > TARG_QUAD_MAX && !tflag) {
-			typ = UQUAD;
-			if (!sflag)
-				ansiu = true;
-		}
-		break;
-	case UQUAD:
-		if (uq > TARG_UQUAD_MAX && !warned) {
-			/* integer constant out of range */
-			warning(252);
-		}
-		break;
-	default:
-		break;
-	}
+	if (base == 8 && len > 1)
+		/* octal number '%.*s' */
+		query_message(8, (int)len, cp);
 
-	uq = (uint64_t)convert_integer((int64_t)uq, typ, 0);
+	bool unsigned_since_c90 = allow_trad && allow_c90 && u_suffix == 0
+	    && ui > TARG_INT_MAX
+	    && ((l_suffix == 0 && base != 10 && ui <= TARG_UINT_MAX)
+		|| (l_suffix <= 1 && ui > TARG_LONG_MAX));
+
+	tspec_t t = u_suffix > 0
+	    ? integer_constant_type_unsigned(l_suffix, ui, warned)
+	    : integer_constant_type_signed(l_suffix, ui, base, warned);
+	ui = (uint64_t)convert_integer((int64_t)ui, t, size_in_bits(t));
 
 	yylval.y_val = xcalloc(1, sizeof(*yylval.y_val));
-	yylval.y_val->v_tspec = typ;
-	yylval.y_val->v_unsigned_since_c90 = ansiu;
-	yylval.y_val->v_quad = (int64_t)uq;
+	yylval.y_val->v_tspec = t;
+	yylval.y_val->v_unsigned_since_c90 = unsigned_since_c90;
+	yylval.y_val->u.integer = (int64_t)ui;
 
 	return T_CON;
 }
 
-/*
- * Extend or truncate q to match t.  If t is signed, sign-extend.
- *
- * len is the number of significant bits. If len is -1, len is set
- * to the width of type t.
- */
+/* Extend or truncate si to match t.  If t is signed, sign-extend. */
 int64_t
-convert_integer(int64_t q, tspec_t t, unsigned int len)
+convert_integer(int64_t si, tspec_t t, unsigned int bits)
 {
-	uint64_t vbits;
 
-	if (len == 0)
-		len = size_in_bits(t);
-
-	vbits = value_bits(len);
-	return t == PTR || is_uinteger(t) || ((q & bit(len - 1)) == 0)
-	    ? (int64_t)(q & vbits)
-	    : (int64_t)(q | ~vbits);
+	uint64_t vbits = value_bits(bits);
+	uint64_t ui = (uint64_t)si;
+	return t == PTR || is_uinteger(t) || ((ui & bit(bits - 1)) == 0)
+	    ? (int64_t)(ui & vbits)
+	    : (int64_t)(ui | ~vbits);
 }
 
-/*
- * Convert a string representing a floating point value into its integral
- * representation. Type and value are returned in yylval. fcon()
- * (and yylex()) returns T_CON.
- * XXX Currently it is not possible to convert constants of type
- * long double which are greater than DBL_MAX.
- */
 int
-lex_floating_constant(const char *yytext, size_t yyleng)
+lex_floating_constant(const char *text, size_t len)
 {
-	const	char *cp;
-	int	len;
-	tspec_t typ;
-	char	c, *eptr;
-	double	d;
-	float	f = 0;
+	const char *cp = text;
 
-	cp = yytext;
-	len = yyleng;
-
-	if (cp[len - 1] == 'i') {
-		/* imaginary, do nothing for now */
+	bool imaginary = cp[len - 1] == 'i';
+	if (imaginary)
 		len--;
-	}
-	if ((c = cp[len - 1]) == 'f' || c == 'F') {
-		typ = FLOAT;
+
+	char c = cp[len - 1];
+	tspec_t t;
+	if (c == 'f' || c == 'F') {
+		t = imaginary ? FCOMPLEX : FLOAT;
 		len--;
 	} else if (c == 'l' || c == 'L') {
-		typ = LDOUBLE;
+		t = imaginary ? LCOMPLEX : LDOUBLE;
 		len--;
-	} else {
-		if (c == 'd' || c == 'D')
-			len--;
-		typ = DOUBLE;
-	}
+	} else
+		t = imaginary ? DCOMPLEX : DOUBLE;
 
-	if (tflag && typ != DOUBLE) {
-		/* suffixes F and L are illegal in traditional C */
+	if (!allow_c90 && t != DOUBLE)
+		/* suffixes 'F' and 'L' are illegal in traditional C */
 		warning(98);
-	}
 
 	errno = 0;
-	d = strtod(cp, &eptr);
-	if (eptr != cp + len) {
-		switch (*eptr) {
-			/*
-			 * XXX: non-native non-current strtod() may not handle hex
-			 * floats, ignore the rest if we find traces of hex float
-			 * syntax...
-			 */
-		case 'p':
-		case 'P':
-		case 'x':
-		case 'X':
-			d = 0;
-			errno = 0;
-			break;
-		default:
-			INTERNAL_ERROR("fcon(%s->%s)", cp, eptr);
-		}
-	}
+	char *eptr;
+	long double ld = strtold(cp, &eptr);
+	lint_assert(eptr == cp + len);
 	if (errno != 0)
 		/* floating-point constant out of range */
 		warning(248);
-
-	if (typ == FLOAT) {
-		f = (float)d;
-		if (finite(f) == 0) {
+	else if (t == FLOAT) {
+		ld = (float)ld;
+		if (isfinite(ld) == 0) {
 			/* floating-point constant out of range */
 			warning(248);
-			f = f > 0 ? FLT_MAX : -FLT_MAX;
+			ld = ld > 0 ? FLT_MAX : -FLT_MAX;
+		}
+	} else if (t == DOUBLE
+	    || /* CONSTCOND */ LDOUBLE_SIZE == DOUBLE_SIZE) {
+		ld = (double)ld;
+		if (isfinite(ld) == 0) {
+			/* floating-point constant out of range */
+			warning(248);
+			ld = ld > 0 ? DBL_MAX : -DBL_MAX;
 		}
 	}
 
 	yylval.y_val = xcalloc(1, sizeof(*yylval.y_val));
-	yylval.y_val->v_tspec = typ;
-	if (typ == FLOAT) {
-		yylval.y_val->v_ldbl = f;
-	} else {
-		yylval.y_val->v_ldbl = d;
-	}
+	yylval.y_val->v_tspec = t;
+	yylval.y_val->u.floating = ld;
 
 	return T_CON;
 }
@@ -761,229 +689,334 @@ lex_operator(int t, op_t o)
 	return t;
 }
 
+static buffer
+read_quoted(bool *complete, char delim, bool wide)
+{
+	buffer buf;
+	buf_init(&buf);
+	if (wide)
+		buf_add_char(&buf, 'L');
+	buf_add_char(&buf, delim);
+
+	for (;;) {
+		int c = read_byte();
+		if (c <= 0)
+			break;
+		buf_add_char(&buf, (char)c);
+		if (c == '\n')
+			break;
+		if (c == delim) {
+			*complete = true;
+			return buf;
+		}
+		if (c == '\\') {
+			c = read_byte();
+			buf_add_char(&buf, (char)(c <= 0 ? ' ' : c));
+			if (c <= 0)
+				break;
+		}
+	}
+	*complete = false;
+	buf_add_char(&buf, delim);
+	return buf;
+}
+
 /*
- * Called if lex found a leading \'.
+ * Analyze the lexical representation of the next character in the string
+ * literal list. At the end, only update the position information.
  */
+bool
+quoted_next(const buffer *lit, quoted_iterator *it)
+{
+	const char *s = lit->data;
+
+	*it = (quoted_iterator){ .start = it->end };
+
+	char delim = s[s[0] == 'L' ? 1 : 0];
+
+	bool in_the_middle = it->start > 0;
+	if (!in_the_middle) {
+		it->start = s[0] == 'L' ? 2 : 1;
+		it->end = it->start;
+	}
+
+	while (s[it->start] == delim) {
+		if (it->start + 1 == lit->len) {
+			it->end = it->start;
+			return false;
+		}
+		it->next_literal = in_the_middle;
+		it->start += 2;
+	}
+	it->end = it->start;
+
+again:
+	switch (s[it->end]) {
+	case '\\':
+		it->end++;
+		goto backslash;
+	case '\n':
+		it->unescaped_newline = true;
+		return false;
+	default:
+		it->value = (unsigned char)s[it->end++];
+		return true;
+	}
+
+backslash:
+	it->escaped = true;
+	if ('0' <= s[it->end] && s[it->end] <= '7')
+		goto octal_escape;
+	switch (s[it->end++]) {
+	case '\n':
+		goto again;
+	case 'a':
+		it->named_escape = true;
+		it->value = '\a';
+		it->invalid_escape = !allow_c90;
+		return true;
+	case 'b':
+		it->named_escape = true;
+		it->value = '\b';
+		return true;
+	case 'e':
+		it->named_escape = true;
+		it->value = '\033';
+		it->invalid_escape = !allow_gcc;
+		return true;
+	case 'f':
+		it->named_escape = true;
+		it->value = '\f';
+		return true;
+	case 'n':
+		it->named_escape = true;
+		it->value = '\n';
+		return true;
+	case 'r':
+		it->named_escape = true;
+		it->value = '\r';
+		return true;
+	case 't':
+		it->named_escape = true;
+		it->value = '\t';
+		return true;
+	case 'v':
+		it->named_escape = true;
+		it->value = '\v';
+		it->invalid_escape = !allow_c90;
+		return true;
+	case 'x':
+		goto hex_escape;
+	case '"':
+		it->literal_escape = true;
+		it->value = '"';
+		it->invalid_escape = !allow_c90 && delim == '\'';
+		return true;
+	case '?':
+		it->literal_escape = true;
+		it->value = '?';
+		it->invalid_escape = !allow_c90;
+		return true;
+	default:
+		it->invalid_escape = true;
+		/* FALLTHROUGH */
+	case '\'':
+	case '\\':
+		it->literal_escape = true;
+		it->value = (unsigned char)s[it->end - 1];
+		return true;
+	}
+
+octal_escape:
+	it->octal_digits++;
+	it->value = s[it->end++] - '0';
+	if ('0' <= s[it->end] && s[it->end] <= '7') {
+		it->octal_digits++;
+		it->value = 8 * it->value + (s[it->end++] - '0');
+		if ('0' <= s[it->end] && s[it->end] <= '7') {
+			it->octal_digits++;
+			it->value = 8 * it->value + (s[it->end++] - '0');
+			it->overflow = it->value > TARG_UCHAR_MAX
+			    && s[0] != 'L';
+		}
+	}
+	return true;
+
+hex_escape:
+	for (;;) {
+		char ch = s[it->end];
+		unsigned digit_value;
+		if ('0' <= ch && ch <= '9')
+			digit_value = ch - '0';
+		else if ('A' <= ch && ch <= 'F')
+			digit_value = 10 + (ch - 'A');
+		else if ('a' <= ch && ch <= 'f')
+			digit_value = 10 + (ch - 'a');
+		else
+			break;
+
+		it->end++;
+		it->value = 16 * it->value + digit_value;
+		uint64_t limit = s[0] == 'L' ? TARG_UINT_MAX : TARG_UCHAR_MAX;
+		if (it->value > limit)
+			it->overflow = true;
+		if (it->hex_digits < 3)
+			it->hex_digits++;
+	}
+	it->missing_hex_digits = it->hex_digits == 0;
+	return true;
+}
+
+static void
+check_quoted(const buffer *buf, bool complete, char delim)
+{
+	quoted_iterator it = { .end = 0 }, prev = it;
+	for (; quoted_next(buf, &it); prev = it) {
+		if (it.missing_hex_digits)
+			/* no hex digits follow \x */
+			error(74);
+		if (it.hex_digits > 0 && !allow_c90)
+			/* \x undefined in traditional C */
+			warning(82);
+		else if (!it.invalid_escape)
+			;
+		else if (it.value == '8' || it.value == '9')
+			/* bad octal digit '%c' */
+			warning(77, (int)it.value);
+		else if (it.literal_escape && it.value == '?')
+			/* \? undefined in traditional C */
+			warning(263);
+		else if (it.literal_escape && it.value == '"')
+			/* \" inside character constants undefined in ... */
+			warning(262);
+		else if (it.named_escape && it.value == '\a')
+			/* \a undefined in traditional C */
+			warning(81);
+		else if (it.named_escape && it.value == '\v')
+			/* \v undefined in traditional C */
+			warning(264);
+		else {
+			unsigned char ch = buf->data[it.end - 1];
+			if (ch_isprint(ch))
+				/* dubious escape \%c */
+				warning(79, ch);
+			else
+				/* dubious escape \%o */
+				warning(80, ch);
+		}
+		if (it.overflow && it.hex_digits > 0)
+			/* overflow in hex escape */
+			warning(75);
+		if (it.overflow && it.octal_digits > 0)
+			/* character escape does not fit in character */
+			warning(76);
+		if (it.value < ' ' && !it.escaped && complete)
+			/* invisible character U+%04X in %s */
+			query_message(17, (unsigned)it.value, delim == '"'
+			    ? "string literal" : "character constant");
+		if (prev.octal_digits > 0 && prev.octal_digits < 3
+		    && !it.escaped && it.value >= '8' && it.value <= '9')
+			/* short octal escape '%.*s' followed by digit '%c' */
+			warning(356, (int)(prev.end - prev.start),
+			    buf->data + prev.start, buf->data[it.start]);
+	}
+	if (it.unescaped_newline)
+		/* newline in string or char constant */
+		error(254);
+	if (!complete && delim == '"')
+		/* unterminated string constant */
+		error(258);
+	if (!complete && delim == '\'')
+		/* unterminated character constant */
+		error(253);
+}
+
+static buffer
+lex_quoted(char delim, bool wide)
+{
+	bool complete;
+	buffer buf = read_quoted(&complete, delim, wide);
+	check_quoted(&buf, complete, delim);
+	return buf;
+}
+
+/* Called if lex found a leading "'". */
 int
 lex_character_constant(void)
 {
-	size_t	n;
-	int val, c;
+	buffer buf = lex_quoted('\'', false);
 
-	n = 0;
-	val = 0;
-	while ((c = get_escaped_char('\'')) >= 0) {
-		val = (val << CHAR_SIZE) + c;
+	size_t n = 0;
+	uint64_t val = 0;
+	quoted_iterator it = { .end = 0 };
+	while (quoted_next(&buf, &it)) {
+		val = (val << CHAR_SIZE) + it.value;
 		n++;
 	}
-	if (c == -2) {
-		/* unterminated character constant */
-		error(253);
-	} else if (n > sizeof(int) || (n > 1 && (pflag || hflag))) {
-		/* XXX: should rather be sizeof(TARG_INT) */
-
+	if (n > sizeof(int) || (n > 1 && (pflag || hflag))) {
+		/*
+		 * XXX: ^^ should rather be sizeof(TARG_INT). Luckily,
+		 * sizeof(int) is the same on all supported platforms.
+		 */
 		/* too many characters in character constant */
 		error(71);
-	} else if (n > 1) {
+	} else if (n > 1)
 		/* multi-character character constant */
 		warning(294);
-	} else if (n == 0) {
+	else if (n == 0 && !it.unescaped_newline)
 		/* empty character constant */
 		error(73);
-	}
-	if (n == 1)
-		val = (int)convert_integer(val, CHAR, CHAR_SIZE);
+
+	int64_t cval = n == 1
+	    ? convert_integer((int64_t)val, CHAR, CHAR_SIZE)
+	    : (int64_t)val;
 
 	yylval.y_val = xcalloc(1, sizeof(*yylval.y_val));
 	yylval.y_val->v_tspec = INT;
-	yylval.y_val->v_quad = val;
+	yylval.y_val->v_char_constant = true;
+	yylval.y_val->u.integer = cval;
 
 	return T_CON;
 }
 
-/*
- * Called if lex found a leading L\'
- */
+/* Called if lex found a leading "L'". */
 int
 lex_wide_character_constant(void)
 {
-	static	char buf[MB_LEN_MAX + 1];
-	size_t	n, nmax;
-	int c;
-	wchar_t	wc;
+	buffer buf = lex_quoted('\'', true);
 
-	nmax = MB_CUR_MAX;
+	static char wbuf[MB_LEN_MAX + 1];
+	size_t n = 0, nmax = MB_CUR_MAX;
 
-	n = 0;
-	while ((c = get_escaped_char('\'')) >= 0) {
+	quoted_iterator it = { .end = 0 };
+	while (quoted_next(&buf, &it)) {
 		if (n < nmax)
-			buf[n] = (char)c;
+			wbuf[n] = (char)it.value;
 		n++;
 	}
 
-	wc = 0;
-
-	if (c == -2) {
-		/* unterminated character constant */
-		error(253);
-	} else if (n == 0) {
+	wchar_t wc = 0;
+	if (n == 0)
 		/* empty character constant */
 		error(73);
-	} else if (n > nmax) {
+	else if (n > nmax) {
 		n = nmax;
 		/* too many characters in character constant */
 		error(71);
 	} else {
-		buf[n] = '\0';
+		wbuf[n] = '\0';
 		(void)mbtowc(NULL, NULL, 0);
-		if (mbtowc(&wc, buf, nmax) < 0)
+		if (mbtowc(&wc, wbuf, nmax) < 0)
 			/* invalid multibyte character */
 			error(291);
 	}
 
 	yylval.y_val = xcalloc(1, sizeof(*yylval.y_val));
-	yylval.y_val->v_tspec = WCHAR;
-	yylval.y_val->v_quad = wc;
+	yylval.y_val->v_tspec = WCHAR_TSPEC;
+	yylval.y_val->v_char_constant = true;
+	yylval.y_val->u.integer = wc;
 
 	return T_CON;
-}
-
-/*
- * Read a character which is part of a character constant or of a string
- * and handle escapes.
- *
- * The argument is the character which delimits the character constant or
- * string.
- *
- * Returns -1 if the end of the character constant or string is reached,
- * -2 if the EOF is reached, and the character otherwise.
- */
-static int
-get_escaped_char(int delim)
-{
-	static	int pbc = -1;
-	int	n, c, v;
-
-	if (pbc == -1) {
-		c = inpc();
-	} else {
-		c = pbc;
-		pbc = -1;
-	}
-	if (c == delim)
-		return -1;
-	switch (c) {
-	case '\n':
-		if (tflag) {
-			/* newline in string or char constant */
-			error(254);
-			return -2;
-		}
-		return c;
-	case 0:
-		/* syntax error '%s' */
-		error(249, "EOF or null byte in literal");
-		return -2;
-	case EOF:
-		return -2;
-	case '\\':
-		switch (c = inpc()) {
-		case '"':
-			if (tflag && delim == '\'')
-				/* \" inside character constants undef... */
-				warning(262);
-			return '"';
-		case '\'':
-			return '\'';
-		case '?':
-			if (tflag)
-				/* \? undefined in traditional C */
-				warning(263);
-			return '?';
-		case '\\':
-			return '\\';
-		case 'a':
-			if (tflag)
-				/* \a undefined in traditional C */
-				warning(81);
-			return '\a';
-		case 'b':
-			return '\b';
-		case 'f':
-			return '\f';
-		case 'n':
-			return '\n';
-		case 'r':
-			return '\r';
-		case 't':
-			return '\t';
-		case 'v':
-			if (tflag)
-				/* \v undefined in traditional C */
-				warning(264);
-			return '\v';
-		case '8': case '9':
-			/* bad octal digit %c */
-			warning(77, c);
-			/* FALLTHROUGH */
-		case '0': case '1': case '2': case '3':
-		case '4': case '5': case '6': case '7':
-			n = 3;
-			v = 0;
-			do {
-				v = (v << 3) + (c - '0');
-				c = inpc();
-			} while (--n > 0 && '0' <= c && c <= '7');
-			pbc = c;
-			if (v > TARG_UCHAR_MAX) {
-				/* character escape does not fit in character */
-				warning(76);
-				v &= CHAR_MASK;
-			}
-			return v;
-		case 'x':
-			if (tflag)
-				/* \x undefined in traditional C */
-				warning(82);
-			v = 0;
-			n = 0;
-			while ((c = inpc()) >= 0 && isxdigit(c)) {
-				c = isdigit(c) ?
-				    c - '0' : toupper(c) - 'A' + 10;
-				v = (v << 4) + c;
-				if (n >= 0) {
-					if ((v & ~CHAR_MASK) != 0) {
-						/* overflow in hex escape */
-						warning(75);
-						n = -1;
-					} else {
-						n++;
-					}
-				}
-			}
-			pbc = c;
-			if (n == 0) {
-				/* no hex digits follow \x */
-				error(74);
-			} if (n == -1) {
-				v &= CHAR_MASK;
-			}
-			return v;
-		case '\n':
-			return get_escaped_char(delim);
-		case EOF:
-			return -2;
-		default:
-			if (isprint(c)) {
-				/* dubious escape \%c */
-				warning(79, c);
-			} else {
-				/* dubious escape \%o */
-				warning(80, c);
-			}
-		}
-	}
-	return c;
 }
 
 /* See https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html */
@@ -1000,93 +1033,72 @@ parse_line_directive_flags(const char *p,
 		while (ch_isspace(*p))
 			p++;
 
-		const char *word_start = p;
+		const char *word = p;
 		while (*p != '\0' && !ch_isspace(*p))
 			p++;
-		const char *word_end = p;
+		size_t len = (size_t)(p - word);
 
-		if (word_end - word_start == 1 && word_start[0] == '1')
+		if (len == 1 && word[0] == '1')
 			*is_begin = true;
-		if (word_end - word_start == 1 && word_start[0] == '2')
+		if (len == 1 && word[0] == '2')
 			*is_end = true;
-		if (word_end - word_start == 1 && word_start[0] == '3')
+		if (len == 1 && word[0] == '3')
 			*is_system = true;
-		/* Flag '4' would only be interesting if lint handled C++. */
+		/* Flag '4' is only interesting for C++. */
 	}
-
-#if 0
-	if (*p != '\0') {
-		/* syntax error '%s' */
-		warning(249, "extra character(s) after directive");
-	}
-#endif
 }
 
 /*
- * Called for preprocessor directives. Currently implemented are:
- *	# lineno
- *	# lineno "filename"
- *	# lineno "filename" GCC-flag...
+ * The first directive of the preprocessed translation unit provides the name
+ * of the C source file as specified at the command line.
  */
-void
-lex_directive(const char *yytext)
+static void
+set_csrc_pos(void)
 {
-	const	char *cp, *fn;
-	char	c, *eptr;
-	size_t	fnl;
-	long	ln;
-	bool	is_begin, is_end, is_system;
+	static bool done;
 
-	static	bool first = true;
-
-	/* Go to first non-whitespace after # */
-	for (cp = yytext + 1; (c = *cp) == ' ' || c == '\t'; cp++)
-		continue;
-
-	if (!ch_isdigit(c)) {
-		if (strncmp(cp, "pragma", 6) == 0 && ch_isspace(cp[6]))
-			return;
-	error:
-		/* undefined or invalid # directive */
-		warning(255);
+	if (done)
 		return;
-	}
-	ln = strtol(--cp, &eptr, 10);
-	if (cp == eptr)
-		goto error;
-	if ((c = *(cp = eptr)) != ' ' && c != '\t' && c != '\0')
-		goto error;
-	while ((c = *cp++) == ' ' || c == '\t')
-		continue;
-	if (c != '\0') {
-		if (c != '"')
-			goto error;
-		fn = cp;
-		while ((c = *cp) != '"' && c != '\0')
-			cp++;
-		if (c != '"')
-			goto error;
-		if ((fnl = cp++ - fn) > PATH_MAX)
-			goto error;
-		/* empty string means stdin */
-		if (fnl == 0) {
-			fn = "{standard input}";
-			fnl = 16;			/* strlen (fn) */
-		}
-		curr_pos.p_file = record_filename(fn, fnl);
-		/*
-		 * If this is the first directive, the name is the name
-		 * of the C source file as specified at the command line.
-		 * It is written to the output file.
-		 */
-		if (first) {
-			csrc_pos.p_file = curr_pos.p_file;
-			outsrc(transform_filename(curr_pos.p_file,
-			    strlen(curr_pos.p_file)));
-			first = false;
-		}
+	done = true;
+	csrc_pos.p_file = curr_pos.p_file;
+	outsrc(transform_filename(curr_pos.p_file, strlen(curr_pos.p_file)));
+}
 
-		parse_line_directive_flags(cp, &is_begin, &is_end, &is_system);
+/* # lineno ["filename" [GCC-flag...]]  */
+static void
+set_location(const char *p)
+{
+	char *end;
+	long ln = strtol(--p, &end, 10);
+	if (end == p)
+		goto error;
+	p = end;
+
+	if (*p != ' ' && *p != '\0')
+		goto error;
+	while (*p == ' ')
+		p++;
+
+	if (*p != '\0') {
+		if (*p != '"')
+			goto error;
+		const char *fn = ++p;
+		while (*p != '"' && *p != '\0')
+			p++;
+		if (*p != '"')
+			goto error;
+		size_t fn_len = p++ - fn;
+		if (fn_len > PATH_MAX)
+			goto error;
+		if (fn_len == 0) {
+			fn = "{standard input}";
+			fn_len = strlen(fn);
+		}
+		curr_pos.p_file = record_filename(fn, fn_len);
+		set_csrc_pos();
+
+		bool is_begin, is_end, is_system;
+		parse_line_directive_flags(p, &is_begin, &is_end, &is_system);
 		update_location(curr_pos.p_file, (int)ln, is_begin, is_end);
 		in_system_header = is_system;
 	}
@@ -1096,364 +1108,449 @@ lex_directive(const char *yytext)
 		csrc_pos.p_line = (int)ln - 1;
 		csrc_pos.p_uniq = 0;
 	}
+	return;
+
+error:
+	/* undefined or invalid '#' directive */
+	warning(255);
 }
 
-/*
- * Handle lint comments such as ARGSUSED.
- *
- * If one of these comments is recognized, the argument, if any, is
- * parsed and a function which handles this comment is called.
- */
+static void
+check_stmt_macro(const char *text)
+{
+	const char *p = text;
+	while (*p == ' ')
+		p++;
+
+	const char *name_start = p;
+	while (ch_isalnum(*p) || *p == '_')
+		p++;
+	const char *name_end = p;
+
+	if (*p == '(') {
+		while (*p != '\0' && *p != ')')
+			p++;
+		if (*p == ')')
+			p++;
+	}
+
+	while (*p == ' ')
+		p++;
+
+	if (strncmp(p, "do", 2) == 0 && !ch_isalnum(p[2]))
+		/* do-while macro '%.*s' ends with semicolon */
+		warning(385, (int)(name_end - name_start), name_start);
+}
+
+// Between lex_pp_begin and lex_pp_end, the current preprocessing line,
+// with comments and whitespace converted to a single space.
+static buffer pp_line;
+
+void
+lex_pp_begin(void)
+{
+	if (pp_line.data == NULL)
+		buf_init(&pp_line);
+	debug_step("%s", __func__);
+	lint_assert(pp_line.len == 0);
+}
+
+void
+lex_pp_identifier(const char *text)
+{
+	debug_step("%s '%s'", __func__, text);
+	buf_add(&pp_line, text);
+}
+
+void
+lex_pp_number(const char *text)
+{
+	debug_step("%s '%s'", __func__, text);
+	buf_add(&pp_line, text);
+}
+
+void
+lex_pp_character_constant(void)
+{
+	buffer buf = lex_quoted('\'', false);
+	debug_step("%s '%s'", __func__, buf.data);
+	buf_add(&pp_line, buf.data);
+	free(buf.data);
+}
+
+void
+lex_pp_string_literal(void)
+{
+	buffer buf = lex_quoted('"', false);
+	debug_step("%s '%s'", __func__, buf.data);
+	buf_add(&pp_line, buf.data);
+	free(buf.data);
+}
+
+void
+lex_pp_punctuator(const char *text)
+{
+	debug_step("%s '%s'", __func__, text);
+	buf_add(&pp_line, text);
+}
+
+void
+lex_pp_comment(void)
+{
+	int lc = -1, c;
+
+	for (;;) {
+		if ((c = read_byte()) == EOF) {
+			/* unterminated comment */
+			error(256);
+			return;
+		}
+		if (lc == '*' && c == '/')
+			break;
+		lc = c;
+	}
+
+	buf_add_char(&pp_line, ' ');
+}
+
+void
+lex_pp_whitespace(void)
+{
+	buf_add_char(&pp_line, ' ');
+}
+
+void
+lex_pp_end(void)
+{
+	const char *text = pp_line.data;
+	size_t len = pp_line.len;
+	while (len > 0 && text[len - 1] == ' ')
+		len--;
+	debug_step("%s '%.*s'", __func__, (int)len, text);
+
+	const char *p = text;
+	while (*p == ' ')
+		p++;
+
+	if (ch_isdigit(*p))
+		set_location(p);
+	else if (strncmp(p, "pragma ", 7) == 0)
+		goto done;
+	else if (strncmp(p, "define ", 7) == 0) {
+		 if (text[len - 1] == ';')
+			check_stmt_macro(p + 7);
+	} else if (strncmp(p, "undef ", 6) == 0)
+		goto done;
+	else
+		/* undefined or invalid '#' directive */
+		warning(255);
+
+done:
+	pp_line.len = 0;
+	pp_line.data[0] = '\0';
+}
+
+/* Handle lint comments such as ARGSUSED. */
 void
 lex_comment(void)
 {
-	int	c, lc;
+	int c;
 	static const struct {
-		const	char *keywd;
+		const	char name[18];
 		bool	arg;
-		void	(*func)(int);
+		lint_comment comment;
 	} keywtab[] = {
-		{ "ARGSUSED",		true,	argsused	},
-		{ "BITFIELDTYPE",	false,	bitfieldtype	},
-		{ "CONSTCOND",		false,	constcond	},
-		{ "CONSTANTCOND",	false,	constcond	},
-		{ "CONSTANTCONDITION",	false,	constcond	},
-		{ "FALLTHRU",		false,	fallthru	},
-		{ "FALLTHROUGH",	false,	fallthru	},
-		{ "FALL THROUGH",	false,	fallthru	},
-		{ "fallthrough",	false,	fallthru	},
-		{ "LINTLIBRARY",	false,	lintlib		},
-		{ "LINTED",		true,	linted		},
-		{ "LONGLONG",		false,	longlong	},
-		{ "NOSTRICT",		true,	linted		},
-		{ "NOTREACHED",		false,	not_reached	},
-		{ "PRINTFLIKE",		true,	printflike	},
-		{ "PROTOLIB",		true,	protolib	},
-		{ "SCANFLIKE",		true,	scanflike	},
-		{ "VARARGS",		true,	varargs		},
+		{ "ARGSUSED",		true,	LC_ARGSUSED	},
+		{ "BITFIELDTYPE",	false,	LC_BITFIELDTYPE	},
+		{ "CONSTCOND",		false,	LC_CONSTCOND	},
+		{ "CONSTANTCOND",	false,	LC_CONSTCOND	},
+		{ "CONSTANTCONDITION",	false,	LC_CONSTCOND	},
+		{ "FALLTHRU",		false,	LC_FALLTHROUGH	},
+		{ "FALLTHROUGH",	false,	LC_FALLTHROUGH	},
+		{ "FALL THROUGH",	false,	LC_FALLTHROUGH	},
+		{ "fallthrough",	false,	LC_FALLTHROUGH	},
+		{ "LINTLIBRARY",	false,	LC_LINTLIBRARY	},
+		{ "LINTED",		true,	LC_LINTED	},
+		{ "LONGLONG",		false,	LC_LONGLONG	},
+		{ "NOSTRICT",		true,	LC_LINTED	},
+		{ "NOTREACHED",		false,	LC_NOTREACHED	},
+		{ "PRINTFLIKE",		true,	LC_PRINTFLIKE	},
+		{ "PROTOLIB",		true,	LC_PROTOLIB	},
+		{ "SCANFLIKE",		true,	LC_SCANFLIKE	},
+		{ "VARARGS",		true,	LC_VARARGS	},
 	};
-	char	keywd[32];
-	char	arg[32];
-	size_t	l, i;
-	int	a;
-	bool	eoc;
+	char keywd[32];
 
-	eoc = false;
+	bool seen_end_of_comment = false;
 
-	/* Skip whitespace after the start of the comment */
-	while ((c = inpc()) != EOF && isspace(c))
+	while (c = read_byte(), isspace(c) != 0)
 		continue;
 
 	/* Read the potential keyword to keywd */
-	l = 0;
+	size_t l = 0;
 	while (c != EOF && l < sizeof(keywd) - 1 &&
-	    (isalpha(c) || isspace(c))) {
-		if (islower(c) && l > 0 && ch_isupper(keywd[0]))
+	    (isalpha(c) != 0 || isspace(c) != 0)) {
+		if (islower(c) != 0 && l > 0 && ch_isupper(keywd[0]))
 			break;
 		keywd[l++] = (char)c;
-		c = inpc();
+		c = read_byte();
 	}
 	while (l > 0 && ch_isspace(keywd[l - 1]))
 		l--;
 	keywd[l] = '\0';
 
 	/* look for the keyword */
-	for (i = 0; i < sizeof(keywtab) / sizeof(keywtab[0]); i++) {
-		if (strcmp(keywtab[i].keywd, keywd) == 0)
-			break;
-	}
-	if (i == sizeof(keywtab) / sizeof(keywtab[0]))
-		goto skip_rest;
+	size_t i;
+	for (i = 0; i < sizeof(keywtab) / sizeof(keywtab[0]); i++)
+		if (strcmp(keywtab[i].name, keywd) == 0)
+			goto found_keyword;
+	goto skip_rest;
 
-	/* skip whitespace after the keyword */
-	while (c != EOF && isspace(c))
-		c = inpc();
+found_keyword:
+	while (isspace(c) != 0)
+		c = read_byte();
 
 	/* read the argument, if the keyword accepts one and there is one */
+	char arg[32];
 	l = 0;
 	if (keywtab[i].arg) {
-		while (c != EOF && isdigit(c) && l < sizeof(arg) - 1) {
+		while (isdigit(c) != 0 && l < sizeof(arg) - 1) {
 			arg[l++] = (char)c;
-			c = inpc();
+			c = read_byte();
 		}
 	}
 	arg[l] = '\0';
-	a = l != 0 ? atoi(arg) : -1;
+	int a = l != 0 ? atoi(arg) : -1;
 
-	/* skip whitespace after the argument */
-	while (c != EOF && isspace(c))
-		c = inpc();
+	while (isspace(c) != 0)
+		c = read_byte();
 
-	if (c != '*' || (c = inpc()) != '/') {
-		if (keywtab[i].func != linted)
-			/* extra characters in lint comment */
-			warning(257);
-	} else {
-		/*
-		 * remember that we have already found the end of the
-		 * comment
-		 */
-		eoc = true;
-	}
+	seen_end_of_comment = c == '*' && (c = read_byte()) == '/';
+	if (!seen_end_of_comment && keywtab[i].comment != LC_LINTED)
+		/* extra characters in lint comment */
+		warning(257);
 
-	if (keywtab[i].func != NULL)
-		(*keywtab[i].func)(a);
+	handle_lint_comment(keywtab[i].comment, a);
 
 skip_rest:
-	while (!eoc) {
-		lc = c;
-		if ((c = inpc()) == EOF) {
+	while (!seen_end_of_comment) {
+		int lc = c;
+		if ((c = read_byte()) == EOF) {
 			/* unterminated comment */
 			error(256);
 			break;
 		}
 		if (lc == '*' && c == '/')
-			eoc = true;
+			seen_end_of_comment = true;
 	}
 }
 
-/*
- * Handle // style comments
- */
 void
 lex_slash_slash_comment(void)
 {
-	int c;
 
-	if (!Sflag && !gflag)
-		/* %s C does not support // comments */
-		gnuism(312, tflag ? "traditional" : "ANSI");
+	if (!allow_c99 && !allow_gcc)
+		/* %s does not support '//' comments */
+		gnuism(312, allow_c90 ? "C90" : "traditional C");
 
-	while ((c = inpc()) != EOF && c != '\n')
+	for (int c; c = read_byte(), c != EOF && c != '\n';)
 		continue;
 }
 
-/*
- * Clear flags for lint comments LINTED, LONGLONG and CONSTCOND.
- * clear_warn_flags() is called after function definitions and global and
- * local declarations and definitions. It is also called between
- * the controlling expression and the body of control statements
- * (if, switch, for, while).
- */
 void
-clear_warn_flags(void)
+reset_suppressions(void)
 {
 
 	lwarn = LWARN_ALL;
-	quadflg = false;
-	constcond_flag = false;
+	suppress_longlong = false;
+	suppress_constcond = false;
 }
 
-/*
- * Strings are stored in a dynamically allocated buffer and passed
- * in yylval.y_xstrg to the parser. The parser or the routines called
- * by the parser are responsible for freeing this buffer.
- */
 int
 lex_string(void)
 {
-	unsigned char *s;
-	int	c;
-	size_t	len, max;
-	strg_t	*strg;
-
-	s = xmalloc(max = 64);
-
-	len = 0;
-	while ((c = get_escaped_char('"')) >= 0) {
-		/* +1 to reserve space for a trailing NUL character */
-		if (len + 1 == max)
-			s = xrealloc(s, max *= 2);
-		s[len++] = (char)c;
-	}
-	s[len] = '\0';
-	if (c == -2)
-		/* unterminated string constant */
-		error(258);
-
-	strg = xcalloc(1, sizeof(*strg));
-	strg->st_tspec = CHAR;
-	strg->st_len = len;
-	strg->st_cp = s;
-
-	yylval.y_string = strg;
+	buffer *buf = xmalloc(sizeof(*buf));
+	*buf = lex_quoted('"', false);
+	yylval.y_string = buf;
 	return T_STRING;
+}
+
+static size_t
+wide_length(const buffer *buf)
+{
+
+	(void)mblen(NULL, 0);
+	size_t len = 0, i = 0;
+	while (i < buf->len) {
+		int n = mblen(buf->data + i, MB_CUR_MAX);
+		if (n == -1) {
+			/* invalid multibyte character */
+			error(291);
+			break;
+		}
+		i += n > 1 ? n : 1;
+		len++;
+	}
+	return len;
 }
 
 int
 lex_wide_string(void)
 {
-	char	*s;
-	int	c, n;
-	size_t	i, wi;
-	size_t	len, max, wlen;
-	wchar_t	*ws;
-	strg_t	*strg;
+	buffer buf = lex_quoted('"', true);
 
-	s = xmalloc(max = 64);
-	len = 0;
-	while ((c = get_escaped_char('"')) >= 0) {
-		/* +1 to save space for a trailing NUL character */
-		if (len + 1 >= max)
-			s = xrealloc(s, max *= 2);
-		s[len++] = (char)c;
-	}
-	s[len] = '\0';
-	if (c == -2)
-		/* unterminated string constant */
-		error(258);
+	buffer str;
+	buf_init(&str);
+	quoted_iterator it = { .end = 0 };
+	while (quoted_next(&buf, &it))
+		buf_add_char(&str, (char)it.value);
 
-	/* get length of wide-character string */
-	(void)mblen(NULL, 0);
-	for (i = 0, wlen = 0; i < len; i += n, wlen++) {
-		if ((n = mblen(&s[i], MB_CUR_MAX)) == -1) {
-			/* invalid multibyte character */
-			error(291);
-			break;
-		}
-		if (n == 0)
-			n = 1;
-	}
+	free(buf.data);
 
-	ws = xmalloc((wlen + 1) * sizeof(*ws));
-
-	/* convert from multibyte to wide char */
-	(void)mbtowc(NULL, NULL, 0);
-	for (i = 0, wi = 0; i < len; i += n, wi++) {
-		if ((n = mbtowc(&ws[wi], &s[i], MB_CUR_MAX)) == -1)
-			break;
-		if (n == 0)
-			n = 1;
-	}
-	ws[wi] = 0;
-	free(s);
-
-	strg = xcalloc(1, sizeof(*strg));
-	strg->st_tspec = WCHAR;
-	strg->st_len = wlen;
-	strg->st_wcp = ws;
-
-	yylval.y_string = strg;
+	buffer *len_buf = xcalloc(1, sizeof(*len_buf));
+	len_buf->len = wide_length(&str);
+	yylval.y_string = len_buf;
 	return T_STRING;
 }
 
+void
+lex_next_line(void)
+{
+	curr_pos.p_line++;
+	curr_pos.p_uniq = 0;
+	debug_skip_indent();
+	debug_printf("parsing %s:%d\n", curr_pos.p_file, curr_pos.p_line);
+	if (curr_pos.p_file == csrc_pos.p_file) {
+		csrc_pos.p_line++;
+		csrc_pos.p_uniq = 0;
+	}
+}
+
+void
+lex_unknown_character(int c)
+{
+
+	/* unknown character \%o */
+	error(250, c);
+}
+
 /*
- * As noted above, the scanner does not create new symbol table entries
- * for symbols it cannot find in the symbol table. This is to avoid
- * putting undeclared symbols into the symbol table if a syntax error
- * occurs.
+ * The scanner does not create new symbol table entries for symbols it cannot
+ * find in the symbol table. This is to avoid putting undeclared symbols into
+ * the symbol table if a syntax error occurs.
  *
- * getsym() is called as soon as it is probably ok to put the symbol in the
+ * getsym is called as soon as it is probably ok to put the symbol in the
  * symbol table. It is still possible that symbols are put in the symbol
  * table that are not completely declared due to syntax errors. To avoid too
- * many problems in this case, symbols get type 'int' in getsym().
+ * many problems in this case, symbols get type 'int' in getsym.
  *
- * XXX calls to getsym() should be delayed until decl1*() is called.
+ * XXX calls to getsym should be delayed until declare_1_* is called.
  */
 sym_t *
 getsym(sbuf_t *sb)
 {
-	dinfo_t	*di;
-	char	*s;
-	sym_t	*sym;
 
-	sym = sb->sb_sym;
+	sym_t *sym = sb->sb_sym;
 
 	/*
-	 * During member declaration it is possible that name() looked
-	 * for symbols of type FVFT, although it should have looked for
-	 * symbols of type FTAG. Same can happen for labels. Both cases
-	 * are compensated here.
+	 * During member declaration it is possible that name() looked for
+	 * symbols of type SK_VCFT, although it should have looked for symbols
+	 * of type SK_TAG. Same can happen for labels. Both cases are
+	 * compensated here.
 	 */
-	if (symtyp == FMEMBER || symtyp == FLABEL) {
-		if (sym == NULL || sym->s_kind == FVFT)
-			sym = search(sb);
+	if (sym_kind == SK_MEMBER || sym_kind == SK_LABEL) {
+		if (sym == NULL || sym->s_kind == SK_VCFT)
+			sym = symtab_search(sb->sb_name);
 	}
 
 	if (sym != NULL) {
-		if (sym->s_kind != symtyp)
-			INTERNAL_ERROR("getsym(%d, %d)", sym->s_kind, symtyp);
-		symtyp = FVFT;
-		freesb(sb);
+		lint_assert(sym->s_kind == sym_kind);
+		set_sym_kind(SK_VCFT);
+		free(sb);
 		return sym;
 	}
 
 	/* create a new symbol table entry */
 
-	/* labels must always be allocated at level 1 (outermost block) */
-	if (symtyp == FLABEL) {
-		sym = getlblk(1, sizeof(*sym));
-		s = getlblk(1, sb->sb_len + 1);
+	decl_level *dl;
+	if (sym_kind == SK_LABEL) {
+		sym = level_zero_alloc(1, sizeof(*sym), "sym");
+		char *s = level_zero_alloc(1, sb->sb_len + 1, "string");
 		(void)memcpy(s, sb->sb_name, sb->sb_len + 1);
 		sym->s_name = s;
 		sym->s_block_level = 1;
-		di = dcs;
-		while (di->d_next != NULL && di->d_next->d_next != NULL)
-			di = di->d_next;
-		lint_assert(di->d_ctx == AUTO);
+		dl = dcs;
+		while (dl->d_enclosing != NULL &&
+		    dl->d_enclosing->d_enclosing != NULL)
+			dl = dl->d_enclosing;
+		lint_assert(dl->d_kind == DLK_AUTO);
 	} else {
-		sym = getblk(sizeof(*sym));
+		sym = block_zero_alloc(sizeof(*sym), "sym");
 		sym->s_name = sb->sb_name;
 		sym->s_block_level = block_level;
-		di = dcs;
+		dl = dcs;
 	}
 
-	UNIQUE_CURR_POS(sym->s_def_pos);
-	if ((sym->s_kind = symtyp) != FLABEL)
+	sym->s_def_pos = unique_curr_pos();
+	if ((sym->s_kind = sym_kind) != SK_LABEL)
 		sym->s_type = gettyp(INT);
 
-	symtyp = FVFT;
+	set_sym_kind(SK_VCFT);
 
-	symtab_add(sym);
+	if (!in_gcc_attribute) {
+		debug_printf("%s: symtab_add ", __func__);
+		debug_sym("", sym, "\n");
+		symtab_add(sym);
 
-	*di->d_ldlsym = sym;
-	di->d_ldlsym = &sym->s_dlnxt;
+		*dl->d_last_dlsym = sym;
+		dl->d_last_dlsym = &sym->s_level_next;
+	}
 
-	freesb(sb);
+	free(sb);
 	return sym;
 }
 
 /*
- * Construct a temporary symbol. The symbol name starts with a digit, making
- * the name illegal.
+ * Construct a temporary symbol. The symbol name starts with a digit to avoid
+ * name clashes with other identifiers.
  */
 sym_t *
-mktempsym(type_t *t)
+mktempsym(type_t *tp)
 {
-	static int n = 0;
-	char *s = getlblk(block_level, 64);
-	sym_t *sym = getblk(sizeof(*sym));
+	static unsigned n = 0;
+	char *s = level_zero_alloc((size_t)block_level, 64, "string");
+	sym_t *sym = block_zero_alloc(sizeof(*sym), "sym");
 	scl_t scl;
 
-	(void)snprintf(s, 64, "%.8d_tmp", n++);
+	(void)snprintf(s, 64, "%.8u_tmp", n++);
 
 	scl = dcs->d_scl;
-	if (scl == NOSCL)
+	if (scl == NO_SCL)
 		scl = block_level > 0 ? AUTO : EXTERN;
 
 	sym->s_name = s;
-	sym->s_type = t;
+	sym->s_type = tp;
 	sym->s_block_level = block_level;
 	sym->s_scl = scl;
-	sym->s_kind = FVFT;
+	sym->s_kind = SK_VCFT;
 	sym->s_used = true;
 	sym->s_set = true;
 
 	symtab_add(sym);
 
-	*dcs->d_ldlsym = sym;
-	dcs->d_ldlsym = &sym->s_dlnxt;
+	*dcs->d_last_dlsym = sym;
+	dcs->d_last_dlsym = &sym->s_level_next;
 
 	return sym;
 }
 
-/* Remove a symbol forever from the symbol table. */
 void
-rmsym(sym_t *sym)
+symtab_remove_forever(sym_t *sym)
 {
 
-	debug_step("rmsym '%s' %d '%s'",
-	    sym->s_name, (int)sym->s_kind, type_name(sym->s_type));
+	debug_step("%s '%s' %s '%s'", __func__,
+	    sym->s_name, symbol_kind_name(sym->s_kind),
+	    type_name(sym->s_type));
 	symtab_remove(sym);
 
 	/* avoid that the symbol will later be put back to the symbol table */
@@ -1461,88 +1558,150 @@ rmsym(sym_t *sym)
 }
 
 /*
- * Remove a list of symbols declared at one level from the symbol
- * table.
+ * Remove all symbols from the symbol table that have the same level as the
+ * given symbol.
  */
 void
-rmsyms(sym_t *syms)
+symtab_remove_level(sym_t *syms)
 {
-	sym_t	*sym;
 
-	for (sym = syms; sym != NULL; sym = sym->s_dlnxt) {
+	if (syms != NULL)
+		debug_step("%s %d", __func__, syms->s_block_level);
+
+	/* Note the use of s_level_next instead of s_symtab_next. */
+	for (sym_t *sym = syms; sym != NULL; sym = sym->s_level_next) {
 		if (sym->s_block_level != -1) {
-			debug_step("rmsyms '%s' %d '%s'",
-			    sym->s_name, (int)sym->s_kind,
-			    type_name(sym->s_type));
+			debug_step("%s '%s' %s '%s' %d", __func__,
+			    sym->s_name, symbol_kind_name(sym->s_kind),
+			    type_name(sym->s_type), sym->s_block_level);
 			symtab_remove(sym);
-			sym->s_rlink = NULL;
+			sym->s_symtab_ref = NULL;
 		}
 	}
 }
 
-/*
- * Put a symbol into the symbol table.
- */
+/* Put a symbol into the symbol table. */
 void
-inssym(int bl, sym_t *sym)
+inssym(int level, sym_t *sym)
 {
 
-	debug_step("inssym '%s' %d '%s'",
-	    sym->s_name, sym->s_kind, type_name(sym->s_type));
+	debug_step("%s '%s' %s '%s' %d", __func__,
+	    sym->s_name, symbol_kind_name(sym->s_kind),
+	    type_name(sym->s_type), level);
+	sym->s_block_level = level;
 	symtab_add(sym);
-	sym->s_block_level = bl;
-	lint_assert(sym->s_link == NULL ||
-		    sym->s_block_level >= sym->s_link->s_block_level);
+
+	const sym_t *next = sym->s_symtab_next;
+	if (next != NULL)
+		lint_assert(sym->s_block_level >= next->s_block_level);
 }
 
-/*
- * Called at level 0 after syntax errors.
- *
- * Removes all symbols which are not declared at level 0 from the
- * symbol table. Also frees all memory which is not associated with
- * level 0.
- */
+/* Called at level 0 after syntax errors. */
 void
-cleanup(void)
+clean_up_after_error(void)
 {
-	sym_t	*sym, *nsym;
-	int	i;
 
-	for (i = 0; i < HSHSIZ1; i++) {
-		for (sym = symtab[i]; sym != NULL; sym = nsym) {
-			nsym = sym->s_link;
-			if (sym->s_block_level >= 1)
-				symtab_remove(sym);
-		}
-	}
+	symtab_remove_locals();
 
-	for (i = mem_block_level; i > 0; i--)
-		freelblk(i);
+	while (mem_block_level > 0)
+		level_free_all(mem_block_level--);
 }
 
-/*
- * Create a new symbol with the name of an existing symbol.
- */
+/* Create a new symbol with the same name as an existing symbol. */
 sym_t *
 pushdown(const sym_t *sym)
 {
-	sym_t	*nsym;
 
-	debug_step("pushdown '%s' %d '%s'",
-	    sym->s_name, (int)sym->s_kind, type_name(sym->s_type));
-	nsym = getblk(sizeof(*nsym));
+	debug_step("pushdown '%s' %s '%s'",
+	    sym->s_name, symbol_kind_name(sym->s_kind),
+	    type_name(sym->s_type));
+
+	sym_t *nsym = block_zero_alloc(sizeof(*nsym), "sym");
 	lint_assert(sym->s_block_level <= block_level);
 	nsym->s_name = sym->s_name;
-	UNIQUE_CURR_POS(nsym->s_def_pos);
+	nsym->s_def_pos = unique_curr_pos();
 	nsym->s_kind = sym->s_kind;
 	nsym->s_block_level = block_level;
 
 	symtab_add(nsym);
 
-	*dcs->d_ldlsym = nsym;
-	dcs->d_ldlsym = &nsym->s_dlnxt;
+	*dcs->d_last_dlsym = nsym;
+	dcs->d_last_dlsym = &nsym->s_level_next;
 
 	return nsym;
+}
+
+static void
+fill_token(int tk, const char *text, token *tok)
+{
+	switch (tk) {
+	case T_NAME:
+	case T_TYPENAME:
+		tok->kind = TK_IDENTIFIER;
+		tok->u.identifier = xstrdup(yylval.y_name->sb_name);
+		break;
+	case T_CON:
+		tok->kind = TK_CONSTANT;
+		tok->u.constant = *yylval.y_val;
+		break;
+	case T_NAMED_CONSTANT:
+		tok->kind = TK_IDENTIFIER;
+		tok->u.identifier = xstrdup(text);
+		break;
+	case T_STRING:;
+		tok->kind = TK_STRING_LITERALS;
+		tok->u.string_literals.len = yylval.y_string->len;
+		tok->u.string_literals.cap = yylval.y_string->cap;
+		tok->u.string_literals.data = xstrdup(yylval.y_string->data);
+		break;
+	default:
+		tok->kind = TK_PUNCTUATOR;
+		tok->u.punctuator = xstrdup(text);
+	}
+}
+
+static void
+seq_reserve(balanced_token_sequence *seq)
+{
+	if (seq->len >= seq->cap) {
+		seq->cap = 16 + 2 * seq->cap;
+		const balanced_token *old_tokens = seq->tokens;
+		balanced_token *new_tokens = block_zero_alloc(
+		    seq->cap * sizeof(*seq->tokens), "balanced_token[]");
+		if (seq->len > 0)
+			memcpy(new_tokens, old_tokens,
+			    seq->len * sizeof(*seq->tokens));
+		seq->tokens = new_tokens;
+	}
+}
+
+static balanced_token_sequence
+read_balanced(int opening)
+{
+	int closing = opening == T_LPAREN ? T_RPAREN
+	    : opening == T_LBRACK ? T_RBRACK : T_RBRACE;
+	balanced_token_sequence seq = { NULL, 0, 0 };
+
+	int tok;
+	while (tok = yylex(), tok > 0 && tok != closing) {
+		seq_reserve(&seq);
+		if (tok == T_LPAREN || tok == T_LBRACK || tok == T_LBRACE) {
+			seq.tokens[seq.len].kind = tok == T_LPAREN ? '('
+			    : tok == T_LBRACK ? '[' : '{';
+			seq.tokens[seq.len].u.tokens = read_balanced(tok);
+		} else {
+			fill_token(tok, yytext, &seq.tokens[seq.len].u.token);
+			freeyyv(&yylval, tok);
+		}
+		seq.len++;
+	}
+	return seq;
+}
+
+balanced_token_sequence
+lex_balanced(void)
+{
+	return read_balanced(T_LPAREN);
 }
 
 /*
@@ -1555,18 +1714,13 @@ freeyyv(void *sp, int tok)
 {
 	if (tok == T_NAME || tok == T_TYPENAME) {
 		sbuf_t *sb = *(sbuf_t **)sp;
-		freesb(sb);
+		free(sb);
 	} else if (tok == T_CON) {
 		val_t *val = *(val_t **)sp;
 		free(val);
 	} else if (tok == T_STRING) {
-		strg_t *strg = *(strg_t **)sp;
-		if (strg->st_tspec == CHAR) {
-			free(strg->st_cp);
-		} else {
-			lint_assert(strg->st_tspec == WCHAR);
-			free(strg->st_wcp);
-		}
-		free(strg);
+		buffer *str = *(buffer **)sp;
+		free(str->data);
+		free(str);
 	}
 }

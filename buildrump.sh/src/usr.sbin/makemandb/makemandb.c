@@ -1,4 +1,4 @@
-/*	$NetBSD: makemandb.c,v 1.60 2019/05/18 07:56:43 abhinav Exp $	*/
+/*	$NetBSD: makemandb.c,v 1.67 2023/01/01 21:27:14 gutteridge Exp $	*/
 /*
  * Copyright (c) 2011 Abhinav Upadhyay <er.abhinav.upadhyay@gmail.com>
  * Copyright (c) 2011 Kristaps Dzonsons <kristaps@bsd.lv>
@@ -17,7 +17,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: makemandb.c,v 1.60 2019/05/18 07:56:43 abhinav Exp $");
+__RCSID("$NetBSD: makemandb.c,v 1.67 2023/01/01 21:27:14 gutteridge Exp $");
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -351,6 +351,13 @@ main(int argc, char *argv[])
 		manconf = MANCONF;
 	}
 
+	/* Call man -p to get the list of man page dirs */
+	if ((file = popen(command, "r")) == NULL) {
+		free(command);
+		err(EXIT_FAILURE, "popen failed");
+	}
+	free(command);
+
 	if (mflags.recreate) {
 		char *dbp = get_dbpath(manconf);
 		/* No error here, it will fail in init_db in the same call */
@@ -377,14 +384,6 @@ main(int argc, char *argv[])
 		close_db(db);
 		exit(EXIT_FAILURE);
 	}
-
-
-	/* Call man -p to get the list of man page dirs */
-	if ((file = popen(command, "r")) == NULL) {
-		close_db(db);
-		err(EXIT_FAILURE, "fopen failed");
-	}
-	free(command);
 
 	/* Begin the transaction for indexing the pages	*/
 	sqlite3_exec(db, "BEGIN", NULL, NULL, &errmsg);
@@ -506,7 +505,7 @@ traversedir(const char *parent, const char *file, sqlite3 *db,
 /* build_file_cache --
  *   This function generates an md5 hash of the file passed as its 2nd parameter
  *   and stores it in a temporary table file_cache along with the full file path.
- *   This is done to support incremental updation of the database.
+ *   This is done to support incremental update of the database.
  *   The temporary table file_cache is dropped thereafter in the function
  *   update_db(), once the database has been updated.
  */
@@ -687,17 +686,17 @@ update_existing_entry(sqlite3 *db, const char *file, const char *hash,
 		}
 	} else {
 		if (mflags.verbosity == 2)
-			warnx("Could not update the meta data for %s", file);
+			warnx("Could not update the metadata for %s", file);
 		(*err_count)++;
 	}
 	sqlite3_finalize(inner_stmt);
 }
 
 /* update_db --
- *	Does an incremental updation of the database by checking the file_cache.
+ *	Does an incremental update of the database by checking the file_cache.
  *	It parses and adds the pages which are present in file_cache,
  *	but not in the database.
- *	It also removes the pages which are present in the databse,
+ *	It also removes the pages which are present in the database,
  *	but not in the file_cache.
  */
 static void
@@ -1079,15 +1078,18 @@ mdoc_parse_Sh(const struct roff_node *n, mandb_rec *rec)
 
 	if (n->type == ROFFT_TEXT) {
 		mdoc_parse_section(n->sec, n->string, rec);
-	} else if (mdocs[n->tok] == pmdoc_Xr) {
-		/*
-		 * When encountering other inline macros,
-		 * call pmdoc_macro_handler.
-		 */
-		pmdoc_macro_handler(n, rec, MDOC_Xr);
-		xr_found = 1;
-	} else if (mdocs[n->tok] == pmdoc_Pp) {
-		pmdoc_macro_handler(n, rec, MDOC_Pp);
+	} else if (n->tok >= MDOC_Dd && n->tok < MDOC_MAX) {
+		const int tok_idx = n->tok - MDOC_Dd;
+		if (mdocs[tok_idx] == pmdoc_Xr) {
+			/*
+			* When encountering other inline macros,
+			* call pmdoc_macro_handler.
+			*/
+			pmdoc_macro_handler(n, rec, MDOC_Xr);
+			xr_found = 1;
+		} else if (mdocs[tok_idx] == pmdoc_Pp) {
+			pmdoc_macro_handler(n, rec, MDOC_Pp);
+		}
 	}
 
 	/*
@@ -1217,7 +1219,7 @@ pman_block(const struct roff_node *n, mandb_rec *rec)
  *  1. If the present section is NAME, then it will:
  *    (a) Extract the name of the page (in case of multiple comma separated
  *        names, it will pick up the first one).
- *    (b) Build a space spearated list of all the symlinks/hardlinks to
+ *    (b) Build a space separated list of all the symlinks/hardlinks to
  *        this page and store in the buffer 'links'. These are extracted from
  *        the comma separated list of names in the NAME section as well.
  *    (c) Move on to the one line description section, which is after the list
@@ -1259,7 +1261,7 @@ pman_sh(const struct roff_node *n, mandb_rec *rec)
 
 	/*
 	 * Check if this section should be extracted and
-	 * where it should be stored. Handled the trival cases first.
+	 * where it should be stored. Handled the trivial cases first.
 	 */
 	for (i = 0; i < sizeof(mapping) / sizeof(mapping[0]); ++i) {
 		if (strcmp(head->string, mapping[i].header) == 0) {
@@ -1452,7 +1454,7 @@ man_parse_section(enum man_sec sec, const struct roff_node *n, mandb_rec *rec)
 
 /*
  * insert_into_db --
- *  Inserts the parsed data of the man page in the Sqlite databse.
+ *  Inserts the parsed data of the man page in the SQLite database.
  *  If any of the values is NULL, then we cleanup and return -1 indicating
  *  an error.
  *  Otherwise, store the data in the database and return 0.
@@ -1688,7 +1690,7 @@ insert_into_db(sqlite3 *db, mandb_rec *rec)
 	sqlite3_finalize(stmt);
 	if (rc == SQLITE_CONSTRAINT_UNIQUE) {
 		/* The *most* probable reason for reaching here is that
-		 * the UNIQUE contraint on the file column of the mandb_meta
+		 * the UNIQUE constraint on the file column of the mandb_meta
 		 * table was violated.
 		 * This can happen when a file was updated/modified.
 		 * To fix this we need to do two things:

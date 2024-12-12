@@ -1,4 +1,4 @@
-/*	$NetBSD: socket.h,v 1.129 2018/11/04 16:30:29 christos Exp $	*/
+/*	$NetBSD: socket.h,v 1.132 2024/01/22 18:50:46 christos Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -287,17 +287,14 @@ struct sockaddr_big {
 
 #endif /* _KERNEL */
 
-#if 1
 /*
  * RFC 2553: protocol-independent placeholder for socket addresses
  */
 #define _SS_MAXSIZE	128
 #define _SS_ALIGNSIZE	(sizeof(__int64_t))
 #define _SS_PAD1SIZE	(_SS_ALIGNSIZE - 2)
-#define _SS_PAD2SIZE	(_SS_MAXSIZE - 2 - \
-				_SS_PAD1SIZE - _SS_ALIGNSIZE)
+#define _SS_PAD2SIZE	(_SS_MAXSIZE - 2 - _SS_PAD1SIZE - _SS_ALIGNSIZE)
 
-#if (_XOPEN_SOURCE - 0) >= 500 || defined(_NETBSD_SOURCE)
 struct sockaddr_storage {
 	__uint8_t	ss_len;		/* address length */
 	sa_family_t	ss_family;	/* address family */
@@ -305,10 +302,11 @@ struct sockaddr_storage {
 	__int64_t     __ss_align;/* force desired structure storage alignment */
 	char		__ss_pad2[_SS_PAD2SIZE];
 };
+
+#if defined(_NETBSD_SOURCE)
 #define	sstosa(__ss)	((struct sockaddr *)(__ss))
 #define	sstocsa(__ss)	((const struct sockaddr *)(__ss))
-#endif /* _XOPEN_SOURCE >= 500 || _NETBSD_SOURCE */
-#endif /* 1 */
+#endif /* _NETBSD_SOURCE */
 
 /*
  * Protocol families, same as address families for now.
@@ -392,10 +390,13 @@ struct sockcred {
 
 /*
  * Compute size of a sockcred structure with groups.
+ *
+ * The (ngrps - 1) is to account for struct sockcred being defined with
+ * already one group member. This code works correctly when ngroups == 0
+ * because of unsigned arithmetic wrap-around.
  */
 #define	SOCKCREDSIZE(ngrps) \
-	(/*CONSTCOND*/sizeof(struct sockcred) + (sizeof(gid_t) * \
-	    ((ngrps) ? ((ngrps) - 1) : 0)))
+	(/*LINTED*/sizeof(struct sockcred) + (sizeof(gid_t) * ((ngrps) - 1)))
 #endif /* _NETBSD_SOURCE */
 
 
@@ -526,7 +527,7 @@ struct cmsghdr {
 	socklen_t	cmsg_len;	/* data byte count, including hdr */
 	int		cmsg_level;	/* originating protocol */
 	int		cmsg_type;	/* protocol-specific type */
-/* followed by	u_char  cmsg_data[]; */
+/* followed by unsigned char cmsg_data[]; */
 };
 
 /*
@@ -551,8 +552,8 @@ struct cmsghdr {
     (__CASTV(char *, (mhdr)->msg_control) + (mhdr)->msg_controllen)
 
 /* given pointer to struct cmsghdr, return pointer to data */
-#define	CMSG_DATA(cmsg) (__CASTV(u_char *, cmsg) + __CMSG_ASIZE)
-#define	CCMSG_DATA(cmsg) (__CASTCV(const u_char *, cmsg) + __CMSG_ASIZE)
+#define	CMSG_DATA(cmsg) (__CASTV(unsigned char *, cmsg) + __CMSG_ASIZE)
+#define	CCMSG_DATA(cmsg) (__CASTCV(const unsigned char *, cmsg) + __CMSG_ASIZE)
 
 /* given pointer to struct cmsghdr, return pointer to next cmsghdr */
 #define	CMSG_NXTHDR(mhdr, cmsg)	\

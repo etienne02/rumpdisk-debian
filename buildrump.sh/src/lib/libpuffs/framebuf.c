@@ -1,4 +1,4 @@
-/*	$NetBSD: framebuf.c,v 1.35 2017/06/14 16:39:41 christos Exp $	*/
+/*	$NetBSD: framebuf.c,v 1.37 2022/04/19 20:32:17 rillig Exp $	*/
 
 /*
  * Copyright (c) 2007  Antti Kantee.  All Rights Reserved.
@@ -35,7 +35,7 @@
 
 #include <sys/cdefs.h>
 #if !defined(lint)
-__RCSID("$NetBSD: framebuf.c,v 1.35 2017/06/14 16:39:41 christos Exp $");
+__RCSID("$NetBSD: framebuf.c,v 1.37 2022/04/19 20:32:17 rillig Exp $");
 #endif /* !lint */
 
 #include <sys/types.h>
@@ -349,7 +349,7 @@ do {									\
 		errno = ESHUTDOWN;					\
 		return -1;						\
 	}								\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 int
 puffs_framev_enqueue_cc(struct puffs_cc *pcc, int fd,
@@ -778,16 +778,15 @@ puffs__framev_addfd_ctrl(struct puffs_usermount *pu, int fd, int what,
 	struct puffs_framectrl *pfctrl)
 {
 	struct puffs_fctrl_io *fio;
-	struct kevent *newevs;
 	struct kevent kev[2];
 	size_t nevs;
 	int rv, readenable;
 
 	nevs = pu->pu_nevs+2;
-	newevs = realloc(pu->pu_evs, nevs*sizeof(struct kevent));
-	if (newevs == NULL)
+	if (reallocarr(&pu->pu_evs, nevs, sizeof(struct kevent)) != 0) {
+		errno = ENOMEM;
 		return -1;
-	pu->pu_evs = newevs;
+	}
 
 	fio = malloc(sizeof(struct puffs_fctrl_io));
 	if (fio == NULL)

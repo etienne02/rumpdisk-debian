@@ -1,4 +1,4 @@
-/*	$NetBSD: subr.S,v 1.38 2020/06/30 16:20:02 maxv Exp $	   */
+/*	$NetBSD: subr.S,v 1.43 2023/12/18 22:40:01 kalvisd Exp $	   */
 
 /*
  * Copyright (c) 1994 Ludd, University of Lule}, Sweden.
@@ -225,7 +225,7 @@ _C_LABEL(cmn_idsptch):
 	calls	$0,_C_LABEL(krnunlock)
 #endif
 	popr	$0x3f		# pop registers
-	rei			# return from interrut
+	rei			# return from interrupt
 #if 0
 2:	.asciz	"intr %p(%p)\n"
 #endif
@@ -315,11 +315,24 @@ softint_process:
 	movab	softint_exit,PCB_PC(%r3)/* do a quick exit */
 #ifdef MULTIPROCESSOR
 	movl	L_CPU(%r6),%r8
+	/* XXX store-before-store barrier -- see cpu_switchto */
 	movl	%r6,CI_CURLWP(%r8)
+	/* XXX store-before-load barrier -- see cpu_switchto */
 #endif
-
+	/* copy AST level from current LWP to pinned LWP, reset
+	   current AST level */
+	mfpr	$PR_SSP,%r4		/* current LWP */
+	movl	L_PCB(%r4),%r4		/* PCB address */
+	movl	P0LR(%r4),%r0		/* LR and ASTLVL field, current PCB */
+	movl	P0LR(%r3),%r1		/* same, pinned LWP */
+	cmpl	%r0,%r1
+	bgtru	1f			/* AST(current) >= AST(pinned) */
+	extv	$24,$3,%r0,%r0		/* ASTLVL field for current LWP */
+	insv	%r0,$24,$3,P0LR(%r3)	/* copy to pinned LWP */
+	insv	$4,$24,$3,P0LR(%r4)	/* reset AST for current LWP */
+1:
 	mtpr	PCB_PADDR(%r3),$PR_PCBB	/* restore PA of interrupted pcb */
-	ldpctx				/* implictily updates curlwp */
+	ldpctx				/* implicitly updates curlwp */
 	rei
 
 
@@ -338,7 +351,9 @@ softint_common:
 	movl	%r6,PCB_R6(%r3)		/* move old lwp into new pcb */
 	movl	%r1,PCB_R7(%r3)		/* move IPL into new pcb */
 #ifdef MULTIPROCESSOR
+	/* XXX store-before-store barrier -- see cpu_switchto */
 	movl	%r2,CI_CURLWP(%r8)	/* update ci_curlwp */
+	/* XXX store-before-load barrier -- see cpu_switchto */
 #endif
 
 	/*
@@ -404,7 +419,31 @@ JSBENTRY(Swtchto)
 #ifdef MULTIPROCESSOR
 	movl	L_CPU(%r0), %r8		/* get cpu_info of old lwp */
 	movl	%r8, L_CPU(%r1)		/* update cpu_info of new lwp */
+	/*
+	 * Issue barriers to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
+	 *
+	 * XXX I'm fuzzy on the memory model of VAX.  I would guess
+	 * it's TSO like x86 but I can't find a store-before-load
+	 * barrier, which is the only one TSO requires explicitly.
+	 */
+	/* XXX store-before-store barrier */
 	movl	%r1,CI_CURLWP(%r8)	/* update ci_curlwp */
+	/* XXX store-before-load barrier */
 #endif
 
 	mtpr	PCB_PADDR(%r3),$PR_PCBB	# set PA of new pcb
@@ -505,7 +544,7 @@ ENTRY(copyoutstr, 0)
 	.align	2
 
 #define	UFETCHSTORE_PROLOGUE						 \
-	tstl	4(%ap)			/* uaddr in userpsace? */	;\
+	tstl	4(%ap)			/* uaddr in userspace? */	;\
 	blss	1f			/* nope, fault */		;\
 	mfpr	$PR_ESP,%r1		/* &pcb_onfault is in ESP */	;\
 	movab	2f,(%r1)		/* set pcb_onfault */

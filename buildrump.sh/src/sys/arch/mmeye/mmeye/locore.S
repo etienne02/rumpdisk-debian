@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.11 2011/02/19 10:46:29 kiyohara Exp $	*/
+/*	$NetBSD: locore.S,v 1.15 2023/09/29 05:25:15 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1990 The Regents of the University of California.
@@ -73,20 +73,19 @@
  */
 
 #include "opt_cputype.h"
-#include "opt_memsize.h"	
+#include "opt_memsize.h"
 #include "assym.h"
 
-#if defined(SH3) && defined(SH4)	
-#error "mmeye port don't support SH3,SH4 common kernel."	
+#if defined(SH3) && defined(SH4)
+#error "mmeye port don't support SH3,SH4 common kernel."
 #endif
 
 #include <sh3/asm.h>
-#include <sh3/locore.h>
-#include <sh3/exception.h>
 #include <sh3/cache_sh3.h>
-#include <sh3/cache_sh4.h>	
+#include <sh3/exception.h>
+#include <sh3/locore.h>
 #include <sh3/mmu_sh3.h>
-#include <sh3/mmu_sh4.h>
+#include <sh3/psl.h>
 
 #define	INIT_STACK							\
 	((IOM_RAM_BEGIN + IOM_RAM_SIZE - 0x00001000) | 0x80000000)
@@ -99,27 +98,27 @@ ALTENTRY(kernel_text)
 	/* Set SP to initial position */
 	mov.l	XLtmpstk, r15
 
-	__INTR_MASK(r0, r1)
-
-	/* Set Register Bank to Bank 0 */
+	/* Set Status Register */
 	mov.l	SR_init, r0
 	ldc	r0, sr
 
+	/* MMU off */
 	xor	r0, r0
-	MOV	(MMUCR, r2)	
-	mov.l	r0, @r2		/* MMU OFF */
+	MOV	(MMUCR, r2)
+	mov.l	r0, @r2
 
 	bra	start1
 	nop
 	.align	2
-SR_init:	.long	0x500000F0
-REG_SYMBOL(MMUCR)	
+SR_init:	.long	PSL_MD | PSL_BL | PSL_IMASK
+REG_SYMBOL(MMUCR)
 start1:
 
 #ifdef ROMIMAGE
 	/* Initialize BUS State Control Regs. */
 	mov.l	_ROM_START, r3
-	mov.l	_C_LABEL(ram_start), r4
+	mov.l	XL_ram_start, r4
+	mov.l	@r4, r4
 	sub	r3, r4
 	/* Set Bus State Controller */
 	mov.l	XLInitializeBsc, r0
@@ -140,7 +139,8 @@ start1:
 	add	r3, r1		/* src address */
 	mov.l	___start, r3
 	sub	r2, r3
-	mov.l	_C_LABEL(ram_start), r4
+	mov.l	XL_ram_start, r4
+	mov.l	@r4, r4
 	add	r4, r3		/* dest address */
 1:
 	mov.l	@r1+, r4
@@ -157,6 +157,8 @@ start1:
 	.align	2
 LXstart_in_RAM:
 	.long	start_in_RAM
+XL_ram_start:
+	.long	_C_LABEL(ram_start)
 #else /* ROMIMAGE */
 	/* Set Bus State Controller */
 	mov.l	XLInitializeBsc, r0
@@ -186,7 +188,9 @@ ___etext:	.long	_etext
 ___end:		.long	_end
 XLtmpstk:	.long	INIT_STACK
 _KERNBASE:	.long	0x8c000000
+#ifdef ROMIMAGE
 _ROM_START:	.long	IOM_ROM_BEGIN
+#endif
 XLinitSH3:	.long	_C_LABEL(initSH3)
 XLmain:		.long	_C_LABEL(main)
 

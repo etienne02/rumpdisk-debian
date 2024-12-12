@@ -1,4 +1,4 @@
-/*	$NetBSD: acpi_util.h,v 1.11 2021/02/05 17:12:43 thorpej Exp $ */
+/*	$NetBSD: acpi_util.h,v 1.15 2022/07/23 03:08:17 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2003, 2007 The NetBSD Foundation, Inc.
@@ -67,7 +67,7 @@
 #ifndef _SYS_DEV_ACPI_ACPI_UTIL_H
 #define _SYS_DEV_ACPI_ACPI_UTIL_H
 
-devhandle_t	devhandle_from_acpi(ACPI_HANDLE);
+devhandle_t	devhandle_from_acpi(devhandle_t, ACPI_HANDLE);
 ACPI_HANDLE	devhandle_to_acpi(devhandle_t);
 
 #define	ACPI_DEVICE_CALL_REGISTER(_n_, _c_)				\
@@ -94,10 +94,11 @@ int		 acpi_match_class(ACPI_HANDLE, uint8_t, uint8_t, uint8_t);
 ACPI_HANDLE	 acpi_match_cpu_info(struct cpu_info *);
 struct cpu_info *acpi_match_cpu_handle(ACPI_HANDLE);
 
-char		*acpi_pack_compat_list(ACPI_DEVICE_INFO *, size_t *);
+char		*acpi_pack_compat_list(struct acpi_devnode *ad, size_t *);
 
 ACPI_STATUS	 acpi_dsd_integer(ACPI_HANDLE, const char *, ACPI_INTEGER *);
 ACPI_STATUS	 acpi_dsd_string(ACPI_HANDLE, const char *, char **);
+ACPI_STATUS	 acpi_dsd_bool(ACPI_HANDLE, const char *, bool *);
 
 ACPI_STATUS	 acpi_dsm(ACPI_HANDLE, uint8_t *, ACPI_INTEGER,
 			ACPI_INTEGER, const ACPI_OBJECT *, ACPI_OBJECT **);
@@ -106,6 +107,8 @@ ACPI_STATUS	 acpi_dsm_typed(ACPI_HANDLE, uint8_t *, ACPI_INTEGER,
 			ACPI_OBJECT_TYPE, ACPI_OBJECT **);
 ACPI_STATUS	 acpi_dsm_integer(ACPI_HANDLE, uint8_t *, ACPI_INTEGER,
 			ACPI_INTEGER, const ACPI_OBJECT *,
+			ACPI_INTEGER *);
+ACPI_STATUS	 acpi_dsm_query(ACPI_HANDLE, uint8_t *, ACPI_INTEGER,
 			ACPI_INTEGER *);
 
 ACPI_STATUS	 acpi_claim_childdevs(device_t, struct acpi_devnode *);

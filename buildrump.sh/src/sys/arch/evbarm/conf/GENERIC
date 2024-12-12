@@ -1,5 +1,5 @@
 #
-#	$NetBSD: GENERIC,v 1.100 2021/08/26 17:08:34 thorpej Exp $
+#	$NetBSD: GENERIC,v 1.121 2024/07/16 12:01:19 riastradh Exp $
 #
 #	GENERIC ARM (aarch32) kernel
 #
@@ -16,18 +16,20 @@ options 	SOC_EXYNOS5422
 options 	SOC_IMX6DL
 options 	SOC_IMX6Q
 options 	SOC_IMX6QDL
+options 	SOC_IMX6SX
 options 	SOC_IMX7D
 options 	SOC_MESON8B
 options 	SOC_OMAP3
+options 	SOC_RK3288
 options 	SOC_SUN4I_A10
 options 	SOC_SUN5I_A13
 options 	SOC_SUN6I_A31
 options 	SOC_SUN7I_A20
 options 	SOC_SUN8I_A83T
 options 	SOC_SUN8I_H3
+options 	SOC_SUN8I_V3S
 options 	SOC_SUN9I_A80
 options 	SOC_TEGRA124
-options 	SOC_VIRT
 options 	SOC_ZYNQ7000
 
 options 	MULTIPROCESSOR
@@ -39,6 +41,10 @@ pseudo-device 	openfirm	# /dev/openfirm
 #options 	LOCKDEBUG
 #options 	UVMHIST		# kernhist for uvm/pmap subsystems
 #options 	PCI_CONFIG_DUMP	# verbosely dump PCI config space
+
+# Heartbeat checks
+options 	HEARTBEAT
+options 	HEARTBEAT_MAX_PERIOD_DEFAULT=15
 
 options 	MSGBUFSIZE=32768
 
@@ -77,8 +83,11 @@ options 	MSGBUFSIZE=32768
 #options 	EARLYCONS=tegra, CONSADDR=0x70006300
 
 #options 	EARLYCONS=vexpress, CONSADDR=0x1c090000
-#options 	EARLYCONS=virt, CONSADDR=0x09000000
 #options 	EARLYCONS=zynq, CONSADDR=0xe0001000
+#options 	EARLYCONS=rk3288, CONSADDR=0xff690000
+
+# The QEMU virt machine
+#options 	EARLYCONS=plcom, CONSADDR=0x09000000
 
 # Kernel Undefined Behavior Sanitizer (kUBSan). Use UBSAN_ALWAYS_FATAL
 # if you want panics instead of warnings.
@@ -107,6 +116,10 @@ makeoptions 	COPY_SYMTAB=1
 
 config		netbsd		root on ? type ?
 
+# EFI runtime support
+options 	EFI_RUNTIME
+#pseudo-device	efi		# /dev/efi
+
 # Device tree support
 armfdt0		at root
 simplebus*	at fdt? pass 0
@@ -128,12 +141,14 @@ cycvclkmgr* 	at fdt? pass 1		# Cyclone V clock manager
 cycvrstmgr* 	at fdt? pass 0		# Cyclone V reset manager
 exy5410clk* 	at fdt? pass 3		# Exynos5410 clock controller
 exy5422clk* 	at fdt? pass 3		# Exynos5422 clock controller
-imx6ccm* 	at fdt? pass 1		# i.MX6 CCM
+imx6ccm* 	at fdt? pass 1		# i.MX6Q* CCM
+imx6sxccm* 	at fdt? pass 1		# i.MX6SX CCM
 imx7dccm* 	at fdt? pass 2		# i.MX7D CCM
 meson8bclkc* 	at fdt? pass 2		# Amlogic Meson8b clock controller
 mesonresets* 	at fdt? pass 2		# Amlogic Meson misc. clock resets
 omap3cm* 	at fdt? pass 1		# TI OMAP3 CM
 omap3prm* 	at fdt? pass 1		# TI OMAP3 PRM
+rkcru*		at fdt? pass 2		# Rockchip RK3288 CRU
 sun4ia10ccu* 	at fdt? pass 2		# Allwinner A10/A20 CCU
 sun5ia13ccu* 	at fdt? pass 2		# Allwinner A13 CCU
 sun6ia31ccu* 	at fdt? pass 2		# Allwinner A31 CCU
@@ -154,6 +169,7 @@ tegra210car* 	at fdt? pass 3		# NVIDIA Tegra CAR (T210)
 tidivclk* 	at fdt? pass 1		# TI divider clock
 tidpllclk* 	at fdt? pass 2		# TI DPLL clock
 timuxclk* 	at fdt? pass 1		# TI mux clock
+zynqclk*	at fdt? pass 1		# Xilinx Zynq PS clocks
 
 fclock* 	at fdt? pass 1
 ffclock* 	at fdt? pass 1
@@ -176,7 +192,6 @@ sunxisramc* 	at fdt? pass 4		# SRAM controller
 imxocotp0 	at fdt? pass 2		# On-Chip OTP Controller
 syscon*		at fdt? pass 1		# Generic System Controller
 tisysc*		at fdt? pass 2		# TI sysc interconnect
-#zynqslcr* 	at fdt? pass 1		# Zynq 7000 system Controller
 
 # Timer
 a9ptmr* 	at fdt? pass 2		# ARM Cortex A5/A9 Private Timer
@@ -258,18 +273,22 @@ imxgpio* 	at fdt? pass 3		# i.MX GPIO
 mesonpinctrl* 	at fdt? pass 2		# Amlogic Meson GPIO
 plgpio* 	at fdt?			# ARM PrimeCell GPIO
 sunxigpio* 	at fdt? pass 3		# Allwinner GPIO
+rkgpio*		at rkiomux?		# Rockchip GPIO
 tegragpio* 	at fdt? pass 2		# NVIDIA Tegra GPIO
 tigpio* 	at fdt? pass 2		# TI GPIO
+zynqgpio*	at fdt? pass 2		# Xilinx Zynq GPIO
 gpio* 		at gpiobus?
 
 # IOMUX / MPIO / Pinmux
 pinctrl* 	at fdt? pass 2		# Generic pinctrl driver
 imxiomux* 	at fdt? pass 2		# i.MX IOMUX
+rkiomux*	at fdt? pass 3		# Rockchip IOMUX
 tegrapinmux* 	at fdt?			# NVIDIA Tegra MPIO
 
 # PWM controller
 expwm* 		at fdt? pass 4		# PWM
 imxpwm* 	at fdt?			# i.MX PWM
+rkpwm*		at fdt? pass 3		# Rockchip PWM
 sunxipwm* 	at fdt? pass 3		# Allwinner PWM
 
 # Backlight
@@ -316,6 +335,7 @@ inphy* 		at mii? phy ?		# Intel 82555 PHYs
 iophy* 		at mii? phy ?		# Intel 82553 PHYs
 lxtphy* 	at mii? phy ?		# Level One LXT-970 PHYs
 makphy* 	at mii? phy ?		# Marvell Semiconductor 88E1000 PHYs
+micphy*		at mii? phy ?		# Micrel KSZ[89]xxx PHYs
 nsphy* 		at mii? phy ?		# NS83840 PHYs
 nsphyter* 	at mii? phy ?		# NS83843 PHYs
 pnaphy* 	at mii? phy ?		# generic HomePNA PHYs
@@ -347,8 +367,10 @@ zynquart* 	at fdt?	pass 4		# Cadence UART
 # I2C controllers
 options 	I2C_MAX_ADDR=0xfff
 bsciic* 	at fdt?			# Broadcom BCM283x Serial Control
+cdnsiic*	at fdt? pass 4		# Cadence I2C
 exyoi2c* 	at fdt?			# Samsung Exynos I2C
 imxi2c* 	at fdt? pass 4		# i.MX I2C
+rkiic*		at fdt? pass 4		# Rockchip I2C
 sunxirsb* 	at fdt? pass 4		# Allwinner RSB
 sunxitwi* 	at fdt?			# Allwinner TWI
 tegrai2c* 	at fdt? pass 4		# NVIDIA Tegra I2C
@@ -367,9 +389,11 @@ axppmic* 	at iic?			# X-Powers AXP Power Management IC
 axpreg* 	at axppmic?
 dsrtc*		at iic?			# Dallas Semiconductor RTCs
 em3027rtc* 	at iic?
+lmtemp*		at iic?			# National Semiconductor LM7x
 max77620pmic* 	at iic?
 pcaiicmux*	at iic?			# PCA954x / PCA984x I2C switch / mux
 pcf8563rtc* 	at iic?			# PCF8563 RTC
+rkpmic*		at iic?			# Rockchip Power Management IC
 seeprom* 	at iic?			# AT24Cxx Serial EEPROM
 sy8106a* 	at iic?			# Silergy SY81061 regulator
 tcakp* 		at iic?			# TI TCA8418 Keypad Scan IC
@@ -388,6 +412,7 @@ sunxican* 	at fdt?			# A10/A20 CAN controller
 
 # SPI
 imxspi* 	at fdt?			# i.MX SPI
+rkspi*		at fdt?			# Rockchip SPI
 sun4ispi* 	at fdt?
 sun6ispi* 	at fdt?
 spi* 		at spibus?
@@ -401,6 +426,7 @@ m25p* 		at spi? slave ?
 bcmrng* 	at fdt?			# Broadcom BCM283x RNG
 mesonrng* 	at fdt?			# Amlogic Meson RNG
 tirng* 		at fdt?			# TI RNG
+rkv1crypto*	at fdt?			# Rockchip Crypto v1
 sun8icrypto* 	at fdt?			# Allwinner Crypto Engine
 
 # Security ID EFUSE
@@ -418,6 +444,7 @@ tegrartc* 	at fdt?			# NVIDIA Tegra RTC
 
 # Thermal sensor
 sunxithermal* 	at fdt?			# Thermal sensor controller
+zynqxadc*	at fdt?			# Xilinx 7 series ADC
 
 # BCM2835 VCHIQ, etc
 vchiq0 		at fdt?
@@ -432,8 +459,6 @@ v3scodec* 	at fdt?			# Allwinner V3s audio codec (analog part)
 hdaudio* 	at fdt?			# Intel HDA
 hdafg* 		at hdaudiobus?
 options 	HDAUDIOVERBOSE
-options 	HDAUDIO_ENABLE_HDMI
-options 	HDAUDIO_ENABLE_DISPLAYPORT
 sun8icodec* 	at fdt?			# Audio codec (sun8i)
 sunxicodec* 	at fdt?			# Allwinner audio codec
 sunxii2s* 	at fdt?			# I2S/PCM
@@ -511,6 +536,7 @@ tifb* 		at tilcdc?
 
 options 	VCONS_DRAW_INTR
 options 	WSEMUL_VT100
+options 	WSDISPLAY_CUSTOM_OUTPUT
 options 	WS_DEFAULT_FG=WSCOL_WHITE
 options 	WS_DEFAULT_BG=WSCOL_BLACK
 options 	WS_KERNEL_FG=WSCOL_GREEN
@@ -549,6 +575,8 @@ exusbphy* 	at fdt? pass 9		# Samsung Exynos USB2 PHY
 exusbdrdphy* 	at fdt? pass 9		# Samsung Exynos USB3 DRD PHY
 imxusbphy* 	at fdt? pass 9		# i.MX USB PHY
 mesonusbphy* 	at fdt? pass 9		# Amlogic Meson USB2 PHY
+rk3288usb*	at fdt? pass 9		# Rockchip USB PHY
+rk3288usbphy*	at rk3288usb?
 sun9iusbphy* 	at fdt? pass 9		# Allwinner A80 USB PHY
 sunxiusbphy* 	at fdt? pass 9		# Allwinner USB PHY
 sunxiusb3phy* 	at fdt? pass 9		# Allwinner USB3 PHY
@@ -574,6 +602,7 @@ virtio* 	at pci? dev ? function ?	# Virtio PCI device
 # the balloon driver cannot work on machines with non-4k pages
 #viomb* 	at virtio?			# Virtio memory balloon device
 ld* 		at virtio?			# Virtio disk device
+viocon*		at virtio?			# Virtio serial device
 vioif* 		at virtio?			# Virtio network device
 viornd* 	at virtio?			# Virtio entropy device
 vioscsi* 	at virtio?			# Virtio SCSI device
@@ -607,4 +636,5 @@ bthub* at ubt?
 
 include "dev/bluetooth/bluetoothdevices.config"
 
-cinclude "arch/evbarm/conf/GENERIC.local"
+# Pull in optional local configuration - always at end
+cinclude	"arch/evbarm/conf/GENERIC.local"

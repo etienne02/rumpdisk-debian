@@ -1,4 +1,4 @@
-# $NetBSD: Makefile,v 1.12 2021/05/30 02:26:51 joerg Exp $
+# $NetBSD: Makefile,v 1.24 2024/07/22 02:34:58 riastradh Exp $
 #
 
 NOMAN=		# defined
@@ -13,17 +13,51 @@ SUBDIR+=	helper_dso1 helper_dso3 .WAIT helper_dso2 .WAIT \
 		helper_symver_dso2 .WAIT \
 		data
 
+SUBDIR+=	helper_def_dynamic
+SUBDIR+=	helper_def_static
+SUBDIR+=	helper_onlydef
+SUBDIR+=	.WAIT
+SUBDIR+=	helper_abuse_dynamic
+SUBDIR+=	helper_abuse_static
+SUBDIR+=	helper_onlyctor_dynamic
+SUBDIR+=	helper_onlyuse_dynamic
+SUBDIR+=	helper_onlyuse_static
+SUBDIR+=	helper_use_dynamic
+SUBDIR+=	helper_use_static
+
 TESTSDIR=	${TESTSBASE}/libexec/ld.elf_so
 
 TESTS_C+=	t_dlerror-cleared t_dlerror-false t_dlinfo t_dlvsym t_ifunc
+TESTS_C+=	t_ifunc_now
+TESTS_C+=	t_ifunc_norelro
+TESTS_C+=	t_ifunc_norelro_now
 TESTS_C+=	t_rtld_r_debug
+TESTS_C+=	t_tls_extern
+TESTS_C+=	t_hash
 
-COPTS.t_rtld_r_debug.c += ${${ACTIVE_CC} == "gcc" :? -Wno-maybe-uninitialized :}
+SRCS.t_ifunc_now=		t_ifunc.c
+SRCS.t_ifunc_norelro=		t_ifunc.c
+SRCS.t_ifunc_norelro_now=	t_ifunc.c
+
+LDADD.t_ifunc+=			${${MKRELRO} != "no":?-Wl,-z,relro:}
+LDADD.t_ifunc_now+=		${${MKRELRO} != "no":?-Wl,-z,relro:} -Wl,-z,now
+LDADD.t_ifunc_norelro+=		${${MKRELRO} != "no":?-Wl,-z,norelro:}
+LDADD.t_ifunc_norelro_now+=	${${MKRELRO} != "no":?-Wl,-z,norelro:} -Wl,-z,now
+
+.PATH:	${NETBSDSRCDIR}/libexec/ld.elf_so
+SRCS.t_hash+=	t_hash.c
+SRCS.t_hash+=	hash.c
+CPPFLAGS.t_hash.c+=	-I${NETBSDSRCDIR}/libexec/ld.elf_so
+
+COPTS.t_rtld_r_debug.c += ${CC_WNO_MAYBE_UNINITIALIZED}
 
 LDADD.t_dlerror-false=	-Wl,-rpath,/var/nonexistent/lib
 LDADD.t_dlvsym=		-Wl,-rpath,${TESTSDIR}/h_helper_symver_dso2
-LDADD.t_ifunc=		-Wl,-rpath,${TESTSDIR} -lutil
-DPADD.t_ifunc=		${LIBUTIL}
+.for t in t_ifunc t_ifunc_now t_ifunc_norelro t_ifunc_norelro_now
+LDADD.${t}+=		-Wl,-rpath,${TESTSDIR} -lutil
+DPADD.${t}+=		${LIBUTIL}
+.endfor
+LDADD.t_tls_extern+=	-Wl,-rpath,${TESTSDIR}
 
 TESTS_SH+=		t_df_1_noopen t_dl_symver t_thread_local_dtor
 

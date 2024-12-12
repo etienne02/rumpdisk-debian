@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.208 2021/05/29 22:50:18 tsutsui Exp $
+# $NetBSD: GENERIC,v 1.213 2024/12/07 00:13:14 tsutsui Exp $
 #
 # GENERIC machine description file
 #
@@ -22,9 +22,9 @@ include 	"arch/hp300/conf/std.hp300"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"GENERIC-$Revision: 1.208 $"
+#ident 		"GENERIC-$Revision: 1.213 $"
 
-makeoptions	COPTS="-O2 -fno-reorder-blocks -fno-omit-frame-pointer"
+makeoptions	COPTS="-O2 -fno-reorder-blocks -fno-unwind-tables -fno-omit-frame-pointer"
 	# See share/mk/sys.mk. -fno-omit-frame-pointer is necessary for
 	# backtraces in DDB.
 
@@ -107,16 +107,15 @@ file-system	PTYFS		# /dev/pts/N support
 file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
-# Filesystem options
+# File system options
+#options 	FFS_EI		# FFS Endian Independent support
+options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER	# Network filesystem server
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags
-options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+#options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 options 	INET		# Internet protocols
@@ -335,9 +334,13 @@ pseudo-device	pty			# pseudo-terminals
 #pseudo-device	vcoda			# coda minicache <-> venus comm.
 pseudo-device	ksyms			# /dev/ksyms
 #pseudo-device	putter			# for puffs and pud
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 # wscons pseudo-devices
 pseudo-device	wsmux			# mouse & keyboard multiplexor
 pseudo-device	wsfont
 
 include "dev/veriexec.config"
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/hp300/conf/GENERIC.local"

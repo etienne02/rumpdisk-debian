@@ -1,4 +1,4 @@
-/* $NetBSD: ims.c,v 1.3 2019/07/09 12:56:30 ryoon Exp $ */
+/* $NetBSD: ims.c,v 1.5 2023/05/10 00:10:02 riastradh Exp $ */
 /* $OpenBSD ims.c,v 1.1 2016/01/12 01:11:15 jcs Exp $ */
 
 /*
@@ -20,7 +20,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ims.c,v 1.3 2019/07/09 12:56:30 ryoon Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ims.c,v 1.5 2023/05/10 00:10:02 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -146,22 +146,23 @@ ims_attach(device_t parent, device_t self, void *aux)
 static int
 ims_detach(device_t self, int flags)
 {
-	struct ims_softc *sc = device_private(self);
-	int rv = 0;
+	int error;
 
 	/* No need to do reference counting of ums, wsmouse has all the goo. */
-	if (sc->sc_ms.hidms_wsmousedev != NULL)
-		rv = config_detach(sc->sc_ms.hidms_wsmousedev, flags);
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
 	pmf_device_deregister(self);
-
-	return rv;
+	return 0;
 }
 
-void 
+void
 ims_childdet(device_t self, device_t child)
 {
 	struct ims_softc *sc = device_private(self);
+
+	KASSERT(KERNEL_LOCKED_P());
 
 	KASSERT(sc->sc_ms.hidms_wsmousedev == child);
 	sc->sc_ms.hidms_wsmousedev = NULL;
@@ -184,6 +185,8 @@ ims_enable(void *v)
 	struct ims_softc *sc = v;
 	int error;
 
+	KASSERT(KERNEL_LOCKED_P());
+
 	if (sc->sc_enabled)
 		return EBUSY;
 
@@ -200,6 +203,8 @@ static void
 ims_disable(void *v)
 {
 	struct ims_softc *sc = v;
+
+	KASSERT(KERNEL_LOCKED_P());
 
 #ifdef DIAGNOSTIC
 	if (!sc->sc_enabled) {

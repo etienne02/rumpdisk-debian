@@ -1,4 +1,4 @@
-/*	$NetBSD: hd64570.c,v 1.56 2021/08/17 22:00:31 andvar Exp $	*/
+/*	$NetBSD: hd64570.c,v 1.62 2024/09/14 21:22:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 1999 Christian E. Hopps
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hd64570.c,v 1.56 2021/08/17 22:00:31 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hd64570.c,v 1.62 2024/09/14 21:22:37 andvar Exp $");
 
 #include "opt_inet.h"
 
@@ -79,7 +79,6 @@ __KERNEL_RCSID(0, "$NetBSD: hd64570.c,v 1.56 2021/08/17 22:00:31 andvar Exp $");
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 
 #if defined(INET) || defined(INET6)
 #include <netinet/in.h>
@@ -359,7 +358,7 @@ sca_init(struct sca_softc *sc)
 	sca_write_1(sc, SCA_ITCR,
 	    SCA_ITCR_INTR_PRI_MSCI | SCA_ITCR_ACK_NONE | SCA_ITCR_VOUT_IVR);
 #if 0
-	/* these are for the intrerrupt ack cycle which we don't use */
+	/* these are for the interrupt ack cycle which we don't use */
 	sca_write_1(sc, SCA_IVR, 0x40);
 	sca_write_1(sc, SCA_IMVR, 0x40);
 #endif
@@ -880,15 +879,15 @@ sca_output(
 		IFQ_ENQUEUE(&ifp->if_snd, m, error);
 	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 	if (error != 0) {
-		if_statinc_ref(nsr, if_oerrors);
-		if_statinc_ref(nsr, if_collisions);
+		if_statinc_ref(ifp, nsr, if_oerrors);
+		if_statinc_ref(ifp, nsr, if_collisions);
 		IF_STAT_PUTREF(ifp);
 		splx(s);
 		return (error);
 	}
-	if_statadd_ref(nsr, if_obytes, len);
+	if_statadd_ref(ifp, nsr, if_obytes, len);
 	if (mflags & M_MCAST)
-		if_statinc_ref(nsr, if_omcasts);
+		if_statinc_ref(ifp, nsr, if_omcasts);
 	IF_STAT_PUTREF(ifp);
 
 	sca_start(ifp);
@@ -897,8 +896,7 @@ sca_output(
 	return (error);
 
  bad:
-	if (m)
-		m_freem(m);
+	m_freem(m);
 	return (error);
 }
 
@@ -1207,7 +1205,7 @@ sca_hardintr(struct sca_softc *sc)
 			     (isr1 & 0xf0) >> 4);
 
 		/*
-		 * mcsi intterupts
+		 * msci interrupts
 		 */
 		if (isr0 & 0x0f)
 			ret += sca_msci_intr(&sc->sc_ports[0], isr0 & 0x0f);
@@ -1533,7 +1531,6 @@ static void
 sca_frame_process(sca_port_t *scp)
 {
 	pktqueue_t *pktq = NULL;
-	struct ifqueue *ifq = NULL;
 	struct hdlc_header *hdlc;
 	struct cisco_pkt *cisco;
 	sca_desc_t *desc;
@@ -1541,7 +1538,6 @@ sca_frame_process(sca_port_t *scp)
 	u_int8_t *bufp;
 	u_int16_t len;
 	u_int32_t t;
-	int isr = 0;
 
 	t = time_uptime * 1000;
 	desc = &scp->sp_rxdesc[scp->sp_rxstart];
@@ -1659,12 +1655,11 @@ sca_frame_process(sca_port_t *scp)
 			cisco->time0 = htons((u_int16_t)(t >> 16));
 			cisco->time1 = htons((u_int16_t)(t & 0x0000ffff));
 
-			ifq = &scp->linkq;
-			if (IF_QFULL(ifq)) {
-				IF_DROP(ifq);
+			if (IF_QFULL(&scp->linkq)) {
+				IF_DROP(&scp->linkq);
 				goto dropit;
 			}
-			IF_ENQUEUE(ifq, m);
+			IF_ENQUEUE(&scp->linkq, m);
 
 			sca_start(&scp->sp_if);
 
@@ -1693,25 +1688,14 @@ sca_frame_process(sca_port_t *scp)
 	}
 
 	/* Queue the packet */
-	if (__predict_true(pktq)) {
-		if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
-			if_statinc(&scp->sp_if, if_iqdrops);
-			goto dropit;
-		}
-		return;
-	}
-	if (!IF_QFULL(ifq)) {
-		IF_ENQUEUE(ifq, m);
-		schednetisr(isr);
-	} else {
-		IF_DROP(ifq);
+	KASSERT(pktq != NULL);
+	if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
 		if_statinc(&scp->sp_if, if_iqdrops);
 		goto dropit;
 	}
 	return;
 dropit:
-	if (m)
-		m_freem(m);
+	m_freem(m);
 	return;
 }
 
@@ -1770,7 +1754,7 @@ sca_frame_read_done(sca_port_t *scp)
 {
 	u_int16_t edesc_p;
 
-	/* update where our indicies are */
+	/* update where our indices are */
 	scp->sp_rxend = scp->sp_rxstart;
 	scp->sp_rxstart = (scp->sp_rxstart + 1) % scp->sp_nrxdesc;
 

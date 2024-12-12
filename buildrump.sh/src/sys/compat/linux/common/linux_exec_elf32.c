@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_exec_elf32.c,v 1.100 2020/01/12 18:30:58 ad Exp $	*/
+/*	$NetBSD: linux_exec_elf32.c,v 1.102 2021/11/26 09:05:05 ryo Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998, 2000, 2001 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_exec_elf32.c,v 1.100 2020/01/12 18:30:58 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_exec_elf32.c,v 1.102 2021/11/26 09:05:05 ryo Exp $");
 
 #ifndef ELFSIZE
 /* XXX should die */
@@ -73,8 +73,6 @@ __KERNEL_RCSID(0, "$NetBSD: linux_exec_elf32.c,v 1.100 2020/01/12 18:30:58 ad Ex
 
 #include <compat/linux/linux_syscallargs.h>
 #include <compat/linux/linux_syscall.h>
-
-#define LINUX_GO_RT0_SIGNATURE
 
 #ifdef DEBUG_LINUX
 #define DPRINTF(a)	uprintf a
@@ -275,7 +273,7 @@ out:
  * Look for a .gopclntab, specific to go binaries
  * in it look for a symbol called _rt0_<cpu>_linux
  */
-static int
+int
 ELFNAME2(linux,go_rt0_signature)(struct lwp *l, struct exec_package *epp, Elf_Ehdr *eh)
 {
 	Elf_Shdr *sh;
@@ -339,11 +337,19 @@ ELFNAME2(linux,go_rt0_signature)(struct lwp *l, struct exec_package *epp, Elf_Eh
 		goto out;
 
 #if (ELFSIZE == 32)
+#ifdef LINUX_GO_RT0_SIGNATURE_ARCH32
+	m = LINUX_GO_RT0_SIGNATURE_ARCH32;
+#else
 	extern struct netbsd32_machine32_hook_t netbsd32_machine32_hook;
 	MODULE_HOOK_CALL(netbsd32_machine32_hook, (), machine, m);
+#endif
+#else /* (ELFSIZE == 32) */
+#ifdef LINUX_GO_RT0_SIGNATURE_ARCH64
+	m = LINUX_GO_RT0_SIGNATURE_ARCH64;
 #else
 	m = machine;
 #endif
+#endif /* (ELFSIZE == 32) */
 	mlen = snprintf(mbuf, sizeof(mbuf), "_rt0_%s_linux", m);
 	if (memmem(tmp, sh[i].sh_size, mbuf, mlen) == NULL)
 		error = ENOEXEC;

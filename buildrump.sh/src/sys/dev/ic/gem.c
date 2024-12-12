@@ -1,4 +1,4 @@
-/*	$NetBSD: gem.c,v 1.134 2021/03/10 18:26:16 christos Exp $ */
+/*	$NetBSD: gem.c,v 1.138 2024/07/05 04:31:51 rin Exp $ */
 
 /*
  *
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gem.c,v 1.134 2021/03/10 18:26:16 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gem.c,v 1.138 2024/07/05 04:31:51 rin Exp $");
 
 #include "opt_inet.h"
 
@@ -46,7 +46,6 @@ __KERNEL_RCSID(0, "$NetBSD: gem.c,v 1.134 2021/03/10 18:26:16 christos Exp $");
 #include <sys/callout.h>
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -1411,7 +1410,7 @@ next:
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we were
+		 * didn't fit in the allotted number of segments, or we were
 		 * short on resources.  In this case, we'll copy and try
 		 * again.
 		 */
@@ -1465,8 +1464,7 @@ next:
 			 * packet.
 			 */
 			bus_dmamap_unload(sc->sc_dmatag, dmamap);
-			if (m != NULL)
-				m_freem(m);
+			m_freem(m);
 			break;
 		}
 
@@ -1643,10 +1641,10 @@ gem_tint(struct gem_softc *sc)
 	/* Unload collision counters ... */
 	v = bus_space_read_4(t, mac, GEM_MAC_EXCESS_COLL_CNT) +
 	    bus_space_read_4(t, mac, GEM_MAC_LATE_COLL_CNT);
-	if_statadd_ref(nsr, if_collisions, v +
+	if_statadd_ref(ifp, nsr, if_collisions, v +
 	    bus_space_read_4(t, mac, GEM_MAC_NORM_COLL_CNT) +
 	    bus_space_read_4(t, mac, GEM_MAC_FIRST_COLL_CNT));
-	if_statadd_ref(nsr, if_oerrors, v);
+	if_statadd_ref(ifp, nsr, if_oerrors, v);
 
 	/* ... then clear the hardware counters. */
 	bus_space_write_4(t, mac, GEM_MAC_NORM_COLL_CNT, 0);
@@ -1709,14 +1707,12 @@ gem_tint(struct gem_softc *sc)
 		    0, txs->txs_dmamap->dm_mapsize,
 		    BUS_DMASYNC_POSTWRITE);
 		bus_dmamap_unload(sc->sc_dmatag, txs->txs_dmamap);
-		if (txs->txs_mbuf != NULL) {
-			m_freem(txs->txs_mbuf);
-			txs->txs_mbuf = NULL;
-		}
+		m_freem(txs->txs_mbuf);
+		txs->txs_mbuf = NULL;
 
 		SIMPLEQ_INSERT_TAIL(&sc->sc_txfreeq, txs, txs_q);
 
-		if_statinc_ref(nsr, if_opackets);
+		if_statinc_ref(ifp, nsr, if_opackets);
 		progress = 1;
 	}
 

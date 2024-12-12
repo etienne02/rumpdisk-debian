@@ -1,5 +1,7 @@
-/*	$NetBSD: c11_generic_expression.c,v 1.10 2021/08/01 21:12:31 rillig Exp $	*/
+/*	$NetBSD: c11_generic_expression.c,v 1.19 2023/08/06 19:44:50 rillig Exp $	*/
 # 3 "c11_generic_expression.c"
+
+/* lint1-extra-flags: -X 351 */
 
 /*
  * C99 added support for type-generic macros, but these were limited to the
@@ -8,26 +10,27 @@
  * The generic selection is typically used with macros, but since lint1 works
  * on the preprocessed source, the test cases look a bit strange.
  *
- * C99 6.5.1.1 "Generic selection"
+ * C11 6.5.1.1 "Generic selection"
  */
 
 /* lint1-extra-flags: -Ac11 */
 
 /*
  * The type of 'var' is not compatible with any of the types from the
- * generic-association.  This is a compile-time error.
+ * generic-association.  This is a constraint violation that the compiler must
+ * detect, therefore lint doesn't repeat that diagnostic.
  */
 const char *
 classify_type_without_default(double var)
 {
-	/* expect-2: argument 'var' unused */
+	/* expect-2: warning: parameter 'var' unused in function 'classify_type_without_default' [231] */
 
 	return _Generic(var,
 	    long double: "long double",
 	    long long: "long long",
 	    unsigned: "unsigned"
 	);
-	/* expect-1: expects to return value [214] */
+	/* expect-1: error: function 'classify_type_without_default' expects to return value [214] */
 }
 
 /*
@@ -36,7 +39,7 @@ classify_type_without_default(double var)
 const char *
 classify_type_with_default(double var)
 {
-	/* expect-2: argument 'var' unused */
+	/* expect-2: warning: parameter 'var' unused in function 'classify_type_with_default' [231] */
 
 	return _Generic(var,
 	    long double: "long double",
@@ -52,7 +55,7 @@ classify_type_with_default(double var)
 const char *
 classify_char(char c)
 {
-	/* expect-2: argument 'c' unused */
+	/* expect-2: warning: parameter 'c' unused in function 'classify_char' [231] */
 
 	return _Generic(c,
 	    char: "yes",
@@ -69,11 +72,12 @@ classify_char(char c)
 const int *
 comma_expression(char first, double second)
 {
-	return _Generic(first, second,	/* expect: syntax error 'second' */
+	/* expect+1: error: syntax error 'second' [249] */
+	return _Generic(first, second,
 	    char: "first",
 	    double: 2.0
 	);
-	/* expect+1: without returning value [217] */
+	/* expect+1: warning: function 'comma_expression' falls off bottom without returning value [217] */
 }
 
 /*

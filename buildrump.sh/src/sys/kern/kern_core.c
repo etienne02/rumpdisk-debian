@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_core.c,v 1.35 2021/06/29 22:40:53 dholland Exp $	*/
+/*	$NetBSD: kern_core.c,v 1.39 2023/10/04 22:17:09 ad Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1991, 1993
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_core.c,v 1.35 2021/06/29 22:40:53 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_core.c,v 1.39 2023/10/04 22:17:09 ad Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_execfmt.h"
@@ -57,6 +57,7 @@ __KERNEL_RCSID(0, "$NetBSD: kern_core.c,v 1.35 2021/06/29 22:40:53 dholland Exp 
 #include <sys/module.h>
 #include <sys/compat_stub.h>
 #include <sys/exec_elf.h>
+#include <sys/resourcevar.h>
 
 MODULE(MODULE_CLASS_MISC, coredump, NULL);
 
@@ -121,13 +122,13 @@ coredump(struct lwp *l, const char *pattern)
 	struct vnode		*vp;
 	struct proc		*p;
 	struct vmspace		*vm;
-	kauth_cred_t		cred;
+	kauth_cred_t		cred = NULL;
 	struct pathbuf		*pb;
 	struct vattr		vattr;
 	struct coredump_iostate	io;
 	struct plimit		*lim;
 	int			error, error1;
-	char			*name, *lastslash;
+	char			*name, *lastslash = NULL /* XXXgcc */;
 
 	name = PNBUF_GET();
 
@@ -145,17 +146,14 @@ coredump(struct lwp *l, const char *pattern)
 	if (USPACE + ctob(vm->vm_dsize + vm->vm_ssize) >=
 	    p->p_rlimit[RLIMIT_CORE].rlim_cur) {
 		error = EFBIG;		/* better error code? */
-		mutex_exit(p->p_lock);
-		mutex_exit(&proc_lock);
-		goto done;
+		goto release;
 	}
 
 	/*
 	 * It may well not be curproc, so grab a reference to its current
 	 * credentials.
 	 */
-	kauth_cred_hold(p->p_cred);
-	cred = p->p_cred;
+	cred = kauth_cred_hold(p->p_cred);
 
 	/*
 	 * Make sure the process has not set-id, to prevent data leaks,
@@ -164,9 +162,7 @@ coredump(struct lwp *l, const char *pattern)
 	if (p->p_flag & PK_SUGID) {
 		if (!security_setidcore_dump) {
 			error = EPERM;
-			mutex_exit(p->p_lock);
-			mutex_exit(&proc_lock);
-			goto done;
+			goto release;
 		}
 		pattern = security_setidcore_path;
 	}
@@ -180,11 +176,8 @@ coredump(struct lwp *l, const char *pattern)
 	error = coredump_buildname(p, name, pattern, MAXPATHLEN);
 	mutex_exit(&lim->pl_lock);
 
-	if (error) {
-		mutex_exit(p->p_lock);
-		mutex_exit(&proc_lock);
-		goto done;
-	}
+	if (error)
+		goto release;
 
 	/*
 	 * On a simple filename, see if the filesystem allow us to write
@@ -198,6 +191,7 @@ coredump(struct lwp *l, const char *pattern)
 			error = EPERM;
 	}
 
+release:
 	mutex_exit(p->p_lock);
 	mutex_exit(&proc_lock);
 	if (error)
@@ -284,6 +278,8 @@ coredump(struct lwp *l, const char *pattern)
 	if (error == 0)
 		error = error1;
 done:
+	if (cred != NULL)
+		kauth_cred_free(cred);
 	if (name != NULL)
 		PNBUF_PUT(name);
 	return error;

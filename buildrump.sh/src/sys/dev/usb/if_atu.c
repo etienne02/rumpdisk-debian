@@ -1,4 +1,4 @@
-/*	$NetBSD: if_atu.c,v 1.73 2020/08/28 19:02:19 riastradh Exp $ */
+/*	$NetBSD: if_atu.c,v 1.77 2024/07/05 04:31:52 rin Exp $ */
 /*	$OpenBSD: if_atu.c,v 1.48 2004/12/30 01:53:21 dlg Exp $ */
 /*
  * Copyright (c) 2003, 2004
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_atu.c,v 1.73 2020/08/28 19:02:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_atu.c,v 1.77 2024/07/05 04:31:52 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -967,7 +967,7 @@ atu_internal_firmware(device_t arg)
 	}
 
 	/* after a lot of trying and measuring I found out the device needs
-	 * about 56 miliseconds after sending the remap command before
+	 * about 56 milliseconds after sending the remap command before
 	 * it's ready to communicate again. So we'll wait just a little bit
 	 * longer than that to be sure...
 	 */
@@ -1601,10 +1601,8 @@ atu_xfer_list_free(struct atu_softc *sc, struct atu_chain *ch, int listlen)
 	for (i = 0; i < listlen; i++) {
 		if (ch[i].atu_buf != NULL)
 			ch[i].atu_buf = NULL;
-		if (ch[i].atu_mbuf != NULL) {
-			m_freem(ch[i].atu_mbuf);
-			ch[i].atu_mbuf = NULL;
-		}
+		m_freem(ch[i].atu_mbuf);
+		ch[i].atu_mbuf = NULL;
 		if (ch[i].atu_xfer != NULL) {
 			usbd_destroy_xfer(ch[i].atu_xfer);
 			ch[i].atu_xfer = NULL;
@@ -1741,10 +1739,8 @@ atu_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	DPRINTFN(25, ("%s: atu_txeof status=%d\n", device_xname(sc->atu_dev),
 	    status));
 
-	if (c->atu_mbuf) {
-		m_freem(c->atu_mbuf);
-		c->atu_mbuf = NULL;
-	}
+	m_freem(c->atu_mbuf);
+	c->atu_mbuf = NULL;
 
 	if (status != USBD_NORMAL_COMPLETION) {
 		if (status == USBD_NOT_STARTED || status == USBD_CANCELLED)
@@ -2223,7 +2219,6 @@ atu_stop(struct ifnet *ifp, int disable)
 	struct atu_softc	*sc = ifp->if_softc;
 	struct ieee80211com	*ic = &sc->sc_ic;
 	struct atu_cdata	*cd;
-	usbd_status		err;
 	int s;
 
 	s = splnet();
@@ -2235,19 +2230,11 @@ atu_stop(struct ifnet *ifp, int disable)
 
 	/* Stop transfers. */
 	if (sc->atu_ep[ATU_ENDPT_RX] != NULL) {
-		err = usbd_abort_pipe(sc->atu_ep[ATU_ENDPT_RX]);
-		if (err) {
-			DPRINTF(("%s: abort rx pipe failed: %s\n",
-			    device_xname(sc->atu_dev), usbd_errstr(err)));
-		}
+		usbd_abort_pipe(sc->atu_ep[ATU_ENDPT_RX]);
 	}
 
 	if (sc->atu_ep[ATU_ENDPT_TX] != NULL) {
-		err = usbd_abort_pipe(sc->atu_ep[ATU_ENDPT_TX]);
-		if (err) {
-			DPRINTF(("%s: abort tx pipe failed: %s\n",
-			    device_xname(sc->atu_dev), usbd_errstr(err)));
-		}
+		usbd_abort_pipe(sc->atu_ep[ATU_ENDPT_TX]);
 	}
 
 	/* Free RX/TX/MGMT list resources. */
@@ -2257,20 +2244,12 @@ atu_stop(struct ifnet *ifp, int disable)
 
 	/* Close pipes */
 	if (sc->atu_ep[ATU_ENDPT_RX] != NULL) {
-		err = usbd_close_pipe(sc->atu_ep[ATU_ENDPT_RX]);
-		if (err) {
-			DPRINTF(("%s: close rx pipe failed: %s\n",
-			    device_xname(sc->atu_dev), usbd_errstr(err)));
-		}
+		usbd_close_pipe(sc->atu_ep[ATU_ENDPT_RX]);
 		sc->atu_ep[ATU_ENDPT_RX] = NULL;
 	}
 
 	if (sc->atu_ep[ATU_ENDPT_TX] != NULL) {
-		err = usbd_close_pipe(sc->atu_ep[ATU_ENDPT_TX]);
-		if (err) {
-			DPRINTF(("%s: close tx pipe failed: %s\n",
-			    device_xname(sc->atu_dev), usbd_errstr(err)));
-		}
+		usbd_close_pipe(sc->atu_ep[ATU_ENDPT_TX]);
 		sc->atu_ep[ATU_ENDPT_TX] = NULL;
 	}
 

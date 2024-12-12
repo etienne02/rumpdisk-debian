@@ -1,4 +1,4 @@
-/*	$NetBSD: mdreloc.c,v 1.3 2017/08/10 19:03:26 joerg Exp $	*/
+/*	$NetBSD: mdreloc.c,v 1.6 2024/11/30 01:04:05 christos Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: mdreloc.c,v 1.3 2017/08/10 19:03:26 joerg Exp $");
+__RCSID("$NetBSD: mdreloc.c,v 1.6 2024/11/30 01:04:05 christos Exp $");
 #endif /* not lint */
 
 #include <stdarg.h>
@@ -43,6 +43,8 @@ __RCSID("$NetBSD: mdreloc.c,v 1.3 2017/08/10 19:03:26 joerg Exp $");
 
 #include "debug.h"
 #include "rtld.h"
+
+#include <machine/lwp_private.h>
 
 void _rtld_bind_start(void);
 Elf_Addr _rtld_bind(const Obj_Entry *, Elf_Word);
@@ -171,9 +173,6 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 			break;
 
 		case R_TYPE(TLS_DTPOFF):
-			if (!defobj->tls_done && _rtld_tls_offset_allocate(obj))
-				return -1;
-
 			*where = (Elf_Addr)(def->st_value + rela->r_addend
 			    - TLS_DTV_OFFSET);
 			rdbg(("DTPOFF %s in %s --> %p in %s",
@@ -182,7 +181,8 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 			break;
 
 		case R_TYPE(TLS_TPOFF):
-			if (!defobj->tls_done && _rtld_tls_offset_allocate(obj))
+			if (!defobj->tls_static &&
+			    _rtld_tls_offset_allocate(__UNCONST(defobj)))
 				return -1;
 
 			*where = (Elf_Addr)(def->st_value + rela->r_addend
@@ -249,7 +249,7 @@ _rtld_relocate_plt_object(const Obj_Entry *obj, const Elf_Rela *rela, int reloff
 		return 0;
 
 	value = (Elf_Addr)(defobj->relocbase + def->st_value);
-	rdbg(("bind now/fixup in %s --> new=%p", 
+	rdbg(("bind now/fixup in %s --> new=%p",
 	    defobj->strtab + def->st_name, (void *)value));
 
 	/*
@@ -275,7 +275,7 @@ _rtld_bind(const Obj_Entry *obj, Elf_Word reloff)
 	new_value = 0;	/* XXX gcc */
 
 	_rtld_shared_enter();
-	err = _rtld_relocate_plt_object(obj, rela, reloff, &new_value); 
+	err = _rtld_relocate_plt_object(obj, rela, reloff, &new_value);
 	if (err)
 		_rtld_die();
 	_rtld_shared_exit();
@@ -288,7 +288,7 @@ _rtld_relocate_plt_objects(const Obj_Entry *obj)
 {
 	const Elf_Rela *rela;
 	int reloff;
-	
+
 	for (rela = obj->pltrela, reloff = 0; rela < obj->pltrelalim; rela++, reloff++) {
 		if (_rtld_relocate_plt_object(obj, rela, reloff, NULL) < 0)
 			return -1;

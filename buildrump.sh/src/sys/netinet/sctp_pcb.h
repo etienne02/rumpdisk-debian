@@ -1,5 +1,5 @@
 /*	$KAME: sctp_pcb.h,v 1.21 2005/07/16 01:18:47 suz Exp $	*/
-/*	$NetBSD: sctp_pcb.h,v 1.4 2021/08/09 20:49:10 andvar Exp $ */
+/*	$NetBSD: sctp_pcb.h,v 1.8 2023/06/02 08:51:48 andvar Exp $ */
 
 #ifndef __SCTP_PCB_H__
 #define __SCTP_PCB_H__
@@ -41,6 +41,7 @@
  * we would not allocate enough for Net/Open BSD :-<
  */
 #include <net/if.h>
+#include <netinet/in_pcb.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/ip6protosw.h>
@@ -374,8 +375,8 @@ struct sctp_tcb {
  * Most other locks (INP and INFO) attempt to localize
  * the locking i.e. we try to contain the lock and
  * unlock within the function that needs to lock it. This
- * sometimes mean we do extra locks and unlocks and loose
- * a bit of efficency, but if the performance statements about
+ * sometimes mean we do extra locks and unlocks and lose
+ * a bit of efficiency, but if the performance statements about
  * non-recursive locks are true this should not be a problem.
  * One issue that arises with this only lock when needed
  * is that if an implicit association setup is done we
@@ -750,6 +751,24 @@ sctp_initiate_iterator(asoc_func af, uint32_t, uint32_t, void *, uint32_t,
 
 void in6_sin6_2_sin (struct sockaddr_in *,
                             struct sockaddr_in6 *sin6);
+
+#ifdef __NetBSD__
+#ifndef sotoin6pcb
+#define sotoin6pcb(so)	((struct in6pcb *)((so)->so_pcb))
+#endif
+#ifndef in6p_flags
+#define in6p_flags	in6p_pcb.inp_flags
+#endif
+#ifndef in6p_af
+#define in6p_af		in6p_pcb.inp_af
+#endif
+#ifndef inpcb_hdr
+#define inpcb_hdr	inpcb
+#endif
+#ifndef sp_inph
+#define sp_inph		sp_inp
+#endif
+#endif
 
 #endif /* _KERNEL */
 #endif /* !__SCTP_PCB_H__ */

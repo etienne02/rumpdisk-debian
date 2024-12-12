@@ -1,4 +1,4 @@
-/*	$NetBSD: conf.c,v 1.74 2016/10/03 14:26:02 rkujawa Exp $	*/
+/*	$NetBSD: conf.c,v 1.76 2023/05/08 08:26:11 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1991 The Regents of the University of California.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: conf.c,v 1.74 2016/10/03 14:26:02 rkujawa Exp $");
+__KERNEL_RCSID(0, "$NetBSD: conf.c,v 1.76 2023/05/08 08:26:11 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -41,8 +41,12 @@ __KERNEL_RCSID(0, "$NetBSD: conf.c,v 1.74 2016/10/03 14:26:02 rkujawa Exp $");
 
 #include "ser.h"
 #include "ite.h"
+#include "grf.h"
 #include "amidisplaycc.h"
 #include "mntva.h"
+#ifndef __powerpc__
+#include "zz9k_fb.h"
+#endif
 #include "wsdisplay.h"
 
 /*
@@ -53,6 +57,7 @@ __KERNEL_RCSID(0, "$NetBSD: conf.c,v 1.74 2016/10/03 14:26:02 rkujawa Exp $");
  */
 cons_decl(ser);
 cons_decl(mntva);
+cons_decl(zzfb_);
 cons_decl(grf);
 cons_decl(amidisplaycc_);
 cons_decl(ite);
@@ -64,7 +69,10 @@ struct	consdev constab[] = {
 #if NMNTVA > 0
 	cons_init(mntva),
 #endif
-#if NWSDISPLAY > 0
+#if NZZ9K_FB > 0
+	cons_init(zzfb_),
+#endif
+#if (NWSDISPLAY > 0) && (NGRF > 0)
 	{ dev_init(grf,cnprobe), dev_init(grf,cninit) },
 #endif
 #if NAMIDISPLAYCC > 0
@@ -73,5 +81,5 @@ struct	consdev constab[] = {
 #if NITE > 0
 	cons_init(ite),
 #endif
-	{ 0 },
+	{ 0 }
 };

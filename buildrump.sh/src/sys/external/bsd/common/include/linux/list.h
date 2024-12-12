@@ -1,4 +1,4 @@
-/*	$NetBSD: list.h,v 1.19 2020/02/14 04:38:48 riastradh Exp $	*/
+/*	$NetBSD: list.h,v 1.32 2021/12/19 11:39:24 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -35,10 +35,6 @@
  * - LIST_HEAD(x) means a declaration `struct list_head x =
  *   LIST_HEAD_INIT(x)' in Linux, but something else in NetBSD.
  *   Replace by the expansion.
- *
- * - The `_rcu' routines here are not actually pserialize(9)-safe.
- *   They need dependent read memory barriers added.  Please fix this
- *   if you need to use them with pserialize(9).
  */
 
 #ifndef _LINUX_LIST_H_
@@ -49,15 +45,13 @@
 #include <sys/queue.h>
 
 #include <linux/kernel.h>
+#include <linux/types.h>
+
+#define	POISON_INUSE	0x5a	/* XXX */
 
 /*
- * Doubly-linked lists.
+ * Doubly-linked lists.  Type defined in <linux/types.h>.
  */
-
-struct list_head {
-	struct list_head *prev;
-	struct list_head *next;
-};
 
 #define	LIST_HEAD_INIT(name)	{ .prev = &(name), .next = &(name) }
 
@@ -111,6 +105,18 @@ list_is_singular(const struct list_head *head)
 	return true;
 }
 
+static inline bool
+list_is_first(const struct list_head *entry, const struct list_head *head)
+{
+	return head == entry->prev;
+}
+
+static inline bool
+list_is_last(const struct list_head *entry, const struct list_head *head)
+{
+	return head == entry->next;
+}
+
 static inline void
 __list_add_between(struct list_head *prev, struct list_head *node,
     struct list_head *next)
@@ -128,16 +134,40 @@ list_add(struct list_head *node, struct list_head *head)
 }
 
 static inline void
+list_add_rcu(struct list_head *node, struct list_head *head)
+{
+	struct list_head *next = head->next;
+
+	/* Initialize the new node first.  */
+	node->next = next;
+	node->prev = head;
+
+	/* Now publish it.  */
+	atomic_store_release(&head->next, node);
+
+	/* Fix up back pointers, not protected by RCU.  */
+	next->prev = node;
+}
+
+static inline void
 list_add_tail(struct list_head *node, struct list_head *head)
 {
 	__list_add_between(head->prev, node, head);
 }
 
 static inline void
-list_del(struct list_head *entry)
+__list_del_entry(struct list_head *entry)
 {
 	entry->prev->next = entry->next;
 	entry->next->prev = entry->prev;
+}
+
+static inline void
+list_del(struct list_head *entry)
+{
+	__list_del_entry(entry);
+	entry->next = (void *)(uintptr_t)1;
+	entry->prev = (void *)(uintptr_t)2;
 }
 
 static inline void
@@ -201,6 +231,21 @@ list_move_tail(struct list_head *node, struct list_head *head)
 }
 
 static inline void
+list_bulk_move_tail(struct list_head *head, struct list_head *first,
+    struct list_head *last)
+{
+
+	first->prev->next = last->next;
+	last->next->prev = first->prev;
+
+	head->prev->next = first;
+	first->prev = head->prev;
+
+	last->next = head;
+	head->prev = last;
+}
+
+static inline void
 list_replace(struct list_head *old, struct list_head *new)
 {
 	new->prev = old->prev;
@@ -240,21 +285,23 @@ list_del_init(struct list_head *node)
 		(VAR) != (HEAD);					\
 		(VAR) = list_next((VAR)))
 
+#define	list_for_each_prev(VAR, HEAD)					\
+	for ((VAR) = list_last((HEAD));					\
+		(VAR) != (HEAD);					\
+		(VAR) = list_prev((VAR)))
+
 #define	list_for_each_safe(VAR, NEXT, HEAD)				\
 	for ((VAR) = list_first((HEAD));				\
 		((VAR) != (HEAD)) && ((NEXT) = list_next((VAR)), 1);	\
 		(VAR) = (NEXT))
 
+#define	list_safe_reset_next(VAR, NEXT, FIELD)				\
+	(NEXT) = list_next_entry(VAR, FIELD)
+
 #define	list_for_each_entry(VAR, HEAD, FIELD)				\
 	for ((VAR) = list_entry(list_first((HEAD)), typeof(*(VAR)), FIELD); \
 		&(VAR)->FIELD != (HEAD);				\
 		(VAR) = list_entry(list_next(&(VAR)->FIELD), typeof(*(VAR)), \
-		    FIELD))
-
-#define	list_for_each_entry_reverse(VAR, HEAD, FIELD)			\
-	for ((VAR) = list_entry(list_last((HEAD)), typeof(*(VAR)), FIELD); \
-		&(VAR)->FIELD != (HEAD);				\
-		(VAR) = list_entry(list_prev(&(VAR)->FIELD), typeof(*(VAR)), \
 		    FIELD))
 
 #define	list_for_each_entry_safe(VAR, NEXT, HEAD, FIELD)		\
@@ -264,6 +311,19 @@ list_del_init(struct list_head *node)
 			typeof(*(VAR)), FIELD), 1);			\
 		(VAR) = (NEXT))
 
+#define	list_for_each_entry_safe_reverse(VAR, NEXT, HEAD, FIELD)	\
+	for ((VAR) = list_entry(list_last((HEAD)), typeof(*(VAR)), FIELD); \
+		(&(VAR)->FIELD != (HEAD)) &&				\
+		    ((NEXT) = list_entry(list_prev(&(VAR)->FIELD),	\
+		        typeof(*(VAR)), FIELD), 1);			\
+		(VAR) = (NEXT))
+
+#define	list_for_each_entry_reverse(VAR, HEAD, FIELD)			\
+	for ((VAR) = list_entry(list_last((HEAD)), typeof(*(VAR)), FIELD); \
+		&(VAR)->FIELD != (HEAD);				\
+		(VAR) = list_entry(list_prev(&(VAR)->FIELD), typeof(*(VAR)), \
+		    FIELD))
+
 #define	list_for_each_entry_continue(VAR, HEAD, FIELD)			\
 	for ((VAR) = list_next_entry((VAR), FIELD);			\
 		&(VAR)->FIELD != (HEAD);				\
@@ -272,6 +332,16 @@ list_del_init(struct list_head *node)
 #define	list_for_each_entry_continue_reverse(VAR, HEAD, FIELD)		\
 	for ((VAR) = list_prev_entry((VAR), FIELD);			\
 		&(VAR)->FIELD != (HEAD);				\
+		(VAR) = list_prev_entry((VAR), FIELD))
+
+#define	list_for_each_entry_from(VAR, HEAD, FIELD)			\
+	for (;								\
+		(&(VAR)->FIELD != (HEAD));				\
+		(VAR) = list_next_entry((VAR), FIELD))
+
+#define	list_for_each_entry_from_reverse(VAR, HEAD, FIELD)		\
+	for (;								\
+		(&(VAR)->FIELD != (HEAD));				\
 		(VAR) = list_prev_entry((VAR), FIELD))
 
 #define	list_for_each_entry_safe_from(VAR, NEXT, HEAD, FIELD)		\

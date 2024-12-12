@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.S,v 1.211 2021/08/13 20:26:07 andvar Exp $	*/
+/*	$NetBSD: locore.S,v 1.227 2024/12/03 15:16:42 bouyer Exp $	*/
 
 /*
  * Copyright-o-rama!
@@ -156,6 +156,7 @@
 #include "opt_ddbparam.h"
 #include "opt_modular.h"
 #include "opt_realmem.h"
+#include "opt_selfreloc.h"
 
 #include "opt_compat_netbsd.h"
 #include "opt_compat_netbsd32.h"
@@ -277,11 +278,12 @@
 
 #ifdef XEN
 #define __ASSEMBLY__
+#include <xen/include/public/arch-x86/cpuid.h>
 #include <xen/include/public/elfnote.h>
 #include <xen/include/public/xen.h>
 
 #define ELFNOTE(name, type, desctype, descdata...) \
-.pushsection .note.name			;	\
+.pushsection .note.name, "a", @note	;	\
   .align 4				;	\
   .long 2f - 1f		/* namesz */	;	\
   .long 4f - 3f		/* descsz */	;	\
@@ -305,14 +307,14 @@
 	ELFNOTE(Xen, XEN_ELFNOTE_ENTRY,          .quad,  start)
 #else
 	ELFNOTE(Xen, XEN_ELFNOTE_PADDR_OFFSET,   .quad,  0)
-	ELFNOTE(Xen, XEN_ELFNOTE_PHYS32_ENTRY,   .long,  RELOC(start_xen32))
+	ELFNOTE(Xen, XEN_ELFNOTE_PHYS32_ENTRY,   .long,  RELOC(start_pvh))
 #endif /* XENPV */
 	ELFNOTE(Xen, XEN_ELFNOTE_HYPERCALL_PAGE, .quad,  hypercall_page)
 	ELFNOTE(Xen, XEN_ELFNOTE_HV_START_LOW,   .quad,  HYPERVISOR_VIRT_START)
 	ELFNOTE(Xen, XEN_ELFNOTE_FEATURES,       .asciz, "writable_descriptor_tables|auto_translated_physmap|supervisor_mode_kernel|hvm_callback_vector")
 	ELFNOTE(Xen, XEN_ELFNOTE_PAE_MODE,       .asciz, "yes")
 	ELFNOTE(Xen, XEN_ELFNOTE_L1_MFN_VALID,   .long,  PTE_P, PTE_P)\
-	ELFNOTE(Xen, XEN_ELFNOTE_LOADER,         .asciz, "generic")     
+	ELFNOTE(Xen, XEN_ELFNOTE_LOADER,         .asciz, "generic")
 	ELFNOTE(Xen, XEN_ELFNOTE_SUSPEND_CANCEL, .long,  0)
 #if NKSYMS > 0 || defined(DDB) || defined(MODULAR)
 	ELFNOTE(Xen, XEN_ELFNOTE_BSD_SYMTAB,     .asciz, "yes")
@@ -427,11 +429,11 @@ gdtdesc32:
 	.word	gdt32end - gdt32
 	.long	RELOC(gdt32)
 	.long	0
-gdt32:  
+gdt32:
 	.long	0			# null descriptor
 	.long	0
 	.long	0x0000ffff		# %cs
-	.long	0x00cf9a00 
+	.long	0x00cf9a00
 	.long	0x0000ffff		# %ds, %es, %ss
 	.long	0x00cf9200
 gdt32end:
@@ -455,6 +457,16 @@ tmpstk:
 ENTRY(start)
 #ifndef XENPV
 	.code32
+
+#ifdef SELFRELOC
+	call	next
+next:	pop	%edi
+	sub     $(next - kernel_text), %edi
+
+	/* If not KERNBASE, reloc ourselves to KERNBASE */
+	cmpl	$(KERNTEXTOFF_LO - KERNBASE_LO), %edi
+	jne	selfreloc_start
+#endif /* SELFRELOC */
 
 	/* Warm boot */
 	movw	$0x1234,0x472
@@ -644,7 +656,7 @@ ENTRY(start)
 	movl	$RELOC(__kernel_end),%edi
 
 #if (NKSYMS || defined(DDB) || defined(MODULAR)) && !defined(makeoptions_COPY_SYMTAB)
-	/* Save the symbols (if loaded); brinds us on (2). */
+	/* Save the symbols (if loaded); brings us on (2). */
 	movl	RELOC(esym),%eax
 	testl	%eax,%eax
 	jz	1f
@@ -928,7 +940,7 @@ longmode_hi:
 	/* Copy start_info to a safe place. */
 	movq	%rbx,%rsi
 	movq	$_C_LABEL(start_info_union),%rdi
-	movq	$64,%rcx
+	movq	$(PAGE_SIZE / 8),%rcx
 	rep
 	movsq
 
@@ -963,6 +975,20 @@ longmode_hi:
 
 	movl	$VM_GUEST_XENPV, _C_LABEL(vm_guest)
 
+	/*
+	 * Initialize cpu_info_primary.ci_self := &cpu_info_primary,
+	 * and initialize some MSRs with
+	 * cpu_init_msrs(&cpu_info_primary, full=true).  This sets up
+	 * SYSCALL/SYSRET (XXX why?) and %fs/%gs, which is needed for
+	 * the %gs-relative addressing used by CPUVAR(...), curcpu(),
+	 * and curlwp.
+	 *
+	 * XXX Is it necessary to set cpu_info_primary.ci_self here?
+	 * Isn't it statically initialized in x86/cpu.c?
+	 *
+	 * XXX Why do we immediately clear the segment registers just
+	 * afterward?
+	 */
 	movq	$cpu_info_primary,%rdi
 	movq	%rdi,CPU_INFO_SELF(%rdi) /* ci->ci_self = ci */
 	movq	$1,%rsi
@@ -1010,17 +1036,17 @@ END(start)
 # if !defined(XENPV)
 /* entry point for Xen PVH */
 	.code32
-ENTRY(start_xen32)
+ENTRY(start_pvh)
 	/* Xen doesn't start us with a valid gdt */
 	movl    $RELOC(gdtdesc32), %eax
 	lgdt    (%eax)
 	jmp     $GSEL(GCODE_SEL, SEL_KPL), $RELOC(.Lreload_cs)
 
 .Lreload_cs:
-	movw    $GSEL(GDATA_SEL, SEL_KPL), %ax          
+	movw    $GSEL(GDATA_SEL, SEL_KPL), %ax
 	movw    %ax, %ds
 	movw    %ax, %es
-	movw    %ax, %ss   
+	movw    %ax, %ss
 
 	/* we need a valid stack */
 	movl	$RELOC(tmpstk),%esp
@@ -1034,6 +1060,93 @@ ENTRY(start_xen32)
 	stosb
 
 	/*
+	 * Here, we have 2 cases :
+	 *
+	 *  1) We have been started by Xen
+	 *  2) We have been started by another VMM (Qemu, Firecracker, ...)
+	 *
+	 * The main difference is that, when we are started by Xen,
+	 * %ebx (addr of the hvm_start_info structure) is pointing to a
+	 * location that will be mapped correctly later.
+	 *
+	 * In the second case, we have to copy this structure (and all
+	 * the information contained in it) to a location that will be
+	 * mapped later : __kernel_end
+	 *
+	 * To distinguish between the 2 cases, we'll use the 'cpuid' instruction
+	 */
+
+	push %ebx
+	xorl %eax, %eax
+	cpuid
+	cmpl $0x1, %eax		/* Check if we can call CPUID with eax=1 */
+	jb .start_genpvh
+	xorl %eax, %eax
+	inc %eax
+	cpuid
+	shr $31, %ecx
+	testb $1, %cl		/* Check if bit 31 of ECX (hypervisor) is set */
+	jz .start_genpvh
+	xorl %eax, %eax
+	inc %eax
+	shl $30, %eax
+	cpuid			/* Calling cpuid with eax=0x40000000 */
+	cmp $XEN_CPUID_SIGNATURE_EBX, %ebx	/* "VneX" */
+	je .start_xen32
+
+	/* We have been started by a VMM that is *not* Xen */
+
+.start_genpvh:
+
+	/* First, copy the hvm_start_info structure to __kernel_end */
+	pop %ebx
+	movl %ebx, %esi
+	movl $RELOC(__kernel_end), %edi
+	movl $HVM_START_INFO_SIZE, %ecx
+	shrl $2, %ecx
+	rep movsl
+
+	/* Copy cmdline_paddr after hvm_start_info */
+	movl CMDLINE_PADDR(%ebx), %esi
+	movl $RELOC(__kernel_end), %ecx
+	movl %edi, CMDLINE_PADDR(%ecx)	/* Set new cmdline_paddr in hvm_start_info */
+	.cmdline_copy:
+	movb (%esi), %al
+	movsb
+	cmp $0, %al
+	jne .cmdline_copy
+
+	/* Copy memmap_paddr after cmdline (only if hvm_start_info->version != 0) */
+	xorl %eax, %eax
+	cmpl START_INFO_VERSION(%ebx), %eax
+	je .reload_ebx
+	movl MMAP_PADDR(%ebx), %esi
+	movl $RELOC(__kernel_end), %ecx
+	movl %edi, MMAP_PADDR(%ecx)	/* Set new memmap_paddr in hvm_start_info */
+	movl MMAP_ENTRIES(%ebx), %eax	/* Get memmap_entries */
+	movl $MMAP_ENTRY_SIZE, %ebx
+	mull %ebx			/* eax * ebx => edx:eax */
+	movl %eax, %ecx
+	shrl $2, %ecx
+	rep movsl
+
+.reload_ebx:
+	movl $RELOC(__kernel_end), %ebx
+
+	/* announce ourself */
+	movl	$VM_GUEST_GENPVH, RELOC(vm_guest)
+
+	jmp .save_hvm_start_paddr
+
+.start_xen32:
+	pop %ebx
+	movl	$VM_GUEST_XENPVH, RELOC(vm_guest)
+
+.save_hvm_start_paddr:
+ 	/*
+ 	 * save addr of the hvm_start_info structure. This is also the end
+ 	 * of the symbol table
+	/*
 	 * save addr of the hvm_start_info structure. This is also the end
 	 * of the symbol table
 	 */
@@ -1044,6 +1157,9 @@ ENTRY(start_xen32)
 	movl	%eax,(%ebp)
 	movl	$KERNBASE_HI,4(%ebp)
 	/* get a page for HYPERVISOR_shared_info */
+	/* this is only needed if we are running on Xen */
+	cmpl	$VM_GUEST_XENPVH, RELOC(vm_guest)
+	jne	.add_hvm_start_info_page
 	addl	$PAGE_SIZE, %ebx
 	addl	$PGOFSET,%ebx
 	andl	$~PGOFSET,%ebx
@@ -1051,6 +1167,7 @@ ENTRY(start_xen32)
 	movl	%ebx,(%ebp)
 	movl	$0,4(%ebp)
 	/* XXX assume hvm_start_info+dependant structure fits in a single page */
+.add_hvm_start_info_page:
 	addl	$PAGE_SIZE, %ebx
 	addl	$PGOFSET,%ebx
 	andl	$~PGOFSET,%ebx
@@ -1059,10 +1176,8 @@ ENTRY(start_xen32)
 	movl	%ebx,(%ebp)
 	movl	$KERNBASE_HI,4(%ebp)
 
-	/* annouce ourself */
-	movl	$VM_GUEST_XENPVH, RELOC(vm_guest)
 	jmp .Lbiosbasemem_finished
-END(start_xen32)
+END(start_pvh)
 	.code64
 # endif /* !XENPV */
 /* space for the hypercall call page */
@@ -1177,11 +1292,45 @@ ENTRY(cpu_switchto)
 	movq	PCB_RBP(%r14),%rbp
 
 	/*
-	 * Set curlwp.  This must be globally visible in order to permit
-	 * non-interlocked mutex release.
+	 * Issue XCHG, rather than MOV, to set ci_curlwp := newlwp in
+	 * order to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 *    (This is always guaranteed by the x86 memory model, TSO,
+	 *    but other architectures require a explicit barrier before
+	 *    the store to ci->ci_curlwp.)
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 *    (This is the only ordering x86 TSO ever requires any kind
+	 *    of barrier for -- in this case, we take advantage of the
+	 *    sequential consistency implied by XCHG to obviate the
+	 *    need for MFENCE or something.)
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
 	 */
 	movq	%r12,%rcx
 	xchgq	%rcx,CPUVAR(CURLWP)
+
+#ifdef XENPV
+	/* if we are there, we're obviously not in user context.
+	 * reset ci_xen_clockf_* in case the splx() at the end of mi_switch()
+	 * triggers a deffered call do xen_timer_handler()
+	 */
+	movb    $0, CPUVAR(XEN_CLOCKF_USERMODE)
+	movq    $_C_LABEL(cpu_switchto), CPUVAR(XEN_CLOCKF_PC)
+#endif
+
 
 	/* Skip the rest if returning to a pinned LWP. */
 	testb	%dl,%dl		/* returning = true ? */
@@ -1256,7 +1405,7 @@ ENTRY(cpu_switchto)
 #ifndef XENPV
 	/* Raise the IPL to IPL_HIGH. Dropping the priority is deferred until
 	 * mi_switch(), when cpu_switchto() returns. XXX Still needed? */
-	movl	$IPL_HIGH,CPUVAR(ILEVEL)
+	movb	$IPL_HIGH,CPUVAR(ILEVEL)
 
 	/* The 32bit LWPs are handled differently. */
 	testl	$PCB_COMPAT32,PCB_FLAGS(%r14)
@@ -1366,7 +1515,7 @@ ENTRY(handle_syscall)
 	jnz	9f
 
 #ifdef DIAGNOSTIC
-	cmpl	$IPL_NONE,CPUVAR(ILEVEL)
+	cmpb	$IPL_NONE,CPUVAR(ILEVEL)
 	jne	.Lspl_error
 #endif
 
@@ -1388,7 +1537,7 @@ ENTRY(handle_syscall)
 #ifdef DIAGNOSTIC
 .Lspl_error:
 	movabsq	$4f,%rdi
-	movl	CPUVAR(ILEVEL),%esi
+	movzbl	CPUVAR(ILEVEL),%esi
 	call	_C_LABEL(panic)
 4:	.asciz	"spl not lowered on syscall, ilevel=%x"
 #endif
@@ -1517,7 +1666,7 @@ SYSCALL_ENTRY	syscall_svs,is_svs=1
 #endif
 
 IDTVEC(syscall32)
-	sysret		/* go away please */
+	sysretl		/* go away please */
 IDTVEC_END(syscall32)
 
 	TEXT_USER_END
@@ -1723,3 +1872,140 @@ LABEL(mds_leave_end)
 LABEL(nomds_leave)
 	NOMDS_LEAVE
 LABEL(nomds_leave_end)
+
+#ifdef SELFRELOC
+/*
+ * selfreloc(loadaddr edi)
+ * This is adapted from sys/arch/i386/i386/locore.S
+ */
+	.code32
+ENTRY(selfreloc_start)
+	movl	%edi, %ebx		/* loadaddr saved in ebx */
+	movl	%edi, %esi				/* src */
+	movl	$_RELOC(kernel_text), %edi		/* dest */
+	movl	16(%esp),%ecx				/* esym */
+	subl	$_RELOC(kernel_text), %ecx		/* size */
+
+#if defined(NO_OVERLAP)
+        movl    %ecx, %eax
+#else
+        movl    %edi, %eax
+        subl    %esi, %eax
+        cmpl    %ecx, %eax      /* overlapping? */
+        movl    %ecx, %eax
+        jb      .Lbackwards
+#endif
+        /* nope, copy forwards. */
+        shrl    $2, %ecx        /* copy by words */
+        rep
+        movsl
+        and     $3, %eax        /* any bytes left? */
+        jnz     .Ltrailing
+        jmp     .Lcopy_done
+
+.Ltrailing:
+        cmp     $2, %eax
+        jb      11f
+        movw    (%esi), %ax
+        movw    %ax, (%edi)
+        je      .Lcopy_done
+        movb    2(%esi), %al
+        movb    %al, 2(%edi)
+        jmp     .Lcopy_done
+11:     movb    (%esi), %al
+        movb    %al, (%edi)
+        jmp     .Lcopy_done
+
+#if !defined(NO_OVERLAP)
+.Lbackwards:
+        addl    %ecx, %edi      /* copy backwards. */
+        addl    %ecx, %esi
+        and     $3, %eax        /* any fractional bytes? */
+        jnz     .Lback_align
+.Lback_aligned:
+        shrl    $2, %ecx
+        subl    $4, %esi
+        subl    $4, %edi
+        std
+        rep
+        movsl
+        cld
+        jmp     .Lcopy_done
+
+.Lback_align:
+        sub     %eax, %esi
+        sub     %eax, %edi
+        cmp     $2, %eax
+        jb      11f
+        je      12f
+        movb    2(%esi), %al
+        movb    %al, 2(%edi)
+12:     movw    (%esi), %ax
+        movw    %ax, (%edi)
+        jmp     .Lback_aligned
+11:     movb    (%esi), %al
+        movb    %al, (%edi)
+        jmp     .Lback_aligned
+#endif
+        /* End of copy kernel */
+.Lcopy_done:
+	cld			/* LynxOS depends on it */
+
+	/* load current selfreloc_start addesss in $edi */
+	movl	%ebx, %edi	/* loadaddr was saved in ebx */
+	addl	$(selfreloc_start - kernel_text), %edi
+
+	/* Prepare jump address */
+	lea	(selfreloc_start32a - selfreloc_start)(%edi), %eax
+	movl	%eax, (selfreloc_start32r - selfreloc_start)(%edi)
+
+	/* Setup GDT */
+	lea	(gdt - selfreloc_start)(%edi), %eax
+	mov	%eax, (gdtrr - selfreloc_start)(%edi)
+	lgdt	(gdtr - selfreloc_start)(%edi)
+
+	/* Jump to set %cs */
+	ljmp	*(selfreloc_start32r - selfreloc_start)(%edi)
+
+	.align	4
+selfreloc_start32a:
+	movl	$0x10, %eax	/* #define DATA_SEGMENT 0x10 */
+	movw	%ax, %ds
+	movw	%ax, %es
+	movw	%ax, %fs
+	movw	%ax, %gs
+	movw	%ax, %ss
+
+	/* Disable Paging in CR0 */
+	movl	%cr0, %eax
+	andl	$(~CR0_PG), %eax
+	movl	%eax, %cr0
+
+	/* Disable PAE in CR4 */
+	movl	%cr4, %eax
+	andl	$(~CR4_PAE), %eax
+	movl	%eax, %cr4
+
+	jmp	selfreloc_start32b
+
+	.align	4
+selfreloc_start32b:
+	xor	%eax, %eax
+	movl	$_RELOC(start), %esi
+	jmp	*%esi
+
+	.align	16
+selfreloc_start32r:
+	.long	0
+	.long	0x08	/* #define	CODE_SEGMENT	0x08 */
+	.align	16
+gdt:
+	.long	0, 0
+	.byte	0xff, 0xff, 0x00, 0x00, 0x00, 0x9f, 0xcf, 0x00
+	.byte	0xff, 0xff, 0x00, 0x00, 0x00, 0x93, 0xcf, 0x00
+gdtr:
+	.word	gdtr - gdt
+gdtrr:
+	.quad
+END(selfreloc_start)
+#endif /* SELFRELOC */

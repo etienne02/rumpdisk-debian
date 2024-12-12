@@ -1,4 +1,4 @@
-/*	$NetBSD: pq3pci.c,v 1.29 2021/08/07 16:19:02 thorpej Exp $	*/
+/*	$NetBSD: pq3pci.c,v 1.32 2022/07/22 19:55:38 thorpej Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -39,7 +39,7 @@
 #define	__INTR_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pq3pci.c,v 1.29 2021/08/07 16:19:02 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pq3pci.c,v 1.32 2022/07/22 19:55:38 thorpej Exp $");
 
 #include "locators.h"
 
@@ -712,7 +712,7 @@ pq3pci_intrmap_setup(struct pq3pci_softc *sc,
 	prop_number_t pn = prop_dictionary_get(sc->sc_intrmap, "interrupt-mask");
 	KASSERT(pn != NULL);
 
-	sc->sc_intrmask = prop_number_unsigned_integer_value(pn);
+	sc->sc_intrmask = prop_number_unsigned_value(pn);
 
 	sc->sc_ih = intr_establish_xname(cnl->cnl_intrs[0], IPL_VM, IST_ONCHIP,
 	    pq3pci_onchip_intr, sc, device_xname(sc->sc_dev));
@@ -727,8 +727,11 @@ static int
 pq3pci_once_init(void)
 {
 
-	mutex_init(&pq3pci_intrsources_lock, MUTEX_DEFAULT, IPL_VM);
-	mutex_init(&pq3pci_msigroups_lock, MUTEX_DEFAULT, IPL_VM);
+	/*
+	 * XXX necessary??
+	 */
+	mutex_init(&pq3pci_intrsources_lock, MUTEX_DEFAULT, IPL_NONE);
+	mutex_init(&pq3pci_msigroups_lock, MUTEX_DEFAULT, IPL_NONE);
 
 	return 0;
 }
@@ -1209,7 +1212,7 @@ pq3pci_msi_alloc_one(int ipl)
 	uint32_t bitmap[maplen];
 	pci_intr_handle_t handle;
 
-	mutex_spin_enter(&pq3pci_msigroups_lock);
+	mutex_enter(&pq3pci_msigroups_lock);
 	for (u_int i = 0; i < maplen; i++) {
 		struct pq3pci_msigroup * const msig = pq3pci_msigroups[i];
 		if (msig == NULL) {
@@ -1237,20 +1240,20 @@ pq3pci_msi_alloc_one(int ipl)
 			struct pq3pci_msihand * const msih __diagused =
 			    pq3pci_msi_claim(handle);
 			KASSERT(msih != NULL);
-			mutex_spin_exit(&pq3pci_msigroups_lock);
+			mutex_exit(&pq3pci_msigroups_lock);
 			return handle;
 		}
 	}
 
 	if (freegroup-- == 0) {
-		mutex_spin_exit(&pq3pci_msigroups_lock);
+		mutex_exit(&pq3pci_msigroups_lock);
 		return 0;
 	}
 
 	struct pq3pci_msigroup * const msig =
 	    kmem_zalloc(sizeof(*msig), KM_NOSLEEP);
 	if (msig == NULL) {
-		mutex_spin_exit(&pq3pci_msigroups_lock);
+		mutex_exit(&pq3pci_msigroups_lock);
 		return 0;
 	}
 	pq3pci_msi_group_setup(msig, freegroup, ipl);
@@ -1259,7 +1262,7 @@ pq3pci_msi_alloc_one(int ipl)
 	struct pq3pci_msihand * const msih __diagused =
 	    pq3pci_msi_claim(handle);
 	KASSERT(msih != NULL);
-	mutex_spin_exit(&pq3pci_msigroups_lock);
+	mutex_exit(&pq3pci_msigroups_lock);
 	return handle;
 }
 
@@ -1327,17 +1330,17 @@ static struct pq3pci_intrsource *
 pq3pci_intr_source_lookup(struct pq3pci_softc *sc, pci_intr_handle_t handle)
 {
 	struct pq3pci_intrsource *pis;
-	mutex_spin_enter(&pq3pci_intrsources_lock);
+	mutex_enter(&pq3pci_intrsources_lock);
 	SIMPLEQ_FOREACH(pis, &pq3pci_intrsources, pis_link) {
 		if (pis->pis_handle == handle) {
-			mutex_spin_exit(&pq3pci_intrsources_lock);
+			mutex_exit(&pq3pci_intrsources_lock);
 			return pis;
 		}
 	}
 	pis = kmem_zalloc(sizeof(*pis), KM_NOSLEEP);
 	if (pis != NULL)
 		pq3pci_intr_source_setup(sc, pis, handle);
-	mutex_spin_exit(&pq3pci_intrsources_lock);
+	mutex_exit(&pq3pci_intrsources_lock);
 	return pis;
 }
 
@@ -1390,11 +1393,11 @@ pq3pci_intr_handle_lookup(struct pq3pci_softc *sc,
 	prop_number_t pn_irq = prop_dictionary_get(entry, "interrupt");
 	KASSERT(pn_irq != NULL);
 	KASSERT(prop_object_type(pn_irq) == PROP_TYPE_NUMBER);
-	int irq = prop_number_unsigned_integer_value(pn_irq);
+	int irq = prop_number_unsigned_value(pn_irq);
 	prop_number_t pn_ist = prop_dictionary_get(entry, "type");
 	KASSERT(pn_ist != NULL);
 	KASSERT(prop_object_type(pn_ist) == PROP_TYPE_NUMBER);
-	int ist = prop_number_unsigned_integer_value(pn_ist);
+	int ist = prop_number_unsigned_value(pn_ist);
 
 	return PIH_MAKE(irq, ist, 0);
 }
@@ -1690,8 +1693,8 @@ pq3pci_conf_interrupt(void *v, int bus, int dev, int pin, int swiz, int *iline)
  * This function is used by device drivers like pci_intr_map().
  *
  * "ihps" is the array of vector numbers which MSI used instead of IRQ number.
- * "count" must be powr of 2.
- * "count" can decrease if sturct intrsource cannot be allocated.
+ * "count" must be power of 2.
+ * "count" can decrease if struct intrsource cannot be allocated.
  * if count == 0, return non-zero value.
  */
 static int

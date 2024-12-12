@@ -1,4 +1,4 @@
-/*	$NetBSD: devopen.c,v 1.11 2020/01/18 19:25:58 nonaka Exp $	 */
+/*	$NetBSD: devopen.c,v 1.14 2023/06/20 07:46:03 rin Exp $	 */
 
 /*-
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
@@ -154,13 +154,13 @@ devopen(struct open_file *f, const char *fname, char **file)
 	const char *xname = NULL;
 	int unit, partition;
 	int biosdev;
-	int i, error;
+	int error;
 #if defined(SUPPORT_NFS) || defined(SUPPORT_TFTP)
 	struct devdesc desc;
 	const struct netboot_fstab *nf;
 	char *filename;
 	size_t fsnamelen;
-	int n;
+	int i, n;
 #endif
 
 	error = parsebootfile(fname, &fsname, &devname, &unit, &partition,

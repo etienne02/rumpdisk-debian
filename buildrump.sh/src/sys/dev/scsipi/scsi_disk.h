@@ -1,4 +1,4 @@
-/*	$NetBSD: scsi_disk.h,v 1.33 2019/12/27 09:41:51 msaitoh Exp $	*/
+/*	$NetBSD: scsi_disk.h,v 1.35 2023/12/07 07:04:13 andvar Exp $	*/
 
 /*
  * SCSI-specific interface description
@@ -111,7 +111,7 @@ struct scsi_initialization_pattern_descriptor {
 };
 
 /*
- * Defect desciptors.  These are used as the defect lists in the FORMAT UNIT
+ * Defect descriptors.  These are used as the defect lists in the FORMAT UNIT
  * and READ DEFECT DATA commands, and as the translate page of the
  * SEND DIAGNOSTIC and RECEIVE DIAGNOSTIC RESULTS commands.
  */
@@ -333,7 +333,7 @@ union scsi_disk_pages {
 		u_int8_t pg_length;	/* page length (should be 0x0a) */
 		u_int8_t flags;		/* cache parameter flags */
 #define	CACHING_RCD	0x01		/* read cache disable */
-#define	CACHING_MF	0x02		/* multiplcation factor */
+#define	CACHING_MF	0x02		/* multiplication factor */
 #define	CACHING_WCE	0x04		/* write cache enable (write-back) */
 #define	CACHING_SIZE	0x08		/* use CACHE SEGMENT SIZE */
 #define	CACHING_DISC	0x10		/* pftch across time discontinuities */

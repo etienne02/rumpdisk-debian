@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_sig_43.c,v 1.36 2020/01/01 14:52:38 maxv Exp $	*/
+/*	$NetBSD: kern_sig_43.c,v 1.38 2021/11/01 05:07:16 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_sig_43.c,v 1.36 2020/01/01 14:52:38 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_sig_43.c,v 1.38 2021/11/01 05:07:16 thorpej Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
@@ -70,8 +70,8 @@ void compat_43_sigmask_to_sigset(const int *, sigset_t *);
 void compat_43_sigset_to_sigmask(const sigset_t *, int *);
 void compat_43_sigvec_to_sigaction(const struct sigvec *, struct sigaction *);
 void compat_43_sigaction_to_sigvec(const struct sigaction *, struct sigvec *);
-void compat_43_sigstack_to_sigaltstack(const struct sigstack *, struct sigaltstack *);
-void compat_43_sigaltstack_to_sigstack(const struct sigaltstack *, struct sigstack *);
+void compat_43_sigstack_to_sigaltstack(const struct sigstack *, stack_t *);
+void compat_43_sigaltstack_to_sigstack(const stack_t *, struct sigstack *);
 
 static struct syscall_package kern_sig_43_syscalls[] = {
 	{ SYS_compat_43_osigblock, 0, (sy_call_t *)compat_43_sys_sigblock },
@@ -86,6 +86,7 @@ void
 compat_43_sigmask_to_sigset(const int *sm, sigset_t *ss)
 {
 
+	memset(ss, 0, sizeof(*ss));
 	ss->__bits[0] = *sm;
 	ss->__bits[1] = 0;
 	ss->__bits[2] = 0;
@@ -102,6 +103,8 @@ compat_43_sigset_to_sigmask(const sigset_t *ss, int *sm)
 void
 compat_43_sigvec_to_sigaction(const struct sigvec *sv, struct sigaction *sa)
 {
+
+	memset(sa, 0, sizeof(*sa));
 	sa->sa_handler = sv->sv_handler;
 	compat_43_sigmask_to_sigset(&sv->sv_mask, &sa->sa_mask);
 	sa->sa_flags = sv->sv_flags ^ SA_RESTART;
@@ -110,14 +113,17 @@ compat_43_sigvec_to_sigaction(const struct sigvec *sv, struct sigaction *sa)
 void
 compat_43_sigaction_to_sigvec(const struct sigaction *sa, struct sigvec *sv)
 {
+
+	memset(sv, 0, sizeof(*sv));
 	sv->sv_handler = sa->sa_handler;
 	compat_43_sigset_to_sigmask(&sa->sa_mask, &sv->sv_mask);
 	sv->sv_flags = sa->sa_flags ^ SA_RESTART;
 }
 
 void
-compat_43_sigstack_to_sigaltstack(const struct sigstack *ss, struct sigaltstack *sa)
+compat_43_sigstack_to_sigaltstack(const struct sigstack *ss, stack_t *sa)
 {
+	memset(sa, 0, sizeof(*sa));
 	sa->ss_sp = ss->ss_sp;
 	sa->ss_size = SIGSTKSZ;	/* Use the recommended size */
 	sa->ss_flags = 0;
@@ -126,7 +132,7 @@ compat_43_sigstack_to_sigaltstack(const struct sigstack *ss, struct sigaltstack 
 }
 
 void
-compat_43_sigaltstack_to_sigstack(const struct sigaltstack *sa, struct sigstack *ss)
+compat_43_sigaltstack_to_sigstack(const stack_t *sa, struct sigstack *ss)
 {
 	memset(ss, 0, sizeof(*ss));
 	ss->ss_sp = sa->ss_sp;
@@ -191,7 +197,7 @@ compat_43_sys_sigstack(struct lwp *l, const struct compat_43_sys_sigstack_args *
 		syscallarg(struct sigstack *) oss;
 	} */
 	struct sigstack nss, oss;
-	struct sigaltstack nsa, osa;
+	stack_t nsa, osa;
 	int error;
 
 	if (SCARG(uap, nss)) {

@@ -1,4 +1,4 @@
-/*	$NetBSD: devopen.c,v 1.6 2014/08/10 07:40:49 isaki Exp $	*/
+/*	$NetBSD: devopen.c,v 1.8 2023/02/12 08:25:09 tsutsui Exp $	*/
 /*
  * Copyright (c) 1994 Rolf Grossmann
  * All rights reserved.
@@ -33,14 +33,14 @@
 #include <lib/libkern/libkern.h>
 
 int devlookup(const char *, int);
-int devparse(const char *, int *, char *, char *, char *, char **);
+int devparse(const char *, int *, int *, int *, int *, char **);
 
 int
 devlookup(const char *d, int len)
 {
     struct devsw *dp = devsw;
     int i;
-    
+
     for (i = 0; i < ndevs; i++, dp++)
 	if (dp->dv_name && strncmp(dp->dv_name, d, len) == 0)
 	    return i;
@@ -64,11 +64,11 @@ devlookup(const char *d, int len)
  */
 int
 devparse(const char *fname, int *dev,
-	 char *count, char *lun, char *part, char **file)
+	 int *count, int *lun, int *part, char **file)
 {
     int i;
     const char *s, *args[3];
-    
+
     /* get device name */
     for (s = fname; *s && *s != '/' && *s != '('; s++)
 	;
@@ -86,7 +86,7 @@ devparse(const char *fname, int *dev,
 	}
 	if (*s != ')')
 	    goto baddev;
-	
+
 	switch(i) {
 	  case 3:
 	      *count  = atoi(args[0]);
@@ -108,9 +108,9 @@ devparse(const char *fname, int *dev,
     /* no device present */
     else
 	*file = (char *)fname;	/* XXX discard const */
-    
+
     return 0;
-    
+
 baddev:
     return ENXIO;
 }
@@ -120,7 +120,7 @@ devopen(struct open_file *f, const char *fname, char **file)
 {
     int error;
     int dev;
-    char count, lun, part;
+    int count, lun, part;
     struct devsw *dp;
 
     dev   = 0;	/* default device is first in table (usually scsi disk) */
@@ -132,15 +132,15 @@ devopen(struct open_file *f, const char *fname, char **file)
 	return error;
 
     dp = &devsw[dev];
-	
+
     if ((void *)dp->dv_open == (void *)nodev)
 	return ENXIO;
 
     f->f_dev = dp;
-    
+
     if ((error = (*dp->dv_open)(f, count, lun, part)) != 0)
 	printf("%s(%d,%d,%d): %d = %s\n", devsw[dev].dv_name,
 	       count, lun, part, error, strerror(error));
 
     return error;
-}    
+}

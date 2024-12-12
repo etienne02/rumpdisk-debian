@@ -1,11 +1,12 @@
-/*	$NetBSD: msg_077.c,v 1.4 2021/06/29 07:23:21 rillig Exp $	*/
+/*	$NetBSD: msg_077.c,v 1.9 2024/02/03 20:10:10 rillig Exp $	*/
 # 3 "msg_077.c"
 
-/* Test for message: bad octal digit %c [77] */
+/* Test for message: bad octal digit '%c' [77] */
 
-/* lint1-flags: -tw */
+/* lint1-flags: -tw -X 351 */
 
-char single_digit = '\8';	/* expect: bad octal digit 8 [77] */
+/* expect+1: warning: bad octal digit '8' [77] */
+char single_digit = '\8';
 
 /*
  * Before lex.c 1.47 from 2021-06-29, lint intended to detect a "bad octal
@@ -22,5 +23,6 @@ char single_digit = '\8';	/* expect: bad octal digit 8 [77] */
  * anyway.
  * https://mail-index.netbsd.org/tech-toolchain/2021/03/16/msg003933.html
  */
-/* expect+1: multi-character character constant [294] */
+/* expect+2: warning: short octal escape '\0' followed by digit '8' [356] */
+/* expect+1: warning: multi-character character constant [294] */
 char several_digits = '\08';

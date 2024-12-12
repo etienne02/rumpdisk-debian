@@ -1,4 +1,4 @@
-/*	$NetBSD: reloc.c,v 1.116 2020/02/29 04:24:33 kamil Exp $	 */
+/*	$NetBSD: reloc.c,v 1.118 2023/07/30 09:20:14 riastradh Exp $	 */
 
 /*
  * Copyright 1996 John D. Polstra.
@@ -39,7 +39,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: reloc.c,v 1.116 2020/02/29 04:24:33 kamil Exp $");
+__RCSID("$NetBSD: reloc.c,v 1.118 2023/07/30 09:20:14 riastradh Exp $");
 #endif /* not lint */
 
 #include <err.h>
@@ -56,6 +56,7 @@ __RCSID("$NetBSD: reloc.c,v 1.116 2020/02/29 04:24:33 kamil Exp $");
 #include <dirent.h>
 
 #include "debug.h"
+#include "hash.h"
 #include "rtld.h"
 
 #ifndef RTLD_INHIBIT_COPY_RELOCS
@@ -259,6 +260,16 @@ _rtld_resolve_ifunc2(const Obj_Entry *obj, Elf_Addr addr)
 
 	return target;
 }
+
+#if \
+    !defined(RTLD_COMMON_CALL_IFUNC_RELA) && \
+    !defined(RTLD_COMMON_CALL_IFUNC_REL) && \
+    !defined(RTLD_ARCH_CALL_IFUNC)
+void
+_rtld_call_ifunc(Obj_Entry *obj, sigset_t *mask, u_int cur_objgen)
+{
+}
+#endif
 
 #ifdef RTLD_COMMON_CALL_IFUNC_RELA
 #  ifdef __sparc__

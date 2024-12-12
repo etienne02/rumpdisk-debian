@@ -1,4 +1,4 @@
-/*	$NetBSD: pflogd.c,v 1.10 2015/08/28 12:17:41 joerg Exp $	*/
+/*	$NetBSD: pflogd.c,v 1.13 2024/09/03 09:03:18 rin Exp $	*/
 /*	$OpenBSD: pflogd.c,v 1.45 2007/06/06 14:11:26 henning Exp $	*/
 
 /*
@@ -106,6 +106,20 @@ static size_t bufleft = 0;	/* bytes left in buffer */
 /* if error, stop logging but count dropped packets */
 static int suspended = -1;
 static long packets_dropped = 0;
+
+/*
+ * XXX Taken from libpcap. These are no longer exposed for >= 1.10.5,
+ * for which tv_{,u}sec were converted to unsigned.
+ */
+struct pcap_timeval {
+	uint32_t tv_sec;
+	uint32_t tv_usec;
+};
+struct pcap_sf_pkthdr {
+	struct pcap_timeval ts;
+	uint32_t caplen;
+	uint32_t len;
+};
 
 void
 set_suspended(int s)
@@ -349,9 +363,9 @@ try_reset_dump(int nomove)
 		hdr.magic = TCPDUMP_MAGIC;
 		hdr.version_major = PCAP_VERSION_MAJOR;
 		hdr.version_minor = PCAP_VERSION_MINOR;
-		hdr.thiszone = hpcap->tzoff;
-		hdr.snaplen = hpcap->snapshot;
+		hdr.thiszone = 0;
 		hdr.sigfigs = 0;
+		hdr.snaplen = hpcap->snapshot;
 		hdr.linktype = hpcap->linktype;
 
 		if (fwrite((char *)&hdr, sizeof(hdr), 1, fp) != 1) {

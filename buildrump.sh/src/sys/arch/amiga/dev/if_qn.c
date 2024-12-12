@@ -1,4 +1,4 @@
-/*	$NetBSD: if_qn.c,v 1.49 2020/01/29 05:23:16 thorpej Exp $ */
+/*	$NetBSD: if_qn.c,v 1.53 2022/09/17 19:23:24 thorpej Exp $ */
 
 /*
  * Copyright (c) 1995 Mika Kortelainen
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_qn.c,v 1.49 2020/01/29 05:23:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_qn.c,v 1.53 2022/09/17 19:23:24 thorpej Exp $");
 
 #include "qn.h"
 #if NQN > 0
@@ -141,9 +141,8 @@ struct	qn_softc {
 	u_short	volatile *nic_t_mode;
 	u_short	volatile *nic_reset;
 	u_short	volatile *nic_len;
-	u_char	transmit_pending;
-} qn_softc[NQN];
-
+	bool	transmit_pending;
+};
 
 int	qnmatch(device_t, cfdata_t, void *);
 void	qnattach(device_t, device_t, void *);
@@ -209,7 +208,7 @@ qnattach(device_t parent, device_t self, void *aux)
 	sc->nic_t_mode = (u_short volatile *)(sc->sc_nic_base + NIC_DLCR4);
 	sc->nic_r_mode = (u_short volatile *)(sc->sc_nic_base + NIC_DLCR5);
 	sc->nic_reset = (u_short volatile *)(sc->sc_nic_base + NIC_DLCR6);
-	sc->transmit_pending = 0;
+	sc->transmit_pending = false;
 
 	/*
 	 * The ethernet address of the board (1st three bytes are the vendor
@@ -277,8 +276,7 @@ qninit(struct qn_softc *sc)
 		    CLLADDR(ifp->if_sadl)[i]);
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
-	sc->transmit_pending = 0;
+	sc->transmit_pending = false;
 
 	qn_flush(sc);
 
@@ -387,7 +385,10 @@ qnstart(struct ifnet *ifp)
 	int timout = 60000;
 
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
+		return;
+
+	if (sc->transmit_pending)
 		return;
 
 	IF_DEQUEUE(&ifp->if_snd, m);
@@ -416,18 +417,17 @@ qnstart(struct ifnet *ifp)
 	/* Wait for the packet to really leave. */
 	while (!(*sc->nic_t_status & T_TMT_OK) && --timout) {
 		if ((timout % 10000) == 0)
-			log(LOG_INFO, "qn: timout...\n");
+			log(LOG_INFO, "qn: timeout...\n");
 	}
 
 	if (timout == 0)
 		/* Maybe we should try to recover from this one? */
 		/* But now, let's just fall thru and hope the best... */
-		log(LOG_INFO, "qn: transmit timout (fatal?)\n");
+		log(LOG_INFO, "qn: transmit timeout (fatal?)\n");
 
-	sc->transmit_pending = 1;
+	sc->transmit_pending = true;
 	*sc->nic_t_mask = INT_TMT_OK | INT_SIXTEEN_COL;
 
-	ifp->if_flags |= IFF_OACTIVE;
 	ifp->if_timer = 2;
 }
 
@@ -737,7 +737,7 @@ qnintr(void *arg)
 		*sc->nic_t_status = CLEAR_T_ERR;
 
 		if (sc->transmit_pending && (tint & T_TMT_OK)) {
-			sc->transmit_pending = 0;
+			sc->transmit_pending = false;
 			/*
 			 * Update total number of successfully
 			 * transmitted packets.
@@ -755,7 +755,7 @@ qnintr(void *arg)
 #endif
 			if_statadd2(&sc->sc_ethercom.ec_if,
 			    if_oerrors, 1, if_collisions, 16);
-			sc->transmit_pending = 0;
+			sc->transmit_pending = false;
 		}
 
 		if (sc->transmit_pending) {
@@ -764,8 +764,6 @@ qnintr(void *arg)
 			/* Must return transmission interrupt mask. */
 			return_tintmask = 1;
 		} else {
-			sc->sc_ethercom.ec_if.if_flags &= ~IFF_OACTIVE;
-
 			/* Clear watchdog timer. */
 			sc->sc_ethercom.ec_if.if_timer = 0;
 		}
@@ -778,7 +776,7 @@ qnintr(void *arg)
 	if (rint != 0)
 		qn_rint(sc, rint);
 
-	if ((sc->sc_ethercom.ec_if.if_flags & IFF_OACTIVE) == 0)
+	if (!sc->transmit_pending)
 		if_schedule_deferred_start(&sc->sc_ethercom.ec_if);
 	else if (return_tintmask == 1)
 		*sc->nic_t_mask = tintmask;
@@ -898,7 +896,7 @@ qn_dump(struct qn_softc *sc)
 	log(LOG_INFO, "r_status  : %04x\n", *sc->nic_r_status);
 	log(LOG_INFO, "r_mask    : %04x\n", *sc->nic_r_mask);
 	log(LOG_INFO, "r_mode    : %04x\n", *sc->nic_r_mode);
-	log(LOG_INFO, "pending   : %02x\n", sc->transmit_pending);
+	log(LOG_INFO, "pending   : %s\n", sc->transmit_pending ? "T" : "F");
 	log(LOG_INFO, "if_flags  : %04x\n", sc->sc_ethercom.ec_if.if_flags);
 }
 #endif

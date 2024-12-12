@@ -1,4 +1,4 @@
-/*	$NetBSD: hme.c,v 1.108 2020/03/12 03:01:46 thorpej Exp $	*/
+/*	$NetBSD: hme.c,v 1.110 2024/06/29 12:11:11 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.108 2020/03/12 03:01:46 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hme.c,v 1.110 2024/06/29 12:11:11 riastradh Exp $");
 
 /* #define HMEDEBUG */
 
@@ -198,16 +198,14 @@ hme_config(struct hme_softc *sc)
 				    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error_dev(sc->sc_dev, "DMA buffer map error %d\n",
 			error);
-		bus_dmamap_unload(dmatag, sc->sc_dmamap);
-		bus_dmamem_free(dmatag, &seg, rseg);
-		return;
+		goto bad_free;
 	}
 
 	if ((error = bus_dmamap_create(dmatag, size, 1, size, 0,
 				    BUS_DMA_NOWAIT, &sc->sc_dmamap)) != 0) {
 		aprint_error_dev(sc->sc_dev, "DMA map create error %d\n",
 			error);
-		return;
+		goto bad_unmap;
 	}
 
 	/* Load the buffer */
@@ -216,8 +214,7 @@ hme_config(struct hme_softc *sc)
 	    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) != 0) {
 		aprint_error_dev(sc->sc_dev, "DMA buffer map load error %d\n",
 			error);
-		bus_dmamem_free(dmatag, &seg, rseg);
-		return;
+		goto bad_destroy;
 	}
 	sc->sc_rb.rb_dmabase = sc->sc_dmamap->dm_segs[0].ds_addr;
 
@@ -316,6 +313,15 @@ hme_config(struct hme_softc *sc)
 
 	callout_init(&sc->sc_tick_ch, 0);
 	callout_setfunc(&sc->sc_tick_ch, hme_tick, sc);
+
+	return;
+
+ bad_destroy:
+	bus_dmamap_destroy(dmatag, sc->sc_dmamap);
+ bad_unmap:
+	bus_dmamem_unmap(dmatag, sc->sc_rb.rb_membase, size);
+ bad_free:
+	bus_dmamem_free(dmatag, &seg, rseg);
 }
 
 void
@@ -983,10 +989,10 @@ hme_tint(struct hme_softc *sc)
 	/*
 	 * Unload collision counters
 	 */
-	if_statadd_ref(nsr, if_collisions,
+	if_statadd_ref(ifp, nsr, if_collisions,
 		bus_space_read_4(t, mac, HME_MACI_NCCNT) +
 		bus_space_read_4(t, mac, HME_MACI_FCCNT));
-	if_statadd_ref(nsr, if_oerrors,
+	if_statadd_ref(ifp, nsr, if_oerrors,
 		bus_space_read_4(t, mac, HME_MACI_EXCNT) +
 		bus_space_read_4(t, mac, HME_MACI_LTCNT));
 
@@ -1011,7 +1017,7 @@ hme_tint(struct hme_softc *sc)
 			break;
 
 		ifp->if_flags &= ~IFF_OACTIVE;
-		if_statinc_ref(nsr, if_opackets);
+		if_statinc_ref(ifp, nsr, if_opackets);
 
 		if (++ri == sc->sc_rb.rb_ntbuf)
 			ri = 0;
@@ -1108,13 +1114,13 @@ hme_eint(struct hme_softc *sc, u_int status)
 	/* Receive error counters rolled over */
 	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 	if (status & HME_SEB_STAT_ACNTEXP)
-		if_statadd_ref(nsr, if_ierrors, 0xff);
+		if_statadd_ref(ifp, nsr, if_ierrors, 0xff);
 	if (status & HME_SEB_STAT_CCNTEXP)
-		if_statadd_ref(nsr, if_ierrors, 0xff);
+		if_statadd_ref(ifp, nsr, if_ierrors, 0xff);
 	if (status & HME_SEB_STAT_LCNTEXP)
-		if_statadd_ref(nsr, if_ierrors, 0xff);
+		if_statadd_ref(ifp, nsr, if_ierrors, 0xff);
 	if (status & HME_SEB_STAT_CVCNTEXP)
-		if_statadd_ref(nsr, if_ierrors, 0xff);
+		if_statadd_ref(ifp, nsr, if_ierrors, 0xff);
 	IF_STAT_PUTREF(ifp);
 
 	/* RXTERR locks up the interface, so do a reset */

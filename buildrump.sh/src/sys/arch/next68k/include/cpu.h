@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.h,v 1.50 2019/11/23 19:40:36 ad Exp $	*/
+/*	$NetBSD: cpu.h,v 1.58 2024/01/20 00:15:32 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -43,7 +43,6 @@
 
 #if defined(_KERNEL_OPT)
 #include "opt_lockdebug.h"
-#include "opt_m68k_arch.h"
 #endif
 
 /*
@@ -52,77 +51,11 @@
 #include <m68k/cpu.h>
 
 #if defined(_KERNEL)
-/*
- * Exported definitions unique to next68k/68k cpu support.
- */
-#define	M68K_MMU_MOTOROLA
-
-/*
- * Get interrupt glue.
- */
-#include <machine/intr.h>
-
-/*
- * Arguments to hardclock and gatherstats encapsulate the previous
- * machine state in an opaque clockframe.  On the next68k, we use
- * what the hardware pushes on an interrupt (frame format 0).
- */
-struct clockframe {
-	u_short	sr;		/* sr at time of interrupt */
-	u_long	pc;		/* pc at time of interrupt */
-	u_short	fmt:4,
-		vec:12;		/* vector offset (4-word frame) */
-} __attribute__((packed));
-
-#define	CLKF_USERMODE(framep)	(((framep)->sr & PSL_S) == 0)
-#define	CLKF_PC(framep)		((framep)->pc)
-
-/*
- * The clock interrupt handler can determine if it's a nested
- * interrupt by checking for interrupt_depth > 1.
- * (Remember, the clock interrupt handler itself will cause the
- * depth counter to be incremented).
- */
-extern volatile unsigned int interrupt_depth;
-#define	CLKF_INTR(framep)	(interrupt_depth > 1)
-
-/*
- * Preempt the current process if in interrupt from user mode,
- * or after the current trap/syscall if in system mode.
- */
-#define	cpu_need_resched(ci,l,flags)	do {	\
-	__USE(flags); 				\
-	aston();				\
-} while (/*CONSTCOND*/0)
-
-/*
- * Give a profiling tick to the current process when the user profiling
- * buffer pages are invalid.  On the next68k, request an ast to send us
- * through trap, marking the proc as needing a profiling tick.
- */
-#define	cpu_need_proftick(l)	((l)->l_pflag |= LP_OWEUPC, aston())
-
-/*
- * Notify the current process (p) that it has a signal pending,
- * process as soon as possible.
- */
-#define	cpu_signotify(l)	aston()
-
-#define aston() (astpending++)
-
-extern	int	astpending;	/* need to trap before returning to user mode */
-
-extern	void (*vectab[])(void);
-
 /* locore.s functions */
-void	loadustp(int);
-
 void	doboot(void) __attribute__((__noreturn__));
 int	nmihand(void *);
 
-/* clock.c functions */
-void	next68k_calibrate_delay(void);
-
+extern int iscolor;
 #endif /* _KERNEL */
 
 #define NEXT_RAMBASE  (0x4000000) /* really depends on slot, but... */
@@ -318,7 +251,10 @@ void	next68k_calibrate_delay(void);
 #define MONOBASE	(0x0b000000)
 #define MONOTOP		(0x0b03a800)
 #define COLORBASE	(0x2c000000)
-#define COLORTOP	(0x2c1D4000)
+#define COLORTOP	(0x2c1d4000)
+#define TURBOFBBASE	(0x0c000000)
+#define TURBOMONOTOP	(0x0c03a800)
+#define TURBOCOLORTOP	(0x0c1d4000)
 
 #define NEXT_INTR_BITS \
 "\20\40NMI\37PFAIL\36TIMER\35ENETX_DMA\34ENETR_DMA\33SCSI_DMA\32DISK_DMA\31PRINTER_DMA\30SOUND_OUT_DMA\27SOUND_IN_DMA\26SCC_DMA\25DSP_DMA\24M2R_DMA\23R2M_DMA\22SCC\21REMOTE\20BUS\17DSP_4\16DISK|C16_VIDEO\15SCSI\14PRINTER\13ENETX\12ENETR\11SOUND_OVRUN\10PHONE\07DSP_3\06VIDEO\05MONITOR\04KYBD_MOUSE\03POWER\02SOFTINT1\01SOFTINT0"
@@ -335,11 +271,5 @@ void	next68k_calibrate_delay(void);
 #define	IIOV(pa)	((int)(pa)-INTIOBASE+intiobase)
 #define	IIOP(va)	((int)(va)-intiobase+INTIOBASE)
 #define	IIOMAPSIZE	btoc(INTIOTOP-INTIOBASE)	/* 2mb */
-
-/* mono fb space */
-#define	MONOMAPSIZE	btoc(MONOTOP-MONOBASE)	/* who cares */
-
-/* color fb space */
-#define	COLORMAPSIZE	btoc(COLORTOP-COLORBASE)	/* who cares */
 
 #endif	/* _MACHINE_CPU_H_ */

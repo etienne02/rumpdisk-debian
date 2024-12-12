@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_exec.h,v 1.7 2010/07/07 01:30:35 chs Exp $ */
+/*	$NetBSD: linux32_exec.h,v 1.9 2021/11/26 08:56:29 ryo Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -36,8 +36,12 @@
 
 #include <compat/netbsd32/netbsd32.h>
 
-#if defined(__amd64__)
+#if defined(__aarch64__)
+#include <compat/linux32/arch/aarch64/linux32_exec.h>
+#elif defined(__amd64__)
 #include <compat/linux32/arch/amd64/linux32_exec.h>
+#else
+#error Undefined linux32_exec.h machine type.
 #endif
 
 extern struct emul emul_linux32;
@@ -61,6 +65,10 @@ int linux_elf32_debuglink_signature(struct lwp *l,
 #endif
 #ifdef LINUX32_ATEXIT_SIGNATURE
 int linux_elf32_atexit_signature(struct lwp *l,
+        struct exec_package *, Elf32_Ehdr *);
+#endif
+#ifdef LINUX32_GO_RT0_SIGNATURE
+int linux_elf32_go_rt0_signature(struct lwp *l,
         struct exec_package *, Elf32_Ehdr *);
 #endif
 

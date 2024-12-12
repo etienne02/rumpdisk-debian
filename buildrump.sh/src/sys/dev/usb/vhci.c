@@ -1,4 +1,4 @@
-/*	$NetBSD: vhci.c,v 1.22 2021/08/07 16:19:17 thorpej Exp $ */
+/*	$NetBSD: vhci.c,v 1.27 2022/03/12 15:30:51 riastradh Exp $ */
 
 /*
  * Copyright (c) 2019-2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vhci.c,v 1.22 2021/08/07 16:19:17 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vhci.c,v 1.27 2022/03/12 15:30:51 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -590,17 +590,8 @@ vhci_roothub_ctrl(struct usbd_bus *bus, usb_device_request_t *req,
 static usbd_status
 vhci_device_ctrl_transfer(struct usbd_xfer *xfer)
 {
-	vhci_softc_t *sc = xfer->ux_bus->ub_hcpriv;
-	usbd_status err;
 
 	DPRINTF("%s: called\n", __func__);
-
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
 
 	/* Pipe isn't running, start first */
 	return vhci_device_ctrl_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
@@ -614,7 +605,6 @@ vhci_device_ctrl_start(struct usbd_xfer *xfer)
 	struct usbd_device *dev = xfer->ux_pipe->up_dev;
 	vhci_softc_t *sc = xfer->ux_bus->ub_hcpriv;
 	vhci_port_t *port;
-	bool polling = sc->sc_bus.ub_usepolling;
 	bool isread = (req->bmRequestType & UT_READ) != 0;
 	uint8_t addr = UE_GET_ADDR(ed->bEndpointAddress);
 	int portno, ret;
@@ -627,13 +617,12 @@ vhci_device_ctrl_start(struct usbd_xfer *xfer)
 	DPRINTF("%s: type=0x%02x, len=%d, isread=%d, portno=%d\n",
 	    __func__, req->bmRequestType, UGETW(req->wLength), isread, portno);
 
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
 	if (sc->sc_dying)
 		return USBD_IOERROR;
 
 	port = &sc->sc_port[portno];
-
-	if (!polling)
-		mutex_enter(&sc->sc_lock);
 
 	mutex_enter(&port->lock);
 	if (port->status & UPS_PORT_ENABLED) {
@@ -644,9 +633,6 @@ vhci_device_ctrl_start(struct usbd_xfer *xfer)
 		ret = USBD_IOERROR;
 	}
 	mutex_exit(&port->lock);
-
-	if (!polling)
-		mutex_exit(&sc->sc_lock);
 
 	return ret;
 }
@@ -707,17 +693,8 @@ vhci_device_ctrl_done(struct usbd_xfer *xfer)
 static usbd_status
 vhci_root_intr_transfer(struct usbd_xfer *xfer)
 {
-	vhci_softc_t *sc = xfer->ux_bus->ub_hcpriv;
-	usbd_status err;
 
 	DPRINTF("%s: called\n", __func__);
-
-	/* Insert last in queue. */
-	mutex_enter(&sc->sc_lock);
-	err = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (err)
-		return err;
 
 	/* Pipe isn't running, start first */
 	return vhci_root_intr_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
@@ -727,20 +704,17 @@ static usbd_status
 vhci_root_intr_start(struct usbd_xfer *xfer)
 {
 	vhci_softc_t *sc = xfer->ux_bus->ub_hcpriv;
-	const bool polling = sc->sc_bus.ub_usepolling;
 
 	DPRINTF("%s: called, len=%zu\n", __func__, (size_t)xfer->ux_length);
+
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
 
 	if (sc->sc_dying)
 		return USBD_IOERROR;
 
-	if (!polling)
-		mutex_enter(&sc->sc_lock);
 	KASSERT(sc->sc_intrxfer == NULL);
 	sc->sc_intrxfer = xfer;
 	xfer->ux_status = USBD_IN_PROGRESS;
-	if (!polling)
-		mutex_exit(&sc->sc_lock);
 
 	return USBD_IN_PROGRESS;
 }
@@ -806,14 +780,13 @@ vhci_root_intr_done(struct usbd_xfer *xfer)
 
 /* -------------------------------------------------------------------------- */
 
-static int
+static void
 vhci_usb_attach(vhci_fd_t *vfd)
 {
 	vhci_softc_t *sc = vfd->softc;
 	vhci_port_t *port;
 	struct usbd_xfer *xfer;
 	u_char *p;
-	int ret = 0;
 
 	port = &sc->sc_port[vfd->port];
 
@@ -828,7 +801,6 @@ vhci_usb_attach(vhci_fd_t *vfd)
 	xfer = sc->sc_intrxfer;
 
 	if (xfer == NULL) {
-		ret = ENOBUFS;
 		goto done;
 	}
 	KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
@@ -847,7 +819,6 @@ vhci_usb_attach(vhci_fd_t *vfd)
 
 done:
 	mutex_exit(&sc->sc_lock);
-	return ret;
 }
 
 static void
@@ -898,7 +869,7 @@ vhci_port_flush(vhci_softc_t *sc, vhci_port_t *port)
 	}
 }
 
-static int
+static void
 vhci_usb_detach(vhci_fd_t *vfd)
 {
 	vhci_softc_t *sc = vfd->softc;
@@ -912,8 +883,7 @@ vhci_usb_detach(vhci_fd_t *vfd)
 
 	xfer = sc->sc_intrxfer;
 	if (xfer == NULL) {
-		mutex_exit(&sc->sc_lock);
-		return ENOBUFS;
+		goto done;
 	}
 	KASSERT(xfer->ux_status == USBD_IN_PROGRESS);
 
@@ -936,8 +906,8 @@ vhci_usb_detach(vhci_fd_t *vfd)
 	vhci_port_flush(sc, port);
 
 	mutex_exit(&port->lock);
+done:
 	mutex_exit(&sc->sc_lock);
-	return 0;
 }
 
 static int
@@ -1047,11 +1017,9 @@ static int
 vhci_fd_close(file_t *fp)
 {
 	vhci_fd_t *vfd = fp->f_data;
-	int ret __diagused;
 
 	KASSERT(vfd != NULL);
-	ret = vhci_usb_detach(vfd);
-	KASSERT(ret == 0);
+	vhci_usb_detach(vfd);
 
 	kmem_free(vfd, sizeof(*vfd));
 	fp->f_data = NULL;
@@ -1226,9 +1194,11 @@ vhci_fd_ioctl(file_t *fp, u_long cmd, void *data)
 	case VHCI_IOC_SET_ADDR:
 		return vhci_set_addr(vfd, data);
 	case VHCI_IOC_USB_ATTACH:
-		return vhci_usb_attach(vfd);
+		vhci_usb_attach(vfd);
+		return 0;
 	case VHCI_IOC_USB_DETACH:
-		return vhci_usb_detach(vfd);
+		vhci_usb_detach(vfd);
+		return 0;
 	default:
 		return EINVAL;
 	}
@@ -1299,7 +1269,7 @@ vhci_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->sc_bus.ub_revision = USBREV_2_0;
 	sc->sc_bus.ub_hctype = USBHCTYPE_VHCI;
-	sc->sc_bus.ub_busnum = self->dv_unit;
+	sc->sc_bus.ub_busnum = device_unit(self);
 	sc->sc_bus.ub_usedma = false;
 	sc->sc_bus.ub_methods = &vhci_bus_methods;
 	sc->sc_bus.ub_pipesize = sizeof(vhci_pipe_t);

@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_dma.c,v 1.36 2020/11/21 22:37:11 thorpej Exp $	*/
+/*	$NetBSD: bus_dma.c,v 1.40 2023/12/17 14:54:49 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.36 2020/11/21 22:37:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.40 2023/12/17 14:54:49 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -485,7 +485,7 @@ _bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 {
 
 #ifdef DEBUG_DMA
-	printf("dmamem_unmap: t=%p kva=%p size=%x\n", t, kva, size);
+	printf("dmamem_unmap: t=%p kva=%p size=%lx\n", t, kva, size);
 #endif	/* DEBUG_DMA */
 #ifdef DIAGNOSTIC
 	if ((u_long)kva & PGOFSET)
@@ -503,7 +503,7 @@ _bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 }
 
 /*
- * Common functin for mmap(2)'ing DMA-safe memory.  May be called by
+ * Common function for mmap(2)'ing DMA-safe memory.  May be called by
  * bus-specific DMA mmap(2)'ing functions.
  */
 paddr_t
@@ -541,7 +541,7 @@ _bus_dmamem_mmap(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
 /*
  * Utility function to load a linear buffer.  lastaddrp holds state
  * between invocations (for multiple-buffer loads).  segp contains
- * the starting segment on entrace, and the ending segment on exit.
+ * the starting segment on entrance, and the ending segment on exit.
  * first indicates if this is the first invocation of this function.
  */
 int
@@ -556,7 +556,7 @@ _bus_dmamap_load_buffer(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 	pmap_t pmap;
 
 #ifdef DEBUG_DMA
-	printf("_bus_dmamem_load_buffer(buf=%p, len=%lx, flags=%d, 1st=%d)\n",
+	printf("_bus_dmamap_load_buffer(buf=%p, len=%lx, flags=%d, 1st=%d)\n",
 	    buf, buflen, flags, first);
 #endif	/* DEBUG_DMA */
 

@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_174.c,v 1.4 2021/03/21 10:43:08 rillig Exp $	*/
+/*	$NetBSD: msg_174.c,v 1.7 2024/05/09 20:53:13 rillig Exp $	*/
 # 3 "msg_174.c"
 
-// Test for message: too many initializers [174]
+// Test for message: too many initializers for '%s' [174]
+
+/* lint1-extra-flags: -X 351 */
 
 void
 example(void)
@@ -9,7 +11,8 @@ example(void)
 	/* A single pair of braces is always allowed. */
 	int n = { 13 };
 
-	int too_many = { 17, 19 };	/* expect: 174 */
+	/* expect+1: error: too many initializers for 'int' [174] */
+	int too_many = { 17, 19 };
 
 	/*
 	 * An initializer list must have at least one expression, says the

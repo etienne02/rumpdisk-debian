@@ -1,4 +1,4 @@
-/* $NetBSD: if_msk.c,v 1.117 2021/08/07 16:19:14 thorpej Exp $ */
+/* $NetBSD: if_msk.c,v 1.119 2022/09/24 18:12:42 thorpej Exp $ */
 /*	$OpenBSD: if_msk.c,v 1.79 2009/10/15 17:54:56 deraadt Exp $	*/
 
 /*
@@ -52,13 +52,12 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_msk.c,v 1.117 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_msk.c,v 1.119 2022/09/24 18:12:42 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
@@ -661,7 +660,7 @@ msk_alloc_jumbo_mem(struct sk_if_softc *sc_if)
 	state = 1;
 	if (bus_dmamem_map(sc->sc_dmatag, &sc_if->sk_cdata.sk_jumbo_seg,
 	    sc_if->sk_cdata.sk_jumbo_nseg, MSK_JMEM, (void **)&kva,
-	    BUS_DMA_NOWAIT)) {
+	    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) {
 		aprint_error(": can't map dma buffers (%d bytes)", MSK_JMEM);
 		error = ENOBUFS;
 		goto out;
@@ -1240,7 +1239,8 @@ msk_attach(device_t parent, device_t self, void *aux)
 	}
 	if (bus_dmamem_map(sc->sc_dmatag, &sc_if->sk_ring_seg,
 	    sc_if->sk_ring_nseg,
-	    sizeof(struct msk_ring_data), &kva, BUS_DMA_NOWAIT)) {
+	    sizeof(struct msk_ring_data), &kva,
+	    BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) {
 		aprint_error(": can't map dma buffers (%zu bytes)\n",
 		       sizeof(struct msk_ring_data));
 		goto fail_1;
@@ -1561,7 +1561,7 @@ mskc_attach(device_t parent, device_t self, void *aux)
 	if (bus_dmamem_map(sc->sc_dmatag,
 	    &sc->sk_status_seg, sc->sk_status_nseg,
 	    MSK_STATUS_RING_CNT * sizeof(struct msk_status_desc),
-	    &kva, BUS_DMA_NOWAIT)) {
+	    &kva, BUS_DMA_NOWAIT | BUS_DMA_COHERENT)) {
 		aprint_error(": can't map dma buffers (%zu bytes)\n",
 		    MSK_STATUS_RING_CNT * sizeof(struct msk_status_desc));
 		goto fail_3;

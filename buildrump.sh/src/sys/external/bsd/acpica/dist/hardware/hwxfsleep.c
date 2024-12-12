@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,13 +51,11 @@
 
 /* Local prototypes */
 
-#if (!ACPI_REDUCED_HARDWARE)
 static ACPI_STATUS
 AcpiHwSetFirmwareWakingVector (
     ACPI_TABLE_FACS         *Facs,
     ACPI_PHYSICAL_ADDRESS   PhysicalAddress,
     ACPI_PHYSICAL_ADDRESS   PhysicalAddress64);
-#endif
 
 static ACPI_STATUS
 AcpiHwSleepDispatch (
@@ -91,13 +89,6 @@ static ACPI_SLEEP_FUNCTIONS         AcpiSleepDispatch[] =
 };
 
 
-/*
- * These functions are removed for the ACPI_REDUCED_HARDWARE case:
- *      AcpiSetFirmwareWakingVector
- *      AcpiEnterSleepStateS4bios
- */
-
-#if (!ACPI_REDUCED_HARDWARE)
 /*******************************************************************************
  *
  * FUNCTION:    AcpiHwSetFirmwareWakingVector
@@ -190,6 +181,12 @@ AcpiSetFirmwareWakingVector (
 ACPI_EXPORT_SYMBOL (AcpiSetFirmwareWakingVector)
 
 
+/*
+ * These functions are removed for the ACPI_REDUCED_HARDWARE case:
+ *      AcpiEnterSleepStateS4bios
+ */
+
+#if (!ACPI_REDUCED_HARDWARE)
 /*******************************************************************************
  *
  * FUNCTION:    AcpiEnterSleepStateS4bios
@@ -361,6 +358,12 @@ AcpiEnterSleepStatePrep (
     if (ACPI_FAILURE (Status))
     {
         return_ACPI_STATUS (Status);
+    }
+
+    Status = AcpiGetSleepTypeData (ACPI_STATE_S0,
+        &AcpiGbl_SleepTypeAS0, &AcpiGbl_SleepTypeBS0);
+    if (ACPI_FAILURE (Status)) {
+        AcpiGbl_SleepTypeAS0 = ACPI_SLEEP_TYPE_INVALID;
     }
 
     /* Execute the _PTS method (Prepare To Sleep) */

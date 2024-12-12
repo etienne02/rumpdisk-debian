@@ -1,4 +1,4 @@
-/*	$NetBSD: powsw.c,v 1.1 2011/11/27 09:00:32 isaki Exp $	*/
+/*	$NetBSD: powsw.c,v 1.4 2022/07/16 04:55:35 isaki Exp $	*/
 
 /*
  * Copyright (c) 2011 Tetsuya Isaki. All rights reserved.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: powsw.c,v 1.1 2011/11/27 09:00:32 isaki Exp $");
+__KERNEL_RCSID(0, "$NetBSD: powsw.c,v 1.4 2022/07/16 04:55:35 isaki Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -48,12 +48,12 @@ __KERNEL_RCSID(0, "$NetBSD: powsw.c,v 1.1 2011/11/27 09:00:32 isaki Exp $");
 #include <dev/sysmon/sysmonvar.h>
 #include <dev/sysmon/sysmon_taskq.h>
 
-extern int power_switch_is_off;		/* XXX should be in .h */
+#include "ioconf.h"
 
 //#define POWSW_DEBUG
 
 #if defined(POWSW_DEBUG)
-#define DPRINTF(fmt...)	printf(fmt)
+#define DPRINTF(fmt...)		printf(fmt)
 #define DEBUG_LOG_ADD(c)	sc->sc_log[sc->sc_loglen++] = (c)
 #define DEBUG_LOG_PRINT()	do {	\
 	sc->sc_log[sc->sc_loglen] = '\0';	\
@@ -67,12 +67,12 @@ extern int power_switch_is_off;		/* XXX should be in .h */
 
 /* mask */
 #define POWSW_ALARM		(0x01)
-#define POWSW_EXTERNAL	(0x02)
+#define POWSW_EXTERNAL		(0x02)
 #define POWSW_FRONT		(0x04)
 
 /* parameter */
-#define POWSW_MAX_TICK	(30)
-#define POWSW_THRESHOLD	(10)
+#define POWSW_MAX_TICK		(30)
+#define POWSW_THRESHOLD		(10)
 
 struct powsw_softc {
 	device_t sc_dev;
@@ -89,14 +89,11 @@ struct powsw_softc {
 #endif
 };
 
-extern struct cfdriver powsw_cd;
-
 static int  powsw_match(device_t, cfdata_t, void *);
 static void powsw_attach(device_t, device_t, void *);
 static int  powsw_intr(void *);
 static void powsw_softintr(void *);
 static void powsw_pswitch_event(void *);
-static void powsw_shutdown_check(void *);
 static void powsw_reset_counter(struct powsw_softc *);
 static void powsw_set_aer(struct powsw_softc *, int);
 
@@ -111,7 +108,7 @@ typedef const struct {
 } powsw_desc_t;
 
 static powsw_desc_t powsw_desc[2] = {
-	{ 66, POWSW_FRONT,		"Front Switch", },
+	{ 66, POWSW_FRONT,	"Front Switch", },
 	{ 65, POWSW_EXTERNAL,	"External Power Switch", },
 	/* XXX I'm not sure about alarm bit */
 };
@@ -120,6 +117,7 @@ static powsw_desc_t powsw_desc[2] = {
 static int
 powsw_match(device_t parent, cfdata_t cf, void *aux)
 {
+
 	return 1;
 }
 
@@ -150,9 +148,6 @@ powsw_attach(device_t parent, device_t self, void *aux)
 
 	callout_init(&sc->sc_callout, 0);
 	callout_setfunc(&sc->sc_callout, powsw_softintr, sc);
-
-	if (shutdownhook_establish(powsw_shutdown_check, sc) == NULL)
-		panic("%s: can't establish shutdown hook", xname);
 
 	if (intio_intr_establish(desc->vector, xname, powsw_intr, sc) < 0)
 		panic("%s: can't establish interrupt", xname);
@@ -223,7 +218,8 @@ powsw_softintr(void *arg)
 
 		if (sc->sc_last_sw == sc->sc_prev) {
 			/* switch state is not changed, it was a noise */
-			DPRINTF(" ignore(sw=%d,prev=%d)\n", sc->sc_last_sw, sc->sc_prev);
+			DPRINTF(" ignore(sw=%d,prev=%d)\n",
+			    sc->sc_last_sw, sc->sc_prev);
 		} else {
 			/* switch state has been changed */
 			sc->sc_prev = sc->sc_last_sw;
@@ -231,7 +227,8 @@ powsw_softintr(void *arg)
 			sysmon_task_queue_sched(0, powsw_pswitch_event, sc);
 		}
 		powsw_reset_counter(sc);
-		mfp_bit_set_ierb(sc->sc_mask);	// enable interrupt
+		/* enable interrupt */
+		mfp_bit_set_ierb(sc->sc_mask);
 	}
 
 	splx(s);
@@ -249,25 +246,13 @@ powsw_pswitch_event(void *arg)
 	    poweroff ? "off(PRESS)" : "on(RELEASE)");
 
 	sysmon_pswitch_event(&sc->sc_smpsw,
-		poweroff ? PSWITCH_EVENT_PRESSED : PSWITCH_EVENT_RELEASED);
-}
-
-static void
-powsw_shutdown_check(void *arg)
-{
-	struct powsw_softc *sc = arg;
-	int poweroff;
-
-	poweroff = sc->sc_prev;
-	if (poweroff)
-		power_switch_is_off = 1;
-	DPRINTF("powsw_shutdown_check %s = %d\n",
-		device_xname(sc->sc_dev), power_switch_is_off);
+	    poweroff ? PSWITCH_EVENT_PRESSED : PSWITCH_EVENT_RELEASED);
 }
 
 static void
 powsw_reset_counter(struct powsw_softc *sc)
 {
+
 	sc->sc_last_sw = -1;
 	sc->sc_tick = 0;
 	sc->sc_count = 0;
@@ -279,6 +264,7 @@ powsw_reset_counter(struct powsw_softc *sc)
 static void
 powsw_set_aer(struct powsw_softc *sc, int aer)
 {
+
 	KASSERT(aer == 0 || aer == 1);
 
 	if (aer == 0) {

@@ -38,7 +38,7 @@
 #if 0
 __FBSDID("$FreeBSD: head/sys/contrib/ena-com/ena_plat.h 333453 2018-05-10 09:25:51Z mw $");
 #endif
-__KERNEL_RCSID(0, "$NetBSD: ena_plat.h,v 1.7 2021/07/19 21:16:33 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ena_plat.h,v 1.10 2023/11/05 18:15:02 jdolecek Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -47,8 +47,8 @@ __KERNEL_RCSID(0, "$NetBSD: ena_plat.h,v 1.7 2021/07/19 21:16:33 jmcneill Exp $"
 #include <sys/condvar.h>
 #include <sys/endian.h>
 #include <sys/kernel.h>
+#include <sys/kmem.h>
 #include <sys/kthread.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/module.h>
 #include <sys/proc.h>
@@ -292,9 +292,9 @@ int	ena_dma_alloc(device_t dmadev, bus_size_t size, ena_mem_handle_t *dma,
 			*to = *from;					\
 	} while (0)
 
-#define ENA_MEM_ALLOC(dmadev, size) malloc(size, M_DEVBUF, M_NOWAIT | M_ZERO)
+#define ENA_MEM_ALLOC(dmadev, size) kmem_zalloc(size, KM_NOSLEEP)
 #define ENA_MEM_ALLOC_NODE(dmadev, size, virt, node, dev_node) (virt = NULL)
-#define ENA_MEM_FREE(dmadev, ptr) free(ptr, M_DEVBUF)
+#define ENA_MEM_FREE(dmadev, ptr, size) kmem_free(ptr, size)
 #define ENA_MEM_ALLOC_COHERENT_NODE(dmadev, size, virt, phys, handle, node, \
     dev_node)								\
 	do {								\
@@ -378,8 +378,23 @@ void prefetch(void *x)
 
 #include "ena_defs/ena_includes.h"
 
-#define	rmb()		membar_enter()
-#define	wmb()		membar_exit()
+/*
+ * XXX This is not really right.  Need to adjust the driver to use
+ * bus_space_barrier or bus_dmamap_sync.
+ */
+#if defined(__i386__) || defined(__x86_64__)
+#include <x86/cpufunc.h>
+#define	rmb()		x86_lfence()
+#define	wmb()		x86_sfence()
+#define	mb()		x86_mfence()
+#elif defined(__aarch64__)
+#define	rmb()		__asm __volatile("dsb ld" ::: "memory")
+#define	wmb()		__asm __volatile("dsb st" ::: "memory")
+#define	mb()		__asm __volatile("dsb sy" ::: "memory")
+#else
+#define	rmb()		membar_acquire()
+#define	wmb()		membar_release()
 #define	mb()		membar_sync()
+#endif
 
 #endif /* ENA_PLAT_H_ */

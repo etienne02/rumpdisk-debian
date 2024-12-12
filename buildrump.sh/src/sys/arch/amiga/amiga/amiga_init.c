@@ -1,4 +1,4 @@
-/*	$NetBSD: amiga_init.c,v 1.131 2021/08/17 22:00:27 andvar Exp $	*/
+/*	$NetBSD: amiga_init.c,v 1.133 2024/01/09 07:28:25 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1994 Michael L. Hitch
@@ -39,7 +39,7 @@
 #include "ser.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: amiga_init.c,v 1.131 2021/08/17 22:00:27 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: amiga_init.c,v 1.133 2024/01/09 07:28:25 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -201,7 +201,6 @@ start_c(int id, u_int fphystart, u_int fphysize, u_int cphysize,
 	u_int loadbase)
 {
 	extern char end[];
-	extern u_int protorp[2];
 	struct cfdev *cd;
 	paddr_t pstart, pend;
 	vaddr_t vstart, vend;
@@ -783,10 +782,8 @@ start_c(int id, u_int fphystart, u_int fphysize, u_int cphysize,
 #endif
 	{
 		/*
-		 * setup and load SRP
-		 * nolimit, share global, 4 byte PTE's
+		 * setup and load SRP (see pmap.h)
 		 */
-		(RELOC(protorp[0], u_int)) = 0x80000202;
 		__asm volatile ("pmove %0@,%%srp":: "a" (&RELOC(protorp, u_int)));
 	}
 }

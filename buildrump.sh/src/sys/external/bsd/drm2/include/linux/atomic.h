@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic.h,v 1.22 2020/02/14 14:34:59 maya Exp $	*/
+/*	$NetBSD: atomic.h,v 1.42 2021/12/19 12:21:30 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -38,13 +38,14 @@
 
 #include <asm/barrier.h>
 
-#if defined(MULTIPROCESSOR) && !defined(__HAVE_ATOMIC_AS_MEMBAR)
-#  define	smp_mb__before_atomic()		membar_exit()
-#  define	smp_mb__after_atomic()		membar_enter()
-#else
-#  define	smp_mb__before_atomic()		__insn_barrier()
-#  define	smp_mb__after_atomic()		__insn_barrier()
-#endif
+/* XXX Hope the GCC __sync builtins work everywhere we care about!  */
+#define	xchg(P, V)		__sync_lock_test_and_set(P, V)
+#define	cmpxchg(P, O, N)	__sync_val_compare_and_swap(P, O, N)
+#define	try_cmpxchg(P, V, N)						      \
+({									      \
+	__typeof__(*(V)) *__tcx_v = (V), __tcx_expected = *__tcx_v;	      \
+	(*__tcx_v = cmpxchg((P), __tcx_expected, (N))) == __tcx_expected;     \
+})
 
 /*
  * atomic (u)int operations
@@ -66,7 +67,7 @@ struct atomic {
 typedef struct atomic atomic_t;
 
 static inline int
-atomic_read(atomic_t *atomic)
+atomic_read(const atomic_t *atomic)
 {
 	/* no membar */
 	return atomic->a_u.au_int;
@@ -77,6 +78,12 @@ atomic_set(atomic_t *atomic, int value)
 {
 	/* no membar */
 	atomic->a_u.au_int = value;
+}
+
+static inline void
+atomic_set_release(atomic_t *atomic, int value)
+{
+	atomic_store_release(&atomic->a_u.au_int, value);
 }
 
 static inline void
@@ -100,6 +107,18 @@ atomic_add_return(int addend, atomic_t *atomic)
 
 	smp_mb__before_atomic();
 	v = (int)atomic_add_int_nv(&atomic->a_u.au_uint, addend);
+	smp_mb__after_atomic();
+
+	return v;
+}
+
+static inline int
+atomic_sub_return(int subtrahend, atomic_t *atomic)
+{
+	int v;
+
+	smp_mb__before_atomic();
+	v = (int)atomic_add_int_nv(&atomic->a_u.au_uint, -subtrahend);
 	smp_mb__after_atomic();
 
 	return v;
@@ -150,11 +169,77 @@ atomic_dec_and_test(atomic_t *atomic)
 	return atomic_dec_return(atomic) == 0;
 }
 
+static inline int
+atomic_dec_if_positive(atomic_t *atomic)
+{
+	int v;
+
+	smp_mb__before_atomic();
+	do {
+		v = atomic->a_u.au_uint;
+		if (v <= 0)
+			break;
+	} while (atomic_cas_uint(&atomic->a_u.au_uint, v, v - 1) != v);
+	smp_mb__after_atomic();
+
+	return v - 1;
+}
+
 static inline void
 atomic_or(int value, atomic_t *atomic)
 {
 	/* no membar */
 	atomic_or_uint(&atomic->a_u.au_uint, value);
+}
+
+static inline void
+atomic_and(int value, atomic_t *atomic)
+{
+	/* no membar */
+	atomic_and_uint(&atomic->a_u.au_uint, value);
+}
+
+static inline void
+atomic_andnot(int value, atomic_t *atomic)
+{
+	/* no membar */
+	atomic_and_uint(&atomic->a_u.au_uint, ~value);
+}
+
+static inline int
+atomic_fetch_add(int value, atomic_t *atomic)
+{
+	unsigned old, new;
+
+	smp_mb__before_atomic();
+	do {
+		old = atomic->a_u.au_uint;
+		new = old + value;
+	} while (atomic_cas_uint(&atomic->a_u.au_uint, old, new) != old);
+	smp_mb__after_atomic();
+
+	return old;
+}
+
+static inline int
+atomic_fetch_inc(atomic_t *atomic)
+{
+	return atomic_fetch_add(1, atomic);
+}
+
+static inline int
+atomic_fetch_xor(int value, atomic_t *atomic)
+{
+	unsigned old, new;
+
+	smp_mb__before_atomic();
+	do {
+		old = atomic->a_u.au_uint;
+		new = old ^ value;
+	} while (atomic_cas_uint(&atomic->a_u.au_uint, old, new) != old);
+	smp_mb__after_atomic();
+
+	return old;
 }
 
 static inline void
@@ -223,6 +308,16 @@ atomic_cmpxchg(atomic_t *atomic, int expect, int new)
 	smp_mb__after_atomic();
 
 	return old;
+}
+
+static inline bool
+atomic_try_cmpxchg(atomic_t *atomic, int *valuep, int new)
+{
+	int expect = *valuep;
+
+	*valuep = atomic_cmpxchg(atomic, expect, new);
+
+	return *valuep == expect;
 }
 
 struct atomic64 {
@@ -327,6 +422,12 @@ uint64_t	atomic64_cmpxchg(struct atomic64 *, uint64_t, uint64_t);
 
 #endif
 
+static inline void
+atomic64_inc(struct atomic64 *a)
+{
+	atomic64_add(1, a);
+}
+
 static inline int64_t
 atomic64_inc_return(struct atomic64 *a)
 {
@@ -378,6 +479,18 @@ atomic_long_inc_not_zero(struct atomic_long *a)
 }
 
 static inline long
+atomic_long_xchg(struct atomic_long *a, long new)
+{
+	long old;
+
+	smp_mb__before_atomic();
+	old = (long)atomic_swap_ulong(&a->al_v, (unsigned long)new);
+	smp_mb__after_atomic();
+
+	return old;
+}
+
+static inline long
 atomic_long_cmpxchg(struct atomic_long *a, long expect, long new)
 {
 	long old;
@@ -393,81 +506,6 @@ atomic_long_cmpxchg(struct atomic_long *a, long expect, long new)
 	smp_mb__after_atomic();
 
 	return old;
-}
-
-static inline void
-set_bit(unsigned int bit, volatile unsigned long *ptr)
-{
-	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
-
-	/* no memory barrier */
-	atomic_or_ulong(&ptr[bit / units], (1UL << (bit % units)));
-}
-
-static inline void
-clear_bit(unsigned int bit, volatile unsigned long *ptr)
-{
-	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
-
-	/* no memory barrier */
-	atomic_and_ulong(&ptr[bit / units], ~(1UL << (bit % units)));
-}
-
-static inline void
-change_bit(unsigned int bit, volatile unsigned long *ptr)
-{
-	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
-	volatile unsigned long *const p = &ptr[bit / units];
-	const unsigned long mask = (1UL << (bit % units));
-	unsigned long v;
-
-	/* no memory barrier */
-	do v = *p; while (atomic_cas_ulong(p, v, (v ^ mask)) != v);
-}
-
-static inline int
-test_and_set_bit(unsigned int bit, volatile unsigned long *ptr)
-{
-	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
-	volatile unsigned long *const p = &ptr[bit / units];
-	const unsigned long mask = (1UL << (bit % units));
-	unsigned long v;
-
-	smp_mb__before_atomic();
-	do v = *p; while (atomic_cas_ulong(p, v, (v | mask)) != v);
-	smp_mb__after_atomic();
-
-	return ((v & mask) != 0);
-}
-
-static inline int
-test_and_clear_bit(unsigned int bit, volatile unsigned long *ptr)
-{
-	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
-	volatile unsigned long *const p = &ptr[bit / units];
-	const unsigned long mask = (1UL << (bit % units));
-	unsigned long v;
-
-	smp_mb__before_atomic();
-	do v = *p; while (atomic_cas_ulong(p, v, (v & ~mask)) != v);
-	smp_mb__after_atomic();
-
-	return ((v & mask) != 0);
-}
-
-static inline int
-test_and_change_bit(unsigned int bit, volatile unsigned long *ptr)
-{
-	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
-	volatile unsigned long *const p = &ptr[bit / units];
-	const unsigned long mask = (1UL << (bit % units));
-	unsigned long v;
-
-	smp_mb__before_atomic();
-	do v = *p; while (atomic_cas_ulong(p, v, (v ^ mask)) != v);
-	smp_mb__after_atomic();
-
-	return ((v & mask) != 0);
 }
 
 #endif  /* _LINUX_ATOMIC_H_ */

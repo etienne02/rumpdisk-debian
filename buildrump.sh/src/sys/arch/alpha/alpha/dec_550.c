@@ -1,4 +1,4 @@
-/* $NetBSD: dec_550.c,v 1.36 2012/10/13 17:58:54 jdc Exp $ */
+/* $NetBSD: dec_550.c,v 1.38 2024/03/31 19:06:30 thorpej Exp $ */
 
 /*
  * Copyright (c) 1995, 1996, 1997 Carnegie-Mellon University.
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: dec_550.c,v 1.36 2012/10/13 17:58:54 jdc Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dec_550.c,v 1.38 2024/03/31 19:06:30 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -124,7 +124,7 @@ dec_550_cons_init(void)
 	extern struct cia_config cia_configuration;
 
 	ccp = &cia_configuration;
-	cia_init(ccp, 0);
+	cia_init(ccp);
 
 	ctb = (struct ctb *)(((char *)hwrpb) + hwrpb->rpb_ctb_off);
 
@@ -188,7 +188,7 @@ dec_550_device_register(device_t dev, void *aux)
 	struct bootdev_data *b = bootdev_data;
 	device_t parent = device_parent(dev);
 
-	if (found)
+	if (b == NULL || found)
 		return;
 
 	if (!initted) {

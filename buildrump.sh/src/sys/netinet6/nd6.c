@@ -1,4 +1,4 @@
-/*	$NetBSD: nd6.c,v 1.277 2021/08/17 09:43:21 ozaki-r Exp $	*/
+/*	$NetBSD: nd6.c,v 1.282 2024/04/11 07:34:37 knakahara Exp $	*/
 /*	$KAME: nd6.c,v 1.279 2002/06/08 11:16:51 itojun Exp $	*/
 
 /*
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nd6.c,v 1.277 2021/08/17 09:43:21 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nd6.c,v 1.282 2024/04/11 07:34:37 knakahara Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_compat_netbsd.h"
@@ -57,6 +57,7 @@ __KERNEL_RCSID(0, "$NetBSD: nd6.c,v 1.277 2021/08/17 09:43:21 ozaki-r Exp $");
 #include <sys/queue.h>
 #include <sys/cprng.h>
 #include <sys/workqueue.h>
+#include <sys/compat_stub.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
@@ -77,10 +78,8 @@ __KERNEL_RCSID(0, "$NetBSD: nd6.c,v 1.277 2021/08/17 09:43:21 ozaki-r Exp $");
 #include <netinet/icmp6.h>
 #include <netinet6/icmp6_private.h>
 
-#ifdef COMPAT_90
 #include <compat/netinet6/in6_var.h>
 #include <compat/netinet6/nd6.h>
-#endif
 
 #define ND6_SLOWTIMER_INTERVAL (60 * 60) /* 1 hour */
 #define ND6_RECALC_REACHTM_INTERVAL (60 * 120) /* 2 hours */
@@ -1224,7 +1223,7 @@ nd6_ioctl(u_long cmd, void *data, struct ifnet *ifp)
 		OND.flags = ifndi->flags;
 		break;
 	case OSIOCSIFINFO_IN6_90:
-		/* Allow userland to set Neighour Unreachability Detection
+		/* Allow userland to set Neighbor Unreachability Detection
 		 * timers. */
 		if (OND.chlim != 0)
 			ifndi->chlim = OND.chlim;
@@ -1250,7 +1249,7 @@ nd6_ioctl(u_long cmd, void *data, struct ifnet *ifp)
 		ND.flags = ifndi->flags;
 		break;
 	case SIOCSIFINFO_IN6:
-		/* Allow userland to set Neighour Unreachability Detection
+		/* Allow userland to set Neighbor Unreachability Detection
 		 * timers. */
 		if (ND.chlim != 0)
 			ifndi->chlim = ND.chlim;
@@ -1458,7 +1457,7 @@ nd6_cache_lladdr(
 	 * - If lladdr exist, set IsRouter.  This means (1-5).
 	 * - If it is old entry (!newentry), set IsRouter.  This means (7).
 	 * So, based on the spec, in (1-5) and (7) cases we must set IsRouter.
-	 * A quetion arises for (1) case.  (1) case has no lladdr in the
+	 * A question arises for (1) case.  (1) case has no lladdr in the
 	 * neighbor cache, this is similar to (6).
 	 * This case is rare but we figured that we MUST NOT set IsRouter.
 	 *
@@ -1534,6 +1533,7 @@ nd6_slowtimo(void *ignored_arg)
 {
 	struct nd_kifinfo *ndi;
 	struct ifnet *ifp;
+	struct psref psref;
 	int s;
 
 	SOFTNET_KERNEL_LOCK_UNLESS_NET_MPSAFE();
@@ -1545,6 +1545,8 @@ nd6_slowtimo(void *ignored_arg)
 		ndi = ND_IFINFO(ifp);
 		if (ndi->basereachable && /* already initialized */
 		    (ndi->recalctm -= ND6_SLOWTIMER_INTERVAL) <= 0) {
+			if_acquire(ifp, &psref);
+			pserialize_read_exit(s);
 			/*
 			 * Since reachable time rarely changes by router
 			 * advertisements, we SHOULD insure that a new random
@@ -1553,6 +1555,8 @@ nd6_slowtimo(void *ignored_arg)
 			 */
 			ndi->recalctm = nd6_recalc_reachtm_interval;
 			ndi->reachable = ND_COMPUTE_RTIME(ndi->basereachable);
+			s = pserialize_read_enter();
+			if_release(ifp, &psref);
 		}
 	}
 	pserialize_read_exit(s);
@@ -1651,6 +1655,7 @@ nd6_need_cache(struct ifnet *ifp)
 	case IFT_IEEE1394:
 	case IFT_CARP:
 	case IFT_GIF:		/* XXX need more cases? */
+	case IFT_IPSEC:
 	case IFT_PPP:
 	case IFT_TUNNEL:
 		return 1;
@@ -1668,17 +1673,22 @@ nd6_sysctl(
     size_t newlen
 )
 {
+	int error;
 
 	if (newp)
 		return EPERM;
 
 	switch (name) {
-#ifdef COMPAT_90
+
+/* call the nd6 compat_90 hook to validate the nd6-related names */
 	case OICMPV6CTL_ND6_DRLIST: /* FALLTHROUGH */
 	case OICMPV6CTL_ND6_PRLIST:
-		*oldlenp = 0;
-		return 0;
-#endif
+		MODULE_HOOK_CALL(net_inet6_nd_90_hook, (name), ENOPROTOOPT,
+		    error);
+		if (error == 0)
+			*oldlenp = 0;
+		return error;
+
 	case ICMPV6CTL_ND6_MAXQLEN:
 		return 0;
 	default:

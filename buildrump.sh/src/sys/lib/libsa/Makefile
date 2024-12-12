@@ -1,7 +1,9 @@
-#	$NetBSD: Makefile,v 1.95 2021/05/27 06:54:44 mrg Exp $
+#	$NetBSD: Makefile,v 1.98 2024/06/29 08:00:06 rin Exp $
 
 LIB=	sa
 LIBISPRIVATE?= yes
+NOSSP=yes
+NOFORTIFY=yes
 
 SA_USE_CREAD?= no		# Read compressed kernels
 SA_INCLUDE_NET?= yes		# Netboot via TFTP, NFS
@@ -18,8 +20,6 @@ CPPFLAGS=	-I${SADIR} ${SACPPFLAGS} ${SAMISCCPPFLAGS} \
 
 # For testing
 #WARNS=6
-#NOSSP=yes
-#NOFORTIFY=yes
 #COPTS+=-ffreestanding -Wpointer-sign
 #CPPFLAGS+= -I${.CURDIR}/../../ -I${.CURDIR}
 
@@ -29,11 +29,13 @@ CPPFLAGS=	-I${SADIR} ${SACPPFLAGS} ${SAMISCCPPFLAGS} \
 
 .include <bsd.own.mk>
 
-.PATH.c: ${SADIR} ${.PARSEDIR}/../../../common/lib/libc/string
+.PATH.c: ${SADIR} \
+	${.PARSEDIR}/../../../common/lib/libc/stdlib \
+	${.PARSEDIR}/../../../common/lib/libc/string
 
 # stand routines
 SRCS+=	alloc.c atoi.c errno.c exit.c files.c \
-	getfile.c gets.c globals.c \
+	getfile.c getopt.c gets.c globals.c \
 	panic.c printf.c qsort.c snprintf.c strerror.c \
 	subr_prf.c twiddle.c checkpasswd.c
 
@@ -96,7 +98,3 @@ SRCS+=	ufs.c
 lib${LIB}.o:: ${OBJS:O} __buildstdlib
 
 CPPFLAGS+=	-Wno-pointer-sign
-
-.if defined(HAVE_GCC) && ${MACHINE_ARCH} == "vax"
-COPTS.bootp.c+=	-O0
-.endif

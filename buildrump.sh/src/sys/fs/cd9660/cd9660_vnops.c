@@ -1,4 +1,4 @@
-/*	$NetBSD: cd9660_vnops.c,v 1.61 2021/07/19 01:30:24 dholland Exp $	*/
+/*	$NetBSD: cd9660_vnops.c,v 1.63 2024/02/02 20:27:26 christos Exp $	*/
 
 /*-
  * Copyright (c) 1994
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cd9660_vnops.c,v 1.61 2021/07/19 01:30:24 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cd9660_vnops.c,v 1.63 2024/02/02 20:27:26 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -61,6 +61,7 @@ __KERNEL_RCSID(0, "$NetBSD: cd9660_vnops.c,v 1.61 2021/07/19 01:30:24 dholland E
 #include <fs/cd9660/iso.h>
 #include <fs/cd9660/cd9660_extern.h>
 #include <fs/cd9660/cd9660_node.h>
+#include <fs/cd9660/cd9660_mount.h>
 #include <fs/cd9660/iso_rrip.h>
 #include <fs/cd9660/cd9660_mount.h>
 
@@ -116,11 +117,22 @@ static int
 cd9660_check_permitted(struct vnode *vp, struct iso_node *ip, accmode_t accmode,
     kauth_cred_t cred)
 {
+	accmode_t file_mode;
+	uid_t uid;
+	gid_t gid;
+
+	file_mode = ip->inode.iso_mode & ALLPERMS;
+	file_mode &= (vp->v_type == VDIR) ? ip->i_mnt->im_dmask : ip->i_mnt->im_fmask;
+
+	uid = (ip->i_mnt->im_flags & ISOFSMNT_UID) ?
+	    ip->i_mnt->im_uid : ip->inode.iso_uid;
+	gid = (ip->i_mnt->im_flags & ISOFSMNT_GID) ?
+	    ip->i_mnt->im_gid : ip->inode.iso_gid;
 
 	return kauth_authorize_vnode(cred, KAUTH_ACCESS_ACTION(accmode,
-	    vp->v_type, ip->inode.iso_mode & ALLPERMS), vp, NULL,
-	    genfs_can_access(vp, cred, ip->inode.iso_uid, ip->inode.iso_gid,
-	    ip->inode.iso_mode & ALLPERMS, NULL, accmode));
+	    vp->v_type, file_mode), vp, NULL,
+	    genfs_can_access(vp, cred, uid, gid,
+	    file_mode, NULL, accmode));
 }
 
 int
@@ -160,9 +172,12 @@ cd9660_getattr(void *v)
 	vap->va_fileid	= ip->i_number;
 
 	vap->va_mode	= ip->inode.iso_mode & ALLPERMS;
+	vap->va_mode &= (vp->v_type == VDIR) ? ip->i_mnt->im_dmask : ip->i_mnt->im_fmask;
 	vap->va_nlink	= ip->inode.iso_links;
-	vap->va_uid	= ip->inode.iso_uid;
-	vap->va_gid	= ip->inode.iso_gid;
+	vap->va_uid	= (ip->i_mnt->im_flags & ISOFSMNT_UID) ?
+	    ip->i_mnt->im_uid : ip->inode.iso_uid;
+	vap->va_gid	= (ip->i_mnt->im_flags & ISOFSMNT_GID) ?
+	    ip->i_mnt->im_gid : ip->inode.iso_gid;
 	vap->va_atime	= ip->inode.iso_atime;
 	vap->va_mtime	= ip->inode.iso_mtime;
 	vap->va_ctime	= ip->inode.iso_ctime;
@@ -662,34 +677,6 @@ cd9660_readlink(void *v)
 	return (0);
 }
 
-int
-cd9660_link(void *v)
-{
-	struct vop_link_v2_args /* {
-		struct vnode *a_dvp;
-		struct vnode *a_vp;
-		struct componentname *a_cnp;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
-}
-
-int
-cd9660_symlink(void *v)
-{
-	struct vop_symlink_v3_args /* {
-		struct vnode *a_dvp;
-		struct vnode **a_vpp;
-		struct componentname *a_cnp;
-		struct vattr *a_vap;
-		char *a_target;
-	} */ *ap = v;
-
-	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
-	return (EROFS);
-}
-
 /*
  * Calculate the logical to physical mapping if not done already,
  * then call the device strategy routine.
@@ -856,11 +843,11 @@ const struct vnodeopv_entry_desc cd9660_vnodeop_entries[] = {
 	{ &vop_fsync_desc, genfs_nullop },		/* fsync */
 	{ &vop_seek_desc, genfs_seek },			/* seek */
 	{ &vop_remove_desc, genfs_eopnotsupp },		/* remove */
-	{ &vop_link_desc, cd9660_link },		/* link */
+	{ &vop_link_desc, genfs_erofs_link },		/* link */
 	{ &vop_rename_desc, genfs_eopnotsupp },		/* rename */
 	{ &vop_mkdir_desc, genfs_eopnotsupp },		/* mkdir */
 	{ &vop_rmdir_desc, genfs_eopnotsupp },		/* rmdir */
-	{ &vop_symlink_desc, cd9660_symlink },		/* symlink */
+	{ &vop_symlink_desc, genfs_erofs_symlink },	/* symlink */
 	{ &vop_readdir_desc, cd9660_readdir },		/* readdir */
 	{ &vop_readlink_desc, cd9660_readlink },	/* readlink */
 	{ &vop_abortop_desc, genfs_abortop },		/* abortop */

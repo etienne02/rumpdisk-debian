@@ -1,6 +1,6 @@
-/*	$NetBSD: imx51_intr.h,v 1.1 2010/11/13 07:11:02 bsh Exp $	*/
+/*	$NetBSD: imx51_intr.h,v 1.4 2024/02/07 04:20:26 msaitoh Exp $	*/
 /*-
- * Copyright (c) 2009 SHIMIZU Ryo <ryo@nerv.org>
+ * Copyright (c) 2009 SHIMIZU Ryo
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -292,9 +292,6 @@
 
 #include <arm/pic/picvar.h>
 
-int _splraise(int);
-int _spllower(int);
-void splx(int);
 const char *intr_typename(int);
 
 void imx51_irq_handler(void *);

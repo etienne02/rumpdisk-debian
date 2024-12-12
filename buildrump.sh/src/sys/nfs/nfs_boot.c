@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_boot.c,v 1.88 2018/05/17 02:34:31 thorpej Exp $	*/
+/*	$NetBSD: nfs_boot.c,v 1.90 2024/07/05 04:31:54 rin Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1997 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_boot.c,v 1.88 2018/05/17 02:34:31 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_boot.c,v 1.90 2024/07/05 04:31:54 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_nfs.h"
@@ -487,14 +487,10 @@ send_again:
 
 	secs = timo;
 	for (;;) {
-		if (from) {
-			m_freem(from);
-			from = NULL;
-		}
-		if (m) {
-			m_freem(m);
-			m = NULL;
-		}
+		m_freem(from);
+		from = NULL;
+		m_freem(m);
+		m = NULL;
 		uio.uio_resid = 1 << 16; /* ??? */
 		rcvflg = 0;
 		error = (*so->so_receive)(so, &from, &uio, &m, NULL, &rcvflg);
@@ -525,7 +521,7 @@ send_again:
 		break;
 	}
 out:
-	if (from) m_freem(from);
+	m_freem(from);
 	return (error);
 }
 
@@ -576,7 +572,7 @@ void
 nfs_boot_flushrt(struct ifnet *ifp)
 {
 
-	rt_delete_matched_entries(AF_INET, nfs_boot_delroute_matcher, ifp);
+	rt_delete_matched_entries(AF_INET, nfs_boot_delroute_matcher, ifp, false);
 }
 
 /*

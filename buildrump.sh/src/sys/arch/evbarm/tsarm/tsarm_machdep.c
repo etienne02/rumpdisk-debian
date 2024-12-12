@@ -1,4 +1,4 @@
-/*	$NetBSD: tsarm_machdep.c,v 1.32 2021/08/17 22:00:29 andvar Exp $ */
+/*	$NetBSD: tsarm_machdep.c,v 1.37 2024/02/20 23:36:01 andvar Exp $ */
 
 /*
  * Copyright (c) 2001, 2002, 2003 Wasabi Systems, Inc.
@@ -73,7 +73,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: tsarm_machdep.c,v 1.32 2021/08/17 22:00:29 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: tsarm_machdep.c,v 1.37 2024/02/20 23:36:01 andvar Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -306,50 +306,36 @@ cpu_reboot(int howto, char *bootstr)
 
 /* Static device mappings. */
 static const struct pmap_devmap tsarm_devmap[] = {
-    {
+    DEVMAP_ENTRY(
 	EP93XX_AHB_VBASE,
 	EP93XX_AHB_HWBASE,
-	EP93XX_AHB_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
+	EP93XX_AHB_SIZE
+    ),
 
-    {
+    DEVMAP_ENTRY(
 	EP93XX_APB_VBASE,
 	EP93XX_APB_HWBASE,
-	EP93XX_APB_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
+	EP93XX_APB_SIZE
+    ),
 
 	/*
 	 * IO8 and IO16 space *must* be mapped contiguously with
 	 * IO8_VA == IO16_VA - 64 Mbytes.  ISA busmap driver depends
 	 * on that!
 	 */
-    {
+    DEVMAP_ENTRY(
 	TS7XXX_IO8_VBASE,
 	TS7XXX_IO8_HWBASE,
-	TS7XXX_IO8_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
+	TS7XXX_IO8_SIZE
+    ),
 
-    {
+    DEVMAP_ENTRY(
 	TS7XXX_IO16_VBASE,
 	TS7XXX_IO16_HWBASE,
-	TS7XXX_IO16_SIZE,
-	VM_PROT_READ|VM_PROT_WRITE,
-	PTE_NOCACHE,
-    },
+	TS7XXX_IO16_SIZE
+    ),
 
-   {
-	0,
-	0,
-	0,
-	0,
-	0,
-    }
+    DEVMAP_ENTRY_END
 };
 
 /*
@@ -457,7 +443,7 @@ initarm(void *arg)
 
 #ifdef VERBOSE_INIT_ARM
 	/* Tell the user about the memory */
-	printf("physmemory: %d pages at 0x%08lx -> 0x%08lx\n", physmem,
+	printf("physmemory: 0x%"PRIxPSIZE" pages at 0x%08lx -> 0x%08lx\n", physmem,
 	    physical_start, physical_end - 1);
 #endif
 
@@ -472,7 +458,7 @@ initarm(void *arg)
 	 * array.
 	 *
 	 * The kernel page directory must be on a 16K boundary.  The page
-	 * tables must be on 4K bounaries.  What we do is allocate the
+	 * tables must be on 4K boundaries.  What we do is allocate the
 	 * page directory on the first 16K boundary that we encounter, and
 	 * the page tables on 4K boundaries otherwise.  Since we allocate
 	 * at least 3 L2 page tables, we are guaranteed to encounter at
@@ -829,8 +815,8 @@ consinit(void)
 #if KGDB
 #if NEPCOM > 0
 	if (strcmp(kgdb_devname, "epcom") == 0) {
-		com_kgdb_attach(&ep93xx_bs_tag, kgdb_devaddr, kgdb_devrate,
-			kgdb_devmode);
+		epcom_kgdb_attach(&ep93xx_bs_tag, kgdb_devaddr, kgdb_devrate,
+				  kgdb_devmode);
 	}
 #endif	/* NEPCOM > 0 */
 #endif	/* KGDB */
@@ -856,4 +842,10 @@ ep93xx_bus_dma_init(struct arm32_bus_dma_tag *dma_tag_template)
 	dmat->_nranges = bootconfig.dramblocks;
 
 	return dmat;
+}
+
+void
+cpu_startup_hook(void)
+{
+	ep93xx_intr_evcnt_attach();
 }

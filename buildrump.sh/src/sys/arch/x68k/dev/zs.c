@@ -1,4 +1,4 @@
-/*	$NetBSD: zs.c,v 1.46 2021/08/07 16:19:07 thorpej Exp $	*/
+/*	$NetBSD: zs.c,v 1.48 2022/05/26 14:30:11 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 1998 Minoura Makoto
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.46 2021/08/07 16:19:07 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.48 2022/05/26 14:30:11 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -89,7 +89,7 @@ int zscn_def_cflag = (CREAD | CS8 | HUPCL);
 
 /* Default physical addresses. */
 #define ZS_MAXDEV 5
-static bus_addr_t zs_physaddr[ZS_MAXDEV] = {
+static const bus_addr_t zs_physaddr[ZS_MAXDEV] = {
 	0x00e98000,
 	0x00eafc00,
 	0x00eafc10,
@@ -397,7 +397,7 @@ zs_set_modes(struct zs_chanstate *cs, int cflag	/* bits per second */)
 	/*
 	 * Output hardware flow control on the chip is horrendous:
 	 * if carrier detect drops, the receiver is disabled, and if
-	 * CTS drops, the transmitter is stoped IN MID CHARACTER!
+	 * CTS drops, the transmitter is stopped IN MID CHARACTER!
 	 * Therefore, NEVER set the HFC bit, and instead use the
 	 * status interrupt to detect CTS changes.
 	 */

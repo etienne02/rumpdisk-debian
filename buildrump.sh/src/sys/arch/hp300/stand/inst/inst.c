@@ -1,4 +1,4 @@
-/*	$NetBSD: inst.c,v 1.23 2018/09/04 15:08:30 riastradh Exp $	*/
+/*	$NetBSD: inst.c,v 1.25 2023/01/15 06:19:46 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -46,7 +46,7 @@
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement: 
+ *    must display the following acknowledgement:
  *	This product includes software developed at Ludd, University of
  *	Lule}, Sweden and its contributors.
  * 4. The name of the author may not be used to endorse or promote products
@@ -77,11 +77,6 @@
 #include <hp300/stand/common/samachdep.h>
 
 char line[100];
-
-extern	u_int opendev;
-extern	char *lowram;
-extern	int noconsole;
-extern	int netio_ask;
 
 char	*kernel_name = "/netbsd";
 

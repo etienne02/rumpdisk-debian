@@ -1,4 +1,4 @@
-/*	$NetBSD: evtchn.c,v 1.96 2020/11/15 14:01:06 bouyer Exp $	*/
+/*	$NetBSD: evtchn.c,v 1.100 2022/09/07 00:40:19 knakahara Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -54,7 +54,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: evtchn.c,v 1.96 2020/11/15 14:01:06 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: evtchn.c,v 1.100 2022/09/07 00:40:19 knakahara Exp $");
 
 #include "opt_xen.h"
 #include "isa.h"
@@ -81,6 +81,14 @@ __KERNEL_RCSID(0, "$NetBSD: evtchn.c,v 1.96 2020/11/15 14:01:06 bouyer Exp $");
 #include <xen/evtchn.h>
 #include <xen/xenfunc.h>
 
+/* maximum number of (v)CPUs supported */
+#ifdef XENPV
+#define NBSD_XEN_MAX_VCPUS XEN_LEGACY_MAX_VCPUS
+#else
+#include <xen/include/public/hvm/hvm_info_table.h>
+#define NBSD_XEN_MAX_VCPUS HVM_MAX_VCPUS
+#endif
+
 #define	NR_PIRQS	NR_EVENT_CHANNELS
 
 /*
@@ -96,20 +104,22 @@ struct evtsource *evtsource[NR_EVENT_CHANNELS];
 static uint8_t evtch_bindcount[NR_EVENT_CHANNELS];
 
 /* event-channel <-> VCPU mapping for IPIs. XXX: redo for SMP. */
-static evtchn_port_t vcpu_ipi_to_evtch[XEN_LEGACY_MAX_VCPUS];
+static evtchn_port_t vcpu_ipi_to_evtch[NBSD_XEN_MAX_VCPUS];
 
 /* event-channel <-> VCPU mapping for VIRQ_TIMER.  XXX: redo for SMP. */
-static int virq_timer_to_evtch[XEN_LEGACY_MAX_VCPUS];
+static int virq_timer_to_evtch[NBSD_XEN_MAX_VCPUS];
 
 /* event-channel <-> VIRQ mapping. */
 static int virq_to_evtch[NR_VIRQS];
 
 
-#if NPCI > 0 || NISA > 0
+#if defined(XENPV) && (NPCI > 0 || NISA > 0)
 /* event-channel <-> PIRQ mapping */
 static int pirq_to_evtch[NR_PIRQS];
+/* PIRQ needing notify */
+static int evtch_to_pirq_eoi[NR_EVENT_CHANNELS];
 int pirq_interrupt(void *);
-#endif
+#endif /* defined(XENPV) && (NPCI > 0 || NISA > 0) */
 
 static void xen_evtchn_mask(struct pic *, int);
 static void xen_evtchn_unmask(struct pic *, int);
@@ -224,22 +234,24 @@ events_default_setup(void)
 	int i;
 
 	/* No VCPU -> event mappings. */
-	for (i = 0; i < XEN_LEGACY_MAX_VCPUS; i++)
+	for (i = 0; i < NBSD_XEN_MAX_VCPUS; i++)
 		vcpu_ipi_to_evtch[i] = -1;
 
 	/* No VIRQ_TIMER -> event mappings. */
-	for (i = 0; i < XEN_LEGACY_MAX_VCPUS; i++)
+	for (i = 0; i < NBSD_XEN_MAX_VCPUS; i++)
 		virq_timer_to_evtch[i] = -1;
 
 	/* No VIRQ -> event mappings. */
 	for (i = 0; i < NR_VIRQS; i++)
 		virq_to_evtch[i] = -1;
 
-#if NPCI > 0 || NISA > 0
+#if defined(XENPV) && (NPCI > 0 || NISA > 0)
 	/* No PIRQ -> event mappings. */
 	for (i = 0; i < NR_PIRQS; i++)
 		pirq_to_evtch[i] = -1;
-#endif
+	for (i = 0; i < NR_EVENT_CHANNELS; i++)
+		evtch_to_pirq_eoi[i] = -1;
+#endif /* defined(XENPV) && (NPCI > 0 || NISA > 0) */
 
 	/* No event-channel are 'live' right now. */
 	for (i = 0; i < NR_EVENT_CHANNELS; i++) {
@@ -308,7 +320,7 @@ evtchn_do_event(int evtch, struct intrframe *regs)
 	int ilevel;
 	struct intrhand *ih;
 	int	(*ih_fun)(void *, void *);
-	uint32_t iplmask;
+	uint64_t iplmask;
 
 	KASSERTMSG(evtch >= 0, "negative evtch: %d", evtch);
 	KASSERTMSG(evtch < NR_EVENT_CHANNELS,
@@ -348,6 +360,11 @@ evtchn_do_event(int evtch, struct intrframe *regs)
 		hypervisor_set_ipending(evtsource[evtch]->ev_imask,
 					evtch >> LONG_SHIFT,
 					evtch & LONG_MASK);
+		ih = evtsource[evtch]->ev_handlers;
+		while (ih != NULL) {
+			ih->ih_pending++;
+			ih = ih->ih_evt_next;
+		}
 
 		/* leave masked */
 
@@ -364,7 +381,7 @@ evtchn_do_event(int evtch, struct intrframe *regs)
 #if 0
 		if (ih->ih_cpu != ci) {
 			hypervisor_send_event(ih->ih_cpu, evtch);
-			iplmask &= ~(1 << XEN_IPL2SIR(ih->ih_level));
+			iplmask &= ~(1ULL << XEN_IPL2SIR(ih->ih_level));
 			ih = ih->ih_evt_next;
 			continue;
 		}
@@ -378,16 +395,24 @@ evtchn_do_event(int evtch, struct intrframe *regs)
 			hypervisor_set_ipending(iplmask,
 			    evtch >> LONG_SHIFT, evtch & LONG_MASK);
 			/* leave masked */
+			while (ih != NULL) {
+				ih->ih_pending++;
+				ih = ih->ih_evt_next;
+			}
 			goto splx;
 		}
-		iplmask &= ~(1 << XEN_IPL2SIR(ih->ih_level));
+		iplmask &= ~(1ULL << XEN_IPL2SIR(ih->ih_level));
 		ci->ci_ilevel = ih->ih_level;
+		ih->ih_pending = 0;
 		ih_fun = (void *)ih->ih_fun;
 		ih_fun(ih->ih_arg, regs);
 		ih = ih->ih_evt_next;
 	}
 	x86_disable_intr();
 	hypervisor_unmask_event(evtch);
+#if defined(XENPV) && (NPCI > 0 || NISA > 0)
+	hypervisor_ack_pirq_event(evtch);
+#endif /* defined(XENPV) && (NPCI > 0 || NISA > 0) */
 
 splx:
 	ci->ci_ilevel = ilevel;
@@ -621,7 +646,7 @@ unbind_virq_from_evtch(int virq)
 	return evtchn;
 }
 
-#if NPCI > 0 || NISA > 0
+#if defined(XENPV) && (NPCI > 0 || NISA > 0) 
 int
 get_pirq_to_evtch(int pirq)
 {
@@ -725,7 +750,9 @@ pirq_establish(int pirq, int evtch, int (*func)(void *), void *arg, int level,
 		return NULL;
 	}
 
+	hypervisor_prime_pirq_event(pirq, evtch);
 	hypervisor_unmask_event(evtch);
+	hypervisor_ack_pirq_event(evtch);
 	return ih;
 }
 
@@ -754,7 +781,7 @@ pirq_interrupt(void *arg)
 	return ret;
 }
 
-#endif /* NPCI > 0 || NISA > 0 */
+#endif /* defined(XENPV) && (NPCI > 0 || NISA > 0) */
 
 
 /*
@@ -882,6 +909,7 @@ event_set_handler(int evtch, int (*func)(void *), void *arg, int level,
 	esh_args.ih->ih_arg = esh_args.ih->ih_realarg = arg;
 	esh_args.ih->ih_evt_next = NULL;
 	esh_args.ih->ih_next = NULL;
+	esh_args.ih->ih_pending = 0;
 	esh_args.ih->ih_cpu = ci;
 	esh_args.ih->ih_pin = evtch;
 #ifdef MULTIPROCESSOR
@@ -1066,6 +1094,42 @@ event_remove_handler(int evtch, int (*func)(void *), void *arg)
 	mutex_exit(&cpu_lock);
 	return 0;
 }
+
+#if defined(XENPV) && (NPCI > 0 || NISA > 0)
+void
+hypervisor_prime_pirq_event(int pirq, unsigned int evtch)
+{
+	struct physdev_irq_status_query irq_status;
+	irq_status.irq = pirq;
+	if (HYPERVISOR_physdev_op(PHYSDEVOP_irq_status_query, &irq_status) < 0)
+		panic("HYPERVISOR_physdev_op(PHYSDEVOP_IRQ_STATUS_QUERY)");
+	if (irq_status.flags & XENIRQSTAT_needs_eoi) {
+		evtch_to_pirq_eoi[evtch] = pirq;
+#ifdef IRQ_DEBUG
+		printf("pirq %d needs notify\n", pirq);
+#endif
+	}
+}
+
+void
+hypervisor_ack_pirq_event(unsigned int evtch)
+{
+#ifdef IRQ_DEBUG
+	if (evtch == IRQ_DEBUG)
+		printf("%s: evtch %d\n", __func__, evtch);
+#endif
+
+	if (evtch_to_pirq_eoi[evtch] > 0) {
+		struct physdev_eoi eoi;
+		eoi.irq = evtch_to_pirq_eoi[evtch];
+#ifdef  IRQ_DEBUG
+		if (evtch == IRQ_DEBUG)
+		    printf("pirq_notify(%d)\n", evtch);
+#endif
+		(void)HYPERVISOR_physdev_op(PHYSDEVOP_eoi, &eoi);
+	}
+}
+#endif /* defined(XENPV) && (NPCI > 0 || NISA > 0) */
 
 int
 xen_debug_handler(void *arg)

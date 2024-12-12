@@ -1,4 +1,4 @@
-/* $NetBSD: reg.h,v 1.8 2020/11/07 10:48:17 skrll Exp $ */
+/* $NetBSD: reg.h,v 1.10 2022/12/13 22:25:08 skrll Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -43,7 +43,7 @@
 // x10 - x11	= a0 - a1	(arguments/return values)	  Caller
 // x12 - x17	= a2 - a7	(arguments)			  Caller
 // x18 - x27	= s2 - s11	(saved registers)		  Callee
-// x28 - x31	= t3 - r6	(temporaries)			  Caller
+// x28 - x31	= t3 - t6	(temporaries)			  Caller
 
 struct reg {	// synced with register_t in <riscv/types.h>
 #ifdef _LP64
@@ -62,7 +62,7 @@ struct reg32 {	// synced with register_t in <riscv/types.h>
 };
 #endif
 
-#define _XREG(n)	((n)-1)
+#define _XREG(n)	((n) - 1)
 #define _X_RA		_XREG(1)
 #define _X_SP		_XREG(2)
 #define _X_GP		_XREG(3)

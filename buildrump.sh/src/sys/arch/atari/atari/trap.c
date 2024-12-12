@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.116 2019/11/21 19:23:59 ad Exp $	*/
+/*	$NetBSD: trap.c,v 1.119 2023/10/05 19:41:03 ad Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.116 2019/11/21 19:23:59 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.119 2023/10/05 19:41:03 ad Exp $");
 
 #include "opt_ddb.h"
 #include "opt_execfmt.h"
@@ -277,7 +277,10 @@ kgdb_cont:
 		printf("Double panic\n");
 #ifdef DEBUG
 		/* XXX Should be a machine dependent hook */
-		printf("(press a key)\n"); (void)cngetc();
+		printf("(press a key)\n");
+		cnpollc(1);
+		(void)cngetc();
+		cnpollc(0);
 #endif
 	}
 
@@ -342,7 +345,6 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 		type |= T_USER;
 		sticks = p->p_sticks;
 		l->l_md.md_regs = fp->f_regs;
-		LWP_CACHE_CREDS(l, p);
 	}
 	switch (type) {
 	default:
@@ -366,7 +368,7 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 			BUS_OBJERR : BUS_ADRERR;
 		break;
 
-	/* 
+	/*
 	 * Kernel coprocessor violation
 	 */
 	case T_COPERR:
@@ -399,7 +401,7 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 			ILL_COPROC : ILL_ILLOPC;
 		break;
 
-	/* 
+	/*
 	 * User coprocessor violation
 	 */
 	case T_COPERR|T_USER:
@@ -408,8 +410,8 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 		ksi.ksi_code = FPE_FLTINV;
 		break;
 
-	/* 
-	 * 6888x exceptions 
+	/*
+	 * 6888x exceptions
 	 */
 	case T_FPERR|T_USER:
 		/*
@@ -461,7 +463,7 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 		break;
 
 	/*
-	 * divde by zero, CHK/TRAPV inst 
+	 * divde by zero, CHK/TRAPV inst
 	 */
 	case T_ZERODIV|T_USER:
 		ksi.ksi_code = FPE_FLTDIV;
@@ -508,7 +510,7 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 		fp->f_sr &= ~PSL_T;
 		ksi.ksi_signo = SIGTRAP;
 		break;
-	/* 
+	/*
 	 * Kernel AST (should not happen)
 	 */
 	case T_ASTFLT:
@@ -569,8 +571,8 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 #endif
 		/*
 		 * It is only a kernel address space fault iff:
-		 * 	1. (type & T_USER) == 0  and
-		 * 	2. pcb_onfault not set or
+		 *	1. (type & T_USER) == 0  and
+		 *	2. pcb_onfault not set or
 		 *	3. pcb_onfault set but supervisor space data fault
 		 * The last can occur during an exec() copyin where the
 		 * argument space is lazy-allocated.
@@ -667,5 +669,5 @@ trap(struct frame *fp, int type, u_int code, u_int v)
 	if ((type & T_USER) == 0)
 		return;
 out:
-	userret(l, fp, sticks, v, 1); 
+	userret(l, fp, sticks, v, 1);
 }

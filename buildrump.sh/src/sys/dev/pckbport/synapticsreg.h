@@ -1,4 +1,4 @@
-/*	$NetBSD: synapticsreg.h,v 1.12 2019/06/02 08:55:00 blymn Exp $	*/
+/*	$NetBSD: synapticsreg.h,v 1.14 2024/11/10 11:49:19 mlelstv Exp $	*/
 
 /*
  * Copyright (c) 2005, Steve C. Woodford
@@ -43,8 +43,11 @@
 #define	SYNAPTICS_READ_MODE		0x1
 #define	SYNAPTICS_READ_CAPABILITIES	0x2
 #define	SYNAPTICS_READ_MODEL_ID		0x3
+#define	SYNAPTICS_QUERY_RESOLUTION	0x8
 #define	SYNAPTICS_EXTENDED_QUERY	0x9
 #define	SYNAPTICS_CONTINUED_CAPABILITIES 0x0c
+#define	SYNAPTICS_READ_MAX_COORDS	0x0d
+#define	SYNAPTICS_READ_MIN_COORDS	0x0f
 #define	SYNAPTICS_WRITE_DELUXE_3	0xc8 /* 6.2.3. Deluxe mode setting sequence */
 
 /* Synaptics special commands */
@@ -57,7 +60,9 @@
 
 /* Capability bits. */
 /* (byte[0] << 8) | byte[2] */
+/* Submodel ID: byte[1] */
 #define SYNAPTICS_CAP_VALUE(b)	(((b)[0] << 8) | (b)[2])
+#define SYNAPTICS_CAP_SUBMODEL(b)	((b)[1])
 #define	SYNAPTICS_CAP_EXTENDED		(1 << 15)
 #define	SYNAPTICS_CAP_EXTNUM		(1 << 14 | 1 << 13 | 1 << 12)
 #define	SYNAPTICS_CAP_MBUTTON		(1 << 10)

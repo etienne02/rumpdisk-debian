@@ -1,4 +1,4 @@
-/*	$NetBSD: vfs_vnode.c,v 1.127 2021/04/01 06:26:14 simonb Exp $	*/
+/*	$NetBSD: vfs_vnode.c,v 1.156 2024/12/07 02:27:38 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997-2011, 2019, 2020 The NetBSD Foundation, Inc.
@@ -141,40 +141,45 @@
  *	Vnode is considered active, if reference count (vnode_t::v_usecount)
  *	is non-zero.  It is maintained using: vref(9) and vrele(9), as well
  *	as vput(9), routines.  Common points holding references are e.g.
- *	file openings, current working directory, mount points, etc.  
+ *	file openings, current working directory, mount points, etc.
  *
  *	v_usecount is adjusted with atomic operations, however to change
  *	from a non-zero value to zero the interlock must also be held.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_vnode.c,v 1.127 2021/04/01 06:26:14 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_vnode.c,v 1.156 2024/12/07 02:27:38 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_pax.h"
 #endif
 
 #include <sys/param.h>
-#include <sys/kernel.h>
+#include <sys/types.h>
 
 #include <sys/atomic.h>
 #include <sys/buf.h>
 #include <sys/conf.h>
 #include <sys/device.h>
+#include <sys/fstrans.h>
 #include <sys/hash.h>
 #include <sys/kauth.h>
+#include <sys/kernel.h>
 #include <sys/kmem.h>
-#include <sys/kthread.h>
 #include <sys/module.h>
 #include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/pax.h>
+#include <sys/sdt.h>
 #include <sys/syscallargs.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <sys/threadpool.h>
 #include <sys/vnode_impl.h>
 #include <sys/wapbl.h>
-#include <sys/fstrans.h>
+
+#include <miscfs/deadfs/deadfs.h>
+#include <miscfs/specfs/specdev.h>
 
 #include <uvm/uvm.h>
 #include <uvm/uvm_readahead.h>
@@ -195,14 +200,17 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_vnode.c,v 1.127 2021/04/01 06:26:14 simonb Exp $
  * private cache line as vnodes migrate between them while under the same
  * lock (vdrain_lock).
  */
+
+typedef struct {
+	vnode_impl_t *li_marker;
+} lru_iter_t;
+
 u_int			numvnodes		__cacheline_aligned;
 static vnodelst_t	lru_list[LRU_COUNT]	__cacheline_aligned;
+static struct threadpool *threadpool;
+static struct threadpool_job vdrain_job;
+static struct threadpool_job vrele_job;
 static kmutex_t		vdrain_lock		__cacheline_aligned;
-static kcondvar_t	vdrain_cv;
-static int		vdrain_gen;
-static kcondvar_t	vdrain_gen_cv;
-static bool		vdrain_retry;
-static lwp_t *		vdrain_lwp;
 SLIST_HEAD(hashhead, vnode_impl);
 static kmutex_t		vcache_lock		__cacheline_aligned;
 static kcondvar_t	vcache_cv;
@@ -212,29 +220,34 @@ static struct hashhead	*vcache_hashtab;
 static pool_cache_t	vcache_pool;
 static void		lru_requeue(vnode_t *, vnodelst_t *);
 static vnodelst_t *	lru_which(vnode_t *);
+static vnode_impl_t *	lru_iter_first(int, lru_iter_t *);
+static vnode_impl_t *	lru_iter_next(lru_iter_t *);
+static void		lru_iter_release(lru_iter_t *);
 static vnode_impl_t *	vcache_alloc(void);
 static void		vcache_dealloc(vnode_impl_t *);
 static void		vcache_free(vnode_impl_t *);
 static void		vcache_init(void);
 static void		vcache_reinit(void);
 static void		vcache_reclaim(vnode_t *);
+static void		vrele_deferred(vnode_impl_t *);
 static void		vrelel(vnode_t *, int, int);
-static void		vdrain_thread(void *);
 static void		vnpanic(vnode_t *, const char *, ...)
     __printflike(2, 3);
+static bool		vdrain_one(u_int);
+static void		vdrain_task(struct threadpool_job *);
+static void		vrele_task(struct threadpool_job *);
 
 /* Routines having to do with the management of the vnode table. */
-extern struct mount	*dead_rootmount;
-extern int		(**dead_vnodeop_p)(void *);
-extern int		(**spec_vnodeop_p)(void *);
-extern struct vfsops	dead_vfsops;
 
 /*
  * The high bit of v_usecount is a gate for vcache_tryvget().  It's set
  * only when the vnode state is LOADED.
+ * The next bit of v_usecount is a flag for vrelel().  It's set
+ * from vcache_vget() and vcache_tryvget() whenever the operation succeeds.
  */
-#define	VUSECOUNT_MASK	0x7fffffff
+#define	VUSECOUNT_MASK	0x3fffffff
 #define	VUSECOUNT_GATE	0x80000000
+#define	VUSECOUNT_VGET	0x40000000
 
 /*
  * Return the current usecount of a vnode.
@@ -267,15 +280,12 @@ _vstate_assert(vnode_t *vp, enum vnode_state state, const char *func, int line,
 	int refcnt = vrefcnt(vp);
 
 	if (!has_lock) {
-		/*
-		 * Prevent predictive loads from the CPU, but check the state
-		 * without loooking first.
-		 */
-		membar_enter();
+		enum vnode_state vstate = atomic_load_relaxed(&vip->vi_state);
+
 		if (state == VS_ACTIVE && refcnt > 0 &&
-		    (vip->vi_state == VS_LOADED || vip->vi_state == VS_BLOCKED))
+		    (vstate == VS_LOADED || vstate == VS_BLOCKED))
 			return;
-		if (vip->vi_state == state)
+		if (vstate == state)
 			return;
 		mutex_enter((vp)->v_interlock);
 	}
@@ -349,13 +359,15 @@ vstate_assert_change(vnode_t *vp, enum vnode_state from, enum vnode_state to,
 		vnpanic(vp, "state is %s, gate %d does not match at %s:%d\n",
 		    vstate_name(vip->vi_state), gated, func, line);
 
-	/* Open/close the gate for vcache_tryvget(). */	
-	if (to == VS_LOADED)
+	/* Open/close the gate for vcache_tryvget(). */
+	if (to == VS_LOADED) {
+		membar_release();
 		atomic_or_uint(&vp->v_usecount, VUSECOUNT_GATE);
-	else
+	} else {
 		atomic_and_uint(&vp->v_usecount, ~VUSECOUNT_GATE);
+	}
 
-	vip->vi_state = to;
+	atomic_store_relaxed(&vip->vi_state, to);
 	if (from == VS_LOADING)
 		cv_broadcast(&vcache_cv);
 	if (to == VS_LOADED || to == VS_RECLAIMED)
@@ -391,13 +403,15 @@ vstate_change(vnode_t *vp, enum vnode_state from, enum vnode_state to)
 {
 	vnode_impl_t *vip = VNODE_TO_VIMPL(vp);
 
-	/* Open/close the gate for vcache_tryvget(). */	
-	if (to == VS_LOADED)
+	/* Open/close the gate for vcache_tryvget(). */
+	if (to == VS_LOADED) {
+		membar_release();
 		atomic_or_uint(&vp->v_usecount, VUSECOUNT_GATE);
-	else
+	} else {
 		atomic_and_uint(&vp->v_usecount, ~VUSECOUNT_GATE);
+	}
 
-	vip->vi_state = to;
+	atomic_store_relaxed(&vip->vi_state, to);
 	if (from == VS_LOADING)
 		cv_broadcast(&vcache_cv);
 	if (to == VS_LOADED || to == VS_RECLAIMED)
@@ -421,11 +435,10 @@ vfs_vnode_sysinit(void)
 	}
 	vcache_init();
 
-	cv_init(&vdrain_cv, "vdrain");
-	cv_init(&vdrain_gen_cv, "vdrainwt");
-	error = kthread_create(PRI_VM, KTHREAD_MPSAFE, NULL, vdrain_thread,
-	    NULL, &vdrain_lwp, "vdrain");
-	KASSERTMSG((error == 0), "kthread_create(vdrain) failed: %d", error);
+	error = threadpool_get(&threadpool, PRI_NONE);
+	KASSERTMSG((error == 0), "threadpool_get failed: %d", error);
+	threadpool_job_init(&vdrain_job, vdrain_task, &vdrain_lock, "vdrain");
+	threadpool_job_init(&vrele_job, vrele_task, &vdrain_lock, "vrele");
 }
 
 /*
@@ -444,6 +457,8 @@ vnalloc_marker(struct mount *mp)
 	vp->v_mount = mp;
 	vp->v_type = VBAD;
 	vp->v_interlock = mutex_obj_alloc(MUTEX_DEFAULT, IPL_NONE);
+	klist_init(&vip->vi_klist.vk_klist);
+	vp->v_klist = &vip->vi_klist;
 	vip->vi_state = VS_MARKER;
 
 	return vp;
@@ -461,6 +476,7 @@ vnfree_marker(vnode_t *vp)
 	KASSERT(vip->vi_state == VS_MARKER);
 	mutex_obj_free(vp->v_interlock);
 	uvm_obj_destroy(&vp->v_uobj, true);
+	klist_fini(&vip->vi_klist.vk_klist);
 	pool_cache_put(vcache_pool, vip);
 }
 
@@ -507,7 +523,7 @@ lru_requeue(vnode_t *vp, vnodelst_t *listhd)
 	vip = VNODE_TO_VIMPL(vp);
 	if (listhd == vip->vi_lrulisthd &&
 	    (getticks() - vip->vi_lrulisttm) < hz) {
-	    	return;
+		return;
 	}
 
 	mutex_enter(&vdrain_lock);
@@ -530,10 +546,71 @@ lru_requeue(vnode_t *vp, vnodelst_t *listhd)
 		 */
 		numvnodes += d;
 	}
-	if ((d > 0 && numvnodes > desiredvnodes) ||
-	    listhd == &lru_list[LRU_VRELE])
-		cv_signal(&vdrain_cv);
+	if (listhd == &lru_list[LRU_VRELE])
+		threadpool_schedule_job(threadpool, &vrele_job);
+	if (d > 0 && numvnodes > desiredvnodes)
+		threadpool_schedule_job(threadpool, &vdrain_job);
+	if (d > 0 && numvnodes > desiredvnodes + desiredvnodes / 16)
+		kpause("vnfull", false, MAX(1, mstohz(10)), &vdrain_lock);
 	mutex_exit(&vdrain_lock);
+}
+
+/*
+ * LRU list iterator.
+ * Caller holds vdrain_lock.
+ */
+static vnode_impl_t *
+lru_iter_first(int idx, lru_iter_t *iterp)
+{
+	vnode_impl_t *marker;
+
+	KASSERT(mutex_owned(&vdrain_lock));
+
+	mutex_exit(&vdrain_lock);
+	marker = VNODE_TO_VIMPL(vnalloc_marker(NULL));
+	mutex_enter(&vdrain_lock);
+	marker->vi_lrulisthd = &lru_list[idx];
+	iterp->li_marker = marker;
+
+	TAILQ_INSERT_HEAD(marker->vi_lrulisthd, marker, vi_lrulist);
+
+	return lru_iter_next(iterp);
+}
+
+static vnode_impl_t *
+lru_iter_next(lru_iter_t *iter)
+{
+	vnode_impl_t *vip, *marker;
+	vnodelst_t *listhd;
+
+	KASSERT(mutex_owned(&vdrain_lock));
+
+	marker = iter->li_marker;
+	listhd = marker->vi_lrulisthd;
+
+	while ((vip = TAILQ_NEXT(marker, vi_lrulist))) {
+		TAILQ_REMOVE(listhd, marker, vi_lrulist);
+		TAILQ_INSERT_AFTER(listhd, vip, marker, vi_lrulist);
+		if (!vnis_marker(VIMPL_TO_VNODE(vip)))
+			break;
+	}
+
+	return vip;
+}
+
+static void
+lru_iter_release(lru_iter_t *iter)
+{
+	vnode_impl_t *marker;
+
+	KASSERT(mutex_owned(&vdrain_lock));
+
+	marker = iter->li_marker;
+	TAILQ_REMOVE(marker->vi_lrulisthd, marker, vi_lrulist);
+
+	mutex_exit(&vdrain_lock);
+	vnfree_marker(VIMPL_TO_VNODE(marker));
+	mutex_enter(&vdrain_lock);
 }
 
 /*
@@ -543,174 +620,136 @@ lru_requeue(vnode_t *vp, vnodelst_t *listhd)
 void
 vrele_flush(struct mount *mp)
 {
-	vnode_impl_t *vip, *marker;
-	vnode_t *vp;
-	int when = 0;
+	lru_iter_t iter;
+	vnode_impl_t *vip;
 
 	KASSERT(fstrans_is_owner(mp));
 
-	marker = VNODE_TO_VIMPL(vnalloc_marker(NULL));
-
 	mutex_enter(&vdrain_lock);
-	TAILQ_INSERT_HEAD(&lru_list[LRU_VRELE], marker, vi_lrulist);
-
-	while ((vip = TAILQ_NEXT(marker, vi_lrulist))) {
-		TAILQ_REMOVE(&lru_list[LRU_VRELE], marker, vi_lrulist);
-		TAILQ_INSERT_AFTER(&lru_list[LRU_VRELE], vip, marker,
-		    vi_lrulist);
-		vp = VIMPL_TO_VNODE(vip);
-		if (vnis_marker(vp))
+	for (vip = lru_iter_first(LRU_VRELE, &iter); vip != NULL;
+	    vip = lru_iter_next(&iter)) {
+		if (VIMPL_TO_VNODE(vip)->v_mount != mp)
 			continue;
-
-		KASSERT(vip->vi_lrulisthd == &lru_list[LRU_VRELE]);
-		TAILQ_REMOVE(vip->vi_lrulisthd, vip, vi_lrulist);
-		vip->vi_lrulisthd = &lru_list[LRU_HOLD];
-		vip->vi_lrulisttm = getticks();
-		TAILQ_INSERT_TAIL(vip->vi_lrulisthd, vip, vi_lrulist);
-		mutex_exit(&vdrain_lock);
-
-		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-		mutex_enter(vp->v_interlock);
-		vrelel(vp, 0, LK_EXCLUSIVE);
-
-		if (getticks() > when) {
-			yield();
-			when = getticks() + hz / 10;
-		}
-
-		mutex_enter(&vdrain_lock);
+		vrele_deferred(vip);
 	}
-
-	TAILQ_REMOVE(&lru_list[LRU_VRELE], marker, vi_lrulist);
+	lru_iter_release(&iter);
 	mutex_exit(&vdrain_lock);
-
-	vnfree_marker(VIMPL_TO_VNODE(marker));
 }
 
 /*
- * Reclaim a cached vnode.  Used from vdrain_thread only.
+ * One pass through the LRU lists to keep the number of allocated
+ * vnodes below target.  Returns true if target met.
  */
-static __inline void
-vdrain_remove(vnode_t *vp)
+static bool
+vdrain_one(u_int target)
 {
+	int ix, lists[] = { LRU_FREE, LRU_HOLD };
+	lru_iter_t iter;
+	vnode_impl_t *vip;
+	vnode_t *vp;
 	struct mount *mp;
 
 	KASSERT(mutex_owned(&vdrain_lock));
 
-	/* Probe usecount (unlocked). */
-	if (vrefcnt(vp) > 0)
-		return;
-	/* Try v_interlock -- we lock the wrong direction! */
-	if (!mutex_tryenter(vp->v_interlock))
-		return;
-	/* Probe usecount and state. */
-	if (vrefcnt(vp) > 0 || VSTATE_GET(vp) != VS_LOADED) {
-		mutex_exit(vp->v_interlock);
-		return;
-	}
-	mp = vp->v_mount;
-	if (fstrans_start_nowait(mp) != 0) {
-		mutex_exit(vp->v_interlock);
-		return;
-	}
-	vdrain_retry = true;
-	mutex_exit(&vdrain_lock);
+	for (ix = 0; ix < __arraycount(lists); ix++) {
+		for (vip = lru_iter_first(lists[ix], &iter); vip != NULL;
+		    vip = lru_iter_next(&iter)) {
+			if (numvnodes < target) {
+				lru_iter_release(&iter);
+				return true;
+			}
 
-	if (vcache_vget(vp) == 0) {
-		if (!vrecycle(vp)) {
-			vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-			mutex_enter(vp->v_interlock);
-			vrelel(vp, 0, LK_EXCLUSIVE);
+			vp = VIMPL_TO_VNODE(vip);
+
+			/* Probe usecount (unlocked). */
+			if (vrefcnt(vp) > 0)
+				continue;
+			/* Try v_interlock -- we lock the wrong direction! */
+			if (!mutex_tryenter(vp->v_interlock))
+				continue;
+			/* Probe usecount and state. */
+			if (vrefcnt(vp) > 0 || VSTATE_GET(vp) != VS_LOADED) {
+				mutex_exit(vp->v_interlock);
+				continue;
+			}
+			mutex_exit(&vdrain_lock);
+
+			mp = vp->v_mount;
+			if (fstrans_start_nowait(mp) != 0) {
+				mutex_exit(vp->v_interlock);
+				mutex_enter(&vdrain_lock);
+				continue;
+			}
+
+			if (vcache_vget(vp) == 0) {
+				if (!vrecycle(vp)) {
+					vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+					mutex_enter(vp->v_interlock);
+					vrelel(vp, 0, LK_EXCLUSIVE);
+				}
+			}
+			fstrans_done(mp);
+
+			mutex_enter(&vdrain_lock);
 		}
+		lru_iter_release(&iter);
 	}
-	fstrans_done(mp);
 
-	mutex_enter(&vdrain_lock);
+	return false;
 }
 
 /*
- * Release a cached vnode.  Used from vdrain_thread only.
- */
-static __inline void
-vdrain_vrele(vnode_t *vp)
-{
-	vnode_impl_t *vip = VNODE_TO_VIMPL(vp);
-	struct mount *mp;
-
-	KASSERT(mutex_owned(&vdrain_lock));
-
-	mp = vp->v_mount;
-	if (fstrans_start_nowait(mp) != 0)
-		return;
-
-	/*
-	 * First remove the vnode from the vrele list.
-	 * Put it on the last lru list, the last vrele()
-	 * will put it back onto the right list before
-	 * its usecount reaches zero.
-	 */
-	KASSERT(vip->vi_lrulisthd == &lru_list[LRU_VRELE]);
-	TAILQ_REMOVE(vip->vi_lrulisthd, vip, vi_lrulist);
-	vip->vi_lrulisthd = &lru_list[LRU_HOLD];
-	vip->vi_lrulisttm = getticks();
-	TAILQ_INSERT_TAIL(vip->vi_lrulisthd, vip, vi_lrulist);
-
-	vdrain_retry = true;
-	mutex_exit(&vdrain_lock);
-
-	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
-	mutex_enter(vp->v_interlock);
-	vrelel(vp, 0, LK_EXCLUSIVE);
-	fstrans_done(mp);
-
-	mutex_enter(&vdrain_lock);
-}
-
-/*
- * Helper thread to keep the number of vnodes below desiredvnodes
- * and release vnodes from asynchronous vrele.
+ * threadpool task to keep the number of vnodes below desiredvnodes.
  */
 static void
-vdrain_thread(void *cookie)
+vdrain_task(struct threadpool_job *job)
 {
-	int i;
 	u_int target;
-	vnode_impl_t *vip, *marker;
 
-	marker = VNODE_TO_VIMPL(vnalloc_marker(NULL));
+	target = desiredvnodes - desiredvnodes / 16;
 
 	mutex_enter(&vdrain_lock);
 
-	for (;;) {
-		vdrain_retry = false;
-		target = desiredvnodes - desiredvnodes/10;
+	while (!vdrain_one(target))
+		kpause("vdrain", false, 1, &vdrain_lock);
 
-		for (i = 0; i < LRU_COUNT; i++) {
-			TAILQ_INSERT_HEAD(&lru_list[i], marker, vi_lrulist);
-			while ((vip = TAILQ_NEXT(marker, vi_lrulist))) {
-				TAILQ_REMOVE(&lru_list[i], marker, vi_lrulist);
-				TAILQ_INSERT_AFTER(&lru_list[i], vip, marker,
-				    vi_lrulist);
-				if (vnis_marker(VIMPL_TO_VNODE(vip)))
-					continue;
-				if (i == LRU_VRELE)
-					vdrain_vrele(VIMPL_TO_VNODE(vip));
-				else if (numvnodes < target)
-					break;
-				else
-					vdrain_remove(VIMPL_TO_VNODE(vip));
+	threadpool_job_done(job);
+	mutex_exit(&vdrain_lock);
+}
+
+/*
+ * threadpool task to process asynchronous vrele.
+ */
+static void
+vrele_task(struct threadpool_job *job)
+{
+	int skipped;
+	lru_iter_t iter;
+	vnode_impl_t *vip;
+	struct mount *mp;
+
+	mutex_enter(&vdrain_lock);
+	while ((vip = lru_iter_first(LRU_VRELE, &iter)) != NULL) {
+		for (skipped = 0; vip != NULL; vip = lru_iter_next(&iter)) {
+			mp = VIMPL_TO_VNODE(vip)->v_mount;
+			if (fstrans_start_nowait(mp) == 0) {
+				vrele_deferred(vip);
+				fstrans_done(mp);
+			} else {
+				skipped++;
 			}
-			TAILQ_REMOVE(&lru_list[i], marker, vi_lrulist);
 		}
 
-		if (vdrain_retry) {
-			kpause("vdrainrt", false, 1, &vdrain_lock);
-		} else {
-			vdrain_gen++;
-			cv_broadcast(&vdrain_gen_cv);
-			cv_wait(&vdrain_cv, &vdrain_lock);
+		lru_iter_release(&iter);
+		if (skipped) {
+			kpause("vrele", false, MAX(1, mstohz(10)),
+			    &vdrain_lock);
 		}
 	}
+
+	threadpool_job_done(job);
+	lru_iter_release(&iter);
+	mutex_exit(&vdrain_lock);
 }
 
 /*
@@ -722,6 +761,7 @@ vtryrele(vnode_t *vp)
 {
 	u_int use, next;
 
+	membar_release();
 	for (use = atomic_load_relaxed(&vp->v_usecount);; use = next) {
 		if (__predict_false((use & VUSECOUNT_MASK) == 1)) {
 			return false;
@@ -755,15 +795,45 @@ vput(vnode_t *vp)
 			return;
 		}
 		lktype = LK_NONE;
-	} else if ((vp->v_vflag & VV_LOCKSWORK) == 0) {
-		VOP_UNLOCK(vp);
-		lktype = LK_NONE;
 	} else {
 		lktype = VOP_ISLOCKED(vp);
 		KASSERT(lktype != LK_NONE);
 	}
 	mutex_enter(vp->v_interlock);
 	vrelel(vp, 0, lktype);
+}
+
+/*
+ * Release a vnode from the deferred list.
+ */
+static void
+vrele_deferred(vnode_impl_t *vip)
+{
+	vnode_t *vp;
+
+	KASSERT(mutex_owned(&vdrain_lock));
+	KASSERT(vip->vi_lrulisthd == &lru_list[LRU_VRELE]);
+
+	vp = VIMPL_TO_VNODE(vip);
+
+	/*
+	 * First remove the vnode from the vrele list.
+	 * Put it on the last lru list, the last vrele()
+	 * will put it back onto the right list before
+	 * its usecount reaches zero.
+	 */
+	TAILQ_REMOVE(vip->vi_lrulisthd, vip, vi_lrulist);
+	vip->vi_lrulisthd = &lru_list[LRU_HOLD];
+	vip->vi_lrulisttm = getticks();
+	TAILQ_INSERT_TAIL(vip->vi_lrulisthd, vip, vi_lrulist);
+
+	mutex_exit(&vdrain_lock);
+
+	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
+	mutex_enter(vp->v_interlock);
+	vrelel(vp, 0, LK_EXCLUSIVE);
+
+	mutex_enter(&vdrain_lock);
 }
 
 /*
@@ -774,9 +844,13 @@ static void
 vrelel(vnode_t *vp, int flags, int lktype)
 {
 	const bool async = ((flags & VRELEL_ASYNC) != 0);
-	bool recycle, defer;
+	bool recycle, defer, objlock_held;
+	u_int use, next;
 	int error;
 
+	objlock_held = false;
+
+retry:
 	KASSERT(mutex_owned(vp->v_interlock));
 
 	if (__predict_false(vp->v_op == dead_vnodeop_p &&
@@ -785,18 +859,40 @@ vrelel(vnode_t *vp, int flags, int lktype)
 	}
 
 	/*
-	 * If not the last reference, just drop the reference count and
-	 * unlock.  VOP_UNLOCK() is called here without a vnode reference
-	 * held, but is ok as the hold of v_interlock will stop the vnode
-	 * from disappearing.
+	 * If not the last reference, just unlock and drop the reference count.
+	 *
+	 * Otherwise make sure we pass a point in time where we hold the
+	 * last reference with VGET flag unset.
 	 */
-	if (vtryrele(vp)) {
-		if (lktype != LK_NONE) {
-			VOP_UNLOCK(vp);
+	for (use = atomic_load_relaxed(&vp->v_usecount);; use = next) {
+		if (__predict_false((use & VUSECOUNT_MASK) > 1)) {
+			if (objlock_held) {
+				objlock_held = false;
+				rw_exit(vp->v_uobj.vmobjlock);
+			}
+			if (lktype != LK_NONE) {
+				mutex_exit(vp->v_interlock);
+				lktype = LK_NONE;
+				VOP_UNLOCK(vp);
+				mutex_enter(vp->v_interlock);
+			}
+			if (vtryrele(vp)) {
+				mutex_exit(vp->v_interlock);
+				return;
+			}
+			next = atomic_load_relaxed(&vp->v_usecount);
+			continue;
 		}
-		mutex_exit(vp->v_interlock);
-		return;
+		KASSERT((use & VUSECOUNT_MASK) == 1);
+		next = use & ~VUSECOUNT_VGET;
+		if (next != use) {
+			next = atomic_cas_uint(&vp->v_usecount, use, next);
+		}
+		if (__predict_true(next == use)) {
+			break;
+		}
 	}
+	membar_acquire();
 	if (vrefcnt(vp) <= 0 || vp->v_writecount != 0) {
 		vnpanic(vp, "%s: bad ref count", __func__);
 	}
@@ -809,8 +905,26 @@ vrelel(vnode_t *vp, int flags, int lktype)
 #endif
 
 	/*
+	 * If already clean there is no need to lock, defer or
+	 * deactivate this node.
+	 */
+	if (VSTATE_GET(vp) == VS_RECLAIMED) {
+		if (objlock_held) {
+			objlock_held = false;
+			rw_exit(vp->v_uobj.vmobjlock);
+		}
+		if (lktype != LK_NONE) {
+			mutex_exit(vp->v_interlock);
+			lktype = LK_NONE;
+			VOP_UNLOCK(vp);
+			mutex_enter(vp->v_interlock);
+		}
+		goto out;
+	}
+
+	/*
 	 * First try to get the vnode locked for VOP_INACTIVE().
-	 * Defer vnode release to vdrain_thread if caller requests
+	 * Defer vnode release to vrele task if caller requests
 	 * it explicitly, is the pagedaemon or the lock failed.
 	 */
 	defer = false;
@@ -818,8 +932,7 @@ vrelel(vnode_t *vp, int flags, int lktype)
 		defer = true;
 	} else if (lktype == LK_SHARED) {
 		/* Excellent chance of getting, if the last ref. */
-		error = vn_lock(vp, LK_UPGRADE | LK_RETRY |
-		    LK_NOWAIT);
+		error = vn_lock(vp, LK_UPGRADE | LK_RETRY | LK_NOWAIT);
 		if (error != 0) {
 			defer = true;
 		} else {
@@ -827,8 +940,7 @@ vrelel(vnode_t *vp, int flags, int lktype)
 		}
 	} else if (lktype == LK_NONE) {
 		/* Excellent chance of getting, if the last ref. */
-		error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY |
-		    LK_NOWAIT);
+		error = vn_lock(vp, LK_EXCLUSIVE | LK_RETRY | LK_NOWAIT);
 		if (error != 0) {
 			defer = true;
 		} else {
@@ -838,11 +950,13 @@ vrelel(vnode_t *vp, int flags, int lktype)
 	KASSERT(mutex_owned(vp->v_interlock));
 	if (defer) {
 		/*
-		 * Defer reclaim to the kthread; it's not safe to
+		 * Defer reclaim to the vrele task; it's not safe to
 		 * clean it here.  We donate it our last reference.
 		 */
 		if (lktype != LK_NONE) {
+			mutex_exit(vp->v_interlock);
 			VOP_UNLOCK(vp);
+			mutex_enter(vp->v_interlock);
 		}
 		lru_requeue(vp, &lru_list[LRU_VRELE]);
 		mutex_exit(vp->v_interlock);
@@ -850,80 +964,100 @@ vrelel(vnode_t *vp, int flags, int lktype)
 	}
 	KASSERT(lktype == LK_EXCLUSIVE);
 
-	/*
-	 * If not clean, deactivate the vnode, but preserve
-	 * our reference across the call to VOP_INACTIVE().
-	 */
-	if (VSTATE_GET(vp) == VS_RECLAIMED) {
-		VOP_UNLOCK(vp);
-	} else {
-		/*
-		 * If VOP_INACTIVE() indicates that the file has been
-		 * deleted, then recycle the vnode.
-		 *
-		 * Note that VOP_INACTIVE() will not drop the vnode lock.
-		 */
-		mutex_exit(vp->v_interlock);
-		recycle = false;
-		VOP_INACTIVE(vp, &recycle);
-		rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
-		mutex_enter(vp->v_interlock);
+	/* If the node gained another reference, retry. */
+	use = atomic_load_relaxed(&vp->v_usecount);
+	if ((use & VUSECOUNT_VGET) != 0) {
+		goto retry;
+	}
+	KASSERT((use & VUSECOUNT_MASK) == 1);
 
-		for (;;) {
-			/*
-			 * If no longer the last reference, try to shed it. 
-			 * On success, drop the interlock last thereby
-			 * preventing the vnode being freed behind us.
-			 */
-			if (vtryrele(vp)) {
-				VOP_UNLOCK(vp);
-				rw_exit(vp->v_uobj.vmobjlock);
-				mutex_exit(vp->v_interlock);
-				return;
-			}
-			/*
-			 * Block new references then check again to see if a
-			 * new reference was acquired in the meantime.  If
-			 * it was, restore the vnode state and try again.
-			 */
-			if (recycle) {
-				VSTATE_CHANGE(vp, VS_LOADED, VS_BLOCKED);
-				if (vrefcnt(vp) != 1) {
-					VSTATE_CHANGE(vp, VS_BLOCKED,
-					    VS_LOADED);
-					continue;
-				}
-			}
-			break;
- 		}
-
+	if ((vp->v_iflag & (VI_TEXT|VI_EXECMAP|VI_WRMAP)) != 0 ||
+	    (vp->v_vflag & VV_MAPPED) != 0) {
 		/* Take care of space accounting. */
+		if (!objlock_held) {
+			objlock_held = true;
+			if (!rw_tryenter(vp->v_uobj.vmobjlock, RW_WRITER)) {
+				mutex_exit(vp->v_interlock);
+				rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
+				mutex_enter(vp->v_interlock);
+				goto retry;
+			}
+		}
 		if ((vp->v_iflag & VI_EXECMAP) != 0) {
 			cpu_count(CPU_COUNT_EXECPAGES, -vp->v_uobj.uo_npages);
 		}
 		vp->v_iflag &= ~(VI_TEXT|VI_EXECMAP|VI_WRMAP);
 		vp->v_vflag &= ~VV_MAPPED;
+	}
+	if (objlock_held) {
+		objlock_held = false;
 		rw_exit(vp->v_uobj.vmobjlock);
+	}
 
-		/*
-		 * Recycle the vnode if the file is now unused (unlinked),
-		 * otherwise just free it.
-		 */
-		if (recycle) {
-			VSTATE_ASSERT(vp, VS_BLOCKED);
-			/* vcache_reclaim drops the lock. */
-			vcache_reclaim(vp);
-		} else {
-			VOP_UNLOCK(vp);
+	/*
+	 * Deactivate the vnode, but preserve our reference across
+	 * the call to VOP_INACTIVE().
+	 *
+	 * If VOP_INACTIVE() indicates that the file has been
+	 * deleted, then recycle the vnode.
+	 *
+	 * Note that VOP_INACTIVE() will not drop the vnode lock.
+	 */
+	mutex_exit(vp->v_interlock);
+	recycle = false;
+	VOP_INACTIVE(vp, &recycle);
+	if (!recycle) {
+		lktype = LK_NONE;
+		VOP_UNLOCK(vp);
+	}
+	mutex_enter(vp->v_interlock);
+
+	/*
+	 * Block new references then check again to see if a
+	 * new reference was acquired in the meantime.  If
+	 * it was, restore the vnode state and try again.
+	 */
+	if (recycle) {
+		VSTATE_CHANGE(vp, VS_LOADED, VS_BLOCKED);
+		use = atomic_load_relaxed(&vp->v_usecount);
+		if ((use & VUSECOUNT_VGET) != 0) {
+			VSTATE_CHANGE(vp, VS_BLOCKED, VS_LOADED);
+			goto retry;
 		}
-		KASSERT(vrefcnt(vp) > 0);
+		KASSERT((use & VUSECOUNT_MASK) == 1);
 	}
 
-	if ((atomic_dec_uint_nv(&vp->v_usecount) & VUSECOUNT_MASK) != 0) {
-		/* Gained another reference while being reclaimed. */
-		mutex_exit(vp->v_interlock);
-		return;
+	/*
+	 * Recycle the vnode if the file is now unused (unlinked).
+	 */
+	if (recycle) {
+		VSTATE_ASSERT(vp, VS_BLOCKED);
+		KASSERT(lktype == LK_EXCLUSIVE);
+		/* vcache_reclaim drops the lock. */
+		lktype = LK_NONE;
+		vcache_reclaim(vp);
 	}
+	KASSERT(vrefcnt(vp) > 0);
+	KASSERT(lktype == LK_NONE);
+
+out:
+	for (use = atomic_load_relaxed(&vp->v_usecount);; use = next) {
+		if (__predict_false((use & VUSECOUNT_VGET) != 0 &&
+		    (use & VUSECOUNT_MASK) == 1)) {
+			/* Gained and released another reference, retry. */
+			goto retry;
+		}
+		next = atomic_cas_uint(&vp->v_usecount, use, use - 1);
+		if (__predict_true(next == use)) {
+			if (__predict_false((use & VUSECOUNT_MASK) != 1)) {
+				/* Gained another reference. */
+				mutex_exit(vp->v_interlock);
+				return;
+			}
+			break;
+		}
+	}
+	membar_acquire();
 
 	if (VSTATE_GET(vp) == VS_RECLAIMED && vp->v_holdcnt == 0) {
 		/*
@@ -1117,7 +1251,7 @@ vrevoke_suspend_next(struct mount *lastmp, struct mount *thismp)
 	if (error == 0)
 		return thismp;
 
-	KASSERT(error == EOPNOTSUPP);
+	KASSERT(error == EOPNOTSUPP || error == ENOENT);
 	return NULL;
 }
 
@@ -1150,7 +1284,8 @@ vrevoke(vnode_t *vp)
 		type = vp->v_type;
 		mutex_exit(vp->v_interlock);
 
-		while (spec_node_lookup_by_dev(type, dev, &vq) == 0) {
+		while (spec_node_lookup_by_dev(type, dev, VDEAD_NOWAIT, &vq)
+		    == 0) {
 			mp = vrevoke_suspend_next(mp, vq->v_mount);
 			vgone(vq);
 		}
@@ -1167,13 +1302,14 @@ vgone(vnode_t *vp)
 {
 	int lktype;
 
-	KASSERT(vp->v_mount == dead_rootmount || fstrans_is_owner(vp->v_mount));
+	KASSERT(vp->v_mount == dead_rootmount ||
+	    fstrans_is_owner(vp->v_mount));
 
 	vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 	lktype = LK_EXCLUSIVE;
 	mutex_enter(vp->v_interlock);
 	VSTATE_WAIT_STABLE(vp);
-	if (VSTATE_GET(vp) == VS_LOADED) { 
+	if (VSTATE_GET(vp) == VS_LOADED) {
 		VSTATE_CHANGE(vp, VS_LOADED, VS_BLOCKED);
 		vcache_reclaim(vp);
 		lktype = LK_NONE;
@@ -1307,6 +1443,8 @@ vcache_alloc(void)
 	vp->v_interlock = mutex_obj_alloc(MUTEX_DEFAULT, IPL_NONE);
 
 	uvm_obj_init(&vp->v_uobj, &uvm_vnodeops, true, 1);
+	klist_init(&vip->vi_klist.vk_klist);
+	vp->v_klist = &vip->vi_klist;
 	cv_init(&vp->v_cv, "vnode");
 	cache_vnode_init(vp);
 
@@ -1368,6 +1506,8 @@ vcache_free(vnode_impl_t *vip)
 	mutex_obj_free(vp->v_interlock);
 	rw_destroy(&vip->vi_lock);
 	uvm_obj_destroy(&vp->v_uobj, true);
+	KASSERT(vp->v_klist == &vip->vi_klist);
+	klist_fini(&vip->vi_klist.vk_klist);
 	cv_destroy(&vp->v_cv);
 	cache_vnode_fini(vp);
 	pool_cache_put(vcache_pool, vip);
@@ -1386,10 +1526,12 @@ vcache_tryvget(vnode_t *vp)
 
 	for (use = atomic_load_relaxed(&vp->v_usecount);; use = next) {
 		if (__predict_false((use & VUSECOUNT_GATE) == 0)) {
-			return EBUSY;
+			return SET_ERROR(EBUSY);
 		}
-		next = atomic_cas_uint(&vp->v_usecount, use, use + 1);
+		next = atomic_cas_uint(&vp->v_usecount,
+		    use, (use + 1) | VUSECOUNT_VGET);
 		if (__predict_true(next == use)) {
+			membar_acquire();
 			return 0;
 		}
 	}
@@ -1405,6 +1547,7 @@ vcache_tryvget(vnode_t *vp)
 int
 vcache_vget(vnode_t *vp)
 {
+	int error;
 
 	KASSERT(mutex_owned(vp->v_interlock));
 
@@ -1419,10 +1562,11 @@ vcache_vget(vnode_t *vp)
 			vcache_free(VNODE_TO_VIMPL(vp));
 		else
 			mutex_exit(vp->v_interlock);
-		return ENOENT;
+		return SET_ERROR(ENOENT);
 	}
 	VSTATE_ASSERT(vp, VS_LOADED);
-	atomic_inc_uint(&vp->v_usecount);
+	error = vcache_tryvget(vp);
+	KASSERT(error == 0);
 	mutex_exit(vp->v_interlock);
 
 	return 0;
@@ -1638,7 +1782,7 @@ vcache_rekey_enter(struct mount *mp, struct vnode *vp,
 	vip = vcache_hash_lookup(&new_vcache_key, new_hash);
 	if (vip != NULL) {
 		vcache_dealloc(new_vip);
-		return EEXIST;
+		return SET_ERROR(EEXIST);
 	}
 	SLIST_INSERT_HEAD(&vcache_hashtab[new_hash & vcache_hashmask],
 	    new_vip, vi_hash);
@@ -1721,21 +1865,32 @@ vcache_reclaim(vnode_t *vp)
 	uint32_t hash;
 	uint8_t temp_buf[64], *temp_key;
 	size_t temp_key_len;
-	bool recycle, active;
+	bool recycle;
 	int error;
 
-	KASSERT((vp->v_vflag & VV_LOCKSWORK) == 0 ||
-	    VOP_ISLOCKED(vp) == LK_EXCLUSIVE);
+	KASSERT(VOP_ISLOCKED(vp) == LK_EXCLUSIVE);
 	KASSERT(mutex_owned(vp->v_interlock));
 	KASSERT(vrefcnt(vp) != 0);
 
-	active = (vrefcnt(vp) > 1);
 	temp_key_len = vip->vi_key.vk_key_len;
 	/*
 	 * Prevent the vnode from being recycled or brought into use
 	 * while we clean it out.
 	 */
 	VSTATE_CHANGE(vp, VS_BLOCKED, VS_RECLAIMING);
+
+	/*
+	 * Send NOTE_REVOKE now, before we call VOP_RECLAIM(),
+	 * because VOP_RECLAIM() could cause vp->v_klist to
+	 * become invalid.  Don't check for interest in NOTE_REVOKE
+	 * here; it's always posted because it sets EV_EOF.
+	 *
+	 * Once it's been posted, reset vp->v_klist to point to
+	 * our own local storage, in case we were sharing with
+	 * someone else.
+	 */
+	KNOTE(&vp->v_klist->vk_klist, NOTE_REVOKE);
+	vp->v_klist = &vip->vi_klist;
 	mutex_exit(vp->v_interlock);
 
 	rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
@@ -1772,8 +1927,6 @@ vcache_reclaim(vnode_t *vp)
 
 	/*
 	 * Clean out any cached data associated with the vnode.
-	 * If purging an active vnode, it must be closed and
-	 * deactivated before being reclaimed.
 	 */
 	error = vinvalbuf(vp, V_SAVE, NOCRED, l, 0, 0);
 	if (error != 0) {
@@ -1783,7 +1936,7 @@ vcache_reclaim(vnode_t *vp)
 	}
 	KASSERTMSG((error == 0), "vinvalbuf failed: %d", error);
 	KASSERT((vp->v_iflag & VI_ONWORKLST) == 0);
-	if (active && (vp->v_type == VBLK || vp->v_type == VCHR)) {
+	if (vp->v_type == VBLK || vp->v_type == VCHR) {
 		 spec_node_revoke(vp);
 	}
 
@@ -1794,8 +1947,7 @@ vcache_reclaim(vnode_t *vp)
 	 * would no longer function.
 	 */
 	VOP_INACTIVE(vp, &recycle);
-	KASSERT((vp->v_vflag & VV_LOCKSWORK) == 0 ||
-	    VOP_ISLOCKED(vp) == LK_EXCLUSIVE);
+	KASSERT(VOP_ISLOCKED(vp) == LK_EXCLUSIVE);
 	if (VOP_RECLAIM(vp)) {
 		vnpanic(vp, "%s: cannot reclaim", __func__);
 	}
@@ -1823,10 +1975,8 @@ vcache_reclaim(vnode_t *vp)
 	/* Done with purge, notify sleepers of the grim news. */
 	mutex_enter(vp->v_interlock);
 	vp->v_op = dead_vnodeop_p;
-	vp->v_vflag |= VV_LOCKSWORK;
 	VSTATE_CHANGE(vp, VS_RECLAIMING, VS_RECLAIMED);
 	vp->v_tag = VT_NON;
-	KNOTE(&vp->v_klist, NOTE_REVOKE);
 	mutex_exit(vp->v_interlock);
 
 	/*
@@ -1861,7 +2011,8 @@ vcache_make_anon(vnode_t *vp)
 	bool recycle;
 
 	KASSERT(vp->v_type == VBLK || vp->v_type == VCHR);
-	KASSERT(vp->v_mount == dead_rootmount || fstrans_is_owner(vp->v_mount));
+	KASSERT(vp->v_mount == dead_rootmount ||
+	    fstrans_is_owner(vp->v_mount));
 	VSTATE_ASSERT_UNLOCKED(vp, VS_ACTIVE);
 
 	/* Remove from vnode cache. */
@@ -1885,8 +2036,7 @@ vcache_make_anon(vnode_t *vp)
 		vnpanic(vp, "%s: cannot lock", __func__);
 	}
 	VOP_INACTIVE(vp, &recycle);
-	KASSERT((vp->v_vflag & VV_LOCKSWORK) == 0 ||
-	    VOP_ISLOCKED(vp) == LK_EXCLUSIVE);
+	KASSERT(VOP_ISLOCKED(vp) == LK_EXCLUSIVE);
 	if (VOP_RECLAIM(vp)) {
 		vnpanic(vp, "%s: cannot reclaim", __func__);
 	}
@@ -1898,7 +2048,6 @@ vcache_make_anon(vnode_t *vp)
 	mutex_enter(vp->v_interlock);
 	vp->v_op = spec_vnodeop_p;
 	vp->v_vflag |= VV_MPSAFE;
-	vp->v_vflag &= ~VV_LOCKSWORK;
 	mutex_exit(vp->v_interlock);
 
 	/*
@@ -1952,9 +2101,9 @@ vdead_check(struct vnode *vp, int flags)
 
 	if (VSTATE_GET(vp) == VS_RECLAIMING) {
 		KASSERT(ISSET(flags, VDEAD_NOWAIT));
-		return EBUSY;
+		return SET_ERROR(EBUSY);
 	} else if (VSTATE_GET(vp) == VS_RECLAIMED) {
-		return ENOENT;
+		return SET_ERROR(ENOENT);
 	}
 
 	return 0;
@@ -1963,20 +2112,15 @@ vdead_check(struct vnode *vp, int flags)
 int
 vfs_drainvnodes(void)
 {
-	int i, gen;
 
 	mutex_enter(&vdrain_lock);
-	for (i = 0; i < 2; i++) {
-		gen = vdrain_gen;
-		while (gen == vdrain_gen) {
-			cv_broadcast(&vdrain_cv);
-			cv_wait(&vdrain_gen_cv, &vdrain_lock);
-		}
-	}
-	mutex_exit(&vdrain_lock);
 
-	if (numvnodes >= desiredvnodes)
-		return EBUSY;
+	if (!vdrain_one(desiredvnodes)) {
+		mutex_exit(&vdrain_lock);
+		return SET_ERROR(EBUSY);
+	}
+
+	mutex_exit(&vdrain_lock);
 
 	if (vcache_hashsize != desiredvnodes)
 		vcache_reinit();
@@ -2006,4 +2150,29 @@ vshareilock(vnode_t *tvp, vnode_t *fvp)
 	mutex_obj_hold(fvp->v_interlock);
 	tvp->v_interlock = fvp->v_interlock;
 	mutex_obj_free(oldlock);
+}
+
+void
+vshareklist(vnode_t *tvp, vnode_t *fvp)
+{
+	/*
+	 * If two vnodes share klist state, they must also share
+	 * an interlock.
+	 */
+	KASSERT(tvp->v_interlock == fvp->v_interlock);
+
+	/*
+	 * We make the following assumptions:
+	 *
+	 * ==> Some other synchronization is happening outside of
+	 *     our view to make this safe.
+	 *
+	 * ==> That the "to" vnode will have the necessary references
+	 *     on the "from" vnode so that the storage for the klist
+	 *     won't be yanked out from beneath us (the vnode_impl).
+	 *
+	 * ==> If "from" is also sharing, we then assume that "from"
+	 *     has the necessary references, and so on.
+	 */
+	tvp->v_klist = fvp->v_klist;
 }

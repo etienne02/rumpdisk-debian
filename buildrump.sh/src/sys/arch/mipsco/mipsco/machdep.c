@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.80 2016/12/22 14:47:58 cherry Exp $	*/
+/*	$NetBSD: machdep.c,v 1.82 2024/03/05 14:15:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.80 2016/12/22 14:47:58 cherry Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.82 2024/03/05 14:15:33 thorpej Exp $");
 
 /* from: Utah Hdr: machdep.c 1.63 91/04/24 */
 
@@ -197,7 +197,7 @@ mach_init(int argc, char *argv[], char *envp[], u_int bim, char *bip)
 #if NKSYMS || defined(DDB) || defined(LKM)
 	bi_syms = lookup_bootinfo(BTINFO_SYMTAB);
 
-	/* Load sysmbol table if present */
+	/* Load symbol table if present */
 	if (bi_syms != NULL) {
 		ssym = (void *)bi_syms->ssym;
 		esym = (void *)bi_syms->esym;
@@ -376,12 +376,6 @@ cpu_reboot(volatile int howto, char *bootstr)
 		 */
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */

@@ -1,4 +1,4 @@
-/*	$NetBSD: aic7xxx.c,v 1.143 2021/07/24 21:31:37 andvar Exp $	*/
+/*	$NetBSD: aic7xxx.c,v 1.148 2024/02/02 22:39:10 andvar Exp $	*/
 
 /*
  * Core routines and tables shareable across OS platforms.
@@ -39,7 +39,7 @@
  * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGES.
  *
- * $Id: aic7xxx.c,v 1.143 2021/07/24 21:31:37 andvar Exp $
+ * $Id: aic7xxx.c,v 1.148 2024/02/02 22:39:10 andvar Exp $
  *
  * //depot/aic7xxx/aic7xxx/aic7xxx.c#112 $
  *
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aic7xxx.c,v 1.143 2021/07/24 21:31:37 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aic7xxx.c,v 1.148 2024/02/02 22:39:10 andvar Exp $");
 
 #include <dev/ic/aic7xxx_osm.h>
 #include <dev/ic/aic7xxx_inline.h>
@@ -88,7 +88,7 @@ struct ahc_hard_error_entry {
 
 static struct ahc_hard_error_entry ahc_hard_errors[] = {
 	{ ILLHADDR,	"Illegal Host Access" },
-	{ ILLSADDR,	"Illegal Sequencer Address referrenced" },
+	{ ILLSADDR,	"Illegal Sequencer Address referenced" },
 	{ ILLOPCODE,	"Illegal Opcode in sequencer program" },
 	{ SQPARERR,	"Sequencer Parity Error" },
 	{ DPARERR,	"Data-path Parity Error" },
@@ -113,7 +113,7 @@ static struct ahc_phase_table_entry ahc_phase_table[] =
 };
 
 /*
- * In most cases we only wish to itterate over real phases, so
+ * In most cases we only wish to iterate over real phases, so
  * exclude the last element from the count.
  */
 static const u_int num_phases = NUM_ELEMENTS(ahc_phase_table) - 1;
@@ -3556,7 +3556,7 @@ ahc_handle_msg_reject(struct ahc_softc *ahc, struct ahc_devinfo *devinfo)
 }
 
 /*
- * Process an ingnore wide residue message.
+ * Process an ignore wide residue message.
  */
 static void
 ahc_handle_ign_wide_residue(struct ahc_softc *ahc,
@@ -4140,7 +4140,7 @@ ahc_build_free_scb_list(struct ahc_softc *ahc)
 		/*
 		 * Touch all SCB bytes to avoid parity errors
 		 * should one of our debugging routines read
-		 * an otherwise uninitiatlized byte.
+		 * an otherwise uninitialized byte.
 		 */
 		for (j = 0; j < scbsize; j++)
 			ahc_outb(ahc, SCB_BASE+j, 0xFF);
@@ -4244,7 +4244,7 @@ ahc_init_scbdata(struct ahc_softc *ahc)
 	ahc_outb(ahc, NEXT_QUEUED_SCB, ahc->next_queued_scb->hscb->tag);
 
 	/*
-	 * Note that we were successfull
+	 * Note that we were successful
 	 */
 	return (0);
 
@@ -5942,7 +5942,7 @@ ahc_reset_channel(struct ahc_softc *ahc, char channel, int initiate_reset)
 	 *	 we have run out of ATIO resources to drain that
 	 *	 queue, we may not get them all out here.  Further,
 	 *	 the blocked transactions for the reset channel
-	 *	 should just be killed off, irrespecitve of whether
+	 *	 should just be killed off, irrespective of whether
 	 *	 we are blocked on ATIO resources.  Write a routine
 	 *	 to compact the tqinfifo appropriately.
 	 */
@@ -6278,9 +6278,9 @@ ahc_dumpseq(struct ahc_softc* ahc)
 static void __noinline
 ahc_loadseq(struct ahc_softc *ahc)
 {
-	struct	cs cs_table[num_critical_sections];
-	u_int	begin_set[num_critical_sections];
-	u_int	end_set[num_critical_sections];
+	struct	cs cs_table[NUM_CRITICAL_SECTIONS];
+	u_int	begin_set[NUM_CRITICAL_SECTIONS];
+	u_int	end_set[NUM_CRITICAL_SECTIONS];
 	const struct	patch *cur_patch;
 	u_int	cs_count;
 	u_int	cur_cs;
@@ -6332,7 +6332,7 @@ ahc_loadseq(struct ahc_softc *ahc)
 		 * Move through the CS table until we find a CS
 		 * that might apply to this instruction.
 		 */
-		for (; cur_cs < num_critical_sections; cur_cs++) {
+		for (; cur_cs < NUM_CRITICAL_SECTIONS; cur_cs++) {
 			if (critical_sections[cur_cs].end <= i) {
 				if (begin_set[cs_count] == TRUE
 				 && end_set[cs_count] == FALSE) {

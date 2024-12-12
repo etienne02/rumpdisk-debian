@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_171.c,v 1.6 2021/03/23 18:40:50 rillig Exp $	*/
+/*	$NetBSD: msg_171.c,v 1.9 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_171.c"
 
 // Test for message: cannot assign to '%s' from '%s' [171]
+
+/* lint1-extra-flags: -X 351 */
 
 struct s {
 	int member;
@@ -11,11 +13,15 @@ struct s {
 void
 example(int i, void *vp, struct s *s)
 {
-	i = *s;			/* expect: 171 */
-	*s = i;			/* expect: 171 */
+	/* expect+1: error: cannot assign to 'int' from 'struct s' [171] */
+	i = *s;
+	/* expect+1: error: cannot assign to 'struct s' from 'int' [171] */
+	*s = i;
 
-	vp = *s;		/* expect: 171 */
-	*s = vp;		/* expect: 171 */
+	/* expect+1: error: cannot assign to 'pointer to void' from 'struct s' [171] */
+	vp = *s;
+	/* expect+1: error: cannot assign to 'struct s' from 'pointer to void' [171] */
+	*s = vp;
 }
 
 /*
@@ -37,6 +43,27 @@ pointer_to_compound_literal(void)
 		int y;
 	};
 	struct point *p = &(struct point){
-	    12, 5,
+		12, 5,
+	};
+
+	/*
+	 * A sizeof expression is another way to create nested
+	 * initializations.
+	 */
+	struct point p2 = {
+		(int)sizeof(struct point){
+			(int)sizeof(struct point){
+				(int)sizeof(struct point){
+					(int)sizeof(struct point){
+						0,
+						0,
+					},
+					0,
+				},
+				0,
+			},
+			0,
+		},
+		0,
 	};
 }

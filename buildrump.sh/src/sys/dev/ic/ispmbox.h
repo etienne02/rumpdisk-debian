@@ -1,4 +1,4 @@
-/* $NetBSD: ispmbox.h,v 1.56 2013/09/14 12:43:08 martin Exp $ */
+/* $NetBSD: ispmbox.h,v 1.59 2024/02/02 22:26:58 andvar Exp $ */
 /*
  * Copyright (C) 1997, 1998, 1999 National Aeronautics & Space Administration
  * All rights reserved.
@@ -29,7 +29,7 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 /*
- * Mailbox and Queue Entry Definitions for for Qlogic ISP SCSI adapters.
+ * Mailbox and Queue Entry Definitions for Qlogic ISP SCSI adapters.
  */
 #ifndef	_ISPMBOX_H
 #define	_ISPMBOX_H
@@ -1400,7 +1400,7 @@ typedef struct {
 #define	PLOGX_FLG_IMPLICIT_LOGO_ALL	0x20	/* if with LOGO */
 #define	PLOGX_FLG_EXPLICIT_LOGO		0x40	/* if with LOGO */
 #define	PLOGX_FLG_COMMON_FEATURES	0x80	/* if with PLOGI */
-#define	PLOGX_FLG_FREE_NPHDL		0x80	/* if with with LOGO */
+#define	PLOGX_FLG_FREE_NPHDL		0x80	/* if with LOGO */
 
 #define	PLOGX_FLG_CLASS2		0x100	/* if with PLOGI */
 #define	PLOGX_FLG_FCP2_OVERRIDE		0x200	/* if with PRLOG, PRLI */
@@ -1928,7 +1928,7 @@ typedef struct {
 
 #define	NAFC_RCOUNT	0x80	/* increment resource count */
 #define NAFC_RST_CLRD	0x20	/* Clear LIP Reset */
-#define	NAFC_TVALID	0x10	/* task mangement response code is valid */
+#define	NAFC_TVALID	0x10	/* task management response code is valid */
 
 /*
  * ISP24XX Notify Acknowledge

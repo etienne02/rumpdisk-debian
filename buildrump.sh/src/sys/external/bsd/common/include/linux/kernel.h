@@ -1,4 +1,4 @@
-/*	$NetBSD: kernel.h,v 1.26 2020/10/19 11:49:56 jmcneill Exp $	*/
+/*	$NetBSD: kernel.h,v 1.46 2022/10/25 23:37:36 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -36,7 +36,6 @@
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/endian.h>
 
 #include <lib/libkern/libkern.h>
 
@@ -44,6 +43,7 @@
 #include <asm/div64.h>
 
 #include <linux/bitops.h>
+#include <linux/compiler.h>
 #include <linux/log2.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
@@ -52,30 +52,27 @@
 #define U32_MAX UINT32_MAX
 #define U64_MAX UINT64_MAX
 
+#define	S16_MAX	INT16_MAX
+#define	S16_MIN	INT16_MIN
+#define	S32_MAX	INT32_MAX
+#define	S32_MIN	INT32_MIN
+#define	S64_MAX	INT64_MAX
+#define	S64_MIN	INT64_MIN
+
 #define	oops_in_progress	(panicstr != NULL)
 
-#if BYTE_ORDER == BIG_ENDIAN
-#define	__BIG_ENDIAN		_BIG_ENDIAN
-#else
-#define	__LITTLE_ENDIAN		_LITTLE_ENDIAN
-#endif
-
-#define	IS_ENABLED(option)	(option)
 #define	IS_BUILTIN(option)	(1) /* Probably... */
+#define	IS_ENABLED(option)	(option)
+#define	IS_REACHABLE(option)	(option)
 
-#define	__printf	__printflike
-#define	__user
-#if __GNUC_PREREQ__(4,0)	/* not sure when but this will work */
-#define	__must_check	__attribute__((warn_unused_result))
-#else
-#define	__must_check	/* nothing */
-#endif
-#define	__always_unused	__unused
-#define	noinline	__noinline
+#define	might_sleep	ASSERT_SLEEPABLE
+#define	might_sleep_if(C) do						      \
+{									      \
+	if (C)								      \
+		might_sleep();						      \
+} while (0)
 
-#define	barrier()	__insn_barrier()
-#define	likely(X)	__predict_true(X)
-#define	unlikely(X)	__predict_false(X)
+#define	DEFINE_STATIC_KEY_FALSE(N)	bool N __unused = false
 
 /*
  * XXX Linux kludge to work around GCC uninitialized variable warning.
@@ -83,15 +80,18 @@
  */
 #define	uninitialized_var(x)	x = 0
 
+#define	typecheck(T, X)	({(1 + 0*sizeof((T *)0 - &(X)));})
+
 /* XXX These will multiply evaluate their arguments.  */
 #define	min(X, Y)	MIN(X, Y)
 #define	max(X, Y)	MAX(X, Y)
 
-#define	max_t(T, X, Y)	MAX(X, Y)
-#define	min_t(T, X, Y)	MIN(X, Y)
+#define	max_t(T, X, Y)	MAX((T)(X), (T)(Y))
+#define	min_t(T, X, Y)	MIN((T)(X), (T)(Y))
 
 #define	clamp_t(T, X, MIN, MAX)	min_t(T, max_t(T, X, MIN), MAX)
 #define	clamp(X, MN, MX)	MIN(MAX(X, MN), MX)
+#define	clamp_val(X, MIN, MAX)	clamp_t(typeof(X), X, MIN, MAX)
 
 #define	min3(X, Y, Z)	MIN(X, MIN(Y, Z))
 #define	max3(X, Y, Z)	MAX(X, MAX(Y, Z))
@@ -111,6 +111,8 @@
 #define	DIV_ROUND_UP(X, N)	(((X) + (N) - 1) / (N))
 #define	DIV_ROUND_UP_ULL(X, N)	DIV_ROUND_UP((unsigned long long)(X), (N))
 
+#define	DIV_ROUND_DOWN_ULL(X,N)	((unsigned long long)(X) / (N))
+
 /*
  * Rounding to powers of two -- carefully avoiding multiple evaluation
  * of arguments and pitfalls with C integer arithmetic rules.
@@ -119,6 +121,8 @@
 #define	round_down(X, N)	((X) & ~(uintmax_t)((N) - 1))
 
 #define	IS_ALIGNED(X, N)	(((X) & ((N) - 1)) == 0)
+
+#define	ALIGN_DOWN(X, N)	round_down(X, N)
 
 /*
  * These select 32-bit halves of what may be 32- or 64-bit quantities,
@@ -130,6 +134,8 @@
 #define	lower_32_bits(X)	((uint32_t) ((X) & 0xffffffffUL))
 
 #define	ARRAY_SIZE(ARRAY)	__arraycount(ARRAY)
+
+#define	__is_constexpr(x)	__builtin_constant_p(x)
 
 #define	swap(X, Y)	do						\
 {									\
@@ -143,12 +149,6 @@
 		(void)memcpy(&(Y), __swap_tmp, sizeof(X));		\
 	}								\
 } while (0)
-
-#define	ACCESS_ONCE(X) ({						      \
-	typeof(X) __access_once_tmp = (X);				      \
-	__insn_barrier();						      \
-	__access_once_tmp;						      \
-})
 
 static __inline int64_t
 abs64(int64_t x)
@@ -250,6 +250,38 @@ kasprintf(gfp_t gfp, const char *fmt, ...)
 	va_end(va);
 
 	return str;
+}
+
+static inline void __user *
+u64_to_user_ptr(uint64_t addr)
+{
+
+	return (void __user *)(uintptr_t)addr;
+}
+
+#define	TAINT_MACHINE_CHECK	0
+#define	TAINT_WARN		1
+
+#define	LOCKDEP_STILL_OK	0
+
+static inline void
+add_taint(unsigned taint, int lockdep)
+{
+}
+
+#define	DFEINE_STATIC_KEY_FALSE(FLAG)					      \
+	bool FLAG = false
+
+static inline bool
+static_branch_likely(const bool *flagp)
+{
+	return __predict_true(*flagp);
+}
+
+static inline int
+sscanf(const char *fmt, ...)
+{
+	return 0;		/* XXX */
 }
 
 #endif  /* _LINUX_KERNEL_H_ */

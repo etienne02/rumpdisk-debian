@@ -1,4 +1,4 @@
-/*	$NetBSD: crypto.c,v 1.116 2021/08/14 20:43:05 andvar Exp $ */
+/*	$NetBSD: crypto.c,v 1.131 2022/06/26 22:52:30 riastradh Exp $ */
 /*	$FreeBSD: src/sys/opencrypto/crypto.c,v 1.4.2.5 2003/02/26 00:14:05 sam Exp $	*/
 /*	$OpenBSD: crypto.c,v 1.41 2002/07/17 23:52:38 art Exp $	*/
 
@@ -53,7 +53,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: crypto.c,v 1.116 2021/08/14 20:43:05 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: crypto.c,v 1.131 2022/06/26 22:52:30 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/reboot.h>
@@ -800,6 +800,16 @@ crypto_newsession(u_int64_t *sid, struct cryptoini *cri, int hard)
 	struct cryptocap *cap;
 	int err = EINVAL;
 
+	/*
+	 * On failure, leave *sid initialized to a sentinel value that
+	 * crypto_freesession will ignore.  This is the same as what
+	 * you get from zero-initialized memory -- some callers (I'm
+	 * looking at you, netipsec!) have paths that lead from
+	 * zero-initialized memory into crypto_freesession without any
+	 * crypto_newsession.
+	 */
+	*sid = 0;
+
 	mutex_enter(&crypto_drv_mtx);
 
 	cap = crypto_select_driver_lock(cri, hard);
@@ -807,6 +817,7 @@ crypto_newsession(u_int64_t *sid, struct cryptoini *cri, int hard)
 		u_int32_t hid, lid;
 
 		hid = cap - crypto_drivers;
+		KASSERT(hid < 0xffffff);
 		/*
 		 * Can't do everything in one session.
 		 *
@@ -820,10 +831,11 @@ crypto_newsession(u_int64_t *sid, struct cryptoini *cri, int hard)
 		err = cap->cc_newsession(cap->cc_arg, &lid, cri);
 		crypto_driver_lock(cap);
 		if (err == 0) {
-			(*sid) = hid;
+			(*sid) = hid + 1;
 			(*sid) <<= 32;
 			(*sid) |= (lid & 0xffffffff);
-			(cap->cc_sessions)++;
+			KASSERT(*sid != 0);
+			cap->cc_sessions++;
 		} else {
 			DPRINTF("crypto_drivers[%d].cc_newsession() failed. error=%d\n",
 			    hid, err);
@@ -840,25 +852,32 @@ crypto_newsession(u_int64_t *sid, struct cryptoini *cri, int hard)
  * Delete an existing session (or a reserved session on an unregistered
  * driver).
  */
-int
+void
 crypto_freesession(u_int64_t sid)
 {
 	struct cryptocap *cap;
-	int err = 0;
+
+	/*
+	 * crypto_newsession never returns 0 as a sid (by virtue of
+	 * never returning 0 as a hid, which is part of the sid).
+	 * However, some callers assume that freeing zero is safe.
+	 * Previously this relied on all drivers to agree that freeing
+	 * invalid sids is a no-op, but that's a terrible API contract
+	 * that we're getting rid of.
+	 */
+	if (sid == 0)
+		return;
 
 	/* Determine two IDs. */
 	cap = crypto_checkdriver_lock(CRYPTO_SESID2HID(sid));
-	if (cap == NULL)
-		return ENOENT;
+	KASSERTMSG(cap != NULL, "sid=%"PRIx64, sid);
 
-	if (cap->cc_sessions)
-		(cap->cc_sessions)--;
+	KASSERT(cap->cc_sessions > 0);
+	cap->cc_sessions--;
 
 	/* Call the driver cleanup routine, if available. */
 	if (cap->cc_freesession)
-		err = cap->cc_freesession(cap->cc_arg, sid);
-	else
-		err = 0;
+		cap->cc_freesession(cap->cc_arg, sid);
 
 	/*
 	 * If this was the last session of a driver marked as invalid,
@@ -868,7 +887,6 @@ crypto_freesession(u_int64_t sid)
 		crypto_driver_clear(cap);
 
 	crypto_driver_unlock(cap);
-	return err;
 }
 
 static bool
@@ -1084,7 +1102,7 @@ int
 crypto_register(u_int32_t driverid, int alg, u_int16_t maxoplen,
     u_int32_t flags,
     int (*newses)(void *, u_int32_t*, struct cryptoini*),
-    int (*freeses)(void *, u_int64_t),
+    void (*freeses)(void *, u_int64_t),
     int (*process)(void *, struct cryptop *, int),
     void *arg)
 {
@@ -1255,7 +1273,7 @@ crypto_unblock(u_int32_t driverid, int what)
  * Dispatch a crypto request to a driver or queue
  * it, to be processed by the kernel thread.
  */
-int
+void
 crypto_dispatch(struct cryptop *crp)
 {
 	int result, s;
@@ -1264,6 +1282,10 @@ crypto_dispatch(struct cryptop *crp)
 	struct crypto_crp_q *crp_q;
 
 	KASSERT(crp != NULL);
+	KASSERT(crp->crp_callback != NULL);
+	KASSERT(crp->crp_desc != NULL);
+	KASSERT(crp->crp_buf != NULL);
+	KASSERT(!cpu_intr_p());
 
 	DPRINTF("crp %p, alg %d\n", crp, crp->crp_desc->crd_alg);
 
@@ -1295,8 +1317,7 @@ crypto_dispatch(struct cryptop *crp)
 			softint_schedule(crypto_q_si);
 			kpreempt_enable();
 		}
-
-		return 0;
+		return;
 	}
 
 	crp_qs = crypto_get_crp_qs(&s);
@@ -1313,7 +1334,6 @@ crypto_dispatch(struct cryptop *crp)
 		 * to other drivers in cryptointr() later.
 		 */
 		TAILQ_INSERT_TAIL(crp_q, crp, crp_next);
-		result = 0;
 		goto out;
 	}
 
@@ -1324,7 +1344,6 @@ crypto_dispatch(struct cryptop *crp)
 		 * it unblocks and the swi thread gets kicked.
 		 */
 		TAILQ_INSERT_TAIL(crp_q, crp, crp_next);
-		result = 0;
 		goto out;
 	}
 
@@ -1335,6 +1354,7 @@ crypto_dispatch(struct cryptop *crp)
 	 */
 	crypto_driver_unlock(cap);
 	result = crypto_invoke(crp, 0);
+	KASSERTMSG(result == 0 || result == ERESTART, "result=%d", result);
 	if (result == ERESTART) {
 		/*
 		 * The driver ran out of resources, mark the
@@ -1346,25 +1366,17 @@ crypto_dispatch(struct cryptop *crp)
 		crypto_driver_unlock(cap);
 		TAILQ_INSERT_HEAD(crp_q, crp, crp_next);
 		cryptostats.cs_blocks++;
-
-		/*
-		 * The crp is enqueued to crp_q, that is,
-		 * no error occurs. So, this function should
-		 * not return error.
-		 */
-		result = 0;
 	}
 
 out:
 	crypto_put_crp_qs(&s);
-	return result;
 }
 
 /*
  * Add an asymmetric crypto request to a queue,
  * to be processed by the kernel thread.
  */
-int
+void
 crypto_kdispatch(struct cryptkop *krp)
 {
 	int result, s;
@@ -1373,6 +1385,8 @@ crypto_kdispatch(struct cryptkop *krp)
 	struct crypto_crp_kq *crp_kq;
 
 	KASSERT(krp != NULL);
+	KASSERT(krp->krp_callback != NULL);
+	KASSERT(!cpu_intr_p());
 
 	cryptostats.cs_kops++;
 
@@ -1386,7 +1400,6 @@ crypto_kdispatch(struct cryptkop *krp)
 	 */
 	if (cap == NULL) {
 		TAILQ_INSERT_TAIL(crp_kq, krp, krp_next);
-		result = 0;
 		goto out;
 	}
 
@@ -1397,12 +1410,12 @@ crypto_kdispatch(struct cryptkop *krp)
 		 * it unblocks and the swi thread gets kicked.
 		 */
 		TAILQ_INSERT_TAIL(crp_kq, krp, krp_next);
-		result = 0;
 		goto out;
 	}
 
 	crypto_driver_unlock(cap);
 	result = crypto_kinvoke(krp, 0);
+	KASSERTMSG(result == 0 || result == ERESTART, "result=%d", result);
 	if (result == ERESTART) {
 		/*
 		 * The driver ran out of resources, mark the
@@ -1414,18 +1427,10 @@ crypto_kdispatch(struct cryptkop *krp)
 		crypto_driver_unlock(cap);
 		TAILQ_INSERT_HEAD(crp_kq, krp, krp_next);
 		cryptostats.cs_kblocks++;
-
-		/*
-		 * The krp is enqueued to crp_kq, that is,
-		 * no error occurs. So, this function should
-		 * not return error.
-		 */
-		result = 0;
 	}
 
 out:
 	crypto_put_crp_qs(&s);
-	return result;
 }
 
 /*
@@ -1439,13 +1444,8 @@ crypto_kinvoke(struct cryptkop *krp, int hint)
 	int error;
 
 	KASSERT(krp != NULL);
-
-	/* Sanity checks. */
-	if (krp->krp_callback == NULL) {
-		cv_destroy(&krp->krp_cv);
-		crypto_kfreereq(krp);
-		return EINVAL;
-	}
+	KASSERT(krp->krp_callback != NULL);
+	KASSERT(!cpu_intr_p());
 
 	mutex_enter(&crypto_drv_mtx);
 	for (hid = 0; hid < crypto_drivers_num; hid++) {
@@ -1480,15 +1480,15 @@ crypto_kinvoke(struct cryptkop *krp, int hint)
 		krp->reqcpu = curcpu();
 		crypto_driver_unlock(cap);
 		error = (*process)(arg, krp, hint);
+		KASSERTMSG(error == 0 || error == ERESTART, "error=%d",
+		    error);
+		return error;
 	} else {
-		error = ENODEV;
-	}
-
-	if (error) {
-		krp->krp_status = error;
+		krp->krp_status = ENODEV;
+		krp->reqcpu = curcpu();
 		crypto_kdone(krp);
+		return 0;
 	}
-	return 0;
 }
 
 #ifdef CRYPTO_TIMING
@@ -1522,22 +1522,17 @@ static int
 crypto_invoke(struct cryptop *crp, int hint)
 {
 	struct cryptocap *cap;
+	int error;
 
 	KASSERT(crp != NULL);
+	KASSERT(crp->crp_callback != NULL);
+	KASSERT(crp->crp_desc != NULL);
+	KASSERT(!cpu_intr_p());
 
 #ifdef CRYPTO_TIMING
 	if (crypto_timing)
 		crypto_tstat(&cryptostats.cs_invoke, &crp->crp_tstamp);
 #endif
-	/* Sanity checks. */
-	if (crp->crp_callback == NULL) {
-		return EINVAL;
-	}
-	if (crp->crp_desc == NULL) {
-		crp->crp_etype = EINVAL;
-		crypto_done(crp);
-		return 0;
-	}
 
 	cap = crypto_checkdriver_lock(CRYPTO_SESID2HID(crp->crp_sid));
 	if (cap != NULL && (cap->cc_flags & CRYPTOCAP_F_CLEANUP) == 0) {
@@ -1553,28 +1548,16 @@ crypto_invoke(struct cryptop *crp, int hint)
 		 */
 		DPRINTF("calling process for %p\n", crp);
 		crypto_driver_unlock(cap);
-		return (*process)(arg, crp, hint);
+		error = (*process)(arg, crp, hint);
+		KASSERTMSG(error == 0 || error == ERESTART, "error=%d",
+		    error);
+		return error;
 	} else {
-		struct cryptodesc *crd;
-		u_int64_t nid = 0;
-
-		if (cap != NULL)
+		if (cap != NULL) {
 			crypto_driver_unlock(cap);
-
-		/*
-		 * Driver has unregistered; migrate the session and return
-		 * an error to the caller so they'll resubmit the op.
-		 */
-		crypto_freesession(crp->crp_sid);
-
-		for (crd = crp->crp_desc; crd->crd_next; crd = crd->crd_next)
-			crd->CRD_INI.cri_next = &(crd->crd_next->CRD_INI);
-
-		if (crypto_newsession(&nid, &(crp->crp_desc->CRD_INI), 0) == 0)
-			crp->crp_sid = nid;
-
-		crp->crp_etype = EAGAIN;
-
+			crypto_freesession(crp->crp_sid);
+		}
+		crp->crp_etype = ENODEV;
 		crypto_done(crp);
 		return 0;
 	}
@@ -1613,6 +1596,8 @@ crypto_getreq(int num)
 	struct cryptodesc *crd;
 	struct cryptop *crp;
 	struct crypto_crp_ret_qs *qs;
+
+	KASSERT(num > 0);
 
 	/*
 	 * When crp_ret_q is full, we restrict here to avoid crp_ret_q overflow
@@ -1674,10 +1659,12 @@ crypto_kfreereq(struct cryptkop *krp)
  * Currently, support one descriptor only.
  */
 struct cryptkop *
-crypto_kgetreq(int num __unused, int prflags)
+crypto_kgetreq(int num __diagused, int prflags)
 {
 	struct cryptkop *krp;
 	struct crypto_crp_ret_qs *qs;
+
+	KASSERTMSG(num == 1, "num=%d not supported", num);
 
 	/*
 	 * When crp_ret_kq is full, we restrict here to avoid crp_ret_kq
@@ -1707,6 +1694,9 @@ crypto_kgetreq(int num __unused, int prflags)
 void
 crypto_done(struct cryptop *crp)
 {
+	int wasempty;
+	struct crypto_crp_ret_qs *qs;
+	struct crypto_crp_ret_q *crp_ret_q;
 
 	KASSERT(crp != NULL);
 
@@ -1718,73 +1708,19 @@ crypto_done(struct cryptop *crp)
 #endif
 	DPRINTF("lid[%u]: crp %p\n", CRYPTO_SESID2LID(crp->crp_sid), crp);
 
-	/*
-	 * Normal case; queue the callback for the thread.
-	 *
-	 * The return queue is manipulated by the swi thread
-	 * and, potentially, by crypto device drivers calling
-	 * back to mark operations completed.  Thus we need
-	 * to mask both while manipulating the return queue.
-	 */
-  	if (crp->crp_flags & CRYPTO_F_CBIMM) {
-		/*
-	 	* Do the callback directly.  This is ok when the
-  	 	* callback routine does very little (e.g. the
-	 	* /dev/crypto callback method just does a wakeup).
-	 	*/
-		crp->crp_flags |= CRYPTO_F_DONE;
-
-#ifdef CRYPTO_TIMING
-		if (crypto_timing) {
-			/*
-		 	* NB: We must copy the timestamp before
-		 	* doing the callback as the cryptop is
-		 	* likely to be reclaimed.
-		 	*/
-			struct timespec t = crp->crp_tstamp;
-			crypto_tstat(&cryptostats.cs_cb, &t);
-			crp->crp_callback(crp);
-			crypto_tstat(&cryptostats.cs_finis, &t);
-		} else
-#endif
-		crp->crp_callback(crp);
-	} else {
-		crp->crp_flags |= CRYPTO_F_DONE;
-#if 0
-		if (crp->crp_flags & CRYPTO_F_USER) {
-			/*
-			 * TODO:
-			 * If crp->crp_flags & CRYPTO_F_USER and the used
-			 * encryption driver does all the processing in
-			 * the same context, we can skip enqueueing crp_ret_q
-			 * and softint_schedule(crypto_ret_si).
-			 */
-			DPRINTF("lid[%u]: crp %p CRYPTO_F_USER\n",
-				CRYPTO_SESID2LID(crp->crp_sid), crp);
-		} else
-#endif
-		{
-			int wasempty;
-			struct crypto_crp_ret_qs *qs;
-			struct crypto_crp_ret_q *crp_ret_q;
-
-			qs = crypto_get_crp_ret_qs(crp->reqcpu);
-			crp_ret_q = &qs->crp_ret_q;
-			wasempty = TAILQ_EMPTY(crp_ret_q);
-			DPRINTF("lid[%u]: queueing %p\n",
-				CRYPTO_SESID2LID(crp->crp_sid), crp);
-			crp->crp_flags |= CRYPTO_F_ONRETQ;
-			TAILQ_INSERT_TAIL(crp_ret_q, crp, crp_next);
-			qs->crp_ret_q_len++;
-			if (wasempty && !qs->crp_ret_q_exit_flag) {
-				DPRINTF("lid[%u]: waking cryptoret,"
-					"crp %p hit empty queue\n.",
-					CRYPTO_SESID2LID(crp->crp_sid), crp);
-				softint_schedule_cpu(crypto_ret_si, crp->reqcpu);
-			}
-			crypto_put_crp_ret_qs(crp->reqcpu);
-		}
+	qs = crypto_get_crp_ret_qs(crp->reqcpu);
+	crp_ret_q = &qs->crp_ret_q;
+	wasempty = TAILQ_EMPTY(crp_ret_q);
+	DPRINTF("lid[%u]: queueing %p\n", CRYPTO_SESID2LID(crp->crp_sid), crp);
+	crp->crp_flags |= CRYPTO_F_ONRETQ;
+	TAILQ_INSERT_TAIL(crp_ret_q, crp, crp_next);
+	qs->crp_ret_q_len++;
+	if (wasempty && !qs->crp_ret_q_exit_flag) {
+		DPRINTF("lid[%u]: waking cryptoret, crp %p hit empty queue\n.",
+		    CRYPTO_SESID2LID(crp->crp_sid), crp);
+		softint_schedule_cpu(crypto_ret_si, crp->reqcpu);
 	}
+	crypto_put_crp_ret_qs(crp->reqcpu);
 }
 
 /*
@@ -1793,38 +1729,25 @@ crypto_done(struct cryptop *crp)
 void
 crypto_kdone(struct cryptkop *krp)
 {
+	int wasempty;
+	struct crypto_crp_ret_qs *qs;
+	struct crypto_crp_ret_kq *crp_ret_kq;
 
 	KASSERT(krp != NULL);
 
 	if (krp->krp_status != 0)
 		cryptostats.cs_kerrs++;
-		
-	krp->krp_flags |= CRYPTO_F_DONE;
 
-	/*
-	 * The return queue is manipulated by the swi thread
-	 * and, potentially, by crypto device drivers calling
-	 * back to mark operations completed.  Thus we need
-	 * to mask both while manipulating the return queue.
-	 */
-	if (krp->krp_flags & CRYPTO_F_CBIMM) {
-		krp->krp_callback(krp);
-	} else {
-		int wasempty;
-		struct crypto_crp_ret_qs *qs;
-		struct crypto_crp_ret_kq *crp_ret_kq;
+	qs = crypto_get_crp_ret_qs(krp->reqcpu);
+	crp_ret_kq = &qs->crp_ret_kq;
 
-		qs = crypto_get_crp_ret_qs(krp->reqcpu);
-		crp_ret_kq = &qs->crp_ret_kq;
-
-		wasempty = TAILQ_EMPTY(crp_ret_kq);
-		krp->krp_flags |= CRYPTO_F_ONRETQ;
-		TAILQ_INSERT_TAIL(crp_ret_kq, krp, krp_next);
-		qs->crp_ret_kq_len++;
-		if (wasempty && !qs->crp_ret_q_exit_flag)
-			softint_schedule_cpu(crypto_ret_si, krp->reqcpu);
-		crypto_put_crp_ret_qs(krp->reqcpu);
-	}
+	wasempty = TAILQ_EMPTY(crp_ret_kq);
+	krp->krp_flags |= CRYPTO_F_ONRETQ;
+	TAILQ_INSERT_TAIL(crp_ret_kq, krp, krp_next);
+	qs->crp_ret_kq_len++;
+	if (wasempty && !qs->crp_ret_q_exit_flag)
+		softint_schedule_cpu(crypto_ret_si, krp->reqcpu);
+	crypto_put_crp_ret_qs(krp->reqcpu);
 }
 
 int
@@ -1941,6 +1864,8 @@ cryptointr(void *arg __unused)
 		if (submit != NULL) {
 			TAILQ_REMOVE(crp_q, submit, crp_next);
 			result = crypto_invoke(submit, hint);
+			KASSERTMSG(result == 0 || result == ERESTART,
+			    "result=%d", result);
 			/* we must take here as the TAILQ op or kinvoke
 			   may need this mutex below.  sigh. */
 			if (result == ERESTART) {
@@ -1985,6 +1910,8 @@ cryptointr(void *arg __unused)
 		if (krp != NULL) {
 			TAILQ_REMOVE(crp_kq, krp, krp_next);
 			result = crypto_kinvoke(krp, 0);
+			KASSERTMSG(result == 0 || result == ERESTART,
+			    "result=%d", result);
 			/* the next iteration will want the mutex. :-/ */
 			if (result == ERESTART) {
 				/*

@@ -1,4 +1,4 @@
-/* $NetBSD: sunxi_emac.c,v 1.33 2021/01/27 03:10:20 thorpej Exp $ */
+/* $NetBSD: sunxi_emac.c,v 1.37 2022/09/18 15:44:29 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2016-2017 Jared McNeill <jmcneill@invisible.ca>
@@ -33,7 +33,7 @@
 #include "opt_net_mpsafe.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunxi_emac.c,v 1.33 2021/01/27 03:10:20 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunxi_emac.c,v 1.37 2022/09/18 15:44:29 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -134,6 +134,7 @@ enum sunxi_emac_type {
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "allwinner,sun8i-a83t-emac",	.value = EMAC_A83T },
 	{ .compat = "allwinner,sun8i-h3-emac",		.value = EMAC_H3 },
+	{ .compat = "allwinner,sun8i-v3s-emac",		.value = EMAC_H3 },
 	{ .compat = "allwinner,sun50i-a64-emac",	.value = EMAC_A64 },
 	{ .compat = "allwinner,sun50i-h6-emac",		.value = EMAC_H6 },
 	DEVICE_COMPAT_EOL
@@ -350,8 +351,8 @@ sunxi_emac_setup_txbuf(struct sunxi_emac_softc *sc, int index, struct mbuf *m)
 	if (error == EFBIG) {
 		device_printf(sc->dev,
 		    "TX packet needs too many DMA segments, dropping...\n");
-		m_freem(m);
-		return 0;
+		/* Caller will dequeue and free packet. */
+		return -1;
 	}
 	if (error != 0)
 		return 0;
@@ -446,12 +447,11 @@ sunxi_emac_start_locked(struct sunxi_emac_softc *sc)
 
 	EMAC_ASSERT_LOCKED(sc);
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	for (cnt = 0, start = sc->tx.cur; ; cnt++) {
 		if (sc->tx.queued >= TX_DESC_COUNT - TX_MAX_SEGS) {
-			ifp->if_flags |= IFF_OACTIVE;
 			break;
 		}
 
@@ -460,8 +460,16 @@ sunxi_emac_start_locked(struct sunxi_emac_softc *sc)
 			break;
 
 		nsegs = sunxi_emac_setup_txbuf(sc, sc->tx.cur, m);
-		if (nsegs == 0) {
-			ifp->if_flags |= IFF_OACTIVE;
+		if (__predict_false(nsegs <= 0)) {
+			if (nsegs == -1) {
+				/*
+				 * We're being asked to discard this packet,
+				 * but we can try to continue.
+				 */
+				IFQ_DEQUEUE(&ifp->if_snd, m);
+				m_freem(m);
+				continue;
+			}
 			break;
 		}
 		IFQ_DEQUEUE(&ifp->if_snd, m);
@@ -701,7 +709,6 @@ sunxi_emac_init_locked(struct sunxi_emac_softc *sc)
 	WR4(sc, EMAC_RX_CTL_0, val | RX_EN | CHECK_CRC);
 
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 
 	mii_mediachg(mii);
 	callout_schedule(&sc->stat_ch, hz);
@@ -759,7 +766,7 @@ sunxi_emac_stop_locked(struct sunxi_emac_softc *sc, int disable)
 	val = RD4(sc, EMAC_RX_CTL_1);
 	WR4(sc, EMAC_RX_CTL_1, val & ~RX_DMA_EN);
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 }
 
 static void
@@ -875,7 +882,6 @@ sunxi_emac_txintr(struct sunxi_emac_softc *sc)
 		    i, i + 1, TX_DESC_COUNT,
 		    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-		ifp->if_flags &= ~IFF_OACTIVE;
 		if_statinc(ifp, if_opackets);
 	}
 
@@ -932,7 +938,7 @@ sunxi_emac_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		error = 0;
 
 		if (cmd == SIOCSIFCAP)
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		else if (cmd != SIOCADDMULTI && cmd != SIOCDELMULTI)
 			;
 		else if ((ifp->if_flags & IFF_RUNNING) != 0) {
@@ -987,7 +993,7 @@ sunxi_emac_setup_phy(struct sunxi_emac_softc *sc)
 	reg = syscon_read_4(sc->syscon, EMAC_CLK_REG);
 
 	reg &= ~(EMAC_CLK_PIT | EMAC_CLK_SRC | EMAC_CLK_RMII_EN);
-	if (strcmp(phy_type, "rgmii") == 0)
+	if (strncmp(phy_type, "rgmii", 5) == 0)
 		reg |= EMAC_CLK_PIT_RGMII | EMAC_CLK_SRC_RGMII;
 	else if (strcmp(phy_type, "rmii") == 0)
 		reg |= EMAC_CLK_RMII_EN;

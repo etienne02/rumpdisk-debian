@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_cdevsw.c,v 1.15 2020/12/19 22:09:15 thorpej Exp $	*/
+/*	$NetBSD: drm_cdevsw.c,v 1.31 2024/04/21 03:02:39 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_cdevsw.c,v 1.15 2020/12/19 22:09:15 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_cdevsw.c,v 1.31 2024/04/21 03:02:39 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -57,13 +57,17 @@ __KERNEL_RCSID(0, "$NetBSD: drm_cdevsw.c,v 1.15 2020/12/19 22:09:15 thorpej Exp 
 
 #include <linux/pm.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_internal.h>
+#include <drm/drm_agpsupport.h>
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
+#include <drm/drm_irq.h>
+#include <drm/drm_legacy.h>
+
+#include "../dist/drm/drm_internal.h"
 #include "../dist/drm/drm_legacy.h"
 
 static dev_type_open(drm_open);
-
-static int	drm_firstopen(struct drm_device *);
 
 static int	drm_close(struct file *);
 static int	drm_read(struct file *, off_t *, struct uio *, kauth_cred_t,
@@ -76,6 +80,8 @@ static int	drm_kqfilter(struct file *, struct knote *);
 static int	drm_stat(struct file *, struct stat *);
 static int	drm_fop_mmap(struct file *, off_t *, size_t, int, int *, int *,
 			     struct uvm_object **, int *);
+static void	drm_requeue_event(struct drm_file *, struct drm_pending_event *);
+
 static paddr_t	drm_legacy_mmap(dev_t, off_t, int);
 
 const struct cdevsw drm_cdevsw = {
@@ -95,7 +101,7 @@ const struct cdevsw drm_cdevsw = {
 	.d_flag = D_NEGOFFSAFE,
 };
 
-static const struct fileops drm_fileops = {
+const struct fileops drm_fileops = {
 	.fo_name = "drm",
 	.fo_read = drm_read,
 	.fo_write = fbadop_write,
@@ -114,14 +120,18 @@ drm_open(dev_t d, int flags, int fmt, struct lwp *l)
 {
 	struct drm_minor *dminor;
 	struct drm_device *dev;
-	bool firstopen, lastclose;
+	bool lastclose;
 	int fd;
 	struct file *fp;
+	struct drm_file *priv;
+	int need_setup = 0;
 	int error;
 
 	error = drm_guarantee_initialized();
 	if (error)
 		goto fail0;
+
+	/* Synchronize with drm_file.c, drm_open and drm_open_helper.  */
 
 	if (flags & O_EXCL) {
 		error = EBUSY;
@@ -146,42 +156,59 @@ drm_open(dev_t d, int flags, int fmt, struct lwp *l)
 		error = EBUSY;
 		goto fail1;
 	}
-	firstopen = (dev->open_count == 0);
-	dev->open_count++;
+	if (dev->open_count++ == 0)
+		need_setup = 1;
 	mutex_unlock(&drm_global_mutex);
-
-	if (firstopen) {
-		/* XXX errno Linux->NetBSD */
-		error = -drm_firstopen(dev);
-		if (error)
-			goto fail2;
-	}
 
 	error = fd_allocfile(&fp, &fd);
 	if (error)
 		goto fail2;
 
-	struct drm_file *const file = kmem_zalloc(sizeof(*file), KM_SLEEP);
-	/* XXX errno Linux->NetBSD */
-	error = -drm_open_file(file, fp, dminor);
-	if (error)
+	priv = drm_file_alloc(dminor);
+	if (IS_ERR(priv)) {
+		/* XXX errno Linux->NetBSD */
+		error = -PTR_ERR(priv);
 		goto fail3;
+	}
 
-	error = fd_clone(fp, fd, flags, &drm_fileops, file);
+	if (drm_is_primary_client(priv)) {
+		/* XXX errno Linux->NetBSD */
+		error = -drm_master_open(priv);
+		if (error)
+			goto fail4;
+	}
+	priv->filp = fp;
+
+	mutex_lock(&dev->filelist_mutex);
+	list_add(&priv->lhead, &dev->filelist);
+	mutex_unlock(&dev->filelist_mutex);
+	/* XXX Alpha hose?  */
+
+	if (need_setup) {
+		/* XXX errno Linux->NetBSD */
+		error = -drm_legacy_setup(dev);
+		if (error)
+			goto fail5;
+	}
+
+	error = fd_clone(fp, fd, flags, &drm_fileops, priv);
 	KASSERT(error == EMOVEFD); /* XXX */
 
 	/* Success!  (But error has to be EMOVEFD, not 0.)  */
 	return error;
 
-fail3:	kmem_free(file, sizeof(*file));
-	fd_abort(curproc, fp, fd);
+fail5:	mutex_lock(&dev->filelist_mutex);
+	list_del(&priv->lhead);
+	mutex_unlock(&dev->filelist_mutex);
+fail4:	drm_file_free(priv);
+fail3:	fd_abort(curproc, fp, fd);
 fail2:	mutex_lock(&drm_global_mutex);
 	KASSERT(0 < dev->open_count);
 	--dev->open_count;
 	lastclose = (dev->open_count == 0);
 	mutex_unlock(&drm_global_mutex);
 	if (lastclose)
-		(void)drm_lastclose(dev);
+		drm_lastclose(dev);
 fail1:	drm_minor_release(dminor);
 fail0:	KASSERT(error);
 	if (error == ERESTARTSYS)
@@ -192,13 +219,18 @@ fail0:	KASSERT(error);
 static int
 drm_close(struct file *fp)
 {
-	struct drm_file *const file = fp->f_data;
-	struct drm_minor *const dminor = file->minor;
+	struct drm_file *const priv = fp->f_data;
+	struct drm_minor *const dminor = priv->minor;
 	struct drm_device *const dev = dminor->dev;
 	bool lastclose;
 
-	drm_close_file(file);
-	kmem_free(file, sizeof(*file));
+	/* Synchronize with drm_file.c, drm_release.  */
+
+	mutex_lock(&dev->filelist_mutex);
+	list_del(&priv->lhead);
+	mutex_unlock(&dev->filelist_mutex);
+
+	drm_file_free(priv);
 
 	mutex_lock(&drm_global_mutex);
 	KASSERT(0 < dev->open_count);
@@ -207,65 +239,9 @@ drm_close(struct file *fp)
 	mutex_unlock(&drm_global_mutex);
 
 	if (lastclose)
-		(void)drm_lastclose(dev);
+		drm_lastclose(dev);
 
 	drm_minor_release(dminor);
-
-	return 0;
-}
-
-static int
-drm_firstopen(struct drm_device *dev)
-{
-	int ret;
-
-	if (drm_core_check_feature(dev, DRIVER_MODESET))
-		return 0;
-
-	if (dev->driver->firstopen) {
-		ret = (*dev->driver->firstopen)(dev);
-		if (ret)
-			goto fail0;
-	}
-
-	ret = drm_legacy_dma_setup(dev);
-	if (ret)
-		goto fail1;
-
-	return 0;
-
-fail2: __unused
-	drm_legacy_dma_takedown(dev);
-fail1:	if (dev->driver->lastclose)
-		(*dev->driver->lastclose)(dev);
-fail0:	KASSERT(ret);
-	return ret;
-}
-
-int
-drm_lastclose(struct drm_device *dev)
-{
-
-	/* XXX Order is sketchy here...  */
-	if (dev->driver->lastclose)
-		(*dev->driver->lastclose)(dev);
-	if (dev->irq_enabled && !drm_core_check_feature(dev, DRIVER_MODESET))
-		drm_irq_uninstall(dev);
-
-	mutex_lock(&dev->struct_mutex);
-	if (dev->agp)
-		drm_agp_clear(dev);
-	drm_legacy_sg_cleanup(dev);
-	drm_legacy_dma_takedown(dev);
-	mutex_unlock(&dev->struct_mutex);
-
-	/* XXX Synchronize with drm_legacy_dev_reinit.  */
-	if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
-		dev->sigdata.lock = NULL;
-		dev->context_flag = 0;
-		dev->last_context = 0;
-		dev->if_version = 0;
-	}
 
 	return 0;
 }
@@ -275,35 +251,82 @@ drm_read(struct file *fp, off_t *off, struct uio *uio, kauth_cred_t cred,
     int flags)
 {
 	struct drm_file *const file = fp->f_data;
+	struct drm_device *const dev = file->minor->dev;
 	struct drm_pending_event *event;
 	bool first;
-	int error = 0;
+	int ret = 0;
+
+	/*
+	 * Only one event reader at a time, so that if copyout faults
+	 * after dequeueing one event and we have to put the event
+	 * back, another reader won't see out-of-order events.
+	 */
+	spin_lock(&dev->event_lock);
+	DRM_SPIN_WAIT_NOINTR_UNTIL(ret, &file->event_read_wq, &dev->event_lock,
+	    file->event_read_lock == NULL);
+	if (ret) {
+		spin_unlock(&dev->event_lock);
+		/* XXX errno Linux->NetBSD */
+		return -ret;
+	}
+	file->event_read_lock = curlwp;
+	spin_unlock(&dev->event_lock);
 
 	for (first = true; ; first = false) {
 		int f = 0;
+		off_t offset;
+		size_t resid;
 
 		if (!first || ISSET(fp->f_flag, FNONBLOCK))
 			f |= FNONBLOCK;
 
-		/* XXX errno Linux->NetBSD */
-		error = -drm_dequeue_event(file, uio->uio_resid, &event, f);
-		if (error) {
-			if ((error == EWOULDBLOCK) && !first)
-				error = 0;
+		ret = drm_dequeue_event(file, uio->uio_resid, &event, f);
+		if (ret) {
+			if ((ret == -EWOULDBLOCK) && !first)
+				ret = 0;
 			break;
 		}
 		if (event == NULL)
 			break;
-		error = uiomove(event->event, event->event->length, uio);
-		if (error)	/* XXX Requeue the event?  */
+
+		offset = uio->uio_offset;
+		resid = uio->uio_resid;
+		/* XXX errno NetBSD->Linux */
+		ret = -uiomove(event->event, event->event->length, uio);
+		if (ret) {
+			/*
+			 * Faulted on copyout.  Put the event back and
+			 * stop here.
+			 */
+			if (!first) {
+				/*
+				 * Already transferred some events.
+				 * Rather than back them all out, just
+				 * say we succeeded at returning those.
+				 */
+				ret = 0;
+			}
+			uio->uio_offset = offset;
+			uio->uio_resid = resid;
+			drm_requeue_event(file, event);
 			break;
-		(*event->destroy)(event);
+		}
+		kfree(event);
 	}
 
+	/* Release the event read lock.  */
+	spin_lock(&dev->event_lock);
+	KASSERT(file->event_read_lock == curlwp);
+	file->event_read_lock = NULL;
+	DRM_SPIN_WAKEUP_ONE(&file->event_read_wq, &dev->event_lock);
+	spin_unlock(&dev->event_lock);
+
+	/* XXX errno Linux->NetBSD */
+
 	/* Success!  */
-	if (error == ERESTARTSYS)
-		error = ERESTART;
-	return error;
+	if (ret == ERESTARTSYS)
+		ret = ERESTART;
+	return -ret;
 }
 
 static int
@@ -344,6 +367,19 @@ out:	spin_unlock_irqrestore(&dev->event_lock, irqflags);
 	return ret;
 }
 
+static void
+drm_requeue_event(struct drm_file *file, struct drm_pending_event *event)
+{
+	struct drm_device *const dev = file->minor->dev;
+	unsigned long irqflags;
+
+	spin_lock_irqsave(&dev->event_lock, irqflags);
+	list_add(&event->link, &file->event_list);
+	KASSERT(file->event_space >= event->event->length);
+	file->event_space -= event->event->length;
+	spin_unlock_irqrestore(&dev->event_lock, irqflags);
+}
+
 static int
 drm_ioctl_shim(struct file *fp, unsigned long cmd, void *data)
 {
@@ -362,7 +398,7 @@ drm_ioctl_shim(struct file *fp, unsigned long cmd, void *data)
 }
 
 static int
-drm_poll(struct file *fp __unused, int events __unused)
+drm_poll(struct file *fp, int events)
 {
 	struct drm_file *const file = fp->f_data;
 	struct drm_device *const dev = file->minor->dev;
@@ -386,7 +422,7 @@ static void	filt_drm_detach(struct knote *);
 static int	filt_drm_event(struct knote *, long);
 
 static const struct filterops drm_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_drm_detach,
 	.f_event = filt_drm_event,
@@ -460,7 +496,7 @@ drm_stat(struct file *fp, struct stat *st)
 	struct drm_file *const file = fp->f_data;
 	struct drm_minor *const dminor = file->minor;
 	const dev_t devno = makedev(cdevsw_lookup_major(&drm_cdevsw),
-	    64*dminor->type + dminor->index);
+	    dminor->index);
 
 	(void)memset(st, 0, sizeof(*st));
 
@@ -484,6 +520,8 @@ drm_fop_mmap(struct file *fp, off_t *offp, size_t len, int prot, int *flagsp,
 	int error;
 
 	KASSERT(fp == file->filp);
+	KASSERT(len > 0);
+
 	/* XXX errno Linux->NetBSD */
 	error = -(*dev->driver->mmap_object)(dev, *offp, len, prot, uobjp,
 	    offp, file->filp);

@@ -1,4 +1,4 @@
-/*	$NetBSD: getaddrinfo.c,v 1.120 2020/11/18 12:49:52 is Exp $	*/
+/*	$NetBSD: getaddrinfo.c,v 1.127 2024/01/21 12:58:10 kre Exp $	*/
 /*	$KAME: getaddrinfo.c,v 1.29 2000/08/31 17:26:57 itojun Exp $	*/
 
 /*
@@ -36,7 +36,7 @@
  *   in the source code.  This is because RFC2553 is silent about which error
  *   code must be returned for which situation.
  * - IPv4 classful (shortened) form.  RFC2553 is silent about it.  XNET 5.2
- *   says to use inet_aton() to convert IPv4 numeric to binary (alows
+ *   says to use inet_aton() to convert IPv4 numeric to binary (allows
  *   classful form as a result).
  *   current code - disallow classful form for IPv4 (due to use of inet_pton).
  * - freeaddrinfo(NULL).  RFC2553 is silent about it.  XNET 5.2 says it is
@@ -55,7 +55,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: getaddrinfo.c,v 1.120 2020/11/18 12:49:52 is Exp $");
+__RCSID("$NetBSD: getaddrinfo.c,v 1.127 2024/01/21 12:58:10 kre Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #ifndef RUMP_ACTION
@@ -196,7 +196,7 @@ struct ai_order {
 		struct sockaddr aiou_sa;
 	} aio_src_un;
 #define aio_srcsa aio_src_un.aiou_sa
-	u_int32_t aio_srcflag;
+	uint32_t aio_srcflag;
 	int aio_srcscope;
 	int aio_dstscope;
 	struct policyqueue *aio_srcpolicy;
@@ -257,7 +257,7 @@ static void set_source(struct ai_order *, struct policyhead *,
     struct servent_data *);
 static int comp_dst(const void *, const void *);
 #ifdef INET6
-static int ip6_str2scopeid(char *, struct sockaddr_in6 *, u_int32_t *);
+static int ip6_str2scopeid(const char *, struct sockaddr_in6 *, uint32_t *);
 #endif
 static int gai_addr2scopetype(struct sockaddr *);
 
@@ -322,7 +322,7 @@ do {								\
 		error = EAI_MEMORY;				\
 		goto free;					\
 	}							\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define GET_PORT(ai, serv, svd)					\
 do {								\
@@ -330,7 +330,7 @@ do {								\
 	error = get_port((ai), (serv), 0, (svd));		\
 	if (error != 0)						\
 		goto free;					\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define GET_CANONNAME(ai, str)					\
 do {								\
@@ -338,7 +338,7 @@ do {								\
 	error = get_canonname(pai, (ai), (str));		\
 	if (error != 0)						\
 		goto free;					\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define ERR(err)						\
 do {								\
@@ -346,7 +346,7 @@ do {								\
 	error = (err);						\
 	goto bad;						\
 	/*NOTREACHED*/						\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define MATCH_FAMILY(x, y, w)						\
 	((x) == (y) || (/*CONSTCOND*/(w) && ((x) == PF_UNSPEC ||	\
@@ -717,9 +717,8 @@ reorder(struct addrinfo *sentinel, struct servent_data *svd)
 		return n;
 
 	/* allocate a temporary array for sort and initialization of it. */
-	if ((aio = malloc(sizeof(*aio) * n)) == NULL)
+	if ((aio = calloc(n, sizeof(*aio))) == NULL)
 		return n;	/* give up reordering */
-	memset(aio, 0, sizeof(*aio) * n);
 
 	/* retrieve address selection policy from the kernel */
 	TAILQ_INIT(&policyhead);
@@ -922,7 +921,7 @@ set_source(struct ai_order *aio, struct policyhead *ph,
 #ifdef INET6
 	if (ai.ai_family == AF_INET6) {
 		struct in6_ifreq ifr6;
-		u_int32_t flags6;
+		uint32_t flags6;
 
 		memset(&ifr6, 0, sizeof(ifr6));
 		memcpy(&ifr6.ifr_addr, ai.ai_addr, ai.ai_addrlen);
@@ -1394,7 +1393,8 @@ explore_numeric_scope(const struct addrinfo *pai, const char *hostname,
 	const struct afd *afd;
 	struct addrinfo *cur;
 	int error;
-	char *cp, *hostname2 = NULL, *scope, *addr;
+	char *hostname2 = NULL, *addr;
+	const char *cp, *scope;
 	struct sockaddr_in6 *sin6;
 
 	_DIAGASSERT(pai != NULL);
@@ -1434,7 +1434,7 @@ explore_numeric_scope(const struct addrinfo *pai, const char *hostname,
 
 	error = explore_numeric(pai, addr, servname, res, hostname, svd);
 	if (error == 0) {
-		u_int32_t scopeid;
+		uint32_t scopeid;
 
 		for (cur = *res; cur; cur = cur->ai_next) {
 			if (cur->ai_family != AF_INET6)
@@ -1643,7 +1643,7 @@ addrconfig(uint64_t *mask)
 #ifdef INET6
 /* convert a string to a scope identifier. XXX: IPv6 specific */
 static int
-ip6_str2scopeid(char *scope, struct sockaddr_in6 *sin6, u_int32_t *scopeid)
+ip6_str2scopeid(const char *scope, struct sockaddr_in6 *sin6, uint32_t *scopeid)
 {
 	u_long lscopeid;
 	struct in6_addr *a6;
@@ -1683,7 +1683,7 @@ ip6_str2scopeid(char *scope, struct sockaddr_in6 *sin6, u_int32_t *scopeid)
   trynumeric:
 	errno = 0;
 	lscopeid = strtoul(scope, &ep, 10);
-	*scopeid = (u_int32_t)(lscopeid & 0xffffffffUL);
+	*scopeid = (uint32_t)(lscopeid & 0xffffffffUL);
 	if (errno == 0 && ep && *ep == '\0' && *scopeid == lscopeid)
 		return 0;
 	else
@@ -2821,7 +2821,7 @@ res_querydomainN(const char *name, const char *domain,
 {
 	char nbuf[MAXDNAME];
 	const char *longname = nbuf;
-	size_t n, d;
+	size_t n;
 
 	_DIAGASSERT(name != NULL);
 	/* XXX: target may be NULL??? */
@@ -2842,18 +2842,15 @@ res_querydomainN(const char *name, const char *domain,
 			return -1;
 		}
 		if (n > 0 && name[--n] == '.') {
-			strncpy(nbuf, name, n);
-			nbuf[n] = '\0';
+			snprintf(nbuf, sizeof(nbuf), "%*s", (int)n, name);
 		} else
 			longname = name;
 	} else {
-		n = strlen(name);
-		d = strlen(domain);
-		if (n + 1 + d + 1 > sizeof(nbuf)) {
+		if ((size_t)snprintf(nbuf, sizeof(nbuf), "%s.%s",
+				name, domain) >= sizeof(nbuf)) {
 			h_errno = NO_RECOVERY;
 			return -1;
 		}
-		snprintf(nbuf, sizeof(nbuf), "%s.%s", name, domain);
 	}
 	return res_queryN(longname, target, res);
 }

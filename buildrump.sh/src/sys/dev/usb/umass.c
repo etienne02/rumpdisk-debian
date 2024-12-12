@@ -1,4 +1,4 @@
-/*	$NetBSD: umass.c,v 1.185 2021/05/23 08:42:47 riastradh Exp $	*/
+/*	$NetBSD: umass.c,v 1.189 2022/09/22 14:27:52 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2003 The NetBSD Foundation, Inc.
@@ -124,7 +124,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: umass.c,v 1.185 2021/05/23 08:42:47 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: umass.c,v 1.189 2022/09/22 14:27:52 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -392,7 +392,6 @@ umass_attach(device_t parent, device_t self, void *aux)
 	aprint_normal("\n");
 
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_SOFTUSB);
-	cv_init(&sc->sc_detach_cv, "umassdet");
 
 	devinfop = usbd_devinfo_alloc(uiaa->uiaa_device, 0);
 	aprint_normal_dev(self, "%s\n", devinfop);
@@ -872,18 +871,6 @@ umass_detach(device_t self, int flags)
 	}
 	usbd_abort_default_pipe(sc->sc_udev);
 
-	/* Do we really need reference counting?  Perhaps in ioctl() */
-	mutex_enter(&sc->sc_lock);
-	if (--sc->sc_refcnt >= 0) {
-#ifdef DIAGNOSTIC
-		aprint_normal_dev(self, "waiting for refcnt\n");
-#endif
-		/* Wait for processes to go away. */
-		if (cv_timedwait(&sc->sc_detach_cv, &sc->sc_lock, hz * 60))
-			aprint_error_dev(self, ": didn't detach\n");
-	}
-	mutex_exit(&sc->sc_lock);
-
 	scbus = sc->bus;
 	if (scbus != NULL) {
 		if (scbus->sc_child != NULL)
@@ -925,7 +912,6 @@ umass_detach(device_t self, int flags)
 	usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, sc->sc_udev, sc->sc_dev);
 
 	mutex_destroy(&sc->sc_lock);
-	cv_destroy(&sc->sc_detach_cv);
 
 out:	SDT_PROBE2(usb, umass, device, detach__done,  sc, rv);
 	return rv;
@@ -996,7 +982,7 @@ umass_setup_transfer(struct umass_softc *sc, struct usbd_pipe *pipe,
 	if (sc->sc_dying)
 		return USBD_IOERROR;
 
-	/* Initialiase a USB transfer and then schedule it */
+	/* Initialise a USB transfer and then schedule it */
 
 	usbd_setup_xfer(xfer, sc, buffer, buflen, flags, sc->timeout,
 	    sc->sc_methods->wire_state);
@@ -1024,10 +1010,10 @@ umass_setup_ctrl_transfer(struct umass_softc *sc, usb_device_request_t *req,
 	if (sc->sc_dying)
 		return USBD_IOERROR;
 
-	/* Initialiase a USB control transfer and then schedule it */
+	/* Initialise a USB control transfer and then schedule it */
 
-	usbd_setup_default_xfer(xfer, sc->sc_udev, (void *) sc, sc->timeout,
-		req, buffer, buflen, flags, sc->sc_methods->wire_state);
+	usbd_setup_default_xfer(xfer, sc->sc_udev, sc, USBD_DEFAULT_TIMEOUT,
+	    req, buffer, buflen, flags, sc->sc_methods->wire_state);
 
 	err = usbd_transfer(xfer);
 	if (err && err != USBD_IN_PROGRESS) {
@@ -1564,7 +1550,7 @@ umass_bbb_state(struct usbd_xfer *xfer, void *priv,
 			DPRINTFM(UDMASS_BBB, "sc %#jx: Command Failed, "
 			    "res = %jd", (uintptr_t)sc, residue, 0, 0);
 
-			/* SCSI command failed but transfer was succesful */
+			/* SCSI command failed but transfer was successful */
 			umass_transfer_done(sc, residue, STATUS_CMD_FAILED);
 			return;
 

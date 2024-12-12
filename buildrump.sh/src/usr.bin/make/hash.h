@@ -1,4 +1,4 @@
-/*	$NetBSD: hash.h,v 1.40 2021/04/11 12:46:54 rillig Exp $	*/
+/*	$NetBSD: hash.h,v 1.51 2024/07/07 09:37:00 rillig Exp $	*/
 
 /*
  * Copyright (c) 1988, 1989, 1990 The Regents of the University of California.
@@ -72,7 +72,7 @@
  *	from: @(#)hash.h	8.1 (Berkeley) 6/6/93
  */
 
-/* Hash tables with strings as keys and arbitrary pointers as values. */
+/* Hash tables with string keys and pointer values. */
 
 #ifndef MAKE_HASH_H
 #define MAKE_HASH_H
@@ -82,18 +82,16 @@ typedef struct HashEntry {
 	struct HashEntry *next;	/* Used to link together all the entries
 				 * associated with the same bucket. */
 	void *value;
-	unsigned int key_hash;	/* hash value of the key */
+	unsigned int hash;	/* hash value of the key */
 	char key[1];		/* key string, variable length */
 } HashEntry;
 
 /* The hash table containing the entries. */
 typedef struct HashTable {
-	HashEntry **buckets;	/* Pointers to HashEntry, one
-				 * for each bucket in the table. */
+	HashEntry **buckets;
 	unsigned int bucketsSize;
-	unsigned int numEntries; /* Number of entries in the table. */
+	unsigned int numEntries;
 	unsigned int bucketsMask; /* Used to select the bucket for a hash. */
-	unsigned int maxchain;	/* max length of chain detected */
 } HashTable;
 
 /* State of an iteration over all entries in a table. */
@@ -108,31 +106,40 @@ typedef struct HashSet {
 	HashTable tbl;
 } HashSet;
 
-MAKE_INLINE void *
-HashEntry_Get(HashEntry *h)
+MAKE_INLINE void * MAKE_ATTR_USE
+HashEntry_Get(HashEntry *he)
 {
-	return h->value;
+	return he->value;
 }
 
 MAKE_INLINE void
-HashEntry_Set(HashEntry *h, void *datum)
+HashEntry_Set(HashEntry *he, void *datum)
 {
-	h->value = datum;
+	he->value = datum;
+}
+
+/* Set things up for iterating over all entries in the hash table. */
+MAKE_INLINE void
+HashIter_Init(HashIter *hi, HashTable *t)
+{
+	hi->table = t;
+	hi->nextBucket = 0;
+	hi->entry = NULL;
 }
 
 void HashTable_Init(HashTable *);
 void HashTable_Done(HashTable *);
-HashEntry *HashTable_FindEntry(HashTable *, const char *);
-void *HashTable_FindValue(HashTable *, const char *);
-unsigned int Hash_Substring(Substring);
-void *HashTable_FindValueBySubstringHash(HashTable *, Substring, unsigned int);
+HashEntry *HashTable_FindEntry(HashTable *, const char *) MAKE_ATTR_USE;
+void *HashTable_FindValue(HashTable *, const char *) MAKE_ATTR_USE;
+unsigned int Hash_Substring(Substring) MAKE_ATTR_USE;
+void *HashTable_FindValueBySubstringHash(HashTable *, Substring, unsigned int)
+    MAKE_ATTR_USE;
 HashEntry *HashTable_CreateEntry(HashTable *, const char *, bool *);
-HashEntry *HashTable_Set(HashTable *, const char *, void *);
+void HashTable_Set(HashTable *, const char *, void *);
 void HashTable_DeleteEntry(HashTable *, HashEntry *);
-void HashTable_DebugStats(HashTable *, const char *);
+void HashTable_DebugStats(const HashTable *, const char *);
 
-void HashIter_Init(HashIter *, HashTable *);
-HashEntry *HashIter_Next(HashIter *);
+bool HashIter_Next(HashIter *) MAKE_ATTR_USE;
 
 MAKE_INLINE void
 HashSet_Init(HashSet *set)
@@ -155,7 +162,7 @@ HashSet_Add(HashSet *set, const char *key)
 	return isNew;
 }
 
-MAKE_INLINE bool
+MAKE_INLINE bool MAKE_ATTR_USE
 HashSet_Contains(HashSet *set, const char *key)
 {
 	return HashTable_FindEntry(&set->tbl, key) != NULL;
@@ -167,4 +174,4 @@ HashIter_InitSet(HashIter *hi, HashSet *set)
 	HashIter_Init(hi, &set->tbl);
 }
 
-#endif /* MAKE_HASH_H */
+#endif

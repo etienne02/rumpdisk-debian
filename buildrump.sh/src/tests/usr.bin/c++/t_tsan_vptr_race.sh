@@ -26,43 +26,36 @@
 # POSSIBILITY OF SUCH DAMAGE.
 #
 
+
 test_target()
 {
-	SUPPORT='n'
-	# Detect address space larger than 32 bits
-	maxaddress=`sysctl vm.maxaddress|awk '{print $3}'`
-	if [ $maxaddress -gt 4294967295 ]; then
-		if command -v cc >/dev/null 2>&1; then
-			if ! echo __clang__ | cc -E - | grep -q __clang__; then
-				SUPPORT='y'
-			elif ! cc -v 2>&1 | awk '/gcc version/{print $3}' | \
-				awk -F '.' '($0+0) > 9 {exit 1}'; then
-				SUPPORT='y'
-			fi
-		fi
-	fi
+	atf_set "require.arch" "x86_64"
 }
 
 atf_test_case vptr_race
 vptr_race_head() {
 	atf_set "descr" "Test thread sanitizer for vptr race condition"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 
 atf_test_case vptr_race_profile
 vptr_race_profile_head() {
 	atf_set "descr" "Test thread sanitizer for vptr race with profiling option"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 atf_test_case vptr_race_pic
 vptr_race_pic_head() {
 	atf_set "descr" "Test thread sanitizer for vptr race with position independent code (PIC) flag"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 atf_test_case vptr_race_pie
 vptr_race_pie_head() {
 	atf_set "descr" "Test thread sanitizer for vptr race with position independent execution (PIE) flag"
 	atf_set "require.progs" "c++ paxctl"
+	test_target
 }
 
 vptr_race_body(){
@@ -95,7 +88,7 @@ EOF
 
 	c++ -fsanitize=thread -o test test.cc
 	paxctl +a test
-	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race on vptr \(ctor/dtor vs virtual call\)" ./test
+	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race" ./test
 }
 
 vptr_race_profile_body(){
@@ -126,10 +119,9 @@ int main() {
   return 0;
 }
 EOF
-
 	c++ -fsanitize=thread -o test -pg test.cc
 	paxctl +a test
-	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race on vptr \(ctor/dtor vs virtual call\)" ./test
+	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race" ./test
 }
 
 vptr_race_pic_body(){
@@ -172,12 +164,12 @@ EOF
 	paxctl +a test
 
 	export LD_LIBRARY_PATH=.
-	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race on vptr \(ctor/dtor vs virtual call\)" ./test
+	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race" ./test
 }
 vptr_race_pie_body(){
-	
+
 	#check whether -pie flag is supported on this architecture
-	if ! c++ -pie -dM -E - < /dev/null 2>/dev/null >/dev/null; then 
+	if ! c++ -pie -dM -E - < /dev/null 2>/dev/null >/dev/null; then
 		atf_set_skip "c++ -pie not supported on this architecture"
 	fi
 	cat > test.cc << EOF
@@ -209,7 +201,7 @@ EOF
 
 	c++ -fsanitize=thread -o test -fpie -pie test.cc
 	paxctl +a test
-	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race on vptr \(ctor/dtor vs virtual call\)" ./test
+	atf_check -s ignore -o ignore -e match:"WARNING: ThreadSanitizer: data race" ./test
 }
 
 
@@ -226,11 +218,6 @@ target_not_supported_body()
 
 atf_init_test_cases()
 {
-	test_target
-	test $SUPPORT = 'n' && {
-		atf_add_test_case target_not_supported
-		return 0
-	}
 	atf_add_test_case vptr_race
 	atf_add_test_case vptr_race_profile
 	atf_add_test_case vptr_race_pie

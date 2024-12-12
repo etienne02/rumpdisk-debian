@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ipsec.c,v 1.30 2020/10/14 18:48:05 roy Exp $  */
+/*	$NetBSD: if_ipsec.c,v 1.36 2024/02/10 18:43:53 andvar Exp $  */
 
 /*
  * Copyright (c) 2017 Internet Initiative Japan Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ipsec.c,v 1.30 2020/10/14 18:48:05 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ipsec.c,v 1.36 2024/02/10 18:43:53 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -110,7 +110,7 @@ static inline size_t if_ipsec_set_sadb_dst(struct sadb_address *,
     struct sockaddr *, int);
 static inline size_t if_ipsec_set_sadb_x_policy(struct sadb_x_policy *,
     struct sadb_x_ipsecrequest *, uint16_t, uint8_t, uint32_t, uint8_t,
-    struct sockaddr *, struct sockaddr *);
+    struct sockaddr *, struct sockaddr *, uint16_t);
 static inline void if_ipsec_set_sadb_msg(struct sadb_msg *, uint16_t, uint8_t);
 static inline void if_ipsec_set_sadb_msg_add(struct sadb_msg *, uint16_t);
 static inline void if_ipsec_set_sadb_msg_del(struct sadb_msg *, uint16_t);
@@ -118,7 +118,7 @@ static inline void if_ipsec_set_sadb_msg_del(struct sadb_msg *, uint16_t);
 static int if_ipsec_share_sp(struct ipsec_variant *);
 static int if_ipsec_unshare_sp(struct ipsec_variant *);
 static inline struct secpolicy *if_ipsec_add_sp0(struct sockaddr *,
-    in_port_t, struct sockaddr *, in_port_t, int, int, int, u_int);
+    in_port_t, struct sockaddr *, in_port_t, int, int, int, u_int, uint16_t);
 static inline int if_ipsec_del_sp0(struct secpolicy *);
 static int if_ipsec_add_sp(struct ipsec_variant *,
     struct sockaddr *, in_port_t, struct sockaddr *, in_port_t);
@@ -140,8 +140,17 @@ static int if_ipsec_set_addr_port(struct sockaddr *, struct sockaddr *,
 /* This list is used in ioctl context only. */
 static struct {
 	LIST_HEAD(ipsec_sclist, ipsec_softc) list;
+	bool use_fixed_reqid;
+#define REQID_BASE_DEFAULT	0x2000
+#define REQID_LAST_DEFAULT	0x2fff
+	u_int16_t reqid_base;
+	u_int16_t reqid_last;
 	kmutex_t lock;
-} ipsec_softcs __cacheline_aligned;
+} ipsec_softcs __cacheline_aligned = {
+	.use_fixed_reqid = false,
+	.reqid_base = REQID_BASE_DEFAULT,
+	.reqid_last = REQID_LAST_DEFAULT,
+};
 
 struct psref_class *iv_psref_class __read_mostly;
 
@@ -150,6 +159,16 @@ struct if_clone ipsec_cloner =
 static int max_ipsec_nesting = MAX_IPSEC_NEST;
 
 static struct sysctllog *if_ipsec_sysctl;
+
+static pktq_rps_hash_func_t if_ipsec_pktq_rps_hash_p;
+
+enum {
+	REQID_INDEX_IPV4IN = 0,
+	REQID_INDEX_IPV4OUT,
+	REQID_INDEX_IPV6IN,
+	REQID_INDEX_IPV6OUT,
+	REQID_INDEX_NUM,
+};
 
 #ifdef INET6
 static int
@@ -203,9 +222,89 @@ sysctl_if_ipsec_pmtu_perif(SYSCTLFN_ARGS)
 }
 #endif
 
+static int
+sysctl_if_ipsec_use_fixed_reqid(SYSCTLFN_ARGS)
+{
+	bool fixed;
+	int error;
+	struct sysctlnode node = *rnode;
+
+	mutex_enter(&ipsec_softcs.lock);
+	fixed = ipsec_softcs.use_fixed_reqid;
+	node.sysctl_data = &fixed;
+	error = sysctl_lookup(SYSCTLFN_CALL(&node));
+	if (error || newp == NULL) {
+		mutex_exit(&ipsec_softcs.lock);
+		return error;
+	}
+
+	if (!LIST_EMPTY(&ipsec_softcs.list)) {
+		mutex_exit(&ipsec_softcs.lock);
+		return EBUSY;
+	}
+	ipsec_softcs.use_fixed_reqid = fixed;
+	mutex_exit(&ipsec_softcs.lock);
+
+	return 0;
+}
+
+static int
+sysctl_if_ipsec_reqid_base(SYSCTLFN_ARGS)
+{
+	int base;
+	int error;
+	struct sysctlnode node = *rnode;
+
+	mutex_enter(&ipsec_softcs.lock);
+	base = ipsec_softcs.reqid_base;
+	node.sysctl_data = &base;
+	error = sysctl_lookup(SYSCTLFN_CALL(&node));
+	if (error || newp == NULL) {
+		mutex_exit(&ipsec_softcs.lock);
+		return error;
+	}
+
+	if (!LIST_EMPTY(&ipsec_softcs.list)) {
+		mutex_exit(&ipsec_softcs.lock);
+		return EBUSY;
+	}
+	ipsec_softcs.reqid_base = base;
+	mutex_exit(&ipsec_softcs.lock);
+
+	return 0;
+}
+
+static int
+sysctl_if_ipsec_reqid_last(SYSCTLFN_ARGS)
+{
+	int last;
+	int error;
+	struct sysctlnode node = *rnode;
+
+	mutex_enter(&ipsec_softcs.lock);
+	last = ipsec_softcs.reqid_last;
+	node.sysctl_data = &last;
+	error = sysctl_lookup(SYSCTLFN_CALL(&node));
+	if (error || newp == NULL) {
+		mutex_exit(&ipsec_softcs.lock);
+		return error;
+	}
+
+	if (!LIST_EMPTY(&ipsec_softcs.list)) {
+		mutex_exit(&ipsec_softcs.lock);
+		return EBUSY;
+	}
+	ipsec_softcs.reqid_last = last;
+	mutex_exit(&ipsec_softcs.lock);
+
+	return 0;
+}
+
 static void
 if_ipsec_sysctl_setup(void)
 {
+	const struct sysctlnode *node = NULL;
+
 	if_ipsec_sysctl = NULL;
 
 #ifdef INET6
@@ -241,6 +340,41 @@ if_ipsec_sysctl_setup(void)
 		       CTL_NET, PF_INET6, IPPROTO_IPV6,
 		       IPV6CTL_IPSEC_PMTU, CTL_EOL);
 #endif
+
+	sysctl_createv(&if_ipsec_sysctl, 0, NULL, &node,
+	    CTLFLAG_PERMANENT,
+	    CTLTYPE_NODE, "ipsecif",
+	    SYSCTL_DESCR("ipsecif global control"),
+	    NULL, 0, NULL, 0,
+	    CTL_NET, CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(&if_ipsec_sysctl, 0, &node, NULL,
+	    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+	    CTLTYPE_STRING, "rps_hash",
+	    SYSCTL_DESCR("Interface rps hash function control"),
+	    sysctl_pktq_rps_hash_handler, 0, (void *)&if_ipsec_pktq_rps_hash_p,
+	    PKTQ_RPS_HASH_NAME_LEN,
+	    CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(&if_ipsec_sysctl, 0, &node, NULL,
+	    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+	    CTLTYPE_BOOL, "use_fixed_reqid",
+	    SYSCTL_DESCR("use fixed reqid for SP"),
+	    sysctl_if_ipsec_use_fixed_reqid, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+	sysctl_createv(&if_ipsec_sysctl, 0, &node, NULL,
+	    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+	    CTLTYPE_INT, "reqid_base",
+	    SYSCTL_DESCR("base value of fixed reqid"),
+	    sysctl_if_ipsec_reqid_base, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+	sysctl_createv(&if_ipsec_sysctl, 0, &node, NULL,
+	    CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+	    CTLTYPE_INT, "reqid_last",
+	    SYSCTL_DESCR("last value of fixed reqid"),
+	    sysctl_if_ipsec_reqid_last, 0, NULL, 0,
+	    CTL_CREATE, CTL_EOL);
+
 }
 
 static void
@@ -291,6 +425,7 @@ ipsecifattach(int count)
 
 	iv_psref_class = psref_class_create("ipsecvar", IPL_SOFTNET);
 
+	if_ipsec_pktq_rps_hash_p = pktq_rps_hash_default;
 	if_ipsec_sysctl_setup();
 
 	if_clone_attach(&ipsec_cloner);
@@ -615,11 +750,7 @@ if_ipsec_in_enqueue(struct mbuf *m, int af, struct ifnet *ifp)
 		return;
 	}
 
-#if 1
-	const u_int h = curcpu()->ci_index;
-#else
-	const uint32_t h = pktq_rps_hash(m);
-#endif
+	const uint32_t h = pktq_rps_hash(&if_ipsec_pktq_rps_hash_p, m);
 	pktlen = m->m_pkthdr.len;
 	if (__predict_true(pktq_enqueue(pktq, m, h))) {
 		if_statadd2(ifp, if_ibytes, pktlen, if_ipackets, 1);
@@ -769,7 +900,7 @@ if_ipsec_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		}
 		/*
 		 * calls if_ipsec_getref_variant() for other softcs to check
-		 * address pair duplicattion
+		 * address pair duplication
 		 */
 		bound = curlwp_bind();
 		error = if_ipsec_set_tunnel(&sc->ipsec_if, src, dst);
@@ -1559,7 +1690,7 @@ if_ipsec_set_sadb_dst(struct sadb_address *sadst, struct sockaddr *dst,
 static inline size_t
 if_ipsec_set_sadb_x_policy(struct sadb_x_policy *xpl,
     struct sadb_x_ipsecrequest *xisr, uint16_t policy, uint8_t dir, uint32_t id,
-    uint8_t level, struct sockaddr *src, struct sockaddr *dst)
+    uint8_t level, struct sockaddr *src, struct sockaddr *dst, uint16_t reqid)
 {
 	size_t size;
 
@@ -1575,7 +1706,7 @@ if_ipsec_set_sadb_x_policy(struct sadb_x_policy *xpl,
 	xpl->sadb_x_policy_exttype = SADB_X_EXT_POLICY;
 	xpl->sadb_x_policy_type = policy;
 	xpl->sadb_x_policy_dir = dir;
-	xpl->sadb_x_policy_reserved = 0;
+	xpl->sadb_x_policy_flags = 0;
 	xpl->sadb_x_policy_id = id;
 	xpl->sadb_x_policy_reserved2 = 0;
 
@@ -1588,7 +1719,7 @@ if_ipsec_set_sadb_x_policy(struct sadb_x_policy *xpl,
 		xisr->sadb_x_ipsecrequest_mode = IPSEC_MODE_TRANSPORT;
 		xisr->sadb_x_ipsecrequest_level = level;
 		if (level == IPSEC_LEVEL_UNIQUE)
-			xisr->sadb_x_ipsecrequest_reqid = key_newreqid();
+			xisr->sadb_x_ipsecrequest_reqid = reqid;
 		else
 			xisr->sadb_x_ipsecrequest_reqid = 0;
 	}
@@ -1659,10 +1790,48 @@ if_ipsec_set_addr_port(struct sockaddr *addrport, struct sockaddr *addr,
 	return error;
 }
 
+static int
+if_ipsec_get_reqids(struct ipsec_variant *var, u_int16_t reqids[REQID_INDEX_NUM])
+{
+	struct ipsec_softc *sc = var->iv_softc;
+	struct ifnet *ifp = &sc->ipsec_if;
+
+	mutex_enter(&ipsec_softcs.lock);
+	if (ipsec_softcs.use_fixed_reqid) {
+		uint32_t unit, reqid_base;
+
+		unit = strtoul(ifp->if_xname + sizeof("ipsec") - 1, NULL, 10);
+		reqid_base = ipsec_softcs.reqid_base + unit * 2;
+		if (reqid_base + 1 > ipsec_softcs.reqid_last) {
+			log(LOG_ERR,
+			    "%s: invalid fixed reqid(%"PRIu32"), "
+			    "current range %"PRIu16" <= reqid <= %"PRIu16"\n",
+			    ifp->if_xname, reqid_base + 1,
+			    ipsec_softcs.reqid_base, ipsec_softcs.reqid_last);
+			mutex_exit(&ipsec_softcs.lock);
+			return ENOSPC;
+		}
+
+		/*
+		 * Use same reqid both inbound and outbound to reduce reqid.
+		 */
+		reqids[REQID_INDEX_IPV4IN] = reqid_base;
+		reqids[REQID_INDEX_IPV4OUT] = reqid_base;
+		reqids[REQID_INDEX_IPV6IN] = reqid_base + 1;
+		reqids[REQID_INDEX_IPV6OUT] = reqid_base + 1;
+	} else {
+		for (int i = 0; i < REQID_INDEX_NUM; i++)
+			reqids[i] = key_newreqid();
+	}
+	mutex_exit(&ipsec_softcs.lock);
+
+	return 0;
+}
+
 static struct secpolicy *
 if_ipsec_add_sp0(struct sockaddr *src, in_port_t sport,
     struct sockaddr *dst, in_port_t dport,
-    int dir, int proto, int level, u_int policy)
+    int dir, int proto, int level, u_int policy, uint16_t reqid)
 {
 	struct sadb_msg msg;
 	struct sadb_address xsrc, xdst;
@@ -1685,7 +1854,8 @@ if_ipsec_add_sp0(struct sockaddr *src, in_port_t sport,
 	ext_msg_len += PFKEY_UNIT64(size);
 	size = if_ipsec_set_sadb_dst(&xdst, dst, proto);
 	ext_msg_len += PFKEY_UNIT64(size);
-	size = if_ipsec_set_sadb_x_policy(&xpl, &xisr, policy, dir, 0, level, NULL, NULL);
+	size = if_ipsec_set_sadb_x_policy(&xpl, &xisr, policy, dir, 0, level,
+	    NULL, NULL, reqid);
 	ext_msg_len += PFKEY_UNIT64(size);
 	if_ipsec_set_sadb_msg_add(&msg, ext_msg_len);
 
@@ -1730,7 +1900,9 @@ if_ipsec_add_sp(struct ipsec_variant *var,
 {
 	struct ipsec_softc *sc = var->iv_softc;
 	int level;
+	int error;
 	u_int v6policy;
+	u_int16_t reqids[REQID_INDEX_NUM];
 
 	/*
 	 * must delete sp before add it.
@@ -1756,22 +1928,38 @@ if_ipsec_add_sp(struct ipsec_variant *var,
 	else
 		v6policy = IPSEC_POLICY_DISCARD;
 
+	error = if_ipsec_get_reqids(var, reqids);
+	if (error)
+		goto fail;
+
 	IV_SP_IN(var) = if_ipsec_add_sp0(dst, dport, src, sport,
-	    IPSEC_DIR_INBOUND, IPPROTO_IPIP, level, IPSEC_POLICY_IPSEC);
-	if (IV_SP_IN(var) == NULL)
+	    IPSEC_DIR_INBOUND, IPPROTO_IPIP, level, IPSEC_POLICY_IPSEC,
+	    reqids[REQID_INDEX_IPV4IN]);
+	if (IV_SP_IN(var) == NULL) {
+		error = EEXIST;
 		goto fail;
+	}
 	IV_SP_OUT(var) = if_ipsec_add_sp0(src, sport, dst, dport,
-	    IPSEC_DIR_OUTBOUND, IPPROTO_IPIP, level, IPSEC_POLICY_IPSEC);
-	if (IV_SP_OUT(var) == NULL)
+	    IPSEC_DIR_OUTBOUND, IPPROTO_IPIP, level, IPSEC_POLICY_IPSEC,
+	    reqids[REQID_INDEX_IPV4OUT]);
+	if (IV_SP_OUT(var) == NULL) {
+		error = EEXIST;
 		goto fail;
+	}
 	IV_SP_IN6(var) = if_ipsec_add_sp0(dst, dport, src, sport,
-	    IPSEC_DIR_INBOUND, IPPROTO_IPV6, level, v6policy);
-	if (IV_SP_IN6(var) == NULL)
+	    IPSEC_DIR_INBOUND, IPPROTO_IPV6, level, v6policy,
+	    reqids[REQID_INDEX_IPV6IN]);
+	if (IV_SP_IN6(var) == NULL) {
+		error = EEXIST;
 		goto fail;
+	}
 	IV_SP_OUT6(var) = if_ipsec_add_sp0(src, sport, dst, dport,
-	    IPSEC_DIR_OUTBOUND, IPPROTO_IPV6, level, v6policy);
-	if (IV_SP_OUT6(var) == NULL)
+	    IPSEC_DIR_OUTBOUND, IPPROTO_IPV6, level, v6policy,
+	    reqids[REQID_INDEX_IPV6OUT]);
+	if (IV_SP_OUT6(var) == NULL) {
+		error = EEXIST;
 		goto fail;
+	}
 
 	return 0;
 
@@ -1789,7 +1977,7 @@ fail:
 		IV_SP_IN(var) = NULL;
 	}
 
-	return EEXIST;
+	return error;
 }
 
 static int
@@ -1810,7 +1998,7 @@ if_ipsec_del_sp0(struct secpolicy *sp)
 
 	MGETHDR(m, M_WAIT, MT_DATA);
 
-	size = if_ipsec_set_sadb_x_policy(&xpl, NULL, 0, 0, sp->id, 0, NULL, NULL);
+	size = if_ipsec_set_sadb_x_policy(&xpl, NULL, 0, 0, sp->id, 0, NULL, NULL, 0);
 	ext_msg_len += PFKEY_UNIT64(size);
 
 	if_ipsec_set_sadb_msg_del(&msg, ext_msg_len);

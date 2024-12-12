@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.22 2020/09/07 03:19:04 mrg Exp $
+#	$NetBSD: Makefile,v 1.24 2024/04/20 13:24:48 rillig Exp $
 #	@(#)Makefile	8.1 (Berkeley) 6/5/93
 
 WARNS?=	3	# XXX: sign-compare issues

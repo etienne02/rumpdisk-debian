@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.48 2016/12/22 14:47:59 cherry Exp $	*/
+/*	$NetBSD: pmap.c,v 1.52 2023/12/27 17:35:36 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -82,7 +82,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.48 2016/12/22 14:47:59 cherry Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.52 2023/12/27 17:35:36 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_pmap_debug.h"
@@ -108,7 +108,6 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.48 2016/12/22 14:47:59 cherry Exp $");
 #include <machine/vmparam.h>
 
 #include <sun2/sun2/control.h>
-#include <sun2/sun2/fc.h>
 #include <sun2/sun2/machdep.h>
 
 #ifdef DDB
@@ -869,7 +868,7 @@ pmeg_allocate(pmap_t pmap, vaddr_t va)
 
 /*
  * Put pmeg on the inactive queue, leaving its contents intact.
- * This happens when we loose our context.  We may reclaim
+ * This happens when we lose our context.  We may reclaim
  * this pmeg later if it is still in the inactive queue.
  */
 static void 
@@ -1349,15 +1348,15 @@ pv_link(pmap_t pmap, int pte, vaddr_t va)
 			panic("pv_link: duplicate entry for PA=0x%lx", pa);
 	}
 #endif
-#ifdef HAVECACHE
 
+	/* Only the non-cached bit is of interest here. */
+	int flags = (pte & (PG_NC | PG_MODREF)) >> PV_SHIFT;
+	*pv_flags |= flags;
+
+#ifdef HAVECACHE
 	/*
 	 * Does this new mapping cause VAC alias problems?
 	 */
-	/* Only the non-cached bit is of interest here. */
-	int flags = (pte & PG_NC) ? PV_NC : 0;
-
-	*pv_flags |= flags;
 	if ((*pv_flags & PV_NC) == 0) {
 		for (pv = *head; pv != NULL; pv = pv->pv_next) {
 			if (BADALIAS(va, pv->pv_va)) {
@@ -2154,7 +2153,7 @@ pmap_enter_user(pmap_t pmap, vaddr_t pgva, int new_pte, bool wired)
 	/* Validate this assumption. */
 	if (pmap != current_pmap()) {
 #ifdef	PMAP_DEBUG
-		/* Aparently, this never happens. */
+		/* Apparently, this never happens. */
 		db_printf("pmap_enter_user: not curlwp\n");
 		Debugger();
 #endif

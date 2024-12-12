@@ -1,7 +1,8 @@
-/*	$NetBSD: sys_lwp.c,v 1.82 2020/05/23 23:42:43 ad Exp $	*/
+/*	$NetBSD: sys_lwp.c,v 1.89 2023/10/15 10:29:24 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 2001, 2006, 2007, 2008, 2019, 2020 The NetBSD Foundation, Inc.
+ * Copyright (c) 2001, 2006, 2007, 2008, 2019, 2020, 2023
+ *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -35,21 +36,23 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_lwp.c,v 1.82 2020/05/23 23:42:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_lwp.c,v 1.89 2023/10/15 10:29:24 riastradh Exp $");
 
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/pool.h>
-#include <sys/proc.h>
-#include <sys/types.h>
-#include <sys/syscallargs.h>
+
+#include <sys/cpu.h>
 #include <sys/kauth.h>
 #include <sys/kmem.h>
+#include <sys/lwpctl.h>
+#include <sys/pool.h>
+#include <sys/proc.h>
+#include <sys/pserialize.h>
 #include <sys/ptrace.h>
 #include <sys/sleepq.h>
-#include <sys/lwpctl.h>
-#include <sys/cpu.h>
-#include <sys/pserialize.h>
+#include <sys/syncobj.h>
+#include <sys/syscallargs.h>
+#include <sys/systm.h>
+#include <sys/types.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -57,8 +60,14 @@ __KERNEL_RCSID(0, "$NetBSD: sys_lwp.c,v 1.82 2020/05/23 23:42:43 ad Exp $");
 
 static const stack_t lwp_ss_init = SS_INIT;
 
+/*
+ * Parked LWPs get no priority boost on awakening as they blocked on
+ * user space objects.  Maybe revisit?
+ */
 syncobj_t lwp_park_syncobj = {
+	.sobj_name	= "lwp_park",
 	.sobj_flag	= SOBJ_SLEEPQ_NULL,
+	.sobj_boostpri  = PRI_USER,
 	.sobj_unsleep	= sleepq_unsleep,
 	.sobj_changepri	= sleepq_changepri,
 	.sobj_lendpri	= sleepq_lendpri,
@@ -459,6 +468,7 @@ int
 lwp_unpark(const lwpid_t *tp, const u_int ntargets)
 {
 	u_int target;
+	kmutex_t *mp;
 	int error, s;
 	proc_t *p;
 	lwp_t *t;
@@ -477,11 +487,10 @@ lwp_unpark(const lwpid_t *tp, const u_int ntargets)
 		KASSERT(lwp_locked(t, NULL));
 
 		if (__predict_true(t->l_syncobj == &lwp_park_syncobj)) {
-			/*
-			 * As expected it's parked, so wake it up. 
-			 * lwp_unsleep() will release the LWP lock.
-			 */
-			lwp_unsleep(t, true);
+			/* As expected it's parked, so wake it up. */
+			mp = t->l_mutex;
+			sleepq_remove(NULL, t, true);
+			mutex_spin_exit(mp);
 		} else if (__predict_false(t->l_stat == LSZOMB)) {
 			lwp_unlock(t);
 			error = ESRCH;
@@ -531,9 +540,8 @@ lwp_park(clockid_t clock_id, int flags, struct timespec *ts)
 		lwp_unlock(l);
 		return EALREADY;
 	}
-	l->l_biglocks = 0;
 	sleepq_enqueue(NULL, l, "parked", &lwp_park_syncobj, true);
-	error = sleepq_block(timo, true);
+	error = sleepq_block(timo, true, &lwp_park_syncobj, 0);
 	switch (error) {
 	case EWOULDBLOCK:
 		error = ETIMEDOUT;

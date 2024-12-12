@@ -1,16 +1,16 @@
-/*	$NetBSD: mopcopy.c,v 1.9 2020/10/29 08:50:42 martin Exp $	*/
+/*	$NetBSD: mopcopy.c,v 1.14 2024/12/03 05:57:02 kalvisd Exp $	*/
 
 /* mopcopy - Convert a Unix format kernel into something that
  * can be transferred via MOP.
  *
- * This code was written while refering to the NetBSD/vax boot
+ * This code was written while referring to the NetBSD/vax boot
  * loader. Therefore anything that can be booted by the Vax
- * should be convertable with this program.
+ * should be convertible with this program.
  *
  * If necessary, the a.out header is stripped, and the program
  * segments are padded out. The BSS segment is zero filled.
  * A header is prepended that looks like an IHD header. In 
- * particular the Unix mahine ID is placed where mopd expects
+ * particular the Unix machine ID is placed where mopd expects
  * the image type to be (offset is IHD_W_ALIAS). If the machine
  * ID could be mistaken for a DEC image type, then the conversion 
  * is aborted. The original a.out header is copied into the front
@@ -47,9 +47,13 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "port.h"
+#if defined (HAVE_NBTOOL_CONFIG_H)
+# include "nbtool_config.h"
+#else
+# include "port.h"
+#endif /* defined (HAVE_NBTOOL_CONFIG_H) */
 #ifndef lint
-__RCSID("$NetBSD: mopcopy.c,v 1.9 2020/10/29 08:50:42 martin Exp $");
+__RCSID("$NetBSD: mopcopy.c,v 1.14 2024/12/03 05:57:02 kalvisd Exp $");
 #endif
 
 #include "os.h"
@@ -57,7 +61,7 @@ __RCSID("$NetBSD: mopcopy.c,v 1.9 2020/10/29 08:50:42 martin Exp $");
 #include "mopdef.h"
 #include "file.h"
 #if !defined(NOAOUT)
-#if defined(__NetBSD__) || defined(__OpenBSD__)
+#if defined (HAVE_NBTOOL_CONFIG_H) || defined(__NetBSD__) || defined(__OpenBSD__)
 #include <sys/exec_aout.h>
 #endif
 #if defined(__FreeBSD__)
@@ -76,7 +80,7 @@ __RCSID("$NetBSD: mopcopy.c,v 1.9 2020/10/29 08:50:42 martin Exp $");
 #endif
 
 #ifndef NOELF
-# if defined(__NetBSD__)
+# if defined (HAVE_NBTOOL_CONFIG_H) || defined(__NetBSD__)
 #  include <sys/exec_elf.h>
 # else
 #  define NOELF

@@ -1,4 +1,4 @@
-/*	$NetBSD: tprof_analyze.c,v 1.4 2021/01/30 11:46:25 jmcneill Exp $	*/
+/*	$NetBSD: tprof_analyze.c,v 1.9 2024/11/03 10:43:27 rillig Exp $	*/
 
 /*
  * Copyright (c) 2010,2011,2012 YAMAMOTO Takashi,
@@ -28,7 +28,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: tprof_analyze.c,v 1.4 2021/01/30 11:46:25 jmcneill Exp $");
+__RCSID("$NetBSD: tprof_analyze.c,v 1.9 2024/11/03 10:43:27 rillig Exp $");
 #endif /* not lint */
 
 #include <assert.h>
@@ -46,8 +46,7 @@ __RCSID("$NetBSD: tprof_analyze.c,v 1.4 2021/01/30 11:46:25 jmcneill Exp $");
 #include <util.h>
 #include <dev/tprof/tprof_ioctl.h>
 #include "tprof.h"
-
-#define	_PATH_KSYMS	"/dev/ksyms"
+#include "ksyms.h"
 
 #include <sys/rbtree.h>
 
@@ -63,150 +62,10 @@ struct addr {
 	uint32_t cpuid;		/* cpu id */
 	bool in_kernel;		/* if addr is in the kernel address space */
 	unsigned int nsamples;	/* number of samples taken for the address */
+	unsigned int ncount[TPROF_MAXCOUNTERS];	/* count per event */
 };
 
 static rb_tree_t addrtree;
-
-struct sym {
-	char *name;
-	uint64_t value;
-	uint64_t size;
-};
-
-static struct sym **syms = NULL;
-static size_t nsyms = 0;
-
-static int
-compare_value(const void *p1, const void *p2)
-{
-	const struct sym *s1 = *(const struct sym * const *)p1;
-	const struct sym *s2 = *(const struct sym * const *)p2;
-
-	if (s1->value > s2->value) {
-		return -1;
-	} else if (s1->value < s2->value) {
-		return 1;
-	}
-	/*
-	 * to produce a stable result, it's better not to return 0
-	 * even for __strong_alias.
-	 */
-	if (s1->size > s2->size) {
-		return -1;
-	} else if (s1->size < s2->size) {
-		return 1;
-	}
-	return strcmp(s1->name, s2->name);
-}
-
-static void
-ksymload(void)
-{
-	Elf *e;
-	Elf_Scn *s;
-	GElf_Shdr sh_store;
-	GElf_Shdr *sh;
-	Elf_Data *d;
-	int fd;
-	size_t size, i;
-
-	fd = open(_PATH_KSYMS, O_RDONLY);
-	if (fd == -1) {
-		err(EXIT_FAILURE, "open " _PATH_KSYMS);
-	}
-	if (elf_version(EV_CURRENT) == EV_NONE) {
-		goto elffail;
-	}
-	e = elf_begin(fd, ELF_C_READ, NULL);
-	if (e == NULL) {
-		goto elffail;
-	}
-	for (s = elf_nextscn(e, NULL); s != NULL; s = elf_nextscn(e, s)) {
-		sh = gelf_getshdr(s, &sh_store);
-		if (sh == NULL) {
-			goto elffail;
-		}
-		if (sh->sh_type == SHT_SYMTAB) {
-			break;
-		}
-	}
-	if (s == NULL) {
-		errx(EXIT_FAILURE, "no symtab");
-	}
-	d = elf_getdata(s, NULL);
-	if (d == NULL) {
-		goto elffail;
-	}
-	assert(sh->sh_size == d->d_size);
-	size = sh->sh_size / sh->sh_entsize;
-	for (i = 1; i < size; i++) {
-		GElf_Sym st_store;
-		GElf_Sym *st;
-		struct sym *sym;
-
-		st = gelf_getsym(d, (int)i, &st_store);
-		if (st == NULL) {
-			goto elffail;
-		}
-		if (ELF_ST_TYPE(st->st_info) != STT_FUNC) {
-			continue;
-		}
-		sym = emalloc(sizeof(*sym));
-		sym->name = estrdup(elf_strptr(e, sh->sh_link, st->st_name));
-		sym->value = (uint64_t)st->st_value;
-		sym->size = st->st_size;
-		nsyms++;
-		syms = erealloc(syms, sizeof(*syms) * nsyms);
-		syms[nsyms - 1] = sym;
-	}
-	qsort(syms, nsyms, sizeof(*syms), compare_value);
-	return;
-elffail:
-	errx(EXIT_FAILURE, "libelf: %s", elf_errmsg(elf_errno()));
-}
-
-static const char *
-ksymlookup(uint64_t value, uint64_t *offset)
-{
-	size_t hi;
-	size_t lo;
-	size_t i;
-
-	/*
-	 * try to find the smallest i for which syms[i]->value <= value.
-	 * syms[] is ordered by syms[]->value in the descending order.
-	 */
-
-	hi = nsyms - 1;
-	lo = 0;
-	while (lo < hi) {
-		const size_t mid = (lo + hi) / 2;
-		const struct sym *sym = syms[mid];
-
-		assert(syms[lo]->value >= sym->value);
-		assert(sym->value >= syms[hi]->value);
-		if (sym->value <= value) {
-			hi = mid;
-			continue;
-		}
-		lo = mid + 1;
-	}
-	assert(lo == nsyms - 1 || syms[lo]->value <= value);
-	assert(lo == 0 || syms[lo - 1]->value > value);
-	for (i = lo; i < nsyms; i++) {
-		const struct sym *sym = syms[i];
-
-		if (sym->value <= value &&
-		    (sym->size == 0 || value - sym->value <= sym->size )) {
-			*offset = value - sym->value;
-			return sym->name;
-		}
-		if (sym->size != 0 && sym->value + sym->size < value) {
-			break;
-		}
-	}
-	return NULL;
-}
 
 static signed int
 addrtree_compare_key(void *ctx, const void *n1, const void *keyp)
@@ -278,12 +137,11 @@ tprof_analyze(int argc, char **argv)
 	size_t naddrs, nsamples, i;
 	float perc;
 	int ch;
+	u_int c, maxevent = 0;
 	bool distinguish_processes = true;
 	bool distinguish_cpus = true;
 	bool distinguish_lwps = true;
 	bool kernel_only = false;
-	extern char *optarg;
-	extern int optind;
 	FILE *f;
 
 	while ((ch = getopt(argc, argv, "CkLPp:s")) != -1) {
@@ -332,7 +190,7 @@ tprof_analyze(int argc, char **argv)
 		errx(EXIT_FAILURE, "fopen");
 	}
 
-	ksymload();
+	ksymload(NULL);
 	rb_tree_init(&addrtree, &addrtree_ops);
 
 	/*
@@ -363,6 +221,7 @@ tprof_analyze(int argc, char **argv)
 			continue;
 		}
 		a = emalloc(sizeof(*a));
+		memset(a, 0, sizeof(*a));
 		a->addr = (uint64_t)sample.s_pc;
 		if (distinguish_processes) {
 			a->pid = sample.s_pid;
@@ -384,12 +243,18 @@ tprof_analyze(int argc, char **argv)
 			const char *name;
 			uint64_t offset;
 
-			name = ksymlookup(a->addr, &offset);
+			name = ksymlookup(a->addr, &offset, NULL);
 			if (name != NULL) {
 				a->addr -= offset;
 			}
 		}
+		c = __SHIFTOUT(sample.s_flags, TPROF_SAMPLE_COUNTER_MASK);
+		assert(c < TPROF_MAXCOUNTERS);
+		if (maxevent < c)
+			maxevent = c;
+
 		a->nsamples = 1;
+		a->ncount[c] = 1;
 		o = rb_tree_insert_node(&addrtree, a);
 		if (o != a) {
 			assert(a->addr == o->addr);
@@ -398,7 +263,9 @@ tprof_analyze(int argc, char **argv)
 			assert(a->cpuid == o->cpuid);
 			assert(a->in_kernel == o->in_kernel);
 			free(a);
+
 			o->nsamples++;
+			o->ncount[c]++;
 		} else {
 			naddrs++;
 		}
@@ -423,8 +290,17 @@ tprof_analyze(int argc, char **argv)
 	 */
 	printf("File: %s\n", argv[0]);
 	printf("Number of samples: %zu\n\n", nsamples);
-	printf("percentage   nsamples pid    lwp  cpu  k address          symbol\n");
-	printf("------------ -------- ------ ---- ---- - ---------------- ------\n");
+
+	printf("percentage   nsamples ");
+	for (c = 0; c <= maxevent; c++)
+		printf("event#%02u ", c);
+	printf("pid    lwp    cpu  k address          symbol\n");
+
+	printf("------------ -------- ");
+	for (c = 0; c <= maxevent; c++)
+		printf("-------- ");
+
+	printf("------ ------ ---- - ---------------- ------\n");
 	for (i = 0; i < naddrs; i++) {
 		const char *name;
 		char buf[100];
@@ -432,7 +308,7 @@ tprof_analyze(int argc, char **argv)
 
 		a = l[i];
 		if (a->in_kernel) {
-			name = ksymlookup(a->addr, &offset);
+			name = ksymlookup(a->addr, &offset, NULL);
 		} else {
 			name = NULL;
 		}
@@ -448,11 +324,17 @@ tprof_analyze(int argc, char **argv)
 
 		perc = ((float)a->nsamples / (float)nsamples) * 100.0;
 
-		printf("%11f%% %8u %6" PRIu32 " %4" PRIu32 " %4" PRIu32 " %u %016"
-		    PRIx64 " %s\n",
-		    perc,
-		    a->nsamples, a->pid, a->lwpid, a->cpuid, a->in_kernel,
-		    a->addr, name);
+		printf("%11f%% %8u", perc, a->nsamples);
+
+		for (c = 0; c <= maxevent; c++)
+			printf(" %8u", a->ncount[c]);
+
+		printf(" %6" PRIu32 " %6" PRIu32 " %4" PRIu32 " %u %016"
+		    PRIx64" %s",
+		    a->pid, a->lwpid, a->cpuid, a->in_kernel, a->addr, name);
+
+
+		printf("\n");
 	}
 
 	fclose(f);

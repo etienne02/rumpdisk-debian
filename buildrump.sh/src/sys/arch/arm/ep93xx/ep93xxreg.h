@@ -1,4 +1,4 @@
-/*	$NetBSD: ep93xxreg.h,v 1.7 2009/10/23 00:39:30 snj Exp $ */
+/*	$NetBSD: ep93xxreg.h,v 1.9 2021/11/21 08:25:26 skrll Exp $ */
 
 /*
  * Copyright (c) 2004 Jesse Off
@@ -30,7 +30,7 @@
 #define _EP93XXREG_H_
 
 /*
- * Physical memory map for the Cirrus Logic EP93XX 
+ * Physical memory map for the Cirrus Logic EP93XX
  */
 
 /*
@@ -96,9 +96,9 @@
 /*
  * Virtual memory map for the Cirrus Logic EP93XX integrated devices
  *
- * Some device registers are staticaly mapped on upper address region.
+ * Some device registers are statically mapped on upper address region.
  * because we have to access them before bus_space is initialized.
- * Most device is dynamicaly mapped by bus_space_map().  In this case,
+ * Most device is dynamically mapped by bus_space_map().  In this case,
  * the actual mapped (virtual) address are not cared by device drivers.
  */
 

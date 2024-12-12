@@ -1,4 +1,4 @@
-/*	$NetBSD: firewire.c,v 1.52 2021/08/07 16:19:12 thorpej Exp $	*/
+/*	$NetBSD: firewire.c,v 1.55 2022/05/22 11:27:35 andvar Exp $	*/
 /*-
  * Copyright (c) 2003 Hidetoshi Shimokawa
  * Copyright (c) 1998-2002 Katsushi Kobayashi and Hidetoshi Shimokawa
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: firewire.c,v 1.52 2021/08/07 16:19:12 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: firewire.c,v 1.55 2022/05/22 11:27:35 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -1202,7 +1202,7 @@ fw_rcv(struct fw_rcv_buf *rb)
 		return;
 
 	default:
-		aprint_error_dev(rb->fc->bdev, "unknow tcode %d\n", tcode);
+		aprint_error_dev(rb->fc->bdev, "unknown tcode %d\n", tcode);
 		break;
 	}
 }
@@ -1787,7 +1787,7 @@ fw_explore_node(struct fw_device *dfwdev)
 		 * speed map value.
 		 * 1394a-2000 compliant devices only use
 		 * the Bus Info Block link spd value, so
-		 * ignore the speed map alltogether. SWB
+		 * ignore the speed map altogether. SWB
 		 */
 		if (binfo->link_spd == FWSPD_S100 /* 0 */) {
 			aprint_normal_dev(fc->bdev,
@@ -2041,9 +2041,11 @@ fw_attach_dev(struct firewire_comm *fc)
 
 			fwa.name = fw_get_devclass(fwdev);
 			fwa.fwdev = fwdev;
+			KERNEL_LOCK(1, NULL);
 			fwdev->dev = config_found(sc->dev, &fwa, firewire_print,
 			    CFARGS(.submatch = config_stdsubmatch,
 				   .locators = locs));
+			KERNEL_UNLOCK_ONE(NULL);
 			if (fwdev->dev == NULL) {
 				free(devlist, M_DEVBUF);
 				break;

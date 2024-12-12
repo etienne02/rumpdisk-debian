@@ -1,4 +1,4 @@
-/*	$NetBSD: siop.c,v 1.102 2021/08/07 16:19:12 thorpej Exp $	*/
+/*	$NetBSD: siop.c,v 1.105 2024/02/08 19:44:08 andvar Exp $	*/
 
 /*
  * Copyright (c) 2000 Manuel Bouyer.
@@ -28,7 +28,7 @@
 /* SYM53c7/8xx PCI-SCSI I/O Processors driver */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: siop.c,v 1.102 2021/08/07 16:19:12 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: siop.c,v 1.105 2024/02/08 19:44:08 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -561,7 +561,7 @@ siop_intr(void *v)
 				goto scintr;
 			}
 			/*
-			 * else we have to restart it ourselve, at the
+			 * else we have to restart it ourselves, at the
 			 * interrupted instruction.
 			 */
 			bus_space_write_4(sc->sc_c.sc_rt, sc->sc_c.sc_rh,
@@ -969,7 +969,7 @@ scintr:
 		return 1;
 	}
 	/*
-	 * We just should't get there, but on some KVM virtual hosts,
+	 * We just shouldn't get there, but on some KVM virtual hosts,
 	 * we do - see PR 48277.
 	 */
 	printf("siop_intr: I shouldn't be there !\n");
@@ -1160,7 +1160,7 @@ siop_handle_qtag_reject(struct siop_cmd *siop_cmd)
 /*
  * handle a bus reset: reset chip, unqueue all active commands, free all
  * target struct and report lossage to upper layer.
- * As the upper layer may requeue immediatly we have to first store
+ * As the upper layer may requeue immediately we have to first store
  * all active commands in a temporary queue.
  */
 void

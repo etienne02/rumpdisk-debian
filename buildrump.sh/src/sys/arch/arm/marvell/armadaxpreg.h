@@ -280,7 +280,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define ARMADAXP_GPIO2_BASE	(MVSOC_DEVBUS_BASE + 0x8140)
 
 /*
- * Miscellanseous Register
+ * Miscellaneous Register
  */
 #define	ARMADAXP_MISC_BASE	(MVSOC_DEVBUS_BASE + 0x8200)
 
@@ -293,7 +293,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define	ARMADAXP_MISC_SSRR_GLOBALSOFTRST	(1 << 0)
 
 /*
- * Thermal Sensor and Thermal Managemer
+ * Thermal Sensor and Thermal Management
  */
 #define ARMADAXP_TS_BASE	(MVSOC_DEVBUS_BASE + 0x82b0)
 #define ARMADAXP_TM_BASE	(MVSOC_DEVBUS_BASE + 0x84c0)
@@ -335,7 +335,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define ARMADAXP_L2_CFU			0x228
 #define ARMADAXP_L2_SYNC		0x700
 #define ARMADAXP_L2_STATUS		0x704
-/* Cache maintance operations */
+/* Cache maintenance operations */
 #define ARMADAXP_L2_RANGE_BASE		0x720
 #define ARMADAXP_L2_INV_PHYS		0x770
 #define ARMADAXP_L2_INV_RANGE		0x774

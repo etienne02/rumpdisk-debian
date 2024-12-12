@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.c,v 1.201 2021/08/07 16:19:08 thorpej Exp $	*/
+/*	$NetBSD: cpu.c,v 1.210 2024/04/22 23:07:47 andvar Exp $	*/
 
 /*
  * Copyright (c) 2000-2020 NetBSD Foundation, Inc.
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.201 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.210 2024/04/22 23:07:47 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_mpbios.h"		/* for MPDEBUG */
@@ -106,6 +106,7 @@ __KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.201 2021/08/07 16:19:08 thorpej Exp $");
 #include <machine/mtrr.h>
 #include <machine/pio.h>
 #include <machine/cpu_counter.h>
+#include <machine/pmap_private.h>
 
 #include <x86/fpu.h>
 
@@ -175,6 +176,7 @@ struct cpu_info cpu_info_primary __aligned(CACHE_LINE_SIZE) = {
 	.ci_idepth = -1,
 	.ci_curlwp = &lwp0,
 	.ci_curldt = -1,
+	.ci_kfpu_spl = -1,
 };
 
 struct cpu_info *cpu_info_list = &cpu_info_primary;
@@ -699,7 +701,8 @@ cpu_init(struct cpu_info *ci)
 		ci->ci_feat_val[1] = descs[2];
 	}
 
-	if (x86_fpu_save >= FPU_SAVE_FXSAVE) {
+	if (CPU_IS_PRIMARY(ci) &&
+	    x86_fpu_save >= FPU_SAVE_FXSAVE) {
 		fpuinit_mxcsr_mask();
 	}
 
@@ -916,7 +919,29 @@ cpu_hatch(void *v)
 	 * prevent a race against cpu0. See sys/conf/ssp.mk.
 	 */
 
+	/*
+	 * Initialize MSRs on this CPU:
+	 *
+	 * - On amd64: Enables SYSCALL/SYSRET.
+	 *
+	 * - On amd64: Sets up %fs and %gs so that %gs points to the
+	 *   current struct cpu_info as needed for CPUVAR(...),
+	 *   curcpu(), and curlwp.
+	 *
+	 *   (On i386, CPUVAR(...), curcpu(), and curlwp are made to
+	 *   work first by the conifguration of segment descriptors in
+	 *   the Global Descriptor Table (GDT) in initgdt.)
+	 *
+	 * - Enables the no-execute bit if supported.
+	 *
+	 * Thus, after this point, CPUVAR(...), curcpu(), and curlwp
+	 * will work on this CPU.
+	 *
+	 * Note: The call to cpu_init_msrs for cpu0 happens in
+	 * init386/init_x86_64.
+	 */
 	cpu_init_msrs(ci, true);
+
 	cpu_probe(ci);
 	cpu_speculation_init(ci);
 #if NHYPERV > 0
@@ -1109,6 +1134,7 @@ cpu_copy_trampoline(paddr_t pdir_pa)
 int
 mp_cpu_start(struct cpu_info *ci, paddr_t target)
 {
+#if NLAPIC > 0
 	int error;
 
 	/*
@@ -1124,7 +1150,6 @@ mp_cpu_start(struct cpu_info *ci, paddr_t target)
 	outb(IO_RTC, NVRAM_RESET);
 	outb(IO_RTC+1, NVRAM_RESET_JUMP);
 
-#if NLAPIC > 0
 	/*
 	 * "and the warm reset vector (DWORD based at 40:67) to point
 	 * to the AP startup code ..."
@@ -1134,7 +1159,6 @@ mp_cpu_start(struct cpu_info *ci, paddr_t target)
 	dwordptr[1] = target >> 4;
 
 	memcpy((uint8_t *)cmos_data_mapping + 0x467, dwordptr, 4);
-#endif
 
 	if ((cpu_feature[0] & CPUID_APIC) == 0) {
 		aprint_error("mp_cpu_start: CPU does not have APIC\n");
@@ -1175,6 +1199,9 @@ mp_cpu_start(struct cpu_info *ci, paddr_t target)
 	}
 
 	return 0;
+#else
+	return ENODEV;
+#endif /* NLAPIC > 0 */
 }
 
 void
@@ -1194,10 +1221,55 @@ typedef void (vector)(void);
 extern vector Xsyscall, Xsyscall32, Xsyscall_svs;
 #endif
 
+/*
+ * cpu_init_msrs(ci, full)
+ *
+ *	Initialize some Model-Specific Registers (MSRs) on the current
+ *	CPU, whose struct cpu_info pointer is ci, for:
+ *
+ *	- SYSCALL/SYSRET.
+ *	- %fs/%gs on amd64 if `full' is true; needed to make
+ *	  CPUVAR(...), curcpu(), and curlwp work.  (We do this at boot,
+ *	  but skip it on ACPI wakeup.)
+ *	- No-execute bit, if supported.
+ *
+ *	References:
+ *
+ *	- Intel 64 and IA-32 Architectures Software Developer's Manual,
+ *	  Volume 3: System Programming Guide, Order Number 325384,
+ *	  April 2022, Sec. 5.8.8 `Fast System Calls in 64-Bit Mode',
+ *	  pp. 5-22 through 5-23.
+ *
+ *	- Intel 64 and IA-32 Architectures Software Developer's Manual,
+ *	  Volume 4: Model-Specific Registers, Order Number 335592,
+ *	  April 2022, Sec. 2.1 `Architectural MSRs', Table 2-2,
+ *	  pp. 2-60 through 2-61.
+ */
 void
 cpu_init_msrs(struct cpu_info *ci, bool full)
 {
 #ifdef __x86_64__
+	/*
+	 * On amd64, set up the syscall target address registers
+	 * for SYSCALL/SYSRET:
+	 *
+	 * - IA32_STAR, c000_0081h (MSR_STAR): System Call Target
+	 *   Address.  Code and stack segment selectors for SYSRET
+	 *   (bits 48:63) and SYSCALL (bits 32:47).
+	 *
+	 * - IA32_LSTAR, c000_0082h (MSR_LSTAR): IA-32e Mode System
+	 *   Call Target Address.  Target rip for SYSCALL when executed
+	 *   in 64-bit mode.
+	 *
+	 * - IA32_CSTAR, c000_0083h (MSR_CSTAR): IA-32e Mode System
+	 *   Call Target Address.  Target rip for SYSCALL when executed
+	 *   in compatibility mode.  (XXX Manual says this is `[n]ot
+	 *   used, as the SYSCALL instruction is not recognized in
+	 *   compatibility mode', so why do we set it?)
+	 *
+	 * - IA32_FMASK, c000_0084h (MSR_SFMASK): System Call Flag
+	 *   Mask.  Mask for the RFLAGS register on SYSCALL.
+	 */
 	wrmsr(MSR_STAR,
 	    ((uint64_t)GSEL(GCODE_SEL, SEL_KPL) << 32) |
 	    ((uint64_t)LSEL(LSYSRETBASE_SEL, SEL_UPL) << 48));
@@ -1210,6 +1282,22 @@ cpu_init_msrs(struct cpu_info *ci, bool full)
 		wrmsr(MSR_LSTAR, (uint64_t)Xsyscall_svs);
 #endif
 
+	/*
+	 * On amd64 if `full' is true -- used at boot, but not on ACPI
+	 * wakeup -- then additionally set up %fs and %gs:
+	 *
+	 * - IA32_FS_BASE, c000_0100h (MSR_FSBASE): Base address of
+	 *   %fs.  Not used in NetBSD kernel, so zero it.
+	 *
+	 * - IA32_GS_BASE, c000_0101h (MSR_GSBASE): Base address of
+	 *   %gs.  Used in NetBSD kernel by CPUVAR(...), curcpu(), and
+	 *   curlwp for access to the CPU-local area, so set it to ci.
+	 *
+	 * - IA32_KERNEL_GS_BASE, c000_0102h (MSR_KERNELGSBASE): Base
+	 *   address of what swapgs will leave in %gs when switching to
+	 *   userland.  Zero for now; will be set to pcb->pcb_gs in
+	 *   cpu_switchto for user threads.
+	 */
 	if (full) {
 		wrmsr(MSR_FSBASE, 0);
 		wrmsr(MSR_GSBASE, (uint64_t)ci);
@@ -1217,6 +1305,12 @@ cpu_init_msrs(struct cpu_info *ci, bool full)
 	}
 #endif	/* __x86_64__ */
 
+	/*
+	 * If the no-execute bit is supported, enable it in:
+	 *
+	 * - IA32_EFER, c000_0080h (MSR_EFER): Extended Feature
+         *   Enables.
+	 */
 	if (cpu_feature[2] & CPUID_NOX)
 		wrmsr(MSR_EFER, rdmsr(MSR_EFER) | EFER_NXE);
 }
@@ -1335,32 +1429,52 @@ cpu_get_tsc_freq(struct cpu_info *ci)
 		 */
 		if (ci->ci_data.cpu_cc_freq == 0)
 			freq = freq_from_cpuid = cpu_tsc_freq_cpuid(ci);
+		if (freq != 0)
+			aprint_debug_dev(ci->ci_dev, "TSC freq "
+			    "from CPUID %" PRIu64 " Hz\n", freq);
 #if NHPET > 0
-		if (freq == 0)
+		if (freq == 0) {
 			freq = hpet_tsc_freq();
+			if (freq != 0)
+				aprint_debug_dev(ci->ci_dev, "TSC freq "
+				    "from HPET %" PRIu64 " Hz\n", freq);
+		}
 #endif
 		if (freq == 0) {
 			/*
-			 * Work out the approximate overhead involved below. 
+			 * Work out the approximate overhead involved below.
 			 * Discard the result of the first go around the
 			 * loop.
 			 */
 			overhead = 0;
 			for (int i = 0; i <= 8; i++) {
+				const int s = splhigh();
 				t0 = cpu_counter();
 				delay_func(0);
 				t1 = cpu_counter();
+				splx(s);
 				if (i > 0) {
 					overhead += (t1 - t0);
 				}
 			}
 			overhead >>= 3;
 
-			/* Now do the calibration. */
-			t0 = cpu_counter();
-			delay_func(100000);
-			t1 = cpu_counter();
-			freq = (t1 - t0 - overhead) * 10;
+			/*
+			 * Now do the calibration.
+			 */
+			freq = 0;
+			for (int i = 0; i < 1000; i++) {
+				const int s = splhigh();
+				t0 = cpu_counter();
+				delay_func(100);
+				t1 = cpu_counter();
+				splx(s);
+				freq += t1 - t0 - overhead;
+			}
+			freq = freq * 10;
+
+			aprint_debug_dev(ci->ci_dev, "TSC freq "
+			    "from delay %" PRIu64 " Hz\n", freq);
 		}
 		if (ci->ci_data.cpu_cc_freq != 0) {
 			freq_from_cpuid = cpu_tsc_freq_cpuid(ci);
@@ -1411,8 +1525,11 @@ x86_cpu_idle_halt(void)
 void
 cpu_load_pmap(struct pmap *pmap, struct pmap *oldpmap)
 {
+
+	KASSERT(kpreempt_disabled());
+
 #ifdef SVS
-	if (svs_enabled) {
+	if (svs_enabled && pmap_is_user(pmap)) {
 		svs_pdir_switch(pmap);
 	}
 #endif

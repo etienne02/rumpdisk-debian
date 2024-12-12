@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_pci.c,v 1.33 2020/02/14 04:29:19 riastradh Exp $	*/
+/*	$NetBSD: drm_pci.c,v 1.48 2022/10/28 21:58:48 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_pci.c,v 1.33 2020/02/14 04:29:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_pci.c,v 1.48 2022/10/28 21:58:48 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/errno.h>
@@ -38,8 +38,14 @@ __KERNEL_RCSID(0, "$NetBSD: drm_pci.c,v 1.33 2020/02/14 04:29:19 riastradh Exp $
 
 #include <dev/pci/pcivar.h>
 
-#include <drm/drmP.h>
+#include <linux/err.h>
+#include <drm/drm_agpsupport.h>
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_legacy.h>
+#include <drm/drm_pci.h>
+
+#include "../dist/drm/drm_internal.h"
 
 struct drm_bus_irq_cookie {
 	pci_intr_handle_t *intr_handles;
@@ -53,11 +59,10 @@ drm_pci_attach_args(struct drm_device *dev)
 }
 
 int
-drm_pci_attach(device_t self, const struct pci_attach_args *pa,
-    struct pci_dev *pdev, struct drm_driver *driver, unsigned long cookie,
-    struct drm_device **devp)
+drm_pci_attach(struct drm_device *dev, struct pci_dev *pdev)
 {
-	struct drm_device *dev;
+	device_t self = dev->dev;
+	const struct pci_attach_args *pa = &pdev->pd_pa;
 	unsigned int unit;
 	int ret;
 
@@ -65,17 +70,9 @@ drm_pci_attach(device_t self, const struct pci_attach_args *pa,
 	/* XXX errno NetBSD->Linux */
 	ret = -drm_guarantee_initialized();
 	if (ret)
-		goto fail0;
-
-	/* Create a DRM device.  */
-	dev = drm_dev_alloc(driver, self);
-	if (dev == NULL) {
-		ret = -ENOMEM;
-		goto fail0;
-	}
+		return ret;
 
 	dev->pdev = pdev;
-	pdev->pd_drm_dev = dev;	/* XXX Nouveau kludge.  */
 
 	/* XXX Set the power state to D0?  */
 
@@ -127,43 +124,27 @@ drm_pci_attach(device_t self, const struct pci_attach_args *pa,
 
 	/* Set up AGP stuff if requested.  */
 	if (drm_core_check_feature(dev, DRIVER_USE_AGP)) {
-		if (drm_pci_device_is_agp(dev))
+		if (pci_find_capability(dev->pdev, PCI_CAP_ID_AGP))
 			dev->agp = drm_agp_init(dev);
 		if (dev->agp)
 			dev->agp->agp_mtrr = arch_phys_wc_add(dev->agp->base,
 				dev->agp->agp_info.aki_info.ai_aperture_size);
 	}
 
-	/* Register the DRM device and do driver-specific initialization.  */
-	ret = drm_dev_register(dev, cookie);
-	if (ret)
-		goto fail1;
-
 	/* Success!  */
-	*devp = dev;
 	return 0;
-
-fail2: __unused
-	drm_dev_unregister(dev);
-fail1:	drm_pci_agp_destroy(dev);
-	dev->bus_nmaps = 0;
-	kmem_free(dev->bus_maps, PCI_NUM_RESOURCES * sizeof(dev->bus_maps[0]));
-	if (dev->dmat_subregion_p) {
-		bus_dmatag_destroy(dev->dmat);
-	}
-	drm_dev_unref(dev);
-fail0:	return ret;
 }
 
-int
-drm_pci_detach(struct drm_device *dev, int flags __unused)
+void
+drm_pci_detach(struct drm_device *dev)
 {
 
-	/* Do driver-specific detachment and unregister the device.  */
-	drm_dev_unregister(dev);
-
 	/* Tear down AGP stuff if necessary.  */
-	drm_pci_agp_destroy(dev);
+	if (dev->agp) {
+		arch_phys_wc_del(dev->agp->agp_mtrr);
+		drm_agp_fini(dev);
+		KASSERT(dev->agp == NULL);
+	}
 
 	/* Free the record of available bus space mappings.  */
 	dev->bus_nmaps = 0;
@@ -172,21 +153,6 @@ drm_pci_detach(struct drm_device *dev, int flags __unused)
 	/* Tear down bus space and bus DMA tags.  */
 	if (dev->dmat_subregion_p) {
 		bus_dmatag_destroy(dev->dmat);
-	}
-
-	drm_dev_unref(dev);
-
-	return 0;
-}
-
-void
-drm_pci_agp_destroy(struct drm_device *dev)
-{
-
-	if (dev->agp) {
-		arch_phys_wc_del(dev->agp->agp_mtrr);
-		drm_agp_fini(dev);
-		KASSERT(dev->agp == NULL);
 	}
 }
 
@@ -222,6 +188,8 @@ drm_pci_request_irq(struct drm_device *dev, int flags)
 		}
 	}
 
+	pci_intr_setattr(pa->pa_pc, &irq_cookie->intr_handles[0],
+	    PCI_INTR_MPSAFE, true);
 	intrstr = pci_intr_string(pa->pa_pc, irq_cookie->intr_handles[0],
 	    intrbuf, sizeof(intrbuf));
 	irq_cookie->ih_cookie = pci_intr_establish_xname(pa->pa_pc,
@@ -252,58 +220,4 @@ drm_pci_free_irq(struct drm_device *dev)
 	pci_intr_release(pa->pa_pc, cookie->intr_handles, 1);
 	kmem_free(cookie, sizeof(*cookie));
 	dev->irq_cookie = NULL;
-}
-
-int
-drm_pci_set_busid(struct drm_device *dev, struct drm_master *master)
-{
-	const struct pci_attach_args *const pa = &dev->pdev->pd_pa;
-
-	master->unique = kasprintf(GFP_KERNEL, "pci:%04x:%02x:%02x.%d",
-	    device_unit(device_parent(dev->dev)),
-	    pa->pa_bus, pa->pa_device, pa->pa_function);
-	if (master->unique == NULL)
-		return -ENOMEM;
-	master->unique_len = strlen(master->unique);
-
-	return 0;
-}
-
-int
-drm_pci_set_unique(struct drm_device *dev, struct drm_master *master,
-    struct drm_unique *unique)
-{
-	char kbuf[64], ubuf[64];
-	int ret;
-
-	/* Reject excessively long unique strings.  */
-	if (unique->unique_len > sizeof(ubuf) - 1)
-		return -EINVAL;
-
-	/* Copy in the alleged unique string, NUL-terminated.  */
-	ret = -copyin(unique->unique, ubuf, unique->unique_len);
-	if (ret)
-		return ret;
-	ubuf[unique->unique_len] = '\0';
-
-	/* Make sure it matches what we expect.  */
-	snprintf(kbuf, sizeof kbuf, "PCI:%d:%ld:%ld", dev->pdev->bus->number,
-	    (long)PCI_SLOT(dev->pdev->devfn),
-	    (long)PCI_FUNC(dev->pdev->devfn));
-	if (strncmp(kbuf, ubuf, sizeof(kbuf)) != 0)
-		return -EINVAL;
-
-	/* Remember it.  */
-	master->unique = kstrdup(ubuf, GFP_KERNEL);
-	master->unique_len = strlen(master->unique);
-
-	/* Success!  */
-	return 0;
-}
-
-int
-drm_pcie_get_speed_cap_mask(struct drm_device *dev, u32 *speed_mask)
-{
-
-	return -ENOSYS;
 }

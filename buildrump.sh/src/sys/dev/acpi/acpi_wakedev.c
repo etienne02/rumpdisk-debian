@@ -1,4 +1,4 @@
-/* $NetBSD: acpi_wakedev.c,v 1.27 2017/06/01 02:45:09 chs Exp $ */
+/* $NetBSD: acpi_wakedev.c,v 1.30 2024/12/09 23:41:36 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2009, 2010, 2011 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_wakedev.c,v 1.27 2017/06/01 02:45:09 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_wakedev.c,v 1.30 2024/12/09 23:41:36 jmcneill Exp $");
+
+#include "pci.h"
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -150,7 +152,11 @@ acpi_wakedev_init(struct acpi_devnode *ad)
 	/*
 	 * Last but not least, mark the GPE for wake.
 	 */
-	rv = AcpiSetupGpeForWake(ad->ad_handle, hdl, val);
+	if (!AcpiGbl_ReducedHardware) {
+		rv = AcpiSetupGpeForWake(ad->ad_handle, hdl, val);
+	} else {
+		rv = AE_OK;
+	}
 
 out:
 	if (buf.Pointer != NULL)
@@ -210,7 +216,6 @@ acpi_wakedev_add(struct acpi_devnode *ad)
 {
 	struct acpi_wakedev *aw;
 	const char *str = NULL;
-	device_t dev;
 	int err;
 
 	KASSERT(ad != NULL && ad->ad_wakedev != NULL);
@@ -228,12 +233,14 @@ acpi_wakedev_add(struct acpi_devnode *ad)
 
 	if (ad->ad_device != NULL)
 		str = device_xname(ad->ad_device);
+#if NPCI > 0
 	else {
-		dev = acpi_pcidev_find_dev(ad);
+		device_t dev = acpi_pcidev_find_dev(ad);
 
 		if (dev != NULL)
 			str = device_xname(dev);
 	}
+#endif
 
 	if (str == NULL)
 		return;
@@ -292,7 +299,7 @@ acpi_wakedev_commit(struct acpi_softc *sc, int state)
 	 *
 	 *  3.	Execute _DSW or _PSW method.
 	 */
-	SIMPLEQ_FOREACH(ad, &sc->ad_head, ad_list) {
+	SIMPLEQ_FOREACH(ad, &sc->sc_head, ad_list) {
 
 		if (ad->ad_wakedev == NULL)
 			continue;
@@ -304,11 +311,15 @@ acpi_wakedev_commit(struct acpi_softc *sc, int state)
 		val = ad->ad_wakedev->aw_number;
 
 		if (state == ACPI_STATE_S0) {
-			(void)AcpiSetGpeWakeMask(hdl, val, ACPI_GPE_DISABLE);
+			if (!AcpiGbl_ReducedHardware) {
+				AcpiSetGpeWakeMask(hdl, val, ACPI_GPE_DISABLE);
+			}
 			continue;
 		}
 
-		(void)AcpiSetGpeWakeMask(hdl, val, ACPI_GPE_ENABLE);
+		if (!AcpiGbl_ReducedHardware) {
+			AcpiSetGpeWakeMask(hdl, val, ACPI_GPE_ENABLE);
+		}
 
 		acpi_wakedev_power_set(ad, true);
 		acpi_wakedev_method(ad, state);

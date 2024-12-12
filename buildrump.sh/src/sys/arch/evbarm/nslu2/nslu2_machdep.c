@@ -1,4 +1,4 @@
-/*	$NetBSD: nslu2_machdep.c,v 1.35 2021/08/17 22:00:29 andvar Exp $	*/
+/*	$NetBSD: nslu2_machdep.c,v 1.41 2023/10/12 11:33:38 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
@@ -94,7 +94,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nslu2_machdep.c,v 1.35 2021/08/17 22:00:29 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nslu2_machdep.c,v 1.41 2023/10/12 11:33:38 skrll Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -345,66 +345,55 @@ cpu_reboot(int howto, char *bootstr)
 /* Static device mappings. */
 static const struct pmap_devmap nslu2_devmap[] = {
 	/* Physical/Virtual address for I/O space */
-	{
+	DEVMAP_ENTRY(
 		IXP425_IO_VBASE,
 		IXP425_IO_HWBASE,
-		IXP425_IO_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
-
-	/* Expansion Bus */
-	{
-		IXP425_EXP_VBASE,
-		IXP425_EXP_HWBASE,
-		IXP425_EXP_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
-
-	/* IXP425 PCI Configuration */
-	{
-		IXP425_PCI_VBASE,
-		IXP425_PCI_HWBASE,
-		IXP425_PCI_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		IXP425_IO_SIZE
+	),
 
 	/* SDRAM Controller */
-	{
+	DEVMAP_ENTRY(
 		IXP425_MCU_VBASE,
 		IXP425_MCU_HWBASE,
-		IXP425_MCU_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		IXP425_MCU_SIZE
+	),
+
+	/*
+	 * No need to map the following entries statically.
+	 * If you revive these, align VBASE's to L1 section
+	 * boundaries (see pmap_devmap.c).
+	 */
+#if 0
+	/* Expansion Bus */
+	DEVMAP_ENTRY(
+		IXP425_EXP_VBASE,
+		IXP425_EXP_HWBASE,
+		IXP425_EXP_SIZE
+	),
+
+	/* IXP425 PCI Configuration */
+	DEVMAP_ENTRY(
+		IXP425_PCI_VBASE,
+		IXP425_PCI_HWBASE,
+		IXP425_PCI_SIZE
+	),
 
 	/* PCI Memory Space */
-	{
+	DEVMAP_ENTRY(
 		IXP425_PCI_MEM_VBASE,
 		IXP425_PCI_MEM_HWBASE,
-		IXP425_PCI_MEM_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		IXP425_PCI_MEM_SIZE
+	),
 
 	/* Flash memory */
-	{
+	DEVMAP_ENTRY(
 		NSLU2_FLASH_VBASE,
 		NSLU2_FLASH_HWBASE,
-		NSLU2_FLASH_SIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		NSLU2_FLASH_SIZE
+	),
+#endif
 
-	{
-		0,
-		0,
-		0,
-		0,
-		0,
-	}
+	DEVMAP_ENTRY_END
 };
 
 /*
@@ -423,10 +412,6 @@ static const struct pmap_devmap nslu2_devmap[] = {
 vaddr_t
 initarm(void *arg)
 {
-	extern vaddr_t xscale_cache_clean_addr;
-#ifdef DIAGNOSTIC
-	extern vsize_t xscale_minidata_clean_size;
-#endif
 	int loop;
 	int loop1;
 	u_int kerneldatasize;
@@ -500,8 +485,9 @@ initarm(void *arg)
 
 	/* Tell the user about the memory */
 #ifdef VERBOSE_INIT_ARM
-	printf("physmemory: %d pages at 0x%08lx -> 0x%08lx\n", physmem,
-	    physical_start, physical_end - 1);
+	printf("physmemory: %" PRIuPSIZE " pages at "
+	    "0x%08" PRIxPADDR " -> 0x%08" PRIxPADDR "\n",
+	    physmem, physical_start, physical_end - 1);
 
 	printf("Allocating page tables\n");
 #endif
@@ -640,6 +626,9 @@ initarm(void *arg)
 		logical += pmap_map_chunk(l1pagetable, KERNEL_BASE + logical,
 		    physical_start + logical, totalsize - textsize,
 		    VM_PROT_READ|VM_PROT_WRITE, PTE_CACHE);
+
+		if (KERNEL_BASE + logical >= KERNEL_VM_BASE)
+			panic("VA for kernel image exhausted.");
 	}
 
 #ifdef VERBOSE_INIT_ARM

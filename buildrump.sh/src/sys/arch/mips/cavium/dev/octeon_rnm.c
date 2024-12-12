@@ -1,4 +1,4 @@
-/*	$NetBSD: octeon_rnm.c,v 1.12 2020/06/18 13:52:08 simonb Exp $	*/
+/*	$NetBSD: octeon_rnm.c,v 1.16 2023/03/21 22:07:29 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -99,7 +99,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: octeon_rnm.c,v 1.12 2020/06/18 13:52:08 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: octeon_rnm.c,v 1.16 2023/03/21 22:07:29 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -119,7 +119,8 @@ __KERNEL_RCSID(0, "$NetBSD: octeon_rnm.c,v 1.12 2020/06/18 13:52:08 simonb Exp $
 //#define	OCTRNM_DEBUG
 
 #define	ENT_DELAY_CLOCK 8	/* cycles for each 64-bit RO sample batch */
-#define	RNG_DELAY_CLOCK 81	/* cycles for each SHA-1 output */
+#define	LFSR_DELAY_CLOCK 81	/* cycles to fill LFSR buffer */
+#define	SHA1_DELAY_CLOCK 81	/* cycles to compute SHA-1 output */
 #define	NROGROUPS	16
 #define	RNG_FIFO_WORDS	(512/sizeof(uint64_t))
 
@@ -127,7 +128,6 @@ struct octrnm_softc {
 	uint64_t		sc_sample[RNG_FIFO_WORDS];
 	bus_space_tag_t		sc_bust;
 	bus_space_handle_t	sc_regh;
-	kmutex_t		sc_lock;
 	krndsource_t		sc_rndsrc;	/* /dev/random source */
 	unsigned		sc_rogroup;
 };
@@ -184,9 +184,6 @@ octrnm_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	/* Create a mutex to serialize access to the FIFO.  */
-	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_VM);
-
 	/*
 	 * Reset the core, enable the RNG engine without entropy, wait
 	 * 81 cycles for it to produce a single sample, and draw the
@@ -197,7 +194,7 @@ octrnm_attach(device_t parent, device_t self, void *aux)
 	 */
 	octrnm_reset(sc);
 	octrnm_conditioned_deterministic(sc);
-	octrnm_delay(RNG_DELAY_CLOCK*1);
+	octrnm_delay(LFSR_DELAY_CLOCK + SHA1_DELAY_CLOCK);
 	sample = octrnm_load(sc);
 	if (sample != expected)
 		aprint_error_dev(self, "self-test: read %016"PRIx64","
@@ -230,7 +227,6 @@ octrnm_rng(size_t nbytes, void *vsc)
 	unsigned i;
 
 	/* Sample the ring oscillators round-robin.  */
-	mutex_enter(&sc->sc_lock);
 	while (needed) {
 		/*
 		 * Switch to the next RO group once we drain the FIFO.
@@ -262,15 +258,9 @@ octrnm_rng(size_t nbytes, void *vsc)
 		    sizeof sc->sc_sample, NBBY*sizeof(sc->sc_sample)/BPB);
 		needed -= MIN(needed, MAX(1, NBBY*sizeof(sc->sc_sample)/BPB));
 
-		/* Yield if requested.  */
-		if (__predict_false(curcpu()->ci_schedstate.spc_flags &
-			SPCF_SHOULDYIELD)) {
-			mutex_exit(&sc->sc_lock);
-			preempt();
-			mutex_enter(&sc->sc_lock);
-		}
+		/* Now's a good time to yield.  */
+		preempt_point();
 	}
-	mutex_exit(&sc->sc_lock);
 
 	/* Zero the sample.  */
 	explicit_memset(sc->sc_sample, 0, sizeof sc->sc_sample);

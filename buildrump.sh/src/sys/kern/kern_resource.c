@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_resource.c,v 1.187 2020/05/23 23:42:43 ad Exp $	*/
+/*	$NetBSD: kern_resource.c,v 1.195 2023/10/04 20:28:06 ad Exp $	*/
 
 /*-
  * Copyright (c) 1982, 1986, 1991, 1993
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_resource.c,v 1.187 2020/05/23 23:42:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_resource.c,v 1.195 2023/10/04 20:28:06 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -64,9 +64,6 @@ __KERNEL_RCSID(0, "$NetBSD: kern_resource.c,v 1.187 2020/05/23 23:42:43 ad Exp $
  */
 rlim_t			maxdmap = MAXDSIZ;
 rlim_t			maxsmap = MAXSSIZ;
-
-static pool_cache_t	plimit_cache	__read_mostly;
-static pool_cache_t	pstats_cache	__read_mostly;
 
 static kauth_listener_t	resource_listener;
 static struct sysctllog	*proc_sysctllog;
@@ -140,11 +137,6 @@ resource_listener_cb(kauth_cred_t cred, kauth_action_t action, void *cookie,
 void
 resource_init(void)
 {
-
-	plimit_cache = pool_cache_init(sizeof(struct plimit), 0, 0, 0,
-	    "plimitpl", NULL, IPL_NONE, NULL, NULL, NULL);
-	pstats_cache = pool_cache_init(sizeof(struct pstats), 0, 0, 0,
-	    "pstatspl", NULL, IPL_NONE, NULL, NULL, NULL);
 
 	resource_listener = kauth_listen_scope(KAUTH_SCOPE_PROCESS,
 	    resource_listener_cb, NULL);
@@ -478,6 +470,30 @@ sys_getrlimit(struct lwp *l, const struct sys_getrlimit_args *uap,
 	return copyout(&rl, SCARG(uap, rlp), sizeof(rl));
 }
 
+void
+addrulwp(struct lwp *l, struct bintime *tm)
+{
+
+	lwp_lock(l);
+	bintime_add(tm, &l->l_rtime);
+	if ((l->l_pflag & LP_RUNNING) != 0 &&
+	    (l->l_pflag & (LP_INTR | LP_TIMEINTR)) != LP_INTR) {
+		struct bintime diff;
+		/*
+		 * Adjust for the current time slice.  This is
+		 * actually fairly important since the error
+		 * here is on the order of a time quantum,
+		 * which is much greater than the sampling
+		 * error.
+		 */
+		binuptime(&diff);
+		membar_consumer(); /* for softint_dispatch() */
+		bintime_sub(&diff, &l->l_stime);
+		bintime_add(tm, &diff);
+	}
+	lwp_unlock(l);
+}
+
 /*
  * Transform the running time and tick information in proc p into user,
  * system, and interrupt time usage.
@@ -504,24 +520,7 @@ calcru(struct proc *p, struct timeval *up, struct timeval *sp,
 	tm = p->p_rtime;
 
 	LIST_FOREACH(l, &p->p_lwps, l_sibling) {
-		lwp_lock(l);
-		bintime_add(&tm, &l->l_rtime);
-		if ((l->l_pflag & LP_RUNNING) != 0 &&
-		    (l->l_pflag & (LP_INTR | LP_TIMEINTR)) != LP_INTR) {
-			struct bintime diff;
-			/*
-			 * Adjust for the current time slice.  This is
-			 * actually fairly important since the error
-			 * here is on the order of a time quantum,
-			 * which is much greater than the sampling
-			 * error.
-			 */
-			binuptime(&diff);
-			membar_consumer(); /* for softint_dispatch() */
-			bintime_sub(&diff, &l->l_stime);
-			bintime_add(&tm, &diff);
-		}
-		lwp_unlock(l);
+		addrulwp(l, &tm);
 	}
 
 	tot = st + ut + it;
@@ -601,7 +600,8 @@ sys___getrusage50(struct lwp *l, const struct sys___getrusage50_args *uap,
 }
 
 int
-getrusage1(struct proc *p, int who, struct rusage *ru) {
+getrusage1(struct proc *p, int who, struct rusage *ru)
+{
 
 	switch (who) {
 	case RUSAGE_SELF:
@@ -665,8 +665,6 @@ rulwps(proc_t *p, struct rusage *ru)
 
 	LIST_FOREACH(l, &p->p_lwps, l_sibling) {
 		ruadd(ru, &l->l_ru);
-		ru->ru_nvcsw += (l->l_ncsw - l->l_nivcsw);
-		ru->ru_nivcsw += l->l_nivcsw;
 	}
 }
 
@@ -682,7 +680,7 @@ lim_copy(struct plimit *lim)
 	char *corename;
 	size_t alen, len;
 
-	newlim = pool_cache_get(plimit_cache, PR_WAITOK);
+	newlim = kmem_alloc(sizeof(*newlim), KM_SLEEP);
 	mutex_init(&newlim->pl_lock, MUTEX_DEFAULT, IPL_NONE);
 	newlim->pl_writeable = false;
 	newlim->pl_refcnt = 1;
@@ -793,15 +791,17 @@ lim_free(struct plimit *lim)
 	struct plimit *sv_lim;
 
 	do {
+		membar_release();
 		if (atomic_dec_uint_nv(&lim->pl_refcnt) > 0) {
 			return;
 		}
+		membar_acquire();
 		if (lim->pl_corename != defcorename) {
 			kmem_free(lim->pl_corename, lim->pl_cnlen);
 		}
 		sv_lim = lim->pl_sv_limit;
 		mutex_destroy(&lim->pl_lock);
-		pool_cache_put(plimit_cache, lim);
+		kmem_free(lim, sizeof(*lim));
 	} while ((lim = sv_lim) != NULL);
 }
 
@@ -811,7 +811,7 @@ pstatscopy(struct pstats *ps)
 	struct pstats *nps;
 	size_t len;
 
-	nps = pool_cache_get(pstats_cache, PR_WAITOK);
+	nps = kmem_alloc(sizeof(*nps), KM_SLEEP);
 
 	len = (char *)&nps->pstat_endzero - (char *)&nps->pstat_startzero;
 	memset(&nps->pstat_startzero, 0, len);
@@ -826,7 +826,7 @@ void
 pstatsfree(struct pstats *ps)
 {
 
-	pool_cache_put(pstats_cache, ps);
+	kmem_free(ps, sizeof(*ps));
 }
 
 /*

@@ -1,4 +1,4 @@
-/*	$NetBSD: rfcomm_session.c,v 1.27 2020/02/29 11:40:06 maxv Exp $	*/
+/*	$NetBSD: rfcomm_session.c,v 1.30 2024/07/05 04:31:53 rin Exp $	*/
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rfcomm_session.c,v 1.27 2020/02/29 11:40:06 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rfcomm_session.c,v 1.30 2024/07/05 04:31:53 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -1299,7 +1299,7 @@ rfcomm_session_recv_mcc_rls(struct rfcomm_session *rs, int cr, struct mbuf *m)
 	/*
 	 * So far as I can tell, we just send back what
 	 * they sent us. This signifies errors that seem
-	 * irrelevent for RFCOMM over L2CAP.
+	 * irrelevant for RFCOMM over L2CAP.
 	 */
 	rls.address |= 0x03;	/* EA = 1, CR = 1 */
 	rls.status &= 0x0f;	/* only 4 bits valid */
@@ -1480,7 +1480,7 @@ rfcomm_session_send_frame(struct rfcomm_session *rs, int type, int dlci)
 
 	/*
 	 * The CR (command/response) bit identifies the frame either as a
-	 * commmand or a response and is used along with the DLCI to form
+	 * command or a response and is used along with the DLCI to form
 	 * the address. Commands contain the non-initiator address, whereas
 	 * responses contain the initiator address, so the CR value is
 	 * also dependent on the session direction.
@@ -1622,11 +1622,9 @@ rfcomm_session_send_uih(struct rfcomm_session *rs, struct rfcomm_dlc *dlc,
 nomem:
 	err = ENOMEM;
 
-	if (m0 != NULL)
-		m_freem(m0);
+	m_freem(m0);
 
-	if (m != NULL)
-		m_freem(m);
+	m_freem(m);
 
 fail:
 	if (credit != NULL)

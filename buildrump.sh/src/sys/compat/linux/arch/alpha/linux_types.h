@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_types.h,v 1.7 2013/12/27 14:17:11 njoly Exp $	*/
+/*	$NetBSD: linux_types.h,v 1.9 2024/10/01 16:35:41 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #ifndef _ALPHA_LINUX_TYPES_H
-#define _ALPAH_LINUX_TYPES_H
+#define _ALPHA_LINUX_TYPES_H
 
 typedef unsigned int linux_uid_t;
 typedef unsigned int linux_gid_t;
@@ -85,7 +85,7 @@ struct linux_stat64 {
 	unsigned int		__pad0;
 
 	unsigned long		lst_atime;
-	unsigned long		lst_atime_nsec; 
+	unsigned long		lst_atime_nsec;
 	unsigned long		lst_mtime;
 	unsigned long		lst_mtime_nsec;
 	unsigned long		lst_ctime;

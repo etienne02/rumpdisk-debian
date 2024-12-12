@@ -1,4 +1,4 @@
-/*	$NetBSD: scsireg.h,v 1.12 2008/04/09 15:40:30 tsutsui Exp $	*/
+/*	$NetBSD: scsireg.h,v 1.14 2022/06/12 16:22:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -216,7 +216,7 @@ struct sc_chan_stat {
 	u_int		stag;		/* save tag register */
 	u_int		soffset;	/* save offset register */
 	int		chan_num;	/* channel NO. */
-	uint8_t		comflg;		/* flag for save comand pointer */
+	uint8_t		comflg;		/* flag for save command pointer */
 	uint8_t		intr_flg;	/* interrupt flag. SCSI_INTEN/INTDIS */
 };
 
@@ -266,7 +266,7 @@ struct sc_softc {
 #define SC_DMAC_RD	1
 #define SC_DMAC_WR	2
 
-	struct sc_chan_stat *wbq_actf;		/* forword active pointer */
+	struct sc_chan_stat *wbq_actf;		/* forward active pointer */
 	struct sc_chan_stat *wbq_actl;		/* last active pointer */
 
 	uint8_t	*act_cmd_pointer;

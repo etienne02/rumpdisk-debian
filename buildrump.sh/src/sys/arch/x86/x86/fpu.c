@@ -1,4 +1,4 @@
-/*	$NetBSD: fpu.c,v 1.76 2020/10/24 07:14:30 mgorny Exp $	*/
+/*	$NetBSD: fpu.c,v 1.89 2024/06/21 17:24:08 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2008, 2019 The NetBSD Foundation, Inc.  All
@@ -96,8 +96,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fpu.c,v 1.76 2020/10/24 07:14:30 mgorny Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fpu.c,v 1.89 2024/06/21 17:24:08 riastradh Exp $");
 
+#include "opt_ddb.h"
 #include "opt_multiprocessor.h"
 
 #include <sys/param.h>
@@ -120,6 +121,10 @@ __KERNEL_RCSID(0, "$NetBSD: fpu.c,v 1.76 2020/10/24 07:14:30 mgorny Exp $");
 #include <machine/specialreg.h>
 #include <x86/cpu.h>
 #include <x86/fpu.h>
+
+#ifdef DDB
+#include <ddb/ddb.h>
+#endif
 
 #ifdef XENPV
 #define clts() HYPERVISOR_fpu_taskswitch(0)
@@ -188,7 +193,7 @@ void
 fpuinit_mxcsr_mask(void)
 {
 #ifndef XENPV
-	union savefpu fpusave __aligned(16);
+	union savefpu fpusave __aligned(64);
 	u_long psl;
 
 	memset(&fpusave, 0, sizeof(fpusave));
@@ -373,6 +378,11 @@ fpu_lwp_abandon(struct lwp *l)
 void
 fpu_kern_enter(void)
 {
+	static const union savefpu safe_fpu __aligned(64) = {
+		.sv_xmm = {
+			.fx_mxcsr = __SAFE_MXCSR__,
+		},
+	};
 	struct lwp *l = curlwp;
 	struct cpu_info *ci;
 	int s;
@@ -380,7 +390,15 @@ fpu_kern_enter(void)
 	s = splvm();
 
 	ci = curcpu();
-	KASSERTMSG(ci->ci_ilevel <= IPL_VM, "ilevel=%d", ci->ci_ilevel);
+#if 0
+	/*
+	 * Can't assert this because if the caller holds a spin lock at
+	 * IPL_VM, and previously held and released a spin lock at
+	 * higher IPL, the IPL remains raised above IPL_VM.
+	 */
+	KASSERTMSG(ci->ci_ilevel <= IPL_VM || cold, "ilevel=%d",
+	    ci->ci_ilevel);
+#endif
 	KASSERT(ci->ci_kfpu_spl == -1);
 	ci->ci_kfpu_spl = s;
 
@@ -399,6 +417,11 @@ fpu_kern_enter(void)
 	 * the last FPU usage requiring that we save the FPU state.
 	 */
 	clts();
+
+	/*
+	 * Zero the FPU registers and install safe control words.
+	 */
+	fpu_area_restore(&safe_fpu, x86_xsave_features, /*is_64bit*/false);
 }
 
 /*
@@ -413,7 +436,14 @@ fpu_kern_leave(void)
 	struct cpu_info *ci = curcpu();
 	int s;
 
-	KASSERT(ci->ci_ilevel == IPL_VM);
+#if 0
+	/*
+	 * Can't assert this because if the caller holds a spin lock at
+	 * IPL_VM, and previously held and released a spin lock at
+	 * higher IPL, the IPL remains raised above IPL_VM.
+	 */
+	KASSERT(ci->ci_ilevel == IPL_VM || cold);
+#endif
 	KASSERT(ci->ci_kfpu_spl != -1);
 
 	/*
@@ -421,7 +451,7 @@ fpu_kern_leave(void)
 	 * through Spectre-class attacks to userland, even if there are
 	 * no bugs in fpu state management.
 	 */
-	fpu_area_restore(&zero_fpu, x86_xsave_features, false);
+	fpu_area_restore(&zero_fpu, x86_xsave_features, /*is_64bit*/false);
 
 	/*
 	 * Set CR0_TS again so that the kernel can't accidentally use
@@ -445,7 +475,7 @@ fpu_kern_leave(void)
  * on more than one value or if the user process modifies the control
  * word while a status word bit is already set (which this is a sign
  * of bad coding).
- * We have no choise than to narrow them down to one bit, since we must
+ * We have no choice than to narrow them down to one bit, since we must
  * not send a trapcode that is not exactly one of the FPE_ macros.
  *
  * The mechanism has a static table with 127 entries.  Each combination
@@ -535,7 +565,16 @@ fputrap(struct trapframe *frame)
 	ksiginfo_t ksi;
 
 	if (__predict_false(!USERMODE(frame->tf_cs))) {
-		panic("fpu trap from kernel, trapframe %p\n", frame);
+		register_t ip = X86_TF_RIP(frame);
+		char where[128];
+
+#ifdef DDB
+		db_symstr(where, sizeof(where), (db_expr_t)ip, DB_STGY_PROC);
+#else
+		snprintf(where, sizeof(where), "%p", (void *)ip);
+#endif
+		panic("fpu trap from kernel at %s, trapframe %p\n", where,
+		    frame);
 	}
 
 	KASSERT(curlwp->l_md.md_flags & MDL_FPU_IN_CPU);
@@ -578,6 +617,15 @@ fputrap(struct trapframe *frame)
 void
 fpudna(struct trapframe *frame)
 {
+#ifdef XENPV
+	/*
+	 * Xen produes spurious fpudna traps, just do nothing.
+	 */
+	if (USERMODE(frame->tf_cs)) {
+		clts();
+		return;
+	}
+#endif
 	panic("fpudna from %s, ip %p, trapframe %p",
 	    USERMODE(frame->tf_cs) ? "userland" : "kernel",
 	    (void *)X86_TF_RIP(frame), frame);

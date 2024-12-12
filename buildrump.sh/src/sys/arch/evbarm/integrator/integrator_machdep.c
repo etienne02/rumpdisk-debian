@@ -1,4 +1,4 @@
-/*	$NetBSD: integrator_machdep.c,v 1.80 2021/08/10 06:47:49 skrll Exp $	*/
+/*	$NetBSD: integrator_machdep.c,v 1.82 2023/06/24 05:43:26 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 2001,2002 ARM Ltd
@@ -68,7 +68,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: integrator_machdep.c,v 1.80 2021/08/10 06:47:49 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: integrator_machdep.c,v 1.82 2023/06/24 05:43:26 msaitoh Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -264,47 +264,33 @@ cpu_reboot(int howto, char *bootstr)
 /* Statically mapped devices. */
 static const struct pmap_devmap integrator_devmap[] = {
 #if NPLCOM > 0 && defined(PLCONSOLE)
-	{
+	DEVMAP_ENTRY(
 		UART0_BOOT_BASE,
 		IFPGA_IO_BASE + IFPGA_UART0,
-		1024 * 1024,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE
-	},
+		1024 * 1024
+	),
 
-	{
+	DEVMAP_ENTRY(
 		UART1_BOOT_BASE,
 		IFPGA_IO_BASE + IFPGA_UART1,
-		1024 * 1024,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE
-	},
+		1024 * 1024
+	),
 #endif
 #if NPCI > 0
-	{
+	DEVMAP_ENTRY(
 		IFPGA_PCI_IO_VBASE,
 		IFPGA_PCI_IO_BASE,
-		IFPGA_PCI_IO_VSIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE
-	},
+		IFPGA_PCI_IO_VSIZE
+	),
 
-	{
+	DEVMAP_ENTRY(
 		IFPGA_PCI_CONF_VBASE,
 		IFPGA_PCI_CONF_BASE,
-		IFPGA_PCI_CONF_VSIZE,
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE
-	},
+		IFPGA_PCI_CONF_VSIZE
+	),
 #endif
 
-	{
-		0,
-		0,
-		0,
-		0,
-		0
-	}
+	DEVMAP_ENTRY_END
 };
 
 /*
@@ -478,7 +464,7 @@ integrator_sdram_bounds(paddr_t *memstart, psize_t *memsize)
 		*memsize = 256 * 1024 * 1024 - *memstart;
 		break;
 	default:
-		printf("CM_SDRAM retuns unknown value, using 16M\n");
+		printf("CM_SDRAM returns unknown value, using 16M\n");
 		*memsize = 16 * 1024 * 1024;
 		break;
 	}

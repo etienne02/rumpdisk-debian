@@ -1,4 +1,4 @@
-/*	$NetBSD: genfs_io.c,v 1.101 2020/08/19 07:29:00 simonb Exp $	*/
+/*	$NetBSD: genfs_io.c,v 1.104 2024/04/05 13:05:40 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: genfs_io.c,v 1.101 2020/08/19 07:29:00 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: genfs_io.c,v 1.104 2024/04/05 13:05:40 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -184,7 +184,8 @@ startover:
 		GOP_SIZE(vp, origvsize, &memeof, GOP_SIZE_MEM);
 	}
 	KASSERT(ap->a_centeridx >= 0 || ap->a_centeridx <= orignpages);
-	KASSERT((origoffset & (PAGE_SIZE - 1)) == 0 && origoffset >= 0);
+	KASSERT((origoffset & (PAGE_SIZE - 1)) == 0);
+	KASSERT(origoffset >= 0);
 	KASSERT(orignpages > 0);
 
 	/*
@@ -890,7 +891,8 @@ genfs_do_putpages(struct vnode *vp, off_t startoff, off_t endoff,
 	UVMHIST_FUNC("genfs_putpages"); UVMHIST_CALLED(ubchist);
 
 	KASSERT(origflags & (PGO_CLEANIT|PGO_FREE|PGO_DEACTIVATE));
-	KASSERT((startoff & PAGE_MASK) == 0 && (endoff & PAGE_MASK) == 0);
+	KASSERT((startoff & PAGE_MASK) == 0);
+	KASSERT((endoff & PAGE_MASK) == 0);
 	KASSERT(startoff < endoff || endoff == 0);
 	KASSERT(rw_write_held(slock));
 
@@ -988,11 +990,8 @@ retry:
 	 */
 
 	if (nodirty) {
-#if !defined(DEBUG)
-		if (dirtyonly) {
-			goto skip_scan;
-		}
-#endif /* !defined(DEBUG) */
+		/* We handled the dirtyonly && nodirty case above.  */
+		KASSERT(!dirtyonly);
 		flags &= ~PGO_CLEANIT;
 	}
 
@@ -1331,10 +1330,6 @@ retry:
 		vn_syncer_remove_from_worklist(vp);
 	}
 
-#if !defined(DEBUG)
-skip_scan:
-#endif /* !defined(DEBUG) */
-
 	/* Wait for output to complete. */
 	rw_exit(slock);
 	if (!wasclean && !async && vp->v_numoutput != 0) {
@@ -1454,7 +1449,12 @@ genfs_do_io(struct vnode *vp, off_t off, vaddr_t kva, size_t len, int flags,
 	UVMHIST_LOG(ubchist, "vp %#jx kva %#jx len 0x%jx flags 0x%jx",
 	    (uintptr_t)vp, (uintptr_t)kva, len, flags);
 
-	KASSERT(vp->v_size <= vp->v_writesize);
+	KASSERT(vp->v_size != VSIZENOTSET);
+	KASSERT(vp->v_writesize != VSIZENOTSET);
+	KASSERTMSG(vp->v_size <= vp->v_writesize, "vp=%p"
+	    " v_size=0x%llx v_writesize=0x%llx", vp,
+	    (unsigned long long)vp->v_size,
+	    (unsigned long long)vp->v_writesize);
 	GOP_SIZE(vp, vp->v_writesize, &eof, 0);
 	if (vp->v_type != VBLK) {
 		fs_bshift = vp->v_mount->mnt_fs_bshift;

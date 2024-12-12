@@ -1,4 +1,4 @@
-/*	$NetBSD: mii_physubr.c,v 1.95 2021/06/29 21:03:36 pgoyette Exp $	*/
+/*	$NetBSD: mii_physubr.c,v 1.103 2023/05/22 02:12:13 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2001 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mii_physubr.c,v 1.95 2021/06/29 21:03:36 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mii_physubr.c,v 1.103 2023/05/22 02:12:13 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -79,7 +79,7 @@ mii_get_descr(char *descr, size_t len, uint32_t oui, uint32_t model)
 		strlcat(descr, temp, len);
 		return descr;
 	}
-	snprintf(descr, len, "oui 0x%6x model 0x%04x", oui, model);
+	snprintf(descr, len, "OUI 0x%06x model 0x%04x", oui, model);
 	return NULL;
 }
 
@@ -138,22 +138,14 @@ mii_phy_setmedia(struct mii_softc *sc)
 {
 	struct mii_data *mii = sc->mii_pdata;
 	struct ifmedia_entry *ife = mii->mii_media.ifm_cur;
+	u_int subtype;
 	uint16_t bmcr, anar, gtcr;
 
 	KASSERT(mii_locked(mii));
 
-	if (IFM_SUBTYPE(ife->ifm_media) == IFM_AUTO) {
-		/*
-		 * Force renegotiation if MIIF_DOPAUSE.
-		 *
-		 * XXX This is only necessary because many NICs don't
-		 * XXX advertise PAUSE capabilities at boot time.  Maybe
-		 * XXX we should force this only once?
-		 */
-		PHY_READ(sc, MII_BMCR, &bmcr);
-		if ((bmcr & BMCR_AUTOEN) == 0 ||
-		    (sc->mii_flags & (MIIF_FORCEANEG | MIIF_DOPAUSE)))
-			(void) mii_phy_auto(sc);
+	subtype = IFM_SUBTYPE(ife->ifm_media);
+	if ((subtype == IFM_AUTO) || (subtype == IFM_1000_T)) {
+		(void) mii_phy_auto(sc);
 		return;
 	}
 
@@ -169,7 +161,7 @@ mii_phy_setmedia(struct mii_softc *sc)
 	gtcr = mii_media_table[ife->ifm_data].mm_gtcr;
 
 	if (mii->mii_media.ifm_media & IFM_ETH_MASTER) {
-		switch (IFM_SUBTYPE(ife->ifm_media)) {
+		switch (subtype) {
 		case IFM_1000_T:
 			gtcr |= GTCR_MAN_MS | GTCR_ADV_MS;
 			break;
@@ -198,10 +190,7 @@ mii_phy_setmedia(struct mii_softc *sc)
 	PHY_WRITE(sc, MII_ANAR, anar);
 	if (sc->mii_flags & MIIF_HAVE_GTCR)
 		PHY_WRITE(sc, MII_100T2CR, gtcr);
-	if (IFM_SUBTYPE(ife->ifm_media) == IFM_1000_T)
-		mii_phy_auto(sc);
-	else
-		PHY_WRITE(sc, MII_BMCR, bmcr);
+	PHY_WRITE(sc, MII_BMCR, bmcr);
 }
 
 /* Setup autonegotiation and start it. */
@@ -282,6 +271,8 @@ mii_phy_auto(struct mii_softc *sc)
 		sc->mii_flags |= MIIF_DOINGAUTO;
 		kpause("miiaut", false, hz >> 1, mii->mii_media.ifm_lock);
 		mii_phy_auto_timeout_locked(sc);
+		KASSERT((sc->mii_flags & MIIF_DOINGAUTO) == 0);
+		cv_broadcast(&sc->mii_nway_cv);
 	} else if ((sc->mii_flags & MIIF_DOINGAUTO) == 0) {
 		sc->mii_flags |= MIIF_DOINGAUTO;
 		callout_reset(&sc->mii_nway_ch, hz >> 1,
@@ -308,6 +299,9 @@ static void
 mii_phy_auto_timeout_locked(struct mii_softc *sc)
 {
 
+	KASSERT(mii_locked(sc->mii_pdata));
+	KASSERT(sc->mii_flags & MIIF_DOINGAUTO);
+
 	if (!device_is_active(sc->mii_dev))
 		return;
 
@@ -321,6 +315,8 @@ static void
 mii_phy_auto_timeout(void *arg)
 {
 	struct mii_softc *sc = arg;
+
+	KASSERT((sc->mii_flags & MIIF_AUTOTSLEEP) == 0);
 
 	if (!device_is_active(sc->mii_dev))
 		return;
@@ -383,7 +379,7 @@ mii_phy_tick(struct mii_softc *sc)
 	 * Only retry autonegotiation every N seconds.
 	 */
 	KASSERT(sc->mii_anegticks != 0);
-	if (sc->mii_ticks <= sc->mii_anegticks)
+	if (sc->mii_ticks < sc->mii_anegticks)
 		return EJUSTRETURN;
 
 	if (mii_phy_auto_restart(sc) == EJUSTRETURN)
@@ -428,10 +424,24 @@ mii_phy_down(struct mii_softc *sc)
 
 	KASSERT(mii_locked(sc->mii_pdata));
 
-	if (sc->mii_flags & MIIF_DOINGAUTO) {
-		sc->mii_flags &= ~MIIF_DOINGAUTO;
-		callout_stop(&sc->mii_nway_ch);
+	if (sc->mii_flags & MIIF_AUTOTSLEEP) {
+		while (sc->mii_flags & MIIF_DOINGAUTO) {
+			cv_wait(&sc->mii_nway_cv,
+			    sc->mii_pdata->mii_media.ifm_lock);
+		}
+	} else {
+		if ((sc->mii_flags & MIIF_DOINGAUTO) != 0 &&
+		    callout_halt(&sc->mii_nway_ch,
+			sc->mii_pdata->mii_media.ifm_lock) == 0) {
+			/*
+			 * The callout was scheduled, and we prevented
+			 * it from running before it expired, so we are
+			 * now responsible for clearing the flag.
+			 */
+			sc->mii_flags &= ~MIIF_DOINGAUTO;
+		}
 	}
+	KASSERT((sc->mii_flags & MIIF_DOINGAUTO) == 0);
 }
 
 void
@@ -671,14 +681,13 @@ mii_phy_detach(device_t self, int flags)
 {
 	struct mii_softc *sc = device_private(self);
 
-	mii_lock(sc->mii_pdata);
-	if (sc->mii_flags & MIIF_DOINGAUTO) {
-		callout_halt(&sc->mii_nway_ch,
-		    sc->mii_pdata->mii_media.ifm_lock);
-	}
-	mii_unlock(sc->mii_pdata);
+	/* No mii_lock because mii_flags should be stable by now.  */
+	KASSERT((sc->mii_flags & MIIF_DOINGAUTO) == 0);
 
-	callout_destroy(&sc->mii_nway_ch);
+	if (sc->mii_flags & MIIF_AUTOTSLEEP)
+		cv_destroy(&sc->mii_nway_cv);
+	else
+		callout_destroy(&sc->mii_nway_ch);
 
 	mii_phy_delete_media(sc);
 

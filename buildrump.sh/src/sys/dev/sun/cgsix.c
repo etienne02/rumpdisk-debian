@@ -1,4 +1,4 @@
-/*	$NetBSD: cgsix.c,v 1.70 2021/08/07 16:19:16 thorpej Exp $ */
+/*	$NetBSD: cgsix.c,v 1.72 2022/09/25 21:30:29 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -78,14 +78,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cgsix.c,v 1.70 2021/08/07 16:19:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cgsix.c,v 1.72 2022/09/25 21:30:29 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/buf.h>
 #include <sys/device.h>
 #include <sys/ioctl.h>
-#include <sys/malloc.h>
 #include <sys/mman.h>
 #include <sys/tty.h>
 #include <sys/conf.h>
@@ -339,6 +338,23 @@ cg6_ras_init(struct cgsix_softc *sc)
 }
 
 static void
+cg6_ras_nuke_cursor(struct rasops_info *ri)
+{
+	struct vcons_screen *scr = ri->ri_hw;
+	struct cgsix_softc *sc = scr->scr_cookie;
+	int wi, he, x, y;
+		
+	if (ri->ri_flg & RI_CURSOR) {
+		wi = ri->ri_font->fontwidth;
+		he = ri->ri_font->fontheight;
+		x = ri->ri_ccol * wi + ri->ri_xorigin;
+		y = ri->ri_crow * he + ri->ri_yorigin;
+		cg6_invert(sc, x, y, wi, he);
+		ri->ri_flg &= ~RI_CURSOR;
+	}
+}
+
+static void
 cg6_ras_copyrows(void *cookie, int src, int dst, int n)
 {
 	struct rasops_info *ri = cookie;
@@ -362,6 +378,10 @@ cg6_ras_copyrows(void *cookie, int src, int dst, int n)
 		n = ri->ri_rows - dst;
 	if (n <= 0)
 		return;
+	if ((ri->ri_crow >= src && ri->ri_crow < (src + n)) &&
+	   (ri->ri_flg & RI_CURSOR)) {
+		cg6_ras_nuke_cursor(ri);
+	}
 	n *= ri->ri_font->fontheight;
 	src *= ri->ri_font->fontheight;
 	dst *= ri->ri_font->fontheight;
@@ -380,6 +400,8 @@ cg6_ras_copyrows(void *cookie, int src, int dst, int n)
 	fbc->fbc_x3 = ri->ri_xorigin + ri->ri_emuwidth - 1;
 	fbc->fbc_y3 = ri->ri_yorigin + dst + n - 1;
 	CG6_BLIT(fbc);
+	if (ri->ri_crow >= dst && ri->ri_crow < (dst + n))
+		ri->ri_flg &= ~RI_CURSOR;
 }
 
 static void
@@ -408,6 +430,11 @@ cg6_ras_copycols(void *cookie, int row, int src, int dst, int n)
 		n = ri->ri_cols - dst;
 	if (n <= 0)
 		return;
+	if (ri->ri_crow == row && 
+	   (ri->ri_ccol >= src && ri->ri_ccol < (src + n)) &&
+	   (ri->ri_flg & RI_CURSOR)) {
+		cg6_ras_nuke_cursor(ri);
+	}
 	n *= ri->ri_font->fontwidth;
 	src *= ri->ri_font->fontwidth;
 	dst *= ri->ri_font->fontwidth;
@@ -429,6 +456,9 @@ cg6_ras_copycols(void *cookie, int row, int src, int dst, int n)
 	fbc->fbc_y3 = ri->ri_yorigin + row + 
 	    ri->ri_font->fontheight - 1;
 	CG6_BLIT(fbc);
+	if (ri->ri_crow == row && 
+	   (ri->ri_ccol >= dst && ri->ri_ccol < (dst + n)))
+		ri->ri_flg &= ~RI_CURSOR;
 }
 
 static void
@@ -449,6 +479,11 @@ cg6_ras_erasecols(void *cookie, int row, int col, int n, long int attr)
 		n = ri->ri_cols - col;
 	if (n <= 0)
 		return;
+
+	if (ri->ri_crow == row && 
+	   (ri->ri_ccol >= col && ri->ri_ccol < (col + n)))
+		ri->ri_flg &= ~RI_CURSOR;
+
 	n *= ri->ri_font->fontwidth;
 	col *= ri->ri_font->fontwidth;
 	row *= ri->ri_font->fontheight;
@@ -482,6 +517,9 @@ cg6_ras_eraserows(void *cookie, int row, int n, long int attr)
 		n = ri->ri_rows - row;
 	if (n <= 0)
 		return;
+
+	if (ri->ri_crow >= row && ri->ri_crow < (row + n))
+		ri->ri_flg &= ~RI_CURSOR;
 
 	CG6_WAIT_READY(fbc);
 	fbc->fbc_alu = CG6_ALU_FILL;
@@ -624,7 +662,7 @@ cg6attach(struct cgsix_softc *sc, const char *name, int isconsole)
 		}
 	}
 	cg6_setup_palette(sc);
-	
+
 	aa.scrdata = &cgsix_screenlist;
 	aa.console = isconsole;
 	aa.accessops = &cgsix_accessops;
@@ -1369,6 +1407,10 @@ cgsix_putchar(void *cookie, int row, int col, u_int c, long attr)
 	if ((row >= 0) && (row < ri->ri_rows) && (col >= 0) && 
 	    (col < ri->ri_cols)) {
 
+		if (row == ri->ri_crow && col == ri->ri_ccol) {
+			ri->ri_flg &= ~RI_CURSOR;
+		}
+
 		if (sc->sc_mode == WSDISPLAYIO_MODE_EMUL) {
 
 			int fg, bg, uc, i;
@@ -1437,6 +1479,10 @@ cgsix_putchar_aa(void *cookie, int row, int col, u_int c, long attr)
 
 	if (!CHAR_IN_FONT(c, font))
 		return;
+
+	if (row == ri->ri_crow && col == ri->ri_ccol) {
+		ri->ri_flg &= ~RI_CURSOR;
+	}
 
 	wi = font->fontwidth;
 	he = font->fontheight;
@@ -1532,21 +1578,17 @@ cgsix_cursor(void *cookie, int on, int row, int col)
 	he = ri->ri_font->fontheight;
 	
 	if (sc->sc_mode == WSDISPLAYIO_MODE_EMUL) {
-		x = ri->ri_ccol * wi + ri->ri_xorigin;
-		y = ri->ri_crow * he + ri->ri_yorigin;
-		if (ri->ri_flg & RI_CURSOR) {
-			cg6_invert(sc, x, y, wi, he);
-			ri->ri_flg &= ~RI_CURSOR;
-		}
-		ri->ri_crow = row;
-		ri->ri_ccol = col;
-		if (on)
-		{
-			x = ri->ri_ccol * wi + ri->ri_xorigin;
-			y = ri->ri_crow * he + ri->ri_yorigin;
+		if (on) {
+			if (ri->ri_flg & RI_CURSOR) {
+				cg6_ras_nuke_cursor(ri);
+			}
+			x = col * wi + ri->ri_xorigin;
+			y = row * he + ri->ri_yorigin;
 			cg6_invert(sc, x, y, wi, he);
 			ri->ri_flg |= RI_CURSOR;
 		}
+		ri->ri_crow = row;
+		ri->ri_ccol = col;
 	} else
 	{
 		ri->ri_crow = row;
@@ -1574,6 +1616,7 @@ cgsix_clearscreen(struct cgsix_softc *sc)
 		fbc->fbc_arectx = ri->ri_width - 1;
 		fbc->fbc_arecty = ri->ri_height - 1;
 		CG6_DRAW(fbc);
+		ri->ri_flg &= ~RI_CURSOR;
 	}
 }
 

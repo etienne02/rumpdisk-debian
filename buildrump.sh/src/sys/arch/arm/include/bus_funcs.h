@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_funcs.h,v 1.11 2021/01/24 13:33:56 martin Exp $	*/
+/*	$NetBSD: bus_funcs.h,v 1.13 2023/04/18 11:06:57 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2001 The NetBSD Foundation, Inc.
@@ -708,8 +708,6 @@ void bus_dmamap_sync(bus_dma_tag_t, bus_dmamap_t, bus_addr_t, bus_size_t, int);
 
 #ifdef _ARM32_BUS_DMA_PRIVATE
 
-extern paddr_t physical_start, physical_end;
-
 int	arm32_dma_range_intersect(struct arm32_dma_range *, int,
 	    paddr_t pa, psize_t size, paddr_t *pap, psize_t *sizep);
 
@@ -769,7 +767,7 @@ paddr_t	_bus_dmamem_mmap(bus_dma_tag_t tag, bus_dma_segment_t *segs,
 int	_bus_dmamem_alloc_range(bus_dma_tag_t tag, bus_size_t size,
 	    bus_size_t alignment, bus_size_t boundary,
 	    bus_dma_segment_t *segs, int nsegs, int *rsegs, int flags,
-	    vaddr_t low, vaddr_t high);
+	    paddr_t low, paddr_t high);
 
 int	_bus_dmatag_subregion(bus_dma_tag_t, bus_addr_t, bus_addr_t,
 	    bus_dma_tag_t *, int);

@@ -1,4 +1,4 @@
-/*	$NetBSD: adb_ktm.c,v 1.4 2021/08/07 16:19:09 thorpej Exp $	*/
+/*	$NetBSD: adb_ktm.c,v 1.7 2024/02/11 10:36:40 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2019 Michael Lorenz
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: adb_ktm.c,v 1.4 2021/08/07 16:19:09 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: adb_ktm.c,v 1.7 2024/02/11 10:36:40 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -188,7 +188,7 @@ ktm_init(struct ktm_softc *sc)
  * byte 1 assigns what which button does
  - 0x08 - button 1 - 1, button 2 - nothing
  - 0x09 - both buttons - 1
- - 0x0a - butoon 1 - 1, button 2 - toggle 1
+ - 0x0a - button 1 - 1, button 2 - toggle 1
  - 0x0b - button 1 - 1, button 2 - nothing
  - 0x0c - button 1 - 1, button 2 - 2
  - 0x0e - button 1 - 1, button 2 - 3
@@ -250,13 +250,13 @@ ktm_init(struct ktm_softc *sc)
 
 	ret = sysctl_createv(NULL, 0, NULL, &node,
 	    CTLFLAG_READWRITE | CTLFLAG_OWNDESC,
-	    CTLTYPE_INT, "left", "left button assigmnent",
+	    CTLTYPE_INT, "left", "left button assignment",
 	    sysctl_ktm_left, 1, (void *)sc, 0,
 	    CTL_MACHDEP, me->sysctl_num, CTL_CREATE, CTL_EOL);
 
 	ret = sysctl_createv(NULL, 0, NULL, &node,
 	    CTLFLAG_READWRITE | CTLFLAG_OWNDESC,
-	    CTLTYPE_INT, "right", "right button assigmnent",
+	    CTLTYPE_INT, "right", "right button assignment",
 	    sysctl_ktm_right, 1, (void *)sc, 0,
 	    CTL_MACHDEP, me->sysctl_num, CTL_CREATE, CTL_EOL);
 	__USE(ret);
@@ -363,9 +363,9 @@ ktm_ioctl(void *v, u_long cmd, void *data, int flag, struct lwp *l)
 		break;
 
 	default:
-		return (EPASSTHROUGH);
+		return EPASSTHROUGH;
 	}
-	return (0);
+	return 0;
 }
 
 static void

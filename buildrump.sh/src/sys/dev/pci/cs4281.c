@@ -1,4 +1,4 @@
-/*	$NetBSD: cs4281.c,v 1.57 2021/02/03 14:44:32 isaki Exp $	*/
+/*	$NetBSD: cs4281.c,v 1.60 2024/09/14 21:22:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 2000 Tatoku Ogaito.  All rights reserved.
@@ -43,12 +43,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cs4281.c,v 1.57 2021/02/03 14:44:32 isaki Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cs4281.c,v 1.60 2024/09/14 21:22:37 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/fcntl.h>
 #include <sys/device.h>
 #include <sys/systm.h>
@@ -613,7 +612,7 @@ cs4281_suspend(device_t dv, const pmf_qual_t *qual)
 	struct cs428x_softc *sc = device_private(dv);
 
 	mutex_enter(&sc->sc_lock);
-	mutex_spin_exit(&sc->sc_intr_lock);
+	mutex_spin_enter(&sc->sc_intr_lock);
 
 	/* save current playback status */
 	if (sc->sc_prun) {
@@ -671,7 +670,7 @@ cs4281_resume(device_t dv, const pmf_qual_t *qual)
 		BA0WRITE4(sc, CS4281_DMR1, sc->sc_suspend_state.cs4281.dmr1);
 		BA0WRITE4(sc, CS4281_DCR1, sc->sc_suspend_state.cs4281.dcr1);
 	}
-	/* enable intterupts */
+	/* enable interrupts */
 	if (sc->sc_prun || sc->sc_rrun)
 		BA0WRITE4(sc, CS4281_HICR, HICR_IEV | HICR_CHGM);
 

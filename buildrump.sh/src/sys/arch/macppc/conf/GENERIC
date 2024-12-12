@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.372 2021/01/21 06:51:55 nia Exp $
+# $NetBSD: GENERIC,v 1.380 2024/04/02 22:56:50 charlotte Exp $
 #
 # GENERIC machine description file
 # 
@@ -22,7 +22,7 @@ include		"arch/macppc/conf/std.macppc"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"GENERIC-$Revision: 1.372 $"
+#ident 		"GENERIC-$Revision: 1.380 $"
 
 maxusers	32
 
@@ -78,22 +78,21 @@ options         DKWEDGE_METHOD_GPT      # Supports GPT partitions as wedges
 #options	DKWEDGE_METHOD_MBR      # Support MBR partitions as wedges
 #options	DKWEDGE_METHOD_APPLE    # Support Apple partitions as wedges
 #options 	DKWEDGE_METHOD_RDB	# Support RDB partitions as wedges
+#options 	DKWEDGE_METHOD_TOS	# Support Atari "TOS" partitions as wedges
 
 # File systems
 include "conf/filesystems.config"
 
 # File system options
+options 	APPLE_UFS	# Apple UFS support in FFS
+options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER	# Network File System server
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
-options 	APPLE_UFS	# Apple UFS support in FFS
+options 	WAPBL		# File system journaling support
+options 	NFSSERVER	# Network File System server
 
 options 	NFS_BOOT_DHCP	# Support DHCP NFS root
 
@@ -206,7 +205,6 @@ epic*	at pci? dev ? function ?	# SMC EPIC/100 Ethernet
 ex*	at pci? dev ? function ?	# 3Com 90x[BC]
 fxp*	at pci? dev ? function ?	# Intel EtherExpress PRO 10+/100B
 gem*	at pci? dev ? function ?	# gmac ethernet
-#gm*	at pci? dev ? function ?	# gmac ethernet (old)
 gsip*	at pci? dev ? function ?	# NS83820 Gigabit Ethernet
 mtd*	at pci? dev ? function ?	# Myson MTD803 3-in-1 Ethernet
 ne*	at pci? dev ? function ?	# NE2000-compatible Ethernet
@@ -242,12 +240,6 @@ siop*	at pci? dev ? function ?	# NCR 53c8xx SCSI
 trm*	at pci? dev ? function ?	# Tekram DC-395U/UW/F, DC-315/U SCSI
 
 # Display devices
-# ofb*	at pci? dev ? function ?	# Generic Open Firmware Framebuffer
-#options 	OFB_FAKE_VGA_FB		# Allow X to mmap VGA regs
-# 
-# ofb is considered obsolete and machine-independent genfb should be used
-# instead.
-
 chipsfb*	at pci?	function ?	# C&T 65550
 gffb*		at pci?	function ?	# NVIDIA GeForce2 MX
 machfb*		at pci? function ?	# ATI Mach 64, Rage, Rage Pro
@@ -258,7 +250,6 @@ voodoofb*	at pci? function ?	# 3Dfx Voodoo3
 
 # ATI Radeon. Still has problems on some hardware
 radeonfb*	at pci? function ?
-options 	RADEONFB_ALWAYS_ACCEL_PUTCHAR
 
 # generic PCI framebuffer, should work with everything supported by OF
 genfb*		at pci? function ?
@@ -332,18 +323,7 @@ nvram*	at obio?			# nvram
 options OBIO_SPEED_CONTROL		# CPU speed / voltage control via GPIOs
 					# and/or DFS, found on most *Book G4
 
-
-# the traditional ADB subsystem
-
-#adb*	at obio?			# Apple Desktop Bus
-#apm0	at adb?				# APM emulation
-#aed*	at adb?				# ADB Event Device
-#akbd*	at adb?				# ADB keyboard
-#ams*	at adb?				# ADB mouse
-#abtn*	at adb?
-
-# the new, improved ADB subsystem
-
+# ADB subsystem
 cuda*	at obio?		# CUDA, for Old World PowerMacs
 iic* 		at cuda?	# CUDA's IIC bus
 
@@ -568,3 +548,6 @@ pseudo-device   drvctl
 include "dev/veriexec.config"
 
 #options PAX_MPROTECT=0			# PaX mprotect(2) restrictions
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/macppc/conf/GENERIC.local"

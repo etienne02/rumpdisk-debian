@@ -1,4 +1,4 @@
-/* $NetBSD: kvm_alpha.c,v 1.27 2014/02/19 20:21:22 dsl Exp $ */
+/* $NetBSD: kvm_alpha.c,v 1.29 2023/08/23 14:00:11 rin Exp $ */
 
 /*
  * Copyright (c) 1994, 1995 Carnegie-Mellon University.
@@ -50,7 +50,7 @@
 
 #include "kvm_private.h"
 
-__RCSID("$NetBSD: kvm_alpha.c,v 1.27 2014/02/19 20:21:22 dsl Exp $");
+__RCSID("$NetBSD: kvm_alpha.c,v 1.29 2023/08/23 14:00:11 rin Exp $");
 
 /*ARGSUSED*/
 void
@@ -74,10 +74,10 @@ _kvm_kvatop(kvm_t *kd, vaddr_t va, paddr_t *pa)
 	u_long pteoff, page_off;
 	int rv;
 
-        if (ISALIVE(kd)) {
-                _kvm_err(kd, 0, "vatop called in live kernel!");
-                return(0);
-        }
+	if (ISALIVE(kd)) {
+		_kvm_err(kd, 0, "vatop called in live kernel!");
+		return(0);
+	}
 
 	cpu_kh = kd->cpu_data;
 	page_off = va & (cpu_kh->page_size - 1);
@@ -186,7 +186,6 @@ int
 _kvm_mdopen(kvm_t *kd)
 {
 
-	kd->usrstack = USRSTACK;
 	kd->min_uva = VM_MIN_ADDRESS;
 	kd->max_uva = VM_MAXUSER_ADDRESS;
 

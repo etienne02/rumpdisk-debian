@@ -1,4 +1,4 @@
-/* $NetBSD: sun50i_h6_gpio.c,v 1.2 2018/04/03 16:01:25 bouyer Exp $ */
+/* $NetBSD: sun50i_h6_gpio.c,v 1.4 2021/11/10 17:38:11 jakllsch Exp $ */
 
 /*-
  * Copyright (c) 2016 Jared McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sun50i_h6_gpio.c,v 1.2 2018/04/03 16:01:25 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sun50i_h6_gpio.c,v 1.4 2021/11/10 17:38:11 jakllsch Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -121,8 +121,8 @@ static const struct sunxi_gpio_pins h6_pins[] = {
 };
 
 static const struct sunxi_gpio_pins h6_r_pins[] = {
-	{ "PL0",   0, 0,  { "gpio_in", "gpio_out", NULL, "s_i2c", NULL, NULL, "irq" }, 6, 0 },
-	{ "PL1",   0, 1,  { "gpio_in", "gpio_out", NULL, "s_i2c", NULL, NULL, "irq" }, 6, 1 },
+	{ "PL0",   0, 0,  { "gpio_in", "gpio_out", "s_rsb", "s_i2c", NULL, NULL, "irq" }, 6, 0 },
+	{ "PL1",   0, 1,  { "gpio_in", "gpio_out", "s_rsb", "s_i2c", NULL, NULL, "irq" }, 6, 1 },
 	{ "PL2",   0, 2,  { "gpio_in", "gpio_out", "s_uart", NULL, NULL, NULL, "irq" }, 6, 2 },
 	{ "PL3",   0, 3,  { "gpio_in", "gpio_out", "s_uart", NULL, NULL, NULL, "irq" }, 6, 3 },
 	{ "PL4",   0, 4,  { "gpio_in", "gpio_out", "s_jtag", NULL, NULL, NULL, "irq" }, 6, 4 },
@@ -130,7 +130,7 @@ static const struct sunxi_gpio_pins h6_r_pins[] = {
 	{ "PL6",   0, 6,  { "gpio_in", "gpio_out", "s_jtag", NULL, NULL, NULL, "irq" }, 6, 6 },
 	{ "PL7",   0, 7,  { "gpio_in", "gpio_out", "s_jtag", NULL, NULL, NULL, "irq" }, 6, 7 },
 	{ "PL8",   0, 8,  { "gpio_in", "gpio_out", "s_i2s", NULL, NULL, NULL, "irq" }, 6, 8 },
-	{ "PL9",   0, 9,  { "gpio_in", "gpio_out", "s_cir", NULL, NULL, NULL, "irq" }, 6, 9 },
+	{ "PL9",   0, 9,  { "gpio_in", "gpio_out", "s_cir_rx", NULL, NULL, NULL, "irq" }, 6, 9 },
 	{ "PL10",  0, 10, { "gpio_in", "gpio_out", "s_spdif", NULL, NULL, NULL, "irq" }, 6, 10 },
 
 	{ "PM0",   1, 0,  { "gpio_in", "gpio_out", NULL, NULL, NULL, NULL, "irq" }, 6, 0 },

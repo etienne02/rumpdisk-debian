@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_synch.c,v 1.349 2020/05/23 23:42:43 ad Exp $	*/
+/*	$NetBSD: kern_synch.c,v 1.366 2023/11/22 13:18:48 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 1999, 2000, 2004, 2006, 2007, 2008, 2009, 2019, 2020
+ * Copyright (c) 1999, 2000, 2004, 2006, 2007, 2008, 2009, 2019, 2020, 2023
  *    The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -69,45 +69,55 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_synch.c,v 1.349 2020/05/23 23:42:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_synch.c,v 1.366 2023/11/22 13:18:48 riastradh Exp $");
 
 #include "opt_kstack.h"
+#include "opt_ddb.h"
 #include "opt_dtrace.h"
 
 #define	__MUTEX_PRIVATE
 
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/proc.h>
-#include <sys/kernel.h>
+
+#include <sys/atomic.h>
 #include <sys/cpu.h>
+#include <sys/dtrace_bsd.h>
+#include <sys/evcnt.h>
+#include <sys/intr.h>
+#include <sys/kernel.h>
+#include <sys/lockdebug.h>
+#include <sys/lwpctl.h>
+#include <sys/proc.h>
 #include <sys/pserialize.h>
+#include <sys/resource.h>
 #include <sys/resourcevar.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
-#include <sys/syscall_stats.h>
 #include <sys/sleepq.h>
-#include <sys/lockdebug.h>
-#include <sys/evcnt.h>
-#include <sys/intr.h>
-#include <sys/lwpctl.h>
-#include <sys/atomic.h>
+#include <sys/syncobj.h>
+#include <sys/syscall_stats.h>
 #include <sys/syslog.h>
+#include <sys/systm.h>
 
 #include <uvm/uvm_extern.h>
 
 #include <dev/lockstat.h>
 
-#include <sys/dtrace_bsd.h>
 int                             dtrace_vtime_active=0;
 dtrace_vtime_switch_func_t      dtrace_vtime_switch_func;
+
+#ifdef DDB
+#include <ddb/ddb.h>
+#endif
 
 static void	sched_unsleep(struct lwp *, bool);
 static void	sched_changepri(struct lwp *, pri_t);
 static void	sched_lendpri(struct lwp *, pri_t);
 
 syncobj_t sleep_syncobj = {
+	.sobj_name	= "sleep",
 	.sobj_flag	= SOBJ_SLEEPQ_SORTED,
+	.sobj_boostpri  = PRI_KERNEL,
 	.sobj_unsleep	= sleepq_unsleep,
 	.sobj_changepri	= sleepq_changepri,
 	.sobj_lendpri	= sleepq_lendpri,
@@ -115,7 +125,9 @@ syncobj_t sleep_syncobj = {
 };
 
 syncobj_t sched_syncobj = {
+	.sobj_name	= "sched",
 	.sobj_flag	= SOBJ_SLEEPQ_SORTED,
+	.sobj_boostpri  = PRI_USER,
 	.sobj_unsleep	= sched_unsleep,
 	.sobj_changepri	= sched_changepri,
 	.sobj_lendpri	= sched_lendpri,
@@ -123,7 +135,9 @@ syncobj_t sched_syncobj = {
 };
 
 syncobj_t kpause_syncobj = {
+	.sobj_name	= "kpause",
 	.sobj_flag	= SOBJ_SLEEPQ_NULL,
+	.sobj_boostpri  = PRI_KERNEL,
 	.sobj_unsleep	= sleepq_unsleep,
 	.sobj_changepri	= sleepq_changepri,
 	.sobj_lendpri	= sleepq_lendpri,
@@ -174,21 +188,22 @@ tsleep(wchan_t ident, pri_t priority, const char *wmesg, int timo)
 	sleepq_t *sq;
 	kmutex_t *mp;
 	bool catch_p;
+	int nlocks;
 
 	KASSERT((l->l_pflag & LP_INTR) == 0);
 	KASSERT(ident != &lbolt);
+	//KASSERT(KERNEL_LOCKED_P());
 
 	if (sleepq_dontsleep(l)) {
 		(void)sleepq_abort(NULL, 0);
 		return 0;
 	}
 
-	l->l_kpriority = true;
 	catch_p = priority & PCATCH;
 	sq = sleeptab_lookup(&sleeptab, ident, &mp);
-	sleepq_enter(sq, l, mp);
+	nlocks = sleepq_enter(sq, l, mp);
 	sleepq_enqueue(sq, ident, wmesg, &sleep_syncobj, catch_p);
-	return sleepq_block(timo, catch_p);
+	return sleepq_block(timo, catch_p, &sleep_syncobj, nlocks);
 }
 
 int
@@ -199,7 +214,7 @@ mtsleep(wchan_t ident, pri_t priority, const char *wmesg, int timo,
 	sleepq_t *sq;
 	kmutex_t *mp;
 	bool catch_p;
-	int error;
+	int error, nlocks;
 
 	KASSERT((l->l_pflag & LP_INTR) == 0);
 	KASSERT(ident != &lbolt);
@@ -209,13 +224,12 @@ mtsleep(wchan_t ident, pri_t priority, const char *wmesg, int timo,
 		return 0;
 	}
 
-	l->l_kpriority = true;
 	catch_p = priority & PCATCH;
 	sq = sleeptab_lookup(&sleeptab, ident, &mp);
-	sleepq_enter(sq, l, mp);
+	nlocks = sleepq_enter(sq, l, mp);
 	sleepq_enqueue(sq, ident, wmesg, &sleep_syncobj, catch_p);
 	mutex_exit(mtx);
-	error = sleepq_block(timo, catch_p);
+	error = sleepq_block(timo, catch_p, &sleep_syncobj, nlocks);
 
 	if ((priority & PNORELOCK) == 0)
 		mutex_enter(mtx);
@@ -230,20 +244,19 @@ int
 kpause(const char *wmesg, bool intr, int timo, kmutex_t *mtx)
 {
 	struct lwp *l = curlwp;
-	int error;
+	int error, nlocks;
 
-	KASSERT(!(timo == 0 && intr == false));
+	KASSERTMSG(timo != 0 || intr, "wmesg=%s intr=%s timo=%d mtx=%p",
+	    wmesg, intr ? "true" : "false", timo, mtx);
 
 	if (sleepq_dontsleep(l))
 		return sleepq_abort(NULL, 0);
 
 	if (mtx != NULL)
 		mutex_exit(mtx);
-	l->l_kpriority = true;
-	lwp_lock(l);
-	KERNEL_UNLOCK_ALL(NULL, &l->l_biglocks);
+	nlocks = sleepq_enter(NULL, l, NULL);
 	sleepq_enqueue(NULL, l, wmesg, &kpause_syncobj, intr);
-	error = sleepq_block(timo, intr);
+	error = sleepq_block(timo, intr, &kpause_syncobj, nlocks);
 	if (mtx != NULL)
 		mutex_enter(mtx);
 
@@ -276,18 +289,17 @@ void
 yield(void)
 {
 	struct lwp *l = curlwp;
+	int nlocks;
 
-	KERNEL_UNLOCK_ALL(l, &l->l_biglocks);
+	KERNEL_UNLOCK_ALL(l, &nlocks);
 	lwp_lock(l);
 
 	KASSERT(lwp_locked(l, l->l_cpu->ci_schedstate.spc_lwplock));
 	KASSERT(l->l_stat == LSONPROC);
 
-	/* Voluntary - ditch kpriority boost. */
-	l->l_kpriority = false;
 	spc_lock(l->l_cpu);
 	mi_switch(l);
-	KERNEL_LOCK(l->l_biglocks, l);
+	KERNEL_LOCK(nlocks, l);
 }
 
 /*
@@ -297,27 +309,23 @@ yield(void)
  *
  * - It's counted differently (involuntary vs. voluntary).
  * - Realtime threads go to the head of their runqueue vs. tail for yield().
- * - Priority boost is retained unless LWP has exceeded timeslice.
  */
 void
 preempt(void)
 {
 	struct lwp *l = curlwp;
+	int nlocks;
 
-	KERNEL_UNLOCK_ALL(l, &l->l_biglocks);
+	KERNEL_UNLOCK_ALL(l, &nlocks);
 	lwp_lock(l);
 
 	KASSERT(lwp_locked(l, l->l_cpu->ci_schedstate.spc_lwplock));
 	KASSERT(l->l_stat == LSONPROC);
 
 	spc_lock(l->l_cpu);
-	/* Involuntary - keep kpriority boost unless a CPU hog. */
-	if ((l->l_cpu->ci_schedstate.spc_flags & SPCF_SHOULDYIELD) != 0) {
-		l->l_kpriority = false;
-	}
 	l->l_pflag |= LP_PREEMPTING;
 	mi_switch(l);
-	KERNEL_LOCK(l->l_biglocks, l);
+	KERNEL_LOCK(nlocks, l);
 }
 
 /*
@@ -421,7 +429,6 @@ kpreempt(uintptr_t where)
 			kpreempt_ev_immed.ev_count++;
 		}
 		lwp_lock(l);
-		/* Involuntary - keep kpriority boost. */
 		l->l_pflag |= LP_PREEMPTING;
 		spc_lock(l->l_cpu);
 		mi_switch(l);
@@ -498,9 +505,37 @@ kpreempt_enable(void)
 void
 updatertime(lwp_t *l, const struct bintime *now)
 {
+	static bool backwards = false;
 
 	if (__predict_false(l->l_flag & LW_IDLE))
 		return;
+
+	if (__predict_false(bintimecmp(now, &l->l_stime, <)) && !backwards) {
+		char caller[128];
+
+#ifdef DDB
+		db_symstr(caller, sizeof(caller),
+		    (db_expr_t)(intptr_t)__builtin_return_address(0),
+		    DB_STGY_PROC);
+#else
+		snprintf(caller, sizeof(caller), "%p",
+		    __builtin_return_address(0));
+#endif
+		backwards = true;
+		printf("WARNING: lwp %ld (%s%s%s) flags 0x%x:"
+		    " timecounter went backwards"
+		    " from (%jd + 0x%016"PRIx64"/2^64) sec"
+		    " to (%jd + 0x%016"PRIx64"/2^64) sec"
+		    " in %s\n",
+		    (long)l->l_lid,
+		    l->l_proc->p_comm,
+		    l->l_name ? " " : "",
+		    l->l_name ? l->l_name : "",
+		    l->l_pflag,
+		    (intmax_t)l->l_stime.sec, l->l_stime.frac,
+		    (intmax_t)now->sec, now->frac,
+		    caller);
+	}
 
 	/* rtime += now - stime */
 	bintime_add(&l->l_rtime, now);
@@ -531,6 +566,7 @@ nextlwp(struct cpu_info *ci, struct schedstate_percpu *spc)
 		KASSERT(newl->l_cpu == ci);
 		newl->l_stat = LSONPROC;
 		newl->l_pflag |= LP_RUNNING;
+		newl->l_boostpri = PRI_NONE;
 		spc->spc_curpriority = lwp_eprio(newl);
 		spc->spc_flags &= ~(SPCF_SWITCHCLEAR | SPCF_IDLE);
 		lwp_setlock(newl, spc->spc_lwplock);
@@ -553,7 +589,8 @@ nextlwp(struct cpu_info *ci, struct schedstate_percpu *spc)
 	 * the update to ci_want_resched will become globally visible before
 	 * the release of spc_mutex becomes globally visible.
 	 */
-	ci->ci_want_resched = ci->ci_data.cpu_softints;
+	if (ci->ci_data.cpu_softints == 0)
+		ci->ci_want_resched = 0;
 
 	return newl;
 }
@@ -710,10 +747,11 @@ mi_switch(lwp_t *l)
 
 		/* Count the context switch. */
 		CPU_COUNT(CPU_COUNT_NSWTCH, 1);
-		l->l_ncsw++;
 		if ((l->l_pflag & LP_PREEMPTING) != 0) {
-			l->l_nivcsw++;
+			l->l_ru.ru_nivcsw++;
 			l->l_pflag &= ~LP_PREEMPTING;
+		} else {
+			l->l_ru.ru_nvcsw++;
 		}
 
 		/*
@@ -783,18 +821,23 @@ mi_switch(lwp_t *l)
 
 		/*
 		 * Immediately mark the previous LWP as no longer running
-		 * and unlock (to keep lock wait times short as possible). 
+		 * and unlock (to keep lock wait times short as possible).
 		 * We'll still be at IPL_SCHED afterwards.  If a zombie,
 		 * don't touch after clearing LP_RUNNING as it could be
 		 * reaped by another CPU.  Issue a memory barrier to ensure
 		 * this.
+		 *
+		 * atomic_store_release matches atomic_load_acquire in
+		 * lwp_free.
 		 */
 		KASSERT((prevlwp->l_pflag & LP_RUNNING) != 0);
 		lock = prevlwp->l_mutex;
 		if (__predict_false(prevlwp->l_stat == LSZOMB)) {
-			membar_sync();
+			atomic_store_release(&prevlwp->l_pflag,
+			    prevlwp->l_pflag & ~LP_RUNNING);
+		} else {
+			prevlwp->l_pflag &= ~LP_RUNNING;
 		}
-		prevlwp->l_pflag &= ~LP_RUNNING;
 		mutex_spin_exit(lock);
 
 		/*
@@ -1099,10 +1142,10 @@ static const fixpt_t cexp[ ] = {
 void
 sched_pstats(void)
 {
-	extern struct loadavg averunnable;
 	struct loadavg *avg = &averunnable;
 	const int clkhz = (stathz != 0 ? stathz : hz);
-	static bool backwards = false;
+	static bool backwardslwp = false;
+	static bool backwardsproc = false;
 	static u_int lavg_count = 0;
 	struct proc *p;
 	int nrun;
@@ -1129,6 +1172,19 @@ sched_pstats(void)
 			if (__predict_false((l->l_flag & LW_IDLE) != 0))
 				continue;
 			lwp_lock(l);
+			if (__predict_false(l->l_rtime.sec < 0) &&
+			    !backwardslwp) {
+				backwardslwp = true;
+				printf("WARNING: lwp %ld (%s%s%s): "
+				    "negative runtime: "
+				    "(%jd + 0x%016"PRIx64"/2^64) sec\n",
+				    (long)l->l_lid,
+				    l->l_proc->p_comm,
+				    l->l_name ? " " : "",
+				    l->l_name ? l->l_name : "",
+				    (intmax_t)l->l_rtime.sec,
+				    l->l_rtime.frac);
+			}
 			runtm += l->l_rtime.sec;
 			l->l_swtime++;
 			sched_lwp_stats(l);
@@ -1164,10 +1220,12 @@ sched_pstats(void)
 		p->p_pctcpu = (p->p_pctcpu * ccpu) >> FSHIFT;
 
 		if (__predict_false(runtm < 0)) {
-			if (!backwards) {
-				backwards = true;
-				printf("WARNING: negative runtime; "
-				    "monotonic clock has gone backwards\n");
+			if (!backwardsproc) {
+				backwardsproc = true;
+				printf("WARNING: pid %ld (%s): "
+				    "negative runtime; "
+				    "monotonic clock has gone backwards\n",
+				    (long)p->p_pid, p->p_comm);
 			}
 			mutex_exit(p->p_lock);
 			continue;

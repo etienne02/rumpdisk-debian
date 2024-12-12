@@ -1,4 +1,4 @@
-/*	$NetBSD: adb_keymap.h,v 1.8 2020/08/31 17:51:56 macallan Exp $	*/
+/*	$NetBSD: adb_keymap.h,v 1.10 2022/05/14 01:16:55 manu Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -88,7 +88,7 @@ static const keysym_t akbd_keydesc_us[] = {
     KC(50),			KS_grave,	KS_asciitilde,
     KC(51),			KS_Delete,
     KC(52),			KS_KP_Enter,    /* Pretend this is alt-R ? */
-    KC(53),			KS_Escape,
+    KC(53), KS_Cmd_Debugger,	KS_Escape,
     KC(54),  KS_Cmd1,		KS_Control_L,
     KC(55),			KS_Meta_L,	/* Command */
     KC(56),			KS_Shift_L,
@@ -492,4 +492,11 @@ static const struct wscons_keydesc akbd_keydesctab[] = {
 #undef KBD_MAP
 #undef KC
 
-extern keysym_t adb_to_usb[];
+#define ADB_EMUL_USB_NONE	0
+#define ADB_EMUL_USB_ANSI	1
+#define ADB_EMUL_USB_ISO	2 
+#define ADB_EMUL_USB_JIS	3
+
+extern keysym_t adb_to_usb_ansi[];
+extern keysym_t adb_to_usb_iso[];
+extern keysym_t adb_to_usb_jis[];

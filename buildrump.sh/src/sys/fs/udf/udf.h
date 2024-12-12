@@ -1,4 +1,4 @@
-/* $NetBSD: udf.h,v 1.52 2016/05/24 09:55:57 reinoud Exp $ */
+/* $NetBSD: udf.h,v 1.56 2024/05/18 00:04:01 thorpej Exp $ */
 
 /*
  * Copyright (c) 2006, 2008 Reinoud Zandijk
@@ -40,6 +40,7 @@
 #include <sys/bufq.h>
 #include <sys/disk.h>
 #include <sys/kthread.h>
+#include <sys/malloc.h>
 #include <miscfs/genfs/genfs_node.h>
 
 /* debug section */
@@ -76,7 +77,9 @@ extern int udf_verbose;
 #define UDF_DEBUG_RESERVE	0x1000000
 
 /* initial value of udf_verbose */
-#define UDF_DEBUGGING		(0)
+#define UDF_DEBUGGING		(0x0000000)
+//#define UDF_DEBUGGING		(0x02fffff)
+
 
 #ifdef UDF_DEBUG
 #define DPRINTF(name, arg) { \
@@ -199,7 +202,7 @@ VFS_PROTOS(udf);
 			"\7APPENDONLY_LVINT\10WRITE_METAPART_NODES"
 
 /* logical volume error handling actions */
-#define UDF_UPDATE_TRACKINFO	  0x01	/* update trackinfo and re-shedule   */
+#define UDF_UPDATE_TRACKINFO	  0x01	/* update trackinfo and re-schedule  */
 #define UDF_REMAP_BLOCK		  0x02	/* remap the failing block length    */
 #define UDFONERROR_BITS "\20\1UPDATE_TRACKINFO\2REMAP_BLOCK"
 
@@ -276,7 +279,7 @@ struct udf_mount {
 	struct pri_vol_desc	*primary_vol;		/* identification    */
 	struct logvol_desc	*logical_vol;		/* main mapping v->p */
 	struct unalloc_sp_desc	*unallocated;		/* free UDF space    */
-	struct impvol_desc	*implementation;	/* likely reduntant  */
+	struct impvol_desc	*implementation;	/* likely redundant  */
 	struct logvol_int_desc	*logvol_integrity;	/* current integrity */
 	struct part_desc	*partitions[UDF_PARTITIONS]; /* partitions   */
 	/* logvol_info is derived; points *into* other structures */

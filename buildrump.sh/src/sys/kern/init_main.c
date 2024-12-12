@@ -1,7 +1,7 @@
-/*	$NetBSD: init_main.c,v 1.535 2021/04/01 04:41:38 simonb Exp $	*/
+/*	$NetBSD: init_main.c,v 1.549 2024/03/05 20:59:41 thorpej Exp $	*/
 
 /*-
- * Copyright (c) 2008, 2009, 2019 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2009, 2019, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -97,7 +97,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: init_main.c,v 1.535 2021/04/01 04:41:38 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: init_main.c,v 1.549 2024/03/05 20:59:41 thorpej Exp $");
 
 #include "opt_cnmagic.h"
 #include "opt_ddb.h"
@@ -112,7 +112,6 @@ __KERNEL_RCSID(0, "$NetBSD: init_main.c,v 1.535 2021/04/01 04:41:38 simonb Exp $
 #include "opt_ktrace.h"
 #include "opt_pax.h"
 #include "opt_compat_netbsd.h"
-#include "opt_wapbl.h"
 #include "opt_ptrace.h"
 #include "opt_splash.h"
 #include "opt_kernhist.h"
@@ -139,6 +138,7 @@ extern void *_binary_splash_image_end;
 #include <sys/kernel.h>
 #include <sys/mount.h>
 #include <sys/proc.h>
+#include <sys/lwp.h>
 #include <sys/kthread.h>
 #include <sys/resourcevar.h>
 #include <sys/signalvar.h>
@@ -199,6 +199,7 @@ extern void *_binary_splash_image_end;
 #include <sys/cprng.h>
 #include <sys/psref.h>
 #include <sys/radixtree.h>
+#include <sys/heartbeat.h>
 
 #include <sys/syscall.h>
 #include <sys/syscallargs.h>
@@ -231,7 +232,6 @@ extern void *_binary_splash_image_end;
 
 #include <sys/userconf.h>
 
-extern struct lwp lwp0;
 extern time_t rootfstime;
 
 #ifndef curlwp
@@ -327,9 +327,6 @@ main(void)
 
 	percpu_init();
 
-	/* Initialize lock caches. */
-	mutex_obj_init();
-
 	/* Initialize radix trees (used by numerous subsystems). */
 	radix_tree_init();
 
@@ -410,6 +407,9 @@ main(void)
 	/* Must be called after lwpinit (lwpinit_specificdata) */
 	psref_init();
 
+	/* Initialize exec structures */
+	exec_init(1);		/* signal_init calls exechook_establish() */
+
 	/* Initialize signal-related data structures. */
 	signal_init();
 
@@ -488,7 +488,7 @@ main(void)
 	 * If maximum number of files is not explicitly defined in
 	 * kernel config, adjust the number so that it is somewhat
 	 * more reasonable on machines with larger memory sizes.
-	 * Arbitary numbers are 20,000 files for 16GB RAM or more
+	 * Arbitrary numbers are 20,000 files for 16GB RAM or more
 	 * and 10,000 files for 1GB RAM or more.
 	 *
 	 * XXXtodo: adjust this and other values totally dynamically
@@ -507,9 +507,6 @@ main(void)
 
 	/* Initialize the file descriptor system. */
 	fd_sys_init();
-
-	/* Initialize cwd structures */
-	cwd_sys_init();
 
 	/* Initialize kqueue. */
 	kqueue_init();
@@ -552,8 +549,17 @@ main(void)
 	evcnt_attach_legacy_intrcnt();
 #endif
 
+	/* Enable deferred processing of RNG samples */
+	rnd_init_softint();
+
 	/* Once all CPUs are detected, initialize the per-CPU cprng_fast.  */
 	cprng_fast_init();
+
+	/*
+	 * Now that softints can be established, start monitoring
+	 * system heartbeat on all CPUs.
+	 */
+	heartbeat_start();
 
 	ssp_init();
 
@@ -574,13 +580,7 @@ main(void)
 	/* Get the threads going and into any sleeps before continuing. */
 	yield();
 
-	/* Enable deferred processing of RNG samples */
-	rnd_init_softint();
-
 	vmem_rehash_start();	/* must be before exec_init */
-
-	/* Initialize exec structures */
-	exec_init(1);		/* seminit calls exithook_establish() */
 
 #if NVERIEXEC > 0
 	/*
@@ -762,7 +762,7 @@ configure(void)
 	/*
 	 * XXX
 	 * callout_setfunc() requires mutex(9) so it can't be in config_init()
-	 * on amiga and atari which use config_init() and autoconf(9) fucntions
+	 * on amiga and atari which use config_init() and autoconf(9) functions
 	 * to initialize console devices.
 	 */
 	config_twiddle_init();
@@ -890,7 +890,9 @@ rootconf_handle_wedges(void)
 		if (vp == NULL)
 			return;
 
+		VOP_UNLOCK(vp);
 		error = VOP_IOCTL(vp, DIOCGDINFO, &label, FREAD, NOCRED);
+		vn_lock(vp, LK_EXCLUSIVE | LK_RETRY);
 		VOP_CLOSE(vp, FREAD, NOCRED);
 		vput(vp);
 		if (error)

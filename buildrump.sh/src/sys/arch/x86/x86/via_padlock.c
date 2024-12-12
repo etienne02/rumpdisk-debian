@@ -1,5 +1,5 @@
 /*	$OpenBSD: via.c,v 1.8 2006/11/17 07:47:56 tom Exp $	*/
-/*	$NetBSD: via_padlock.c,v 1.31 2020/06/29 23:58:44 riastradh Exp $ */
+/*	$NetBSD: via_padlock.c,v 1.35 2022/05/22 11:39:27 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2003 Jason Wright
@@ -20,7 +20,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: via_padlock.c,v 1.31 2020/06/29 23:58:44 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: via_padlock.c,v 1.35 2022/05/22 11:39:27 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -67,7 +67,7 @@ int	via_padlock_crypto_swauth(struct cryptop *, struct cryptodesc *,
 	    struct swcr_data *, void *);
 int	via_padlock_crypto_encdec(struct cryptop *, struct cryptodesc *,
 	    struct via_padlock_session *, struct via_padlock_softc *, void *);
-int	via_padlock_crypto_freesession(void *, uint64_t);
+void	via_padlock_crypto_freesession(void *, uint64_t);
 static	__inline void via_padlock_cbc(void *, void *, void *, void *, int,
 	    void *);
 
@@ -99,10 +99,10 @@ via_c3_ace_init(struct via_padlock_softc *sc)
 	 *
 	 *
 	 * XXX We should actually implement the HMAC modes this hardware
-	 * XXX can accellerate (wrap its plain SHA1/SHA2 as HMAC) and
+	 * XXX can accelerate (wrap its plain SHA1/SHA2 as HMAC) and
 	 * XXX strongly consider removing those passed through to cryptosoft.
 	 * XXX As it stands, we can "steal" sessions from drivers which could
-	 * XXX better accellerate them.
+	 * XXX better accelerate them.
 	 *
 	 * XXX Note the ordering dependency between when this (or any
 	 * XXX crypto driver) attaches and when cryptosoft does.  We are
@@ -134,10 +134,6 @@ via_padlock_crypto_newsession(void *arg, uint32_t *sidp, struct cryptoini *cri)
 	const struct swcr_auth_hash *axf;
 	struct swcr_data *swd;
 	int sesn, i, cw0;
-
-	KASSERT(sc != NULL /*, ("via_padlock_crypto_freesession: null softc")*/);
-	if (sc == NULL || sidp == NULL || cri == NULL)
-		return (EINVAL);
 
 	if (sc->sc_sessions == NULL) {
 		ses = sc->sc_sessions = malloc(sizeof(*ses), M_DEVBUF,
@@ -302,7 +298,7 @@ via_padlock_crypto_newsession(void *arg, uint32_t *sidp, struct cryptoini *cri)
 	return (0);
 }
 
-int
+void
 via_padlock_crypto_freesession(void *arg, uint64_t tid)
 {
 	struct via_padlock_softc *sc = arg;
@@ -311,13 +307,10 @@ via_padlock_crypto_freesession(void *arg, uint64_t tid)
 	int sesn;
 	uint32_t sid = ((uint32_t)tid) & 0xffffffff;
 
-	KASSERT(sc != NULL /*, ("via_padlock_crypto_freesession: null softc")*/);
-	if (sc == NULL)
-		return (EINVAL);
-
 	sesn = VIAC3_SESSION(sid);
-	if (sesn >= sc->sc_nsessions)
-		return (EINVAL);
+	KASSERTMSG(sesn >= 0, "sesn=%d", sesn);
+	KASSERTMSG(sesn < sc->sc_nsessions, "sesn=%d nsessions=%d",
+	    sesn, sc->sc_nsessions);
 
 	if (sc->sc_sessions[sesn].swd) {
 		swd = sc->sc_sessions[sesn].swd;
@@ -335,7 +328,6 @@ via_padlock_crypto_freesession(void *arg, uint64_t tid)
 	}
 
 	memset(&sc->sc_sessions[sesn], 0, sizeof(sc->sc_sessions[sesn]));
-	return (0);
 }
 
 static __inline void
@@ -504,7 +496,7 @@ via_padlock_crypto_process(void *arg, struct cryptop *crp, int hint)
 out:
 	crp->crp_etype = err;
 	crypto_done(crp);
-	return (err);
+	return 0;
 }
 
 static int

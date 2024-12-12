@@ -1,4 +1,4 @@
-/* $NetBSD: kern_auth.c,v 1.78 2020/05/16 18:31:50 christos Exp $ */
+/* $NetBSD: kern_auth.c,v 1.84 2023/10/04 22:17:09 ad Exp $ */
 
 /*-
  * Copyright (c) 2005, 2006 Elad Efrat <elad@NetBSD.org>
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_auth.c,v 1.78 2020/05/16 18:31:50 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_auth.c,v 1.84 2023/10/04 22:17:09 ad Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -122,7 +122,7 @@ kauth_cred_alloc(void)
 }
 
 /* Increment reference count to cred. */
-void
+kauth_cred_t
 kauth_cred_hold(kauth_cred_t cred)
 {
 	KASSERT(cred != NULL);
@@ -131,6 +131,7 @@ kauth_cred_hold(kauth_cred_t cred)
 	KASSERT(cred->cr_refcnt > 0);
 
 	atomic_inc_uint(&cred->cr_refcnt);
+	return cred;
 }
 
 /* Decrease reference count to cred. If reached zero, free it. */
@@ -144,8 +145,10 @@ kauth_cred_free(kauth_cred_t cred)
 	KASSERT(cred->cr_refcnt > 0);
 	ASSERT_SLEEPABLE();
 
+	membar_release();
 	if (atomic_dec_uint_nv(&cred->cr_refcnt) > 0)
 		return;
+	membar_acquire();
 
 	kauth_cred_hook(cred, KAUTH_CRED_FREE, NULL, NULL);
 	specificdata_fini(kauth_domain, &cred->cr_sd);
@@ -235,8 +238,7 @@ kauth_proc_fork(struct proc *parent, struct proc *child)
 {
 
 	mutex_enter(parent->p_lock);
-	kauth_cred_hold(parent->p_cred);
-	child->p_cred = parent->p_cred;
+	child->p_cred = kauth_cred_hold(parent->p_cred);
 	mutex_exit(parent->p_lock);
 
 	/* XXX: relies on parent process stalling during fork() */
@@ -396,6 +398,25 @@ kauth_cred_ismember_gid(kauth_cred_t cred, gid_t gid, int *resultp)
 		}
 
 	return (0);
+}
+
+int
+kauth_cred_groupmember(kauth_cred_t cred, gid_t gid)
+{
+	int ismember, error;
+
+	KASSERT(cred != NULL);
+	KASSERT(cred != NOCRED);
+	KASSERT(cred != FSCRED);
+
+	if (kauth_cred_getegid(cred) == gid)
+		return 0;
+
+	error = kauth_cred_ismember_gid(cred, gid, &ismember);
+	if (error)
+		return error;
+
+	return ismember ? 0 : -1;
 }
 
 u_int

@@ -1,4 +1,4 @@
-# $NetBSD: XEN3PAE_DOMU,v 1.17 2021/01/20 13:22:08 nia Exp $
+# $NetBSD: XEN3PAE_DOMU,v 1.24 2024/04/02 22:56:50 charlotte Exp $
 
 include 	"arch/i386/conf/std.xen"
 
@@ -58,8 +58,13 @@ options 	DDB_ONPANIC=1	# see also sysctl(7): `ddb.onpanic'
 options 	DDB_HISTORY_SIZE=512	# enable history editing in DDB
 #options 	KGDB		# remote debugger
 #options 	KGDB_DEVNAME="\"com\"",KGDB_DEVADDR=0x2f8,KGDB_DEVRATE=57600
-#makeoptions	DEBUG="-g"	# compile full symbol table
+makeoptions	DEBUG="-g"	# compile full symbol table
 options DDB_COMMANDONENTER="trace;show registers"
+options 	KDTRACE_HOOKS	# kernel DTrace hooks
+
+# Heartbeat checks
+options 	HEARTBEAT
+options 	HEARTBEAT_MAX_PERIOD_DEFAULT=15
 
 # Compatibility options
 include 	"conf/compat_netbsd09.config"
@@ -73,6 +78,7 @@ options 	DKWEDGE_METHOD_GPT	# Supports GPT partitions as wedges
 #options 	DKWEDGE_METHOD_MBR	# Support MBR partitions as wedges
 options 	DKWEDGE_METHOD_APPLE	# Support Apple partitions as wedges
 #options 	DKWEDGE_METHOD_RDB	# Support RDB partitions as wedges
+#options 	DKWEDGE_METHOD_TOS	# Support Atari "TOS" partitions as wedges
 
 # File systems
 file-system	FFS		# UFS
@@ -98,17 +104,16 @@ file-system	NILFS		# experimental - NTT's NiLFS(2)
 #file-system	V7FS		# 7th Edition(V7) File System
 
 # File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	DISKLABEL_EI	# disklabel Endian Independent support
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER	# Network File System server
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
+options 	WAPBL		# File system journaling support
+options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
+#options 	DISKLABEL_EI	# disklabel Endian Independent support
+options 	NFSSERVER	# Network File System server
 #options 	V7FS_EI		# V7FS Endian Independent support
 
 # Networking options
@@ -162,9 +167,6 @@ xenbus* 	at hypervisor?		# Xen virtual bus
 xennet* 	at xenbus?		# Xen virtual network interface
 xbd*		at xenbus?		# Xen virtual block device
 balloon*	at xenbus?		# Xen balloon device
-
-cinclude "arch/i386/conf/GENERIC.local"
-cinclude "arch/i386/conf/XEN3_DOMU.local"
 
 # Pseudo-Devices
 
@@ -231,3 +233,7 @@ options 	PAX_ASLR=0		# PaX Address Space Layout Randomization
 #xpci* at xenbus ?			#Xen3 PCI front end driver
 #pci* at xpci ?
 # you then need to add your PCI devices drivers below.
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/i386/conf/GENERIC.local"
+cinclude	"arch/i386/conf/XEN3_DOMU.local"

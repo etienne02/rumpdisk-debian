@@ -1,4 +1,4 @@
-/*	$NetBSD: svs.c,v 1.39 2020/07/19 07:35:08 maxv Exp $	*/
+/*	$NetBSD: svs.c,v 1.42 2022/09/24 11:05:18 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2018-2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: svs.c,v 1.39 2020/07/19 07:35:08 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: svs.c,v 1.42 2022/09/24 11:05:18 riastradh Exp $");
 
 #include "opt_svs.h"
 #include "opt_user_ldt.h"
@@ -45,9 +45,11 @@ __KERNEL_RCSID(0, "$NetBSD: svs.c,v 1.39 2020/07/19 07:35:08 maxv Exp $");
 #include <sys/reboot.h>
 
 #include <x86/cputypes.h>
+
 #include <machine/cpuvar.h>
 #include <machine/frameasm.h>
 #include <machine/gdt.h>
+#include <machine/pmap_private.h>
 
 #include <uvm/uvm.h>
 #include <uvm/uvm_page.h>
@@ -60,7 +62,7 @@ __KERNEL_RCSID(0, "$NetBSD: svs.c,v 1.39 2020/07/19 07:35:08 maxv Exp $");
  * entries containing the userland pages.
  *
  * ~~~~~~~~~~ The UTLS Page ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
- * 
+ *
  * We use a special per-cpu page that we call UTLS, for User Thread Local
  * Storage. Each CPU has one UTLS page. This page has two VAs:
  *
@@ -138,7 +140,7 @@ __KERNEL_RCSID(0, "$NetBSD: svs.c,v 1.39 2020/07/19 07:35:08 maxv Exp $");
  * During a context switch, svs_lwp_switch() gets called first. This function
  * does the kenter job described above, not in the kernel page tables (that
  * are currently loaded), but in the user page tables (that are not loaded).
- * 
+ *
  *           VIRTUAL ADDRESSES                     PHYSICAL ADDRESSES
  *
  * +-----------------------------+
@@ -573,6 +575,7 @@ svs_pmap_sync(struct pmap *pmap, int index)
 
 	KASSERT(pmap != NULL);
 	KASSERT(pmap != pmap_kernel());
+	KASSERT(pmap_is_user(pmap));
 	KASSERT(mutex_owned(&pmap->pm_lock));
 	KASSERT(kpreempt_disabled());
 	KASSERT(index < PDIR_SLOT_USERLIM);
@@ -697,6 +700,7 @@ svs_pdir_switch(struct pmap *pmap)
 
 	KASSERT(kpreempt_disabled());
 	KASSERT(pmap != pmap_kernel());
+	KASSERT(pmap_is_user(pmap));
 
 	/* Update the info in the UTLS page */
 	utls = (struct svs_utls *)ci->ci_svs_utls;

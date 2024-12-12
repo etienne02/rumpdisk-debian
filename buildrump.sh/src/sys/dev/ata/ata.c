@@ -1,4 +1,4 @@
-/*	$NetBSD: ata.c,v 1.163 2021/08/29 23:49:32 rin Exp $	*/
+/*	$NetBSD: ata.c,v 1.169 2022/05/31 08:43:15 andvar Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Manuel Bouyer.  All rights reserved.
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ata.c,v 1.163 2021/08/29 23:49:32 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ata.c,v 1.169 2022/05/31 08:43:15 andvar Exp $");
 
 #include "opt_ata.h"
 
@@ -94,7 +94,7 @@ static struct pool ata_xfer_pool;
 /*
  * A queue of atabus instances, used to ensure the same bus probe order
  * for a given hardware configuration at each boot.  Kthread probing
- * devices on a atabus.  Only one probing at once. 
+ * devices on a atabus.  Only one probing at once.
  */
 static TAILQ_HEAD(, atabus_initq)	atabus_initq_head;
 static kmutex_t				atabus_qlock;
@@ -960,7 +960,7 @@ ata_dmaerr(struct ata_drive_datas *drvp, int flags)
 	/*
 	 * Downgrade decision: if we get NERRS_MAX in NXFER.
 	 * We start with n_dmaerrs set to NERRS_MAX-1 so that the
-	 * first error within the first NXFER ops will immediatly trigger
+	 * first error within the first NXFER ops will immediately trigger
 	 * a downgrade.
 	 * If we got an error and n_xfers is bigger than NXFER reset counters.
 	 */
@@ -1024,7 +1024,7 @@ ata_exec_xfer(struct ata_channel *chp, struct ata_xfer *xfer)
 
 	/*
 	 * Standard commands are added to the end of command list, but
-	 * recovery commands must be run immediatelly.
+	 * recovery commands must be run immediately.
 	 */
 	if ((xfer->c_flags & C_SKIP_QUEUE) == 0)
 		SIMPLEQ_INSERT_TAIL(&chp->ch_queue->queue_xfer, xfer,
@@ -1231,10 +1231,11 @@ int
 ata_xfer_start(struct ata_xfer *xfer)
 {
 	struct ata_channel *chp = xfer->c_chp;
-	int rv;
+	int rv, status;
 
 	KASSERT(mutex_owned(&chp->ch_lock));
 
+again:
 	rv = xfer->ops->c_start(chp, xfer);
 	switch (rv) {
 	case ATASTART_STARTED:
@@ -1248,8 +1249,10 @@ ata_xfer_start(struct ata_xfer *xfer)
 		/* can happen even in thread context for some ATAPI devices */
 		ata_channel_unlock(chp);
 		KASSERT(xfer->ops != NULL && xfer->ops->c_poll != NULL);
-		xfer->ops->c_poll(chp, xfer);
+		status = xfer->ops->c_poll(chp, xfer);
 		ata_channel_lock(chp);
+		if (status == ATAPOLL_AGAIN)
+			goto again;
 		break;
 	case ATASTART_ABORT:
 		ata_channel_unlock(chp);
@@ -1327,7 +1330,7 @@ ata_free_xfer(struct ata_channel *chp, struct ata_xfer *xfer)
 
 	if (__predict_false(chp->ch_atac->atac_free_hw))
 		chp->ch_atac->atac_free_hw(chp);
- 
+
 	ata_channel_unlock(chp);
 
 	if (__predict_true(!ISSET(xfer->c_flags, C_PRIVATE_ALLOC)))
@@ -1417,7 +1420,7 @@ ata_timo_xfer_check(struct ata_xfer *xfer)
 
 	    		device_printf(drvp->drv_softc,
 			    "xfer %"PRIxPTR" freed while invoking timeout\n",
-			    (intptr_t)xfer & PAGE_MASK); 
+			    (intptr_t)xfer & PAGE_MASK);
 
 			ata_free_xfer(chp, xfer);
 			return true;
@@ -1428,7 +1431,7 @@ ata_timo_xfer_check(struct ata_xfer *xfer)
 
 	    	device_printf(drvp->drv_softc,
 		    "xfer %"PRIxPTR" deactivated while invoking timeout\n",
-		    (intptr_t)xfer & PAGE_MASK); 
+		    (intptr_t)xfer & PAGE_MASK);
 		return true;
 	}
 
@@ -1500,7 +1503,7 @@ ata_kill_pending(struct ata_drive_datas *drvp)
 				break;
 			}
 		}
-		
+
 		if (!drv_active) {
 			/* all finished */
 			break;
@@ -1597,12 +1600,14 @@ ata_thread_run(struct ata_channel *chp, int flags, int type, int arg)
 			/* NOTREACHED */
 		}
 
-		/*
-		 * Block execution of other commands while reset is scheduled
-		 * to a thread.
-		 */
-		ata_channel_freeze_locked(chp);
-		chp->ch_flags |= type;
+		if (!(chp->ch_flags & type)) {
+			/*
+			 * Block execution of other commands while
+			 * reset is scheduled to a thread.
+			 */
+			ata_channel_freeze_locked(chp);
+			chp->ch_flags |= type;
+		}
 
 		cv_signal(&chp->ch_thr_idle);
 		return;
@@ -1611,7 +1616,7 @@ ata_thread_run(struct ata_channel *chp, int flags, int type, int arg)
 	/* Block execution of other commands during reset */
 	ata_channel_freeze_locked(chp);
 
-	/* 
+	/*
 	 * If reset has been scheduled to a thread, then clear
 	 * the flag now so that the thread won't try to execute it if
 	 * we happen to sleep, and thaw one more time after the reset.
@@ -1758,7 +1763,7 @@ ata_print_modes(struct ata_channel *chp)
 			    ? " w/PRIO" : "");
 		} else if (drvp->drive_flags & ATA_DRIVE_WFUA)
 			aprint_verbose(", WRITE DMA FUA EXT");
-			
+
 #endif	/* NATA_DMA || NATA_PIOBM */
 		aprint_verbose("\n");
 	}
@@ -1919,7 +1924,7 @@ ata_probe_caps(struct ata_drive_datas *drvp)
 			}
 			/*
 			 * If controller's driver can't set its PIO mode,
-			 * get the highter one for the drive.
+			 * get the higher one for the drive.
 			 */
 			if (atac->atac_set_modes == NULL ||
 			    atac->atac_pio_cap >= i + 3) {
@@ -2275,7 +2280,7 @@ atabus_rescan(device_t self, const char *ifattr, const int *locators)
 
 	/*
 	 * we can rescan a port multiplier atabus, even if some devices are
-	 * still attached 
+	 * still attached
 	 */
 	if (chp->ch_satapmp_nports == 0) {
 		if (chp->atapibus != NULL) {

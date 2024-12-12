@@ -1,4 +1,4 @@
-/*	$NetBSD: limits.h,v 1.9 2019/01/21 20:28:17 dholland Exp $	*/
+/*	$NetBSD: limits.h,v 1.11 2024/10/30 15:56:11 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1988 The Regents of the University of California.
@@ -34,6 +34,8 @@
 #ifndef	_MACHINE_LIMITS_H_
 #define	_MACHINE_LIMITS_H_
 
+#include <sys/featuretest.h>
+
 #define	CHAR_BIT	8		/* number of bits in a char */
 
 #define	UCHAR_MAX	0xff		/* max value for an unsigned char */
@@ -68,11 +70,9 @@
 #define	SSIZE_MIN	LONG_MIN	/* min value for a ssize_t */
 #define	SIZE_T_MAX	ULONG_MAX	/* max value for a size_t */
 
-/* GCC requires that quad constants be written as expressions. */
-#define	UQUAD_MAX	((u_quad_t)0-1)	/* max value for a uquad_t */
-					/* max value for a quad_t */
-#define	QUAD_MAX	((quad_t)(UQUAD_MAX >> 1))
-#define	QUAD_MIN	(-QUAD_MAX-1)	/* min value for a quad_t */
+#define	UQUAD_MAX	0xffffffffffffffffULL		/* max unsigned quad */
+#define	QUAD_MAX	0x7fffffffffffffffLL		/* max signed quad */
+#define	QUAD_MIN	(-0x7fffffffffffffffLL-1)	/* min signed quad */
 
 #endif /* _NETBSD_SOURCE */
 #endif /* _POSIX_C_SOURCE || _XOPEN_SOURCE || _NETBSD_SOURCE */

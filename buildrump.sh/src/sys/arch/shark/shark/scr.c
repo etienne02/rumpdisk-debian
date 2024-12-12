@@ -1,4 +1,4 @@
-/*	$NetBSD: scr.c,v 1.33 2021/08/09 21:38:04 andvar Exp $	*/
+/*	$NetBSD: scr.c,v 1.38 2024/03/06 20:02:24 andvar Exp $	*/
 
 /*
  * Copyright 1997
@@ -67,7 +67,7 @@
 **    referenced to T2 counts.
 **
 **    The bottom half is done as a several linked state machines.  
-**    The top level machine is the maserSM (ie master State Machine).  This 
+**    The top level machine is the masterSM (ie master State Machine).  This 
 **    machine calls mid level protocol machines, ie ATRSM (Answer To Reset 
 **    State Machine), t0SendSM (T=0 Send State Machine), and t0RecvSM (T=0 Recv 
 **    State Machine).  These mid level protocol machines in turn call low level
@@ -102,7 +102,7 @@
 */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scr.c,v 1.33 2021/08/09 21:38:04 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scr.c,v 1.38 2024/03/06 20:02:24 andvar Exp $");
 
 #include "opt_ddb.h"
 
@@ -662,8 +662,8 @@ const struct cdevsw scr_cdevsw = {
 **      scrProbe
 **     
 **     This is the probe routine for the Smart Card.  Because the 
-**     Smart Card is hard wired, there is no probing to peform.  The
-**     function ensures that a succesfull problem occurs only once.
+**     Smart Card is hard wired, there is no probing to perform.  The
+**     function ensures that a successful problem occurs only once.
 **
 **  FORMAL PARAMETERS:
 **
@@ -2298,7 +2298,7 @@ static void   coldResetSM(struct scr_softc * sc,int cmd)
 **      checked to see if it is 1/2 speed, and if so, the clock is changed
 **      and the state adjustes
 **
-**      At the end of the first byte we have to determin the logic being
+**      At the end of the first byte we have to determine the logic being
 **      used by the card, ie is it active high/low and msb/lsb.  
 **
 **
@@ -3466,7 +3466,7 @@ static void scrClkStart(struct scr_softc * sc,int countPerTick)
 **
 **      scrClkAdj
 **
-**      Adjusts the frequence of the clock
+**      Adjusts the frequency of the clock
 **
 **  FORMAL PARAMETERS:
 **

@@ -1,4 +1,4 @@
-/*	$NetBSD: promlib.c,v 1.48 2021/05/10 13:59:30 thorpej Exp $ */
+/*	$NetBSD: promlib.c,v 1.52 2022/01/22 11:49:16 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: promlib.c,v 1.48 2021/05/10 13:59:30 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: promlib.c,v 1.52 2022/01/22 11:49:16 thorpej Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_sparc_arch.h"
@@ -49,6 +49,7 @@ __KERNEL_RCSID(0, "$NetBSD: promlib.c,v 1.48 2021/05/10 13:59:30 thorpej Exp $")
 #include <lib/libsa/stand.h>
 #define malloc(s,t,f)	alloc(s)
 #else
+#include <sys/device_calls.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
 #endif /* _STANDALONE */
@@ -98,11 +99,7 @@ static void	opf_interpret_simple(const char *);
 static devhandle_t
 null_prom_to_devhandle(int node __unused)
 {
-	devhandle_t devhandle;
-
-	devhandle_invalidate(&devhandle);
-
-	return devhandle;
+	return devhandle_invalid();
 }
 
 static int
@@ -242,12 +239,18 @@ static const struct devhandle_impl obp_devhandle_impl = {
 };
 
 static devhandle_t
-devhandle_from_obp(int node)
+devhandle_from_obp(devhandle_t super_handle, int node)
 {
-	devhandle_t handle = {
-		.impl = &obp_devhandle_impl,
-		.integer = node,
-	};
+	devhandle_type_t super_type = devhandle_type(super_handle);
+	devhandle_t handle = { 0 };
+
+	if (super_type == DEVHANDLE_TYPE_OPENBOOT) {
+		handle.impl = super_handle.impl;
+	} else {
+		KASSERT(super_type == DEVHANDLE_TYPE_INVALID);
+		handle.impl = &obp_devhandle_impl;
+	}
+	handle.integer = node;
 
 	return handle;
 }
@@ -268,7 +271,7 @@ obp_device_enumerate_children(device_t dev, devhandle_t call_handle, void *v)
 
 	for (node = prom_firstchild(node); node != 0;
 	     node = prom_nextsibling(node)) {
-		if (!args->callback(dev, devhandle_from_obp(node),
+		if (!args->callback(dev, devhandle_from_obp(call_handle, node),
 				    args->callback_arg)) {
 			break;
 		}
@@ -276,7 +279,7 @@ obp_device_enumerate_children(device_t dev, devhandle_t call_handle, void *v)
 
 	return 0;
 }
-OBP_DEVICE_CALL_REGISTER("device-enumerate-children",
+OBP_DEVICE_CALL_REGISTER(DEVICE_ENUMERATE_CHILDREN_STR,
 			 obp_device_enumerate_children)
 #endif /* ! _STANDALONE */
 

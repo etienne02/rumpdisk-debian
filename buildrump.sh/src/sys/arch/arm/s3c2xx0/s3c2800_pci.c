@@ -1,4 +1,4 @@
-/*	$NetBSD: s3c2800_pci.c,v 1.32 2021/08/07 16:18:45 thorpej Exp $	*/
+/*	$NetBSD: s3c2800_pci.c,v 1.34 2022/09/25 12:28:54 andvar Exp $	*/
 
 /*
  * Copyright (c) 2002 Fujitsu Component Limited
@@ -100,7 +100,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: s3c2800_pci.c,v 1.32 2021/08/07 16:18:45 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: s3c2800_pci.c,v 1.34 2022/09/25 12:28:54 andvar Exp $");
 
 #include "opt_pci.h"
 #include "pci.h"
@@ -353,7 +353,7 @@ sspci_bs_map(void *t, bus_addr_t bpa, bus_size_t size, int flag,
 	    t, bpa, size, flag);
 #endif
 
-	/* Round the allocation to page boundries */
+	/* Round the allocation to page boundaries */
 	startpa = trunc_page(bpa);
 	endpa = round_page(bpa + size);
 
@@ -691,7 +691,7 @@ sspci_intr(void *arg)
 		s = splhigh();
 		softint_schedule(sc->sc_softinterrupt);
 
-		/* mask INTA itnerrupt until softinterrupt is handled */
+		/* mask INTA interrupt until softinterrupt is handled */
 		sc->sc_pciinten &= ~PCIINT_INA;
 		bus_space_write_4(iot, ioh, PCICTL_PCIINTEN,
 		    sc->sc_pciinten);

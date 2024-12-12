@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.33 2020/02/20 08:27:38 skrll Exp $
+#	$NetBSD: genassym.cf,v 1.36 2024/01/09 04:16:23 thorpej Exp $
 
 #
 # Copyright (c) 1982, 1990, 1993
@@ -41,6 +41,7 @@ include <sys/syscall.h>
 
 include <uvm/uvm_extern.h>
 
+include <machine/fcode.h>
 include <machine/psl.h>
 include <machine/pcb.h>
 include <machine/pte.h>
@@ -83,6 +84,14 @@ define	AMIGA_68060	AMIGA_68060
 ifdef DRACO
 define	DRACO		DRACO
 endif
+
+# MMU configuration constants (from pmap.h)
+export	MMU51_SRP_BITS
+export	MMU51_CRP_BITS
+export	MMU51_TCR_BITS
+export	MMU40_TCR_BITS
+
+define	M68K_MMU_MOTOROLA	1
 
 # lwp & proc fields and values
 define	L_PCB			offsetof(struct lwp, l_addr)

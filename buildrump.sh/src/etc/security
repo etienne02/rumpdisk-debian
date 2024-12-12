@@ -1,6 +1,6 @@
 #!/bin/sh -
 #
-#	$NetBSD: security,v 1.128 2021/01/10 23:24:25 riastradh Exp $
+#	$NetBSD: security,v 1.132 2024/07/21 14:56:16 he Exp $
 #	from: @(#)security	8.1 (Berkeley) 6/9/93
 #
 
@@ -195,8 +195,7 @@ done | mtree -CM -k all > $SPECIALSPEC || exit 1
 # Check for enough entropy.
 #
 if checkyesno check_entropy; then
-	if ! dd if=/dev/random iflag=nonblock of=/dev/null bs=1 count=1 \
-	    msgfmt=quiet 2>/dev/null; then
+	if [ "$(sysctl -n kern.entropy.needed)" != 0 ]; then
 		printf '\n'
 		printf 'Entropy:\n'
 		printf 'System may need more entropy for cryptography.\n'
@@ -274,6 +273,7 @@ if checkyesno check_passwd; then
 		    	$2 !~ /^\$1/ &&
 		    	$2 !~ /^\$2/ &&
 			$2 !~ /^\$sha1/ &&
+			$2 !~ /^\$argon2(i|d|id)/ &&
 		    	$2 != "" &&
 			(permit_star || $2 != "*") &&
 		    	$2 !~ /^\*[A-z-]+$/ &&
@@ -359,7 +359,7 @@ if checkyesno check_group; then
 			dupgroups="$dupgroups $group"
 		fi
 	done
-	if [ ! -z $dupgroups ] ; then
+	if [ ! -z "$dupgroups" ] ; then
 		printf "\n$GRP has duplicate group names.\n"
 		printf "$dupgroups\n"
 	fi

@@ -7,14 +7,14 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: gemini_ipm.c,v 1.5 2021/08/09 19:24:33 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gemini_ipm.c,v 1.7 2023/05/26 20:50:21 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/intr.h>
-#include <sys/malloc.h>
 #include <arm/cpufunc.h>
+#include <arm/arm32/pte.h>
 #include <arch/arm/gemini/gemini_obiovar.h>
 #include <arch/arm/gemini/gemini_ipivar.h>
 #include <arch/arm/gemini/gemini_ipm.h>

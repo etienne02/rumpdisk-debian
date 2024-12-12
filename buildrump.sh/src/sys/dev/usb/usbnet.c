@@ -1,4 +1,4 @@
-/*	$NetBSD: usbnet.c,v 1.42 2021/06/16 00:21:19 riastradh Exp $	*/
+/*	$NetBSD: usbnet.c,v 1.121 2024/11/10 11:53:04 mlelstv Exp $	*/
 
 /*
  * Copyright (c) 2019 Matthew R. Green
@@ -12,8 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
@@ -33,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: usbnet.c,v 1.42 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: usbnet.c,v 1.121 2024/11/10 11:53:04 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -54,21 +52,22 @@ struct usbnet_cdata {
 
 struct usbnet_private {
 	/*
-	 * - unp_core_lock protects most of this structure, the public one,
-	 *   and the MII / media data.
+	 * - unp_miilock protects the MII / media data and tick scheduling.
 	 * - unp_rxlock protects the rx path and its data
 	 * - unp_txlock protects the tx path and its data
-	 * - unp_detachcv handles detach vs open references
 	 *
 	 * the lock ordering is:
-	 *	ifnet lock -> unp_core_lock -> unp_rxlock -> unp_txlock
-	 * - ifnet lock is not needed for unp_core_lock, but if ifnet lock is
-	 *   involved, it must be taken first
+	 *	ifnet lock -> unp_miilock
+	 *		   -> unp_rxlock
+	 *		   -> unp_txlock
+	 *		   -> unp_mcastlock
 	 */
-	kmutex_t		unp_core_lock;
+	kmutex_t		unp_miilock;
 	kmutex_t		unp_rxlock;
 	kmutex_t		unp_txlock;
-	kcondvar_t		unp_detachcv;
+
+	kmutex_t		unp_mcastlock;
+	bool			unp_mcastactive;
 
 	struct usbnet_cdata	unp_cdata;
 
@@ -78,12 +77,14 @@ struct usbnet_private {
 	struct callout		unp_stat_ch;
 	struct usbd_pipe	*unp_ep[USBNET_ENDPT_MAX];
 
-	bool			unp_dying;
-	bool			unp_stopping;
+	volatile bool		unp_dying;
+	bool			unp_stopped;
+	bool			unp_rxstopped;
+	bool			unp_txstopped;
 	bool			unp_attached;
+	bool			unp_ifp_attached;
 	bool			unp_link;
 
-	int			unp_refcnt;
 	int			unp_timer;
 	unsigned short		unp_if_flags;
 	unsigned		unp_number;
@@ -98,6 +99,15 @@ struct usbnet_private {
 #define un_cdata(un)	(&(un)->un_pri->unp_cdata)
 
 volatile unsigned usbnet_number;
+
+static void usbnet_isowned_rx(struct usbnet *);
+static void usbnet_isowned_tx(struct usbnet *);
+
+static inline void
+usbnet_isowned_mii(struct usbnet *un)
+{
+	KASSERT(mutex_owned(&un->un_pri->unp_miilock));
+}
 
 static int usbnet_modcmd(modcmd_t, void *);
 
@@ -151,7 +161,7 @@ fail:
 static void
 uno_stop(struct usbnet *un, struct ifnet *ifp, int disable)
 {
-	usbnet_isowned_core(un);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
 	if (un->un_ops->uno_stop)
 		(*un->un_ops->uno_stop)(ifp, disable);
 }
@@ -159,11 +169,11 @@ uno_stop(struct usbnet *un, struct ifnet *ifp, int disable)
 static int
 uno_ioctl(struct usbnet *un, struct ifnet *ifp, u_long cmd, void *data)
 {
-	/*
-	 * There are cases where IFNET_LOCK will not be held when we
-	 * are called (e.g. add/delete multicast address), so we can't
-	 * assert it.
-	 */
+
+	KASSERTMSG(cmd != SIOCADDMULTI, "%s", ifp->if_xname);
+	KASSERTMSG(cmd != SIOCDELMULTI, "%s", ifp->if_xname);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+
 	if (un->un_ops->uno_ioctl)
 		return (*un->un_ops->uno_ioctl)(ifp, cmd, data);
 	return 0;
@@ -172,35 +182,43 @@ uno_ioctl(struct usbnet *un, struct ifnet *ifp, u_long cmd, void *data)
 static int
 uno_override_ioctl(struct usbnet *un, struct ifnet *ifp, u_long cmd, void *data)
 {
-	/* See above. */
+
+	switch (cmd) {
+	case SIOCADDMULTI:
+	case SIOCDELMULTI:
+		break;
+	default:
+		KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+	}
+
 	return (*un->un_ops->uno_override_ioctl)(ifp, cmd, data);
 }
 
 static int
 uno_init(struct usbnet *un, struct ifnet *ifp)
 {
-	KASSERT(IFNET_LOCKED(ifp));
-	return (*un->un_ops->uno_init)(ifp);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+	return un->un_ops->uno_init ? (*un->un_ops->uno_init)(ifp) : 0;
 }
 
 static int
 uno_read_reg(struct usbnet *un, int phy, int reg, uint16_t *val)
 {
-	usbnet_isowned_core(un);
+	usbnet_isowned_mii(un);
 	return (*un->un_ops->uno_read_reg)(un, phy, reg, val);
 }
 
 static int
 uno_write_reg(struct usbnet *un, int phy, int reg, uint16_t val)
 {
-	usbnet_isowned_core(un);
+	usbnet_isowned_mii(un);
 	return (*un->un_ops->uno_write_reg)(un, phy, reg, val);
 }
 
 static void
 uno_mii_statchg(struct usbnet *un, struct ifnet *ifp)
 {
-	usbnet_isowned_core(un);
+	usbnet_isowned_mii(un);
 	(*un->un_ops->uno_statchg)(ifp);
 }
 
@@ -239,7 +257,7 @@ usbnet_newbuf(size_t buflen)
 {
 	struct mbuf *m;
 
-	if (buflen > MCLBYTES)
+	if (buflen > MCLBYTES - ETHER_ALIGN)
 		return NULL;
 
 	MGETHDR(m, M_DONTWAIT, MT_DATA);
@@ -254,8 +272,8 @@ usbnet_newbuf(size_t buflen)
 		}
 	}
 
+	m->m_len = m->m_pkthdr.len = ETHER_ALIGN + buflen;
 	m_adj(m, ETHER_ALIGN);
-	m->m_len = m->m_pkthdr.len = buflen;
 
 	return m;
 }
@@ -287,6 +305,7 @@ usbnet_enqueue(struct usbnet * const un, uint8_t *buf, size_t buflen,
 		if_statinc(ifp, if_ierrors);
 		return;
 	}
+	MCLAIM(m, &unp->unp_ec.ec_rx_mowner);
 
 	m_set_rcvif(m, ifp);
 	m->m_pkthdr.csum_flags = csum_flags;
@@ -316,6 +335,7 @@ usbnet_input(struct usbnet * const un, uint8_t *buf, size_t buflen)
 		if_statinc(ifp, if_ierrors);
 		return;
 	}
+	MCLAIM(m, &unp->unp_ec.ec_rx_mowner);
 
 	m_set_rcvif(m, ifp);
 	memcpy(mtod(m, char *), buf, buflen);
@@ -335,7 +355,6 @@ usbnet_rxeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	struct usbnet_chain * const c = priv;
 	struct usbnet * const un = c->unc_un;
 	struct usbnet_private * const unp = un->un_pri;
-	struct ifnet * const ifp = usbnet_ifp(un);
 	uint32_t total_len;
 
 	USBNETHIST_CALLARGSN(5, "%jd: enter: status %#jx xfer %#jx",
@@ -343,9 +362,9 @@ usbnet_rxeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 
 	mutex_enter(&unp->unp_rxlock);
 
-	if (unp->unp_dying || unp->unp_stopping ||
+	if (usbnet_isdying(un) || unp->unp_rxstopped ||
 	    status == USBD_INVAL || status == USBD_NOT_STARTED ||
-	    status == USBD_CANCELLED || !(ifp->if_flags & IFF_RUNNING))
+	    status == USBD_CANCELLED)
 		goto out;
 
 	if (status != USBD_NORMAL_COMPLETION) {
@@ -360,7 +379,7 @@ usbnet_rxeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	usbd_get_xfer_status(xfer, NULL, NULL, &total_len, NULL);
 
 	if (total_len > un->un_rx_bufsz) {
-		aprint_error_dev(un->un_dev,
+		device_printf(un->un_dev,
 		    "rxeof: too large transfer (%u > %u)\n",
 		    total_len, un->un_rx_bufsz);
 		goto done;
@@ -370,7 +389,7 @@ usbnet_rxeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	usbnet_isowned_rx(un);
 
 done:
-	if (unp->unp_dying || unp->unp_stopping)
+	if (usbnet_isdying(un) || unp->unp_rxstopped)
 		goto out;
 
 	mutex_exit(&unp->unp_rxlock);
@@ -399,7 +418,7 @@ usbnet_txeof(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	    unp->unp_number, status, (uintptr_t)xfer, 0);
 
 	mutex_enter(&unp->unp_txlock);
-	if (unp->unp_stopping || unp->unp_dying) {
+	if (unp->unp_txstopped || usbnet_isdying(un)) {
 		mutex_exit(&unp->unp_txlock);
 		return;
 	}
@@ -441,21 +460,20 @@ usbnet_pipe_intr(struct usbd_xfer *xfer, void *priv, usbd_status status)
 	USBNETHIST_FUNC();
 	struct usbnet * const un = priv;
 	struct usbnet_private * const unp = un->un_pri;
-	struct usbnet_intr * const uni = un->un_intr;
-	struct ifnet * const ifp = usbnet_ifp(un);
+	struct usbnet_intr * const uni __unused = un->un_intr;
 
-	if (uni == NULL || unp->unp_dying || unp->unp_stopping ||
+	if (usbnet_isdying(un) ||
 	    status == USBD_INVAL || status == USBD_NOT_STARTED ||
-	    status == USBD_CANCELLED || !(ifp->if_flags & IFF_RUNNING)) {
-		USBNETHIST_CALLARGS("%jd: uni %#jx d/s %#jx status %#jx",
+	    status == USBD_CANCELLED) {
+		USBNETHIST_CALLARGS("%jd: uni %#jx dying %#jx status %#jx",
 		    unp->unp_number, (uintptr_t)uni,
-		    (unp->unp_dying << 8) | unp->unp_stopping, status);
+		    usbnet_isdying(un), status);
 		return;
 	}
 
 	if (status != USBD_NORMAL_COMPLETION) {
 		if (usbd_ratecheck(&unp->unp_intr_notice)) {
-			aprint_error_dev(un->un_dev, "usb error on intr: %s\n",
+			device_printf(un->un_dev, "usb error on intr: %s\n",
 			    usbd_errstr(status));
 		}
 		if (status == USBD_STALLED)
@@ -486,10 +504,11 @@ usbnet_start_locked(struct ifnet *ifp)
 
 	usbnet_isowned_tx(un);
 	KASSERT(cd->uncd_tx_cnt <= un->un_tx_list_cnt);
+	KASSERT(!unp->unp_txstopped);
 
-	if (!unp->unp_link || (ifp->if_flags & IFF_RUNNING) == 0) {
-		DPRINTF("start called no link (%jx) or running (flags %jx)",
-		    unp->unp_link, ifp->if_flags, 0, 0);
+	if (!unp->unp_link) {
+		DPRINTF("start called no link (%jx)",
+		    unp->unp_link, 0, 0, 0);
 		return;
 	}
 
@@ -572,11 +591,11 @@ usbnet_if_start(struct ifnet *ifp)
 	struct usbnet_private * const unp = un->un_pri;
 
 	USBNETHIST_FUNC();
-	USBNETHIST_CALLARGS("%jd: stopping %jd",
-	    unp->unp_number, unp->unp_stopping, 0, 0);
+	USBNETHIST_CALLARGS("%jd: txstopped %jd",
+	    unp->unp_number, unp->unp_txstopped, 0, 0);
 
 	mutex_enter(&unp->unp_txlock);
-	if (!unp->unp_stopping)
+	if (!unp->unp_txstopped)
 		usbnet_start_locked(ifp);
 	mutex_exit(&unp->unp_txlock);
 }
@@ -662,8 +681,8 @@ usbnet_rx_start_pipes(struct usbnet * const un)
 	struct usbnet_private * const unp = un->un_pri;
 
 	mutex_enter(&unp->unp_rxlock);
-	mutex_enter(&unp->unp_txlock);
-	unp->unp_stopping = false;
+	KASSERT(unp->unp_rxstopped);
+	unp->unp_rxstopped = false;
 
 	for (size_t i = 0; i < un->un_rx_list_cnt; i++) {
 		struct usbnet_chain *c = &cd->uncd_rx_chain[i];
@@ -673,7 +692,6 @@ usbnet_rx_start_pipes(struct usbnet * const un)
 		usbd_transfer(c->unc_xfer);
 	}
 
-	mutex_exit(&unp->unp_txlock);
 	mutex_exit(&unp->unp_rxlock);
 }
 
@@ -756,10 +774,7 @@ usbnet_ep_close_pipes(struct usbnet * const un)
 	for (size_t i = 0; i < __arraycount(unp->unp_ep); i++) {
 		if (unp->unp_ep[i] == NULL)
 			continue;
-		usbd_status err = usbd_close_pipe(unp->unp_ep[i]);
-		if (err)
-			aprint_error_dev(un->un_dev, "close pipe %zu: %s\n", i,
-			    usbd_errstr(err));
+		usbd_close_pipe(unp->unp_ep[i]);
 		unp->unp_ep[i] = NULL;
 	}
 }
@@ -794,24 +809,19 @@ usbnet_ep_open_pipes(struct usbnet * const un)
 	return USBD_NORMAL_COMPLETION;
 }
 
-static usbd_status
+static void
 usbnet_ep_stop_pipes(struct usbnet * const un)
 {
 	struct usbnet_private * const unp = un->un_pri;
-	usbd_status err = USBD_NORMAL_COMPLETION;
 
 	for (size_t i = 0; i < __arraycount(unp->unp_ep); i++) {
 		if (unp->unp_ep[i] == NULL)
 			continue;
-		usbd_status err2 = usbd_abort_pipe(unp->unp_ep[i]);
-		if (err == USBD_NORMAL_COMPLETION && err2)
-			err = err2;
+		usbd_abort_pipe(unp->unp_ep[i]);
 	}
-
-	return err;
 }
 
-int
+static int
 usbnet_init_rx_tx(struct usbnet * const un)
 {
 	USBNETHIST_FUNC(); USBNETHIST_CALLED();
@@ -820,13 +830,11 @@ usbnet_init_rx_tx(struct usbnet * const un)
 	usbd_status err;
 	int error = 0;
 
-	usbnet_isowned_core(un);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
 
-	if (unp->unp_dying) {
+	if (usbnet_isdying(un)) {
 		return EIO;
 	}
-
-	usbnet_busy(un);
 
 	/* Open RX and TX pipes. */
 	err = usbnet_ep_open_pipes(un);
@@ -851,17 +859,37 @@ usbnet_init_rx_tx(struct usbnet * const un)
 		goto out;
 	}
 
+	/* Indicate we are up and running. */
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+	ifp->if_flags |= IFF_RUNNING;
+
+	/*
+	 * If the hardware has a multicast filter, program it and then
+	 * allow updates to it while we're running.
+	 */
+	if (un->un_ops->uno_mcast) {
+		mutex_enter(&unp->unp_mcastlock);
+		KASSERTMSG(!unp->unp_mcastactive, "%s", ifp->if_xname);
+		unp->unp_if_flags = ifp->if_flags;
+		(*un->un_ops->uno_mcast)(ifp);
+		unp->unp_mcastactive = true;
+		mutex_exit(&unp->unp_mcastlock);
+	}
+
+	/* Allow transmit.  */
+	mutex_enter(&unp->unp_txlock);
+	KASSERT(unp->unp_txstopped);
+	unp->unp_txstopped = false;
+	mutex_exit(&unp->unp_txlock);
+
 	/* Start up the receive pipe(s). */
 	usbnet_rx_start_pipes(un);
 
-	/* Indicate we are up and running. */
-#if 0
-	/* XXX if_mcast_op() can call this without ifnet locked */
-	KASSERT(ifp->if_softc == NULL || IFNET_LOCKED(ifp));
-#endif
-	ifp->if_flags |= IFF_RUNNING;
-
+	/* Kick off the watchdog/stats/mii tick.  */
+	mutex_enter(&unp->unp_miilock);
+	unp->unp_stopped = false;
 	callout_schedule(&unp->unp_stat_ch, hz);
+	mutex_exit(&unp->unp_miilock);
 
 out:
 	if (error) {
@@ -869,104 +897,80 @@ out:
 		usbnet_tx_list_fini(un);
 		usbnet_ep_close_pipes(un);
 	}
-	usbnet_unbusy(un);
 
-	usbnet_isowned_core(un);
+	/*
+	 * For devices without any media autodetection, treat success
+	 * here as an active link.
+	 */
+	if (un->un_ops->uno_statchg == NULL) {
+		mutex_enter(&unp->unp_miilock);
+		usbnet_set_link(un, error == 0);
+		mutex_exit(&unp->unp_miilock);
+	}
 
 	return error;
 }
 
-void
-usbnet_busy(struct usbnet *un)
-{
-	struct usbnet_private * const unp = un->un_pri;
-
-	usbnet_isowned_core(un);
-
-	unp->unp_refcnt++;
-}
-
-void
-usbnet_unbusy(struct usbnet *un)
-{
-	struct usbnet_private * const unp = un->un_pri;
-
-	usbnet_isowned_core(un);
-
-	if (--unp->unp_refcnt < 0)
-		cv_broadcast(&unp->unp_detachcv);
-}
-
 /* MII management. */
 
-int
+static int
 usbnet_mii_readreg(device_t dev, int phy, int reg, uint16_t *val)
 {
 	USBNETHIST_FUNC();
 	struct usbnet * const un = device_private(dev);
-	struct usbnet_private * const unp = un->un_pri;
 	int err;
 
-	/* MII layer ensures core_lock is held. */
-	usbnet_isowned_core(un);
+	/* MII layer ensures miilock is held. */
+	usbnet_isowned_mii(un);
 
-	if (unp->unp_dying) {
+	if (usbnet_isdying(un)) {
 		return EIO;
 	}
 
-	usbnet_busy(un);
 	err = uno_read_reg(un, phy, reg, val);
-	usbnet_unbusy(un);
-
 	if (err) {
 		USBNETHIST_CALLARGS("%jd: read PHY failed: %jd",
-		    unp->unp_number, err, 0, 0);
+		    un->un_pri->unp_number, err, 0, 0);
 		return err;
 	}
 
 	return 0;
 }
 
-int
+static int
 usbnet_mii_writereg(device_t dev, int phy, int reg, uint16_t val)
 {
 	USBNETHIST_FUNC();
 	struct usbnet * const un = device_private(dev);
-	struct usbnet_private * const unp = un->un_pri;
 	int err;
 
-	/* MII layer ensures core_lock is held. */
-	usbnet_isowned_core(un);
+	/* MII layer ensures miilock is held. */
+	usbnet_isowned_mii(un);
 
-	if (unp->unp_dying) {
+	if (usbnet_isdying(un)) {
 		return EIO;
 	}
 
-	usbnet_busy(un);
 	err = uno_write_reg(un, phy, reg, val);
-	usbnet_unbusy(un);
-
 	if (err) {
 		USBNETHIST_CALLARGS("%jd: write PHY failed: %jd",
-		    unp->unp_number, err, 0, 0);
+		    un->un_pri->unp_number, err, 0, 0);
 		return err;
 	}
 
 	return 0;
 }
 
-void
+static void
 usbnet_mii_statchg(struct ifnet *ifp)
 {
 	USBNETHIST_FUNC(); USBNETHIST_CALLED();
 	struct usbnet * const un = ifp->if_softc;
 
-	/* MII layer ensures core_lock is held. */
-	usbnet_isowned_core(un);
+	/* MII layer ensures miilock is held. */
+	usbnet_isowned_mii(un);
 
-	usbnet_busy(un);
 	uno_mii_statchg(un, ifp);
-	usbnet_unbusy(un);
 }
 
 static int
@@ -977,10 +981,13 @@ usbnet_media_upd(struct ifnet *ifp)
 	struct usbnet_private * const unp = un->un_pri;
 	struct mii_data * const mii = usbnet_mii(un);
 
-	/* ifmedia layer ensures core_lock is held. */
-	usbnet_isowned_core(un);
+	/* ifmedia layer ensures miilock is held. */
+	usbnet_isowned_mii(un);
 
-	if (unp->unp_dying)
+	/* ifmedia changes only with IFNET_LOCK held.  */
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+
+	if (usbnet_isdying(un))
 		return EIO;
 
 	unp->unp_link = false;
@@ -997,6 +1004,13 @@ usbnet_media_upd(struct ifnet *ifp)
 
 /* ioctl */
 
+/*
+ * usbnet_ifflags_cb(ec)
+ *
+ *	Called by if_ethersubr when interface flags change
+ *	(SIOCSIFFLAGS), or ethernet capabilities change
+ *	(SIOCSETHERCAP), on a running interface.
+ */
 static int
 usbnet_ifflags_cb(struct ethercom *ec)
 {
@@ -1004,22 +1018,55 @@ usbnet_ifflags_cb(struct ethercom *ec)
 	struct ifnet *ifp = &ec->ec_if;
 	struct usbnet *un = ifp->if_softc;
 	struct usbnet_private * const unp = un->un_pri;
-	int rv = 0;
 
-	mutex_enter(&unp->unp_core_lock);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
 
 	const u_short changed = ifp->if_flags ^ unp->unp_if_flags;
-	if ((changed & ~(IFF_CANTCHANGE | IFF_DEBUG)) == 0) {
-		unp->unp_if_flags = ifp->if_flags;
-		if ((changed & IFF_PROMISC) != 0)
-			rv = ENETRESET;
-	} else {
-		rv = ENETRESET;
-	}
 
-	mutex_exit(&unp->unp_core_lock);
+	/*
+	 * If any user-settable flags have changed other than
+	 * IFF_DEBUG, just reset the interface.
+	 */
+	if ((changed & ~(IFF_CANTCHANGE | IFF_DEBUG)) != 0)
+		return ENETRESET;
 
-	return rv;
+	/*
+	 * Otherwise, cache the flags change so we can read the flags
+	 * under unp_mcastlock for multicast updates in SIOCADDMULTI or
+	 * SIOCDELMULTI without IFNET_LOCK.
+	 */
+	mutex_enter(&unp->unp_mcastlock);
+	unp->unp_if_flags = ifp->if_flags;
+	mutex_exit(&unp->unp_mcastlock);
+
+	/*
+	 * If we're switching on or off promiscuous mode, reprogram the
+	 * hardware multicast filter now.
+	 *
+	 * XXX Actually, reset the interface, because some usbnet
+	 * drivers (e.g., aue(4)) initialize the hardware differently
+	 * in uno_init depending on IFF_PROMISC.  But some (again,
+	 * aue(4)) _also_ need to know whether IFF_PROMISC is set in
+	 * uno_mcast and do something different with it there.  Maybe
+	 * the logic can be unified, but it will require an audit and
+	 * testing of all the usbnet drivers.
+	 */
+	if (changed & IFF_PROMISC)
+		return ENETRESET;
+
+	return 0;
+}
+
+bool
+usbnet_ispromisc(struct usbnet *un)
+{
+	struct ifnet * const ifp = usbnet_ifp(un);
+	struct usbnet_private * const unp = un->un_pri;
+
+	KASSERTMSG(mutex_owned(&unp->unp_mcastlock) || IFNET_LOCKED(ifp),
+	    "%s", ifp->if_xname);
+
+	return unp->unp_if_flags & IFF_PROMISC;
 }
 
 static int
@@ -1037,8 +1084,30 @@ usbnet_if_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		return uno_override_ioctl(un, ifp, cmd, data);
 
 	error = ether_ioctl(ifp, cmd, data);
-	if (error == ENETRESET)
-		error = uno_ioctl(un, ifp, cmd, data);
+	if (error == ENETRESET) {
+		switch (cmd) {
+		case SIOCADDMULTI:
+		case SIOCDELMULTI:
+			/*
+			 * If there's a hardware multicast filter, and
+			 * it has been programmed by usbnet_init_rx_tx
+			 * and is active, update it now.  Otherwise,
+			 * drop the update on the floor -- it will be
+			 * observed by usbnet_init_rx_tx next time we
+			 * bring the interface up.
+			 */
+			if (un->un_ops->uno_mcast) {
+				mutex_enter(&unp->unp_mcastlock);
+				if (unp->unp_mcastactive)
+					(*un->un_ops->uno_mcast)(ifp);
+				mutex_exit(&unp->unp_mcastlock);
+			}
+			error = 0;
+			break;
+		default:
+			error = uno_ioctl(un, ifp, cmd, data);
+		}
+	}
 
 	return error;
 }
@@ -1052,45 +1121,84 @@ usbnet_if_ioctl(struct ifnet *ifp, u_long cmd, void *data)
  *	- free RX and TX resources
  *	- close pipes
  *
- * usbnet_stop() is exported for drivers to use, expects lock held.
- *
  * usbnet_if_stop() is for the if_stop handler.
  */
-void
+static void
 usbnet_stop(struct usbnet *un, struct ifnet *ifp, int disable)
 {
 	struct usbnet_private * const unp = un->un_pri;
+	struct mii_data * const mii = usbnet_mii(un);
 
 	USBNETHIST_FUNC(); USBNETHIST_CALLED();
 
-	usbnet_isowned_core(un);
-
-	usbnet_busy(un);
-
-	mutex_enter(&unp->unp_rxlock);
-	mutex_enter(&unp->unp_txlock);
-	unp->unp_stopping = true;
-	mutex_exit(&unp->unp_txlock);
-	mutex_exit(&unp->unp_rxlock);
-
-	uno_stop(un, ifp, disable);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+	KASSERTMSG(ifp->if_flags & IFF_RUNNING, "%s", ifp->if_xname);
 
 	/*
-	 * XXXSMP Would like to
-	 *	KASSERT(IFNET_LOCKED(ifp))
-	 * here but the locking order is:
-	 *	ifnet -> core_lock -> rxlock -> txlock
-	 * and core_lock is already held.
+	 * For drivers with hardware multicast filter update callbacks:
+	 * Prevent concurrent access to the hardware registers by
+	 * multicast filter updates, which happens without IFNET_LOCK.
 	 */
-	ifp->if_flags &= ~IFF_RUNNING;
-	unp->unp_timer = 0;
+	if (un->un_ops->uno_mcast) {
+		mutex_enter(&unp->unp_mcastlock);
+		KASSERTMSG(unp->unp_mcastactive, "%p", ifp->if_xname);
+		unp->unp_mcastactive = false;
+		unp->unp_if_flags = 0;
+		mutex_exit(&unp->unp_mcastlock);
+	}
 
-	callout_halt(&unp->unp_stat_ch, &unp->unp_core_lock);
+	/*
+	 * Prevent new activity (rescheduling ticks, xfers, &c.) and
+	 * clear the watchdog timer.
+	 */
+	mutex_enter(&unp->unp_miilock);
+	unp->unp_stopped = true;
+	mutex_exit(&unp->unp_miilock);
+
+	mutex_enter(&unp->unp_rxlock);
+	unp->unp_rxstopped = true;
+	mutex_exit(&unp->unp_rxlock);
+
+	mutex_enter(&unp->unp_txlock);
+	unp->unp_txstopped = true;
+	unp->unp_timer = 0;
+	mutex_exit(&unp->unp_txlock);
+
+	/*
+	 * Stop the timer first, then the task -- if the timer was
+	 * already firing, we stop the task or wait for it complete
+	 * only after it last fired.  Setting unp_stopped prevents the
+	 * timer task from being scheduled again.
+	 */
+	callout_halt(&unp->unp_stat_ch, NULL);
 	usb_rem_task_wait(un->un_udev, &unp->unp_ticktask, USB_TASKQ_DRIVER,
-	    &unp->unp_core_lock);
+	    NULL);
+
+	/*
+	 * Now that we have stopped calling mii_tick, bring the MII
+	 * state machine down.
+	 */
+	if (mii) {
+		mutex_enter(&unp->unp_miilock);
+		mii_down(mii);
+		mutex_exit(&unp->unp_miilock);
+	}
 
 	/* Stop transfers. */
 	usbnet_ep_stop_pipes(un);
+
+	/*
+	 * Now that the software is quiescent, ask the driver to stop
+	 * the hardware.  The driver's uno_stop routine now has
+	 * exclusive access to any registers that might previously have
+	 * been used by to ifmedia, mii, or ioctl callbacks.
+	 *
+	 * Don't bother if the device is being detached, though -- if
+	 * it's been unplugged then there's no point in trying to touch
+	 * the registers.
+	 */
+	if (!usbnet_isdying(un))
+		uno_stop(un, ifp, disable);
 
 	/* Free RX/TX resources. */
 	usbnet_rx_list_fini(un);
@@ -1099,18 +1207,29 @@ usbnet_stop(struct usbnet *un, struct ifnet *ifp, int disable)
 	/* Close pipes. */
 	usbnet_ep_close_pipes(un);
 
-	usbnet_unbusy(un);
+	/* Everything is quesced now. */
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+	ifp->if_flags &= ~IFF_RUNNING;
 }
 
 static void
 usbnet_if_stop(struct ifnet *ifp, int disable)
 {
 	struct usbnet * const un = ifp->if_softc;
-	struct usbnet_private * const unp = un->un_pri;
 
-	mutex_enter(&unp->unp_core_lock);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+
+	/*
+	 * If we're already stopped, nothing to do.
+	 *
+	 * XXX This should be an assertion, but it may require some
+	 * analysis -- and possibly some tweaking -- of sys/net to
+	 * ensure.
+	 */
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
+		return;
+
 	usbnet_stop(un, ifp, disable);
-	mutex_exit(&unp->unp_core_lock);
 }
 
 /*
@@ -1128,10 +1247,8 @@ usbnet_tick(void *arg)
 
 	USBNETHIST_CALLARGSN(10, "%jd: enter", unp->unp_number, 0, 0, 0);
 
-	if (unp != NULL && !unp->unp_stopping && !unp->unp_dying) {
-		/* Perform periodic stuff in process context */
-		usb_add_task(un->un_udev, &unp->unp_ticktask, USB_TASKQ_DRIVER);
-	}
+	/* Perform periodic stuff in process context */
+	usb_add_task(un->un_udev, &unp->unp_ticktask, USB_TASKQ_DRIVER);
 }
 
 static void
@@ -1141,17 +1258,13 @@ usbnet_watchdog(struct ifnet *ifp)
 	struct usbnet * const un = ifp->if_softc;
 	struct usbnet_private * const unp = un->un_pri;
 	struct usbnet_cdata * const cd = un_cdata(un);
-	usbd_status err;
 
 	if_statinc(ifp, if_oerrors);
 	device_printf(un->un_dev, "watchdog timeout\n");
 
 	if (cd->uncd_tx_cnt > 0) {
 		DPRINTF("uncd_tx_cnt=%ju non zero, aborting pipe", 0, 0, 0, 0);
-		err = usbd_abort_pipe(unp->unp_ep[USBNET_ENDPT_TX]);
-		if (err)
-			device_printf(un->un_dev, "pipe abort failed: %s\n",
-			    usbd_errstr(err));
+		usbd_abort_pipe(unp->unp_ep[USBNET_ENDPT_TX]);
 		if (cd->uncd_tx_cnt != 0)
 			DPRINTF("uncd_tx_cnt now %ju", cd->uncd_tx_cnt, 0, 0, 0);
 	}
@@ -1166,46 +1279,31 @@ usbnet_tick_task(void *arg)
 	USBNETHIST_FUNC();
 	struct usbnet * const un = arg;
 	struct usbnet_private * const unp = un->un_pri;
-
-	if (unp == NULL)
-		return;
-
-	USBNETHIST_CALLARGSN(8, "%jd: enter", unp->unp_number, 0, 0, 0);
-
-	mutex_enter(&unp->unp_core_lock);
-	if (unp->unp_stopping || unp->unp_dying) {
-		mutex_exit(&unp->unp_core_lock);
-		return;
-	}
-
 	struct ifnet * const ifp = usbnet_ifp(un);
 	struct mii_data * const mii = usbnet_mii(un);
 
-	KASSERT(ifp != NULL);	/* embedded member */
+	USBNETHIST_CALLARGSN(8, "%jd: enter", unp->unp_number, 0, 0, 0);
 
-	usbnet_busy(un);
-	mutex_exit(&unp->unp_core_lock);
-
-	if (unp->unp_timer != 0 && --unp->unp_timer == 0)
+	mutex_enter(&unp->unp_txlock);
+	const bool timeout = unp->unp_timer != 0 && --unp->unp_timer == 0;
+	mutex_exit(&unp->unp_txlock);
+	if (timeout)
 		usbnet_watchdog(ifp);
-
-	DPRINTFN(8, "mii %#jx ifp %#jx", (uintptr_t)mii, (uintptr_t)ifp, 0, 0);
-	if (mii) {
-		mutex_enter(&unp->unp_core_lock);
-		mii_tick(mii);
-		if (!unp->unp_link)
-			(*mii->mii_statchg)(ifp);
-		mutex_exit(&unp->unp_core_lock);
-	}
 
 	/* Call driver if requested. */
 	uno_tick(un);
 
-	mutex_enter(&unp->unp_core_lock);
-	usbnet_unbusy(un);
-	if (!unp->unp_stopping && !unp->unp_dying)
+	mutex_enter(&unp->unp_miilock);
+	DPRINTFN(8, "mii %#jx ifp %#jx", (uintptr_t)mii, (uintptr_t)ifp, 0, 0);
+	if (mii) {
+		mii_tick(mii);
+		if (!unp->unp_link)
+			(*mii->mii_statchg)(ifp);
+	}
+
+	if (!unp->unp_stopped && !usbnet_isdying(un))
 		callout_schedule(&unp->unp_stat_ch, hz);
-	mutex_exit(&unp->unp_core_lock);
+	mutex_exit(&unp->unp_miilock);
 }
 
 static int
@@ -1213,8 +1311,38 @@ usbnet_if_init(struct ifnet *ifp)
 {
 	USBNETHIST_FUNC(); USBNETHIST_CALLED();
 	struct usbnet * const un = ifp->if_softc;
+	int error;
 
-	return uno_init(un, ifp);
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+
+	/*
+	 * Prevent anyone from bringing the interface back up once
+	 * we're detaching.
+	 */
+	if (usbnet_isdying(un))
+		return EIO;
+
+	/*
+	 * If we're already running, stop the interface first -- we're
+	 * reinitializing it.
+	 *
+	 * XXX Grody for sys/net to call if_init to reinitialize.  This
+	 * should be an assertion, not a branch, but it will require
+	 * some tweaking of sys/net to avoid.  See also the comment in
+	 * usbnet_ifflags_cb about if_init vs uno_mcast on reinitialize.
+	 */
+	if (ifp->if_flags & IFF_RUNNING)
+		usbnet_stop(un, ifp, /*disable*/1/*XXX???*/);
+	KASSERTMSG((ifp->if_flags & IFF_RUNNING) == 0, "%s", ifp->if_xname);
+
+	error = uno_init(un, ifp);
+	if (error)
+		return error;
+	error = usbnet_init_rx_tx(un);
+	if (error)
+		return error;
+
+	return 0;
 }
 
 
@@ -1223,13 +1351,8 @@ usbnet_if_init(struct ifnet *ifp)
 void
 usbnet_set_link(struct usbnet *un, bool link)
 {
+	usbnet_isowned_mii(un);
 	un->un_pri->unp_link = link;
-}
-
-void
-usbnet_set_dying(struct usbnet *un, bool link)
-{
-	un->un_pri->unp_dying = link;
 }
 
 struct ifnet *
@@ -1271,64 +1394,22 @@ usbnet_havelink(struct usbnet *un)
 bool
 usbnet_isdying(struct usbnet *un)
 {
-	return un->un_pri == NULL || un->un_pri->unp_dying;
+	return atomic_load_relaxed(&un->un_pri->unp_dying);
 }
 
 
 /* Locking. */
 
-void
-usbnet_lock_core(struct usbnet *un)
+static void
+usbnet_isowned_rx(struct usbnet *un)
 {
-	mutex_enter(&un->un_pri->unp_core_lock);
+	KASSERT(mutex_owned(&un->un_pri->unp_rxlock));
 }
 
-void
-usbnet_unlock_core(struct usbnet *un)
+static void
+usbnet_isowned_tx(struct usbnet *un)
 {
-	mutex_exit(&un->un_pri->unp_core_lock);
-}
-
-kmutex_t *
-usbnet_mutex_core(struct usbnet *un)
-{
-	return &un->un_pri->unp_core_lock;
-}
-
-void
-usbnet_lock_rx(struct usbnet *un)
-{
-	mutex_enter(&un->un_pri->unp_rxlock);
-}
-
-void
-usbnet_unlock_rx(struct usbnet *un)
-{
-	mutex_exit(&un->un_pri->unp_rxlock);
-}
-
-kmutex_t *
-usbnet_mutex_rx(struct usbnet *un)
-{
-	return &un->un_pri->unp_rxlock;
-}
-
-void
-usbnet_lock_tx(struct usbnet *un)
-{
-	mutex_enter(&un->un_pri->unp_txlock);
-}
-
-void
-usbnet_unlock_tx(struct usbnet *un)
-{
-	mutex_exit(&un->un_pri->unp_txlock);
-}
-
-kmutex_t *
-usbnet_mutex_tx(struct usbnet *un)
-{
-	return &un->un_pri->unp_txlock;
+	KASSERT(mutex_owned(&un->un_pri->unp_txlock));
 }
 
 /* Autoconf management. */
@@ -1347,7 +1428,7 @@ usbnet_empty_eaddr(struct usbnet * const un)
  * are connected and commands can be sent), and the second connects the
  * device to the system networking.
  *
- * Always call usbnet_detach(), even if usbnet_attach_ifp() is skippped.
+ * Always call usbnet_detach(), even if usbnet_attach_ifp() is skipped.
  * Also usable as driver detach directly.
  *
  * To skip ethernet configuration (eg, point-to-point), make sure that
@@ -1355,15 +1436,13 @@ usbnet_empty_eaddr(struct usbnet * const un)
  */
 
 void
-usbnet_attach(struct usbnet *un,
-	      const char *detname)	/* detach cv name */
+usbnet_attach(struct usbnet *un)
 {
 	USBNETHIST_FUNC(); USBNETHIST_CALLED();
 
 	/* Required inputs.  */
 	KASSERT(un->un_ops->uno_tx_prepare);
 	KASSERT(un->un_ops->uno_rx_loop);
-	KASSERT(un->un_ops->uno_init);
 	KASSERT(un->un_rx_bufsz);
 	KASSERT(un->un_tx_bufsz);
 	KASSERT(un->un_rx_list_cnt);
@@ -1375,14 +1454,15 @@ usbnet_attach(struct usbnet *un,
 	un->un_pri = kmem_zalloc(sizeof(*un->un_pri), KM_SLEEP);
 	struct usbnet_private * const unp = un->un_pri;
 
-	usb_init_task(&unp->unp_ticktask, usbnet_tick_task, un, USB_TASKQ_MPSAFE);
+	usb_init_task(&unp->unp_ticktask, usbnet_tick_task, un,
+	    USB_TASKQ_MPSAFE);
 	callout_init(&unp->unp_stat_ch, CALLOUT_MPSAFE);
 	callout_setfunc(&unp->unp_stat_ch, usbnet_tick, un);
 
 	mutex_init(&unp->unp_txlock, MUTEX_DEFAULT, IPL_SOFTUSB);
 	mutex_init(&unp->unp_rxlock, MUTEX_DEFAULT, IPL_SOFTUSB);
-	mutex_init(&unp->unp_core_lock, MUTEX_DEFAULT, IPL_NONE);
-	cv_init(&unp->unp_detachcv, detname);
+	mutex_init(&unp->unp_miilock, MUTEX_DEFAULT, IPL_NONE);
+	mutex_init(&unp->unp_mcastlock, MUTEX_DEFAULT, IPL_SOFTCLOCK);
 
 	rnd_attach_source(&unp->unp_rndsrc, device_xname(un->un_dev),
 	    RND_TYPE_NET, RND_FLAG_DEFAULT);
@@ -1392,6 +1472,9 @@ usbnet_attach(struct usbnet *un,
 
 	unp->unp_number = atomic_inc_uint_nv(&usbnet_number);
 
+	unp->unp_stopped = true;
+	unp->unp_rxstopped = true;
+	unp->unp_txstopped = true;
 	unp->unp_attached = true;
 }
 
@@ -1415,9 +1498,9 @@ usbnet_attach_mii(struct usbnet *un, const struct usbnet_mii *unm)
 
 	usbnet_ec(un)->ec_mii = mii;
 	ifmedia_init_with_lock(&mii->mii_media, 0,
-	    usbnet_media_upd, ether_mediastatus, usbnet_mutex_core(un));
+	    usbnet_media_upd, ether_mediastatus, &unp->unp_miilock);
 	mii_attach(un->un_dev, mii, unm->un_mii_capmask, unm->un_mii_phyloc,
-		   unm->un_mii_offset, unm->un_mii_flags);
+	    unm->un_mii_offset, unm->un_mii_flags);
 
 	if (LIST_FIRST(&mii->mii_phys) == NULL) {
 		ifmedia_add(&mii->mii_media, IFM_ETHER | IFM_NONE, 0, NULL);
@@ -1437,7 +1520,9 @@ usbnet_attach_ifp(struct usbnet *un,
 	struct ifnet * const ifp = usbnet_ifp(un);
 
 	KASSERT(unp->unp_attached);
+	KASSERT(!unp->unp_ifp_attached);
 
+	ifp->if_softc = un;
 	strlcpy(ifp->if_xname, device_xname(un->un_dev), IFNAMSIZ);
 	ifp->if_flags = if_flags;
 	ifp->if_extflags = IFEF_MPSAFE | if_extflags;
@@ -1456,6 +1541,7 @@ usbnet_attach_ifp(struct usbnet *un,
 	if (ifp->_if_input == NULL)
 		ifp->if_percpuq = if_percpuq_create(ifp);
 	if_register(ifp);
+	unp->unp_ifp_attached = true;
 
 	/*
 	 * If ethernet address is all zero, skip ether_ifattach() and
@@ -1473,7 +1559,6 @@ usbnet_attach_ifp(struct usbnet *un,
 
 	/* Now ready, and attached. */
 	IFQ_SET_READY(&ifp->if_snd);
-	ifp->if_softc = un;
 
 	usbd_add_drv_event(USB_EVENT_DRIVER_ATTACH, un->un_udev, un->un_dev);
 
@@ -1495,39 +1580,39 @@ usbnet_detach(device_t self, int flags)
 	struct ifnet * const ifp = usbnet_ifp(un);
 	struct mii_data * const mii = usbnet_mii(un);
 
-	mutex_enter(&unp->unp_core_lock);
-	unp->unp_dying = true;
-	mutex_exit(&unp->unp_core_lock);
+	/*
+	 * Prevent new activity.  After we stop the interface, it
+	 * cannot be brought back up.
+	 */
+	atomic_store_relaxed(&unp->unp_dying, true);
 
-	if (ifp->if_flags & IFF_RUNNING) {
+	/*
+	 * If we're still running on the network, stop and wait for all
+	 * asynchronous activity to finish.
+	 *
+	 * If usbnet_attach_ifp never ran, IFNET_LOCK won't work, but
+	 * no activity is possible, so just skip this part.
+	 */
+	if (unp->unp_ifp_attached) {
 		IFNET_LOCK(ifp);
-		usbnet_if_stop(ifp, 1);
+		if (ifp->if_flags & IFF_RUNNING) {
+			usbnet_if_stop(ifp, 1);
+		}
 		IFNET_UNLOCK(ifp);
 	}
 
-	callout_halt(&unp->unp_stat_ch, NULL);
-	usb_rem_task_wait(un->un_udev, &unp->unp_ticktask, USB_TASKQ_DRIVER,
-	    NULL);
-
-	mutex_enter(&unp->unp_core_lock);
-	unp->unp_refcnt--;
-	while (unp->unp_refcnt >= 0) {
-		/* Wait for processes to go away */
-		cv_wait(&unp->unp_detachcv, &unp->unp_core_lock);
-	}
-	mutex_exit(&unp->unp_core_lock);
-
-	usbnet_rx_list_free(un);
-	usbnet_tx_list_free(un);
-
-	callout_destroy(&unp->unp_stat_ch);
-	rnd_detach_source(&unp->unp_rndsrc);
+	/*
+	 * The callout and tick task can't be scheduled anew at this
+	 * point, and usbnet_if_stop has waited for them to complete.
+	 */
+	KASSERT(!callout_pending(&unp->unp_stat_ch));
+	KASSERT(!usb_task_pending(un->un_udev, &unp->unp_ticktask));
 
 	if (mii) {
 		mii_detach(mii, MII_PHY_ANY, MII_OFFSET_ANY);
 		ifmedia_fini(&mii->mii_media);
 	}
-	if (ifp->if_softc) {
+	if (unp->unp_ifp_attached) {
 		if (!usbnet_empty_eaddr(un))
 			ether_ifdetach(ifp);
 		else
@@ -1536,14 +1621,28 @@ usbnet_detach(device_t self, int flags)
 	}
 	usbnet_ec(un)->ec_mii = NULL;
 
-	cv_destroy(&unp->unp_detachcv);
-	mutex_destroy(&unp->unp_core_lock);
+	usbnet_rx_list_free(un);
+	usbnet_tx_list_free(un);
+
+	rnd_detach_source(&unp->unp_rndsrc);
+
+	mutex_destroy(&unp->unp_mcastlock);
+	mutex_destroy(&unp->unp_miilock);
 	mutex_destroy(&unp->unp_rxlock);
 	mutex_destroy(&unp->unp_txlock);
 
+	callout_destroy(&unp->unp_stat_ch);
+
 	pmf_device_deregister(un->un_dev);
 
-	usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, un->un_udev, un->un_dev);
+	/*
+	 * Notify userland that we're going away, if we arrived in the
+	 * first place.
+	 */
+	if (unp->unp_ifp_attached) {
+		usbd_add_drv_event(USB_EVENT_DRIVER_DETACH, un->un_udev,
+		    un->un_dev);
+	}
 
 	kmem_free(unp, sizeof(*unp));
 	un->un_pri = NULL;
@@ -1563,15 +1662,19 @@ usbnet_activate(device_t self, devact_t act)
 	case DVACT_DEACTIVATE:
 		if_deactivate(ifp);
 
-		mutex_enter(&unp->unp_core_lock);
-		unp->unp_dying = true;
-		mutex_exit(&unp->unp_core_lock);
+		atomic_store_relaxed(&unp->unp_dying, true);
+
+		mutex_enter(&unp->unp_miilock);
+		unp->unp_stopped = true;
+		mutex_exit(&unp->unp_miilock);
 
 		mutex_enter(&unp->unp_rxlock);
-		mutex_enter(&unp->unp_txlock);
-		unp->unp_stopping = true;
-		mutex_exit(&unp->unp_txlock);
+		unp->unp_rxstopped = true;
 		mutex_exit(&unp->unp_rxlock);
+
+		mutex_enter(&unp->unp_txlock);
+		unp->unp_txstopped = true;
+		mutex_exit(&unp->unp_txlock);
 
 		return 0;
 	default:

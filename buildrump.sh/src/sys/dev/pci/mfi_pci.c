@@ -1,4 +1,4 @@
-/* $NetBSD: mfi_pci.c,v 1.20 2018/12/09 11:14:02 jdolecek Exp $ */
+/* $NetBSD: mfi_pci.c,v 1.22 2022/09/25 17:52:25 thorpej Exp $ */
 /* $OpenBSD: mfi_pci.c,v 1.11 2006/08/06 04:40:08 brad Exp $ */
 /*
  * Copyright (c) 2006 Marco Peereboom <marco@peereboom.us>
@@ -17,12 +17,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mfi_pci.c,v 1.20 2018/12/09 11:14:02 jdolecek Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mfi_pci.c,v 1.22 2022/09/25 17:52:25 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/device.h>
 
 #include <dev/pci/pcidevs.h>
@@ -99,6 +98,7 @@ static const struct mfi_pci_subtype mfi_gen2_subtypes[] = {
 
 static const struct mfi_pci_subtype mfi_skinny_subtypes[] = {
 	{ PCI_VENDOR_IBM,	0x03b1,		"IBM ServeRAID M1015 SAS/SATA" },
+	{ PCI_VENDOR_DELL,	0x1f78,		"Dell PERC H310" },
 	{ 0x0,			0,		"" }
 };
 

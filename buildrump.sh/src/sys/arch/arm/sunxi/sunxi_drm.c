@@ -1,4 +1,4 @@
-/* $NetBSD: sunxi_drm.c,v 1.15 2021/08/07 16:18:45 thorpej Exp $ */
+/* $NetBSD: sunxi_drm.c,v 1.26 2022/09/25 07:50:23 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2019 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,28 +27,31 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunxi_drm.c,v 1.15 2021/08/07 16:18:45 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunxi_drm.c,v 1.26 2022/09/25 07:50:23 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/intr.h>
-#include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/conf.h>
+#include <sys/systm.h>
 
+#include <uvm/uvm_device.h>
 #include <uvm/uvm_extern.h>
 #include <uvm/uvm_object.h>
-#include <uvm/uvm_device.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_fb_helper.h>
-
-#include <dev/fdt/fdtvar.h>
 #include <dev/fdt/fdt_port.h>
+#include <dev/fdt/fdtvar.h>
 
 #include <arm/sunxi/sunxi_drm.h>
+
+#include <drm/drm_auth.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_vblank.h>
 
 #define	SUNXI_DRM_MAX_WIDTH	3840
 #define	SUNXI_DRM_MAX_HEIGHT	2160
@@ -66,6 +69,7 @@ static TAILQ_HEAD(, sunxi_drm_endpoint) sunxi_drm_endpoints =
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "allwinner,sun8i-h3-display-engine" },
+	{ .compat = "allwinner,sun8i-v3s-display-engine" },
 	{ .compat = "allwinner,sun50i-a64-display-engine" },
 	DEVICE_COMPAT_EOL
 };
@@ -81,17 +85,17 @@ static void	sunxi_drm_attach(device_t, device_t, void *);
 static void	sunxi_drm_init(device_t);
 static vmem_t	*sunxi_drm_alloc_cma_pool(struct drm_device *, size_t);
 
-static int	sunxi_drm_set_busid(struct drm_device *, struct drm_master *);
-
 static uint32_t	sunxi_drm_get_vblank_counter(struct drm_device *, unsigned int);
 static int	sunxi_drm_enable_vblank(struct drm_device *, unsigned int);
 static void	sunxi_drm_disable_vblank(struct drm_device *, unsigned int);
 
 static int	sunxi_drm_load(struct drm_device *, unsigned long);
-static int	sunxi_drm_unload(struct drm_device *);
+static void	sunxi_drm_unload(struct drm_device *);
+
+static void	sunxi_drm_task_work(struct work *, void *);
 
 static struct drm_driver sunxi_drm_driver = {
-	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_PRIME,
+	.driver_features = DRIVER_MODESET | DRIVER_GEM,
 	.dev_priv_size = 0,
 	.load = sunxi_drm_load,
 	.unload = sunxi_drm_unload,
@@ -101,7 +105,6 @@ static struct drm_driver sunxi_drm_driver = {
 	.gem_uvm_ops = &drm_gem_cma_uvm_ops,
 
 	.dumb_create = drm_gem_cma_dumb_create,
-	.dumb_map_offset = drm_gem_cma_dumb_map_offset,
 	.dumb_destroy = drm_gem_dumb_destroy,
 
 	.get_vblank_counter = sunxi_drm_get_vblank_counter,
@@ -114,8 +117,6 @@ static struct drm_driver sunxi_drm_driver = {
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
-
-	.set_busid = sunxi_drm_set_busid,
 };
 
 CFATTACH_DECL_NEW(sunxi_drm, sizeof(struct sunxi_drm_softc),
@@ -138,22 +139,36 @@ sunxi_drm_attach(device_t parent, device_t self, void *aux)
 	prop_dictionary_t dict = device_properties(self);
 	bool is_disabled;
 
-	sc->sc_dev = self;
-	sc->sc_dmat = faa->faa_dmat;
-	sc->sc_bst = faa->faa_bst;
-	sc->sc_phandle = faa->faa_phandle;
-
 	aprint_naive("\n");
 
-	if (prop_dictionary_get_bool(dict, "disabled", &is_disabled) && is_disabled) {
+	if (prop_dictionary_get_bool(dict, "disabled", &is_disabled) &&
+	    is_disabled) {
 		aprint_normal(": Display Engine Pipeline (disabled)\n");
 		return;
 	}
 
 	aprint_normal(": Display Engine Pipeline\n");
 
+#ifdef WSDISPLAY_MULTICONS
+	const bool is_console = true;
+	prop_dictionary_set_bool(dict, "is_console", is_console);
+#endif
+
+	sc->sc_dev = self;
+	sc->sc_dmat = faa->faa_dmat;
+	sc->sc_bst = faa->faa_bst;
+	sc->sc_phandle = faa->faa_phandle;
+	sc->sc_task_thread = NULL;
+	SIMPLEQ_INIT(&sc->sc_tasks);
+	if (workqueue_create(&sc->sc_task_wq, "sunxidrm",
+		&sunxi_drm_task_work, NULL, PRI_NONE, IPL_NONE, WQ_MPSAFE)) {
+		aprint_error_dev(self, "unable to create workqueue\n");
+		sc->sc_task_wq = NULL;
+		return;
+	}
+
 	sc->sc_ddev = drm_dev_alloc(driver, sc->sc_dev);
-	if (sc->sc_ddev == NULL) {
+	if (IS_ERR(sc->sc_ddev)) {
 		aprint_error_dev(self, "couldn't allocate DRM device\n");
 		return;
 	}
@@ -175,17 +190,41 @@ sunxi_drm_init(device_t dev)
 	struct drm_driver * const driver = &sunxi_drm_driver;
 	int error;
 
+	/*
+	 * Cause any tasks issued synchronously during attach to be
+	 * processed at the end of this function.
+	 */
+	sc->sc_task_thread = curlwp;
+
 	error = -drm_dev_register(sc->sc_ddev, 0);
 	if (error) {
-		drm_dev_unref(sc->sc_ddev);
 		aprint_error_dev(dev, "couldn't register DRM device: %d\n",
 		    error);
-		return;
+		goto out;
 	}
+	sc->sc_dev_registered = true;
 
 	aprint_normal_dev(dev, "initialized %s %d.%d.%d %s on minor %d\n",
 	    driver->name, driver->major, driver->minor, driver->patchlevel,
 	    driver->date, sc->sc_ddev->primary->index);
+
+	/*
+	 * Process asynchronous tasks queued synchronously during
+	 * attach.  This will be for display detection to attach a
+	 * framebuffer, so we have the opportunity for a console device
+	 * to attach before autoconf has completed, in time for init(8)
+	 * to find that console without panicking.
+	 */
+	while (!SIMPLEQ_EMPTY(&sc->sc_tasks)) {
+		struct sunxi_drm_task *const task =
+		    SIMPLEQ_FIRST(&sc->sc_tasks);
+
+		SIMPLEQ_REMOVE_HEAD(&sc->sc_tasks, sdt_u.queue);
+		(*task->sdt_fn)(task);
+	}
+
+out:	/* Cause any subsequent tasks to be processed by the workqueue.  */
+	atomic_store_relaxed(&sc->sc_task_thread, NULL);
 }
 
 static vmem_t *
@@ -208,23 +247,6 @@ sunxi_drm_alloc_cma_pool(struct drm_device *ddev, size_t cma_size)
 }
 
 static int
-sunxi_drm_set_busid(struct drm_device *ddev, struct drm_master *master)
-{
-	struct sunxi_drm_softc * const sc = sunxi_drm_private(ddev);
-	char id[32];
-
-	snprintf(id, sizeof(id), "platform:sunxi:%u", device_unit(sc->sc_dev));
-
-	master->unique = kzalloc(strlen(id) + 1, GFP_KERNEL);
-	if (master->unique == NULL)
-		return -ENOMEM;
-	strcpy(master->unique, id);
-	master->unique_len = strlen(master->unique);
-
-	return 0;
-}
-
-static int
 sunxi_drm_fb_create_handle(struct drm_framebuffer *fb,
     struct drm_file *file, unsigned int *handle)
 {
@@ -239,7 +261,7 @@ sunxi_drm_fb_destroy(struct drm_framebuffer *fb)
 	struct sunxi_drm_framebuffer *sfb = to_sunxi_drm_framebuffer(fb);
 
 	drm_framebuffer_cleanup(fb);
-	drm_gem_object_unreference_unlocked(&sfb->obj->base);
+	drm_gem_object_put_unlocked(&sfb->obj->base);
 	kmem_free(sfb, sizeof(*sfb));
 }
 
@@ -250,7 +272,7 @@ static const struct drm_framebuffer_funcs sunxi_drm_framebuffer_funcs = {
 
 static struct drm_framebuffer *
 sunxi_drm_fb_create(struct drm_device *ddev, struct drm_file *file,
-    struct drm_mode_fb_cmd2 *cmd)
+    const struct drm_mode_fb_cmd2 *cmd)
 {
 	struct sunxi_drm_framebuffer *fb;
 	struct drm_gem_object *gem_obj;
@@ -259,31 +281,13 @@ sunxi_drm_fb_create(struct drm_device *ddev, struct drm_file *file,
 	if (cmd->flags)
 		return NULL;
 
-	gem_obj = drm_gem_object_lookup(ddev, file, cmd->handles[0]);
+	gem_obj = drm_gem_object_lookup(file, cmd->handles[0]);
 	if (gem_obj == NULL)
 		return NULL;
 
 	fb = kmem_zalloc(sizeof(*fb), KM_SLEEP);
 	fb->obj = to_drm_gem_cma_obj(gem_obj);
-	fb->base.pitches[0] = cmd->pitches[0];
-	fb->base.pitches[1] = cmd->pitches[1];
-	fb->base.pitches[2] = cmd->pitches[2];
-	fb->base.offsets[0] = cmd->offsets[0];
-	fb->base.offsets[1] = cmd->offsets[2];
-	fb->base.offsets[2] = cmd->offsets[1];
-	fb->base.width = cmd->width;
-	fb->base.height = cmd->height;
-	fb->base.pixel_format = cmd->pixel_format;
-	fb->base.bits_per_pixel = drm_format_plane_cpp(fb->base.pixel_format, 0) * 8;
-
-	switch (fb->base.pixel_format) {
-	case DRM_FORMAT_XRGB8888:
-	case DRM_FORMAT_ARGB8888:
-		fb->base.depth = 32;
-		break;
-	default:
-		break;
-	}
+	drm_helper_mode_fill_fb_struct(ddev, &fb->base, cmd);
 
 	error = drm_framebuffer_init(ddev, &fb->base, &sunxi_drm_framebuffer_funcs);
 	if (error != 0)
@@ -294,7 +298,7 @@ sunxi_drm_fb_create(struct drm_device *ddev, struct drm_file *file,
 dealloc:
 	drm_framebuffer_cleanup(&fb->base);
 	kmem_free(fb, sizeof(*fb));
-	drm_gem_object_unreference_unlocked(gem_obj);
+	drm_gem_object_put_unlocked(gem_obj);
 
 	return NULL;
 }
@@ -391,8 +395,8 @@ sunxi_drm_fb_probe(struct drm_fb_helper *helper, struct drm_fb_helper_surface_si
 	fb->offsets[0] = 0;
 	fb->width = width;
 	fb->height = height;
-	fb->pixel_format = DRM_FORMAT_XRGB8888;
-	drm_fb_get_bpp_depth(fb->pixel_format, &fb->depth, &fb->bits_per_pixel);
+	fb->format = drm_format_info(DRM_FORMAT_XRGB8888);
+	fb->dev = ddev;
 
 	error = drm_framebuffer_init(ddev, fb, &sunxi_drm_framebuffer_funcs);
 	if (error != 0) {
@@ -469,7 +473,7 @@ sunxi_drm_load(struct drm_device *ddev, unsigned long flags)
 
 	drm_fb_helper_prepare(ddev, &fbdev->helper, &sunxi_drm_fb_helper_funcs);
 
-	error = drm_fb_helper_init(ddev, &fbdev->helper, num_crtc, num_crtc);
+	error = drm_fb_helper_init(ddev, &fbdev->helper, num_crtc);
 	if (error)
 		goto allocerr;
 
@@ -539,12 +543,10 @@ sunxi_drm_disable_vblank(struct drm_device *ddev, unsigned int crtc)
 	sc->sc_vbl[crtc].disable_vblank(sc->sc_vbl[crtc].priv);
 }
 
-static int
+static void
 sunxi_drm_unload(struct drm_device *ddev)
 {
 	drm_mode_config_cleanup(ddev);
-
-	return 0;
 }
 
 int
@@ -571,4 +573,32 @@ sunxi_drm_endpoint_device(struct fdt_endpoint *ep)
 			return sep->ddev;
 
 	return NULL;
+}
+
+static void
+sunxi_drm_task_work(struct work *work, void *cookie)
+{
+	struct sunxi_drm_task *task = container_of(work, struct sunxi_drm_task,
+	    sdt_u.work);
+
+	(*task->sdt_fn)(task);
+}
+
+void
+sunxi_task_init(struct sunxi_drm_task *task,
+    void (*fn)(struct sunxi_drm_task *))
+{
+
+	task->sdt_fn = fn;
+}
+
+void
+sunxi_task_schedule(device_t self, struct sunxi_drm_task *task)
+{
+	struct sunxi_drm_softc *sc = device_private(self);
+
+	if (atomic_load_relaxed(&sc->sc_task_thread) == curlwp)
+		SIMPLEQ_INSERT_TAIL(&sc->sc_tasks, task, sdt_u.queue);
+	else
+		workqueue_enqueue(sc->sc_task_wq, &task->sdt_u.work, NULL);
 }

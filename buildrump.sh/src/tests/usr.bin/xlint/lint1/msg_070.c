@@ -1,7 +1,7 @@
-/*	$NetBSD: msg_070.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_070.c,v 1.5 2023/08/26 10:43:53 rillig Exp $	*/
 # 3 "msg_070.c"
 
-// Test for message: %soperand of '%s' is unsigned in ANSI C [70]
+// Test for message: %soperand of '%s' is unsigned in C90 [70]
+/* This message is not used. */
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+typedef int dummy;

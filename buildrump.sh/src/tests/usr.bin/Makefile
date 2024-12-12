@@ -1,23 +1,19 @@
-#	$NetBSD: Makefile,v 1.34 2020/11/01 22:28:32 christos Exp $
+#	$NetBSD: Makefile,v 1.42 2024/10/12 22:19:37 riastradh Exp $
 #
 
 .include <bsd.own.mk>
 
 TESTSDIR=       ${TESTSBASE}/usr.bin
 
-TESTS_SUBDIRS=	awk basename bzip2 cc cmp config cpio col cut \
-		diff dirname find fstat gdb grep gzip id indent \
-		infocmp jot ld locale m4 make mixerctl mkdep nbperf \
-		netpgpverify patch pkill pr printf pwhash rump_server \
-		shmif_dumpbus sdiff sed sort tar tmux tr unifdef uniq \
-		vmstat xlint ztest
+TESTS_SUBDIRS=	awk basename bzip2 cc cmp compress config cpio col cut \
+		diff dirname error find fstat ftp gdb grep gzip id indent \
+		infocmp jot ld locale m4 make mixerctl mkdep mtree nbperf \
+		netpgpverify patch pkill pr printf pwhash realpath rump_server \
+		shmif_dumpbus shmif_pcapin sdiff sed sort stat tar tmux tr \
+		unifdef uniq vmstat xlint ztest
 
 .if ${MKCXX} != "no"
 TESTS_SUBDIRS+=	c++
-.endif
-
-.if (defined(MKARGON2) && ${MKARGON2} != "no")
-TESTS_SUBDIRS+=	argon2
 .endif
 
 .include <bsd.test.mk>

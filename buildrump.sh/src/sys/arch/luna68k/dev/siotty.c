@@ -1,4 +1,4 @@
-/* $NetBSD: siotty.c,v 1.47 2020/12/29 17:17:14 tsutsui Exp $ */
+/* $NetBSD: siotty.c,v 1.53 2023/01/15 05:08:33 tsutsui Exp $ */
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -31,9 +31,10 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: siotty.c,v 1.47 2020/12/29 17:17:14 tsutsui Exp $");
+__KERNEL_RCSID(0, "$NetBSD: siotty.c,v 1.53 2023/01/15 05:08:33 tsutsui Exp $");
 
 #include "opt_ddb.h"
+#include "siotty.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -49,11 +50,11 @@ __KERNEL_RCSID(0, "$NetBSD: siotty.c,v 1.47 2020/12/29 17:17:14 tsutsui Exp $");
 #include <sys/kauth.h>
 #include <sys/kmem.h>
 
+#include <machine/board.h>
 #include <machine/cpu.h>
 
 #include <luna68k/dev/sioreg.h>
 #include <luna68k/dev/siovar.h>
-#include <luna68k/dev/syscn.h>
 
 #include "ioconf.h"
 
@@ -61,7 +62,7 @@ __KERNEL_RCSID(0, "$NetBSD: siotty.c,v 1.47 2020/12/29 17:17:14 tsutsui Exp $");
 
 static const uint8_t ch0_regs[6] = {
 	WR0_RSTINT,				/* reset E/S interrupt */
-	WR1_RXALLS | WR1_TXENBL,		/* Rx per char, Tx */
+	WR1_RXALLS | WR1_TXENBL | WR1_ESENBL,	/* Rx per char, Tx, E/S */
 	0,					/* */
 	WR3_RX8BIT | WR3_RXENBL,		/* Rx */
 	WR4_BAUD96 | WR4_STOP1,			/* Tx/Rx */
@@ -75,6 +76,13 @@ static const struct speedtab siospeedtab[] = {
 	{ -1,	0, },
 };
 
+struct siotty_rxqdata {
+	uint8_t data;
+	uint8_t stat;
+};
+
+typedef struct siotty_rxqdata rxqdata_t;
+
 struct siotty_softc {
 	device_t	sc_dev;
 	struct tty	*sc_tty;
@@ -85,10 +93,10 @@ struct siotty_softc {
 	u_int		sc_hwflags;
 #define	SIOTTY_HW_CONSOLE	0x0001
 
-	uint8_t		*sc_rbuf;
-	uint8_t		*sc_rbufend;
-	uint8_t	* volatile sc_rbget;
-	uint8_t	* volatile sc_rbput;
+	rxqdata_t	*sc_rbuf;
+	rxqdata_t	*sc_rbufend;
+	rxqdata_t * volatile sc_rbget;
+	rxqdata_t * volatile sc_rbput;
 	volatile u_int	sc_rbavail;
 
 	uint8_t		*sc_tba;
@@ -104,7 +112,6 @@ u_int siotty_rbuf_size = SIOTTY_RING_SIZE;
 
 static struct cnm_state	siotty_cnm_state;
 
-#include "siotty.h"
 static void siostart(struct tty *);
 static int  sioparam(struct tty *, struct termios *);
 static void siottyintr(void *);
@@ -127,6 +134,10 @@ static dev_type_ioctl(sioioctl);
 static dev_type_stop(siostop);
 static dev_type_tty(siotty);
 static dev_type_poll(siopoll);
+
+static dev_type_cninit(siottycninit);
+static dev_type_cngetc(siottycngetc);
+static dev_type_cnputc(siottycnputc);
 
 const struct cdevsw siotty_cdevsw = {
 	.d_open = sioopen,
@@ -176,8 +187,8 @@ siotty_attach(device_t parent, device_t self, void *aux)
 		sc->sc_flags = TIOCFLAG_SOFTCAR;
 	} else {
 		setsioreg(sc->sc_ctl, WR0, WR0_CHANRST);
-		setsioreg(sc->sc_ctl, WR2A, WR2_VEC86 | WR2_INTR_1);
-		setsioreg(sc->sc_ctl, WR2B, 0);
+		setsioreg(&siosc->sc_ctl[0], WR2A, WR2A_VEC86 | WR2A_INTR_1);
+		setsioreg(&siosc->sc_ctl[1], WR2B, 0);
 		setsioreg(sc->sc_ctl, WR0, sc->sc_wr[WR0]);
 		setsioreg(sc->sc_ctl, WR4, sc->sc_wr[WR4]);
 		setsioreg(sc->sc_ctl, WR3, sc->sc_wr[WR3]);
@@ -188,8 +199,9 @@ siotty_attach(device_t parent, device_t self, void *aux)
 
 	aprint_normal("\n");
 
-	sc->sc_rbuf = kmem_alloc(siotty_rbuf_size * 2, KM_SLEEP);
-	sc->sc_rbufend = sc->sc_rbuf + (siotty_rbuf_size * 2);
+	sc->sc_rbuf = kmem_alloc(siotty_rbuf_size * sizeof(rxqdata_t),
+	    KM_SLEEP);
+	sc->sc_rbufend = sc->sc_rbuf + siotty_rbuf_size;
 	sc->sc_rbput = sc->sc_rbget = sc->sc_rbuf;
 	sc->sc_rbavail = siotty_rbuf_size;
 
@@ -213,7 +225,7 @@ siottyintr(void *arg)
 {
 	struct siotty_softc *sc;
 	struct sioreg *sio;
-	uint8_t *put, *end;
+	rxqdata_t *put, *end;
 	uint8_t c;
 	uint16_t rr;
 	int cc;
@@ -226,18 +238,20 @@ siottyintr(void *arg)
 	sio = sc->sc_ctl;
 	rr = getsiocsr(sio);
 	if ((rr & RR_BREAK) != 0) {
-		sio->sio_cmd = WR0_RSTINT;
 		cn_check_magic(sc->sc_tty->t_dev, CNC_BREAK, siotty_cnm_state);
 	}
+	/* XXX should handle RR_DCD and RR_CTS */
+	sio->sio_cmd = WR0_RSTINT;
+
 	if ((rr & RR_RXRDY) != 0) {
 		do {
 			if (cc > 0) {
 				c = sio->sio_data;
 				cn_check_magic(sc->sc_tty->t_dev, c,
 				    siotty_cnm_state);
-				put[0] = c;
-				put[1] = rr & 0xff;
-				put += 2;
+				put->data = c;
+				put->stat = rr & 0xff;
+				put++;
 				if (put >= end)
 					put = sc->sc_rbuf;
 				cc--;
@@ -288,7 +302,7 @@ siottysoft(void *arg)
 static void
 siotty_rxsoft(struct siotty_softc *sc, struct tty *tp)
 {
-	uint8_t *get, *end;
+	rxqdata_t *get, *end;
 	u_int cc, scc;
 	unsigned int code;
 	uint8_t stat;
@@ -303,15 +317,15 @@ siotty_rxsoft(struct siotty_softc *sc, struct tty *tp)
 	}
 
 	while (cc > 0) {
-		code = get[0];
-		stat = get[1];
+		code = get->data;
+		stat = get->stat;
 		if ((stat & RR_FRAMING) != 0)
 			code |= TTY_FE;
 		else if ((stat & RR_PARITY) != 0)
 			code |= TTY_PE;
 
 		(*tp->t_linesw->l_rint)(code, tp);
-		get += 2;
+		get++;
 		if (get >= end)
 			get = sc->sc_rbuf;
 		cc--;
@@ -414,14 +428,16 @@ sioparam(struct tty *tp, struct termios *t)
 	tp->t_ospeed = t->c_ospeed;
 	tp->t_cflag = t->c_cflag;
 
-	sc->sc_wr[WR3] &= 0x3f;
-	sc->sc_wr[WR5] &= 0x9f;
+	sc->sc_wr[WR3] &= ~WR3_RX8BIT;
+	sc->sc_wr[WR5] &= ~WR5_TX8BIT;
 	switch (tp->t_cflag & CSIZE) {
 	case CS7:
-		sc->sc_wr[WR3] |= WR3_RX7BIT; sc->sc_wr[WR5] |= WR5_TX7BIT;
+		sc->sc_wr[WR3] |= WR3_RX7BIT;
+		sc->sc_wr[WR5] |= WR5_TX7BIT;
 		break;
 	case CS8:
-		sc->sc_wr[WR3] |= WR3_RX8BIT; sc->sc_wr[WR5] |= WR5_TX8BIT;
+		sc->sc_wr[WR3] |= WR3_RX8BIT;
+		sc->sc_wr[WR5] |= WR5_TX8BIT;
 		break;
 	}
 	if ((tp->t_cflag & PARENB) != 0) {
@@ -523,9 +539,9 @@ sioopen(dev_t dev, int flag, int mode, struct lwp *l)
 		/* raise RTS and DTR here; but, DTR lead is not wired */
 		/* then check DCD condition; but, DCD lead is not wired */
 #if 0
-		if ((sc->sc_flags & TIOCFLAG_SOFTCAR) != 0
-		    || (tp->t_cflag & MDMBUF) != 0
-		    || (getsiocsr(sc->sc_ctl) & RR_DCD) != 0)
+		if ((sc->sc_flags & TIOCFLAG_SOFTCAR) != 0 ||
+		    (tp->t_cflag & MDMBUF) != 0 ||
+		    (getsiocsr(sc->sc_ctl) & RR_DCD) != 0)
 			tp->t_state |= TS_CARR_ON;
 		else
 			tp->t_state &= ~TS_CARR_ON;
@@ -557,8 +573,8 @@ sioclose(dev_t dev, int flag, int mode, struct lwp *l)
 	s = splserial();
 	siomctl(sc, TIOCM_BREAK, DMBIC);
 #if 0 /* because unable to feed DTR signal */
-	if ((tp->t_cflag & HUPCL) != 0
-	    || tp->t_wopen || (tp->t_state & TS_ISOPEN) == 0) {
+	if ((tp->t_cflag & HUPCL) != 0 ||
+	    tp->t_wopen || (tp->t_state & TS_ISOPEN) == 0) {
 		siomctl(sc, TIOCM_DTR, DMBIC);
 		/* Yield CPU time to others for 1 second, then ... */
 		siomctl(sc, TIOCM_DTR, DMBIS);
@@ -666,62 +682,42 @@ siotty(dev_t dev)
 	return sc->sc_tty;
 }
 
-/*--------------------  miscelleneous routine --------------------*/
-
-/* EXPORT */ void
-setsioreg(struct sioreg *sio, int regno, int val)
-{
-
-	if (regno != 0)
-		sio->sio_cmd = regno;	/* DELAY(); */
-	sio->sio_cmd = val;		/* DELAY(); */
-}
-
-/* EXPORT */ uint16_t
-getsiocsr(struct sioreg *sio)
-{
-	int val;
-
-	val = sio->sio_stat << 8;	/* DELAY(); */
-	sio->sio_cmd = 1;		/* DELAY(); */
-	val |= sio->sio_stat;		/* DELAY(); */
-	return val;
-}
-
 /*---------------------  console interface ----------------------*/
 
-struct consdev syscons = {
-	NULL,
-	NULL,
-	syscngetc,
-	syscnputc,
-	nullcnpollc,
-	NULL,
-	NULL,
-	NULL,
-	NODEV,
-	CN_REMOTE,
+struct consdev siottycons = {
+	.cn_probe = NULL,
+	.cn_init  = siottycninit,
+	.cn_getc  = siottycngetc,
+	.cn_putc  = siottycnputc,
+	.cn_pollc = nullcnpollc,
+	.cn_bell  = NULL,
+	.cn_halt  = NULL,
+	.cn_flush = NULL,
+	.cn_dev   = NODEV,
+	.cn_pri   = CN_REMOTE,
 };
 
-/* EXPORT */ void
-syscninit(int channel)
+static void
+siottycninit(struct consdev *cn)
 {
-/*
- * Channel A is immediately initialized with 9600N1 right after cold
- * boot/reset/poweron.  ROM monitor emits one line message on CH.A.
- */
-	struct sioreg *sio;
-	sio = (struct sioreg *)0x51000000 + channel;
+	/*
+	 * Channel A is immediately initialized with 9600N1 right after cold
+	 * boot/reset/poweron.  ROM monitor emits one line message on CH.A.
+	 */
+	struct sioreg *sio, *sio_base, *sio_a, *sio_b;
 
-	syscons.cn_dev = makedev(cdevsw_lookup_major(&siotty_cdevsw),
-				 channel);
-	cn_tab = &syscons;
+	sio_base = (struct sioreg *)OBIO_SIO;
+	sio_a = &sio_base[0];
+	sio_b = &sio_base[1];
+	sio   = sio_a;
+
+	siottycons.cn_dev = makedev(cdevsw_lookup_major(&siotty_cdevsw), 0);
 	cn_init_magic(&siotty_cnm_state);
 	cn_set_magic("\047\001");
 
 	setsioreg(sio, WR0, WR0_CHANRST);
-	setsioreg(sio, WR2A, WR2_VEC86 | WR2_INTR_1);
-	setsioreg(sio, WR2B, 0);
+	setsioreg(sio_a, WR2A, WR2A_VEC86 | WR2A_INTR_1);
+	setsioreg(sio_b, WR2B, 0);
 	setsioreg(sio, WR0, ch0_regs[WR0]);
 	setsioreg(sio, WR4, ch0_regs[WR4]);
 	setsioreg(sio, WR3, ch0_regs[WR3]);
@@ -729,33 +725,20 @@ syscninit(int channel)
 	setsioreg(sio, WR0, ch0_regs[WR0]);
 }
 
-/* EXPORT */ int
-syscngetc(dev_t dev)
+static int
+siottycngetc(dev_t dev)
 {
 	struct sioreg *sio;
-	int s, c;
 
-	sio = (struct sioreg *)0x51000000 + ((int)dev & 0x1);
-	s = splhigh();
-	while ((getsiocsr(sio) & RR_RXRDY) == 0)
-		continue;
-	c = sio->sio_data;
-	splx(s);
-
-	return c;
+	sio = (struct sioreg *)OBIO_SIO;
+	return siogetc(sio);
 }
 
-/* EXPORT */ void
-syscnputc(dev_t dev, int c)
+static void
+siottycnputc(dev_t dev, int c)
 {
 	struct sioreg *sio;
-	int s;
 
-	sio = (struct sioreg *)0x51000000 + ((int)dev & 0x1);
-	s = splhigh();
-	while ((getsiocsr(sio) & RR_TXRDY) == 0)
-		continue;
-	sio->sio_cmd = WR0_RSTPEND;
-	sio->sio_data = c;
-	splx(s);
+	sio = (struct sioreg *)OBIO_SIO;
+	sioputc(sio, c);
 }

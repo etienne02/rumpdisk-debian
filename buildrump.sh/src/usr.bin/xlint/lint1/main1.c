@@ -1,4 +1,4 @@
-/*	$NetBSD: main1.c,v 1.57 2021/08/28 13:29:26 rillig Exp $	*/
+/*	$NetBSD: main1.c,v 1.84 2024/09/24 19:58:06 rillig Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Jochen Pohl
@@ -14,7 +14,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -36,13 +36,12 @@
 #endif
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: main1.c,v 1.57 2021/08/28 13:29:26 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: main1.c,v 1.84 2024/09/24 19:58:06 rillig Exp $");
 #endif
 
 #include <sys/types.h>
-#include <errno.h>
-#include <limits.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,89 +50,51 @@ __RCSID("$NetBSD: main1.c,v 1.57 2021/08/28 13:29:26 rillig Exp $");
 
 #include "lint1.h"
 
-/* set yydebug to 1*/
-bool	yflag;
+int aflag;
+bool bflag;
+bool cflag;
+bool eflag;
+bool Fflag;
+bool hflag;
+bool Pflag;
+bool pflag;
+bool rflag;
+bool Tflag;
+bool vflag;
+bool wflag;
+bool yflag;
+bool zflag;
 
 /*
- * Print warnings if an assignment of an integer type to another integer type
- * causes an implicit narrowing conversion. If aflag is 1, these warnings
- * are printed only if the source type is at least as wide as long. If aflag
- * is greater than 1, they are always printed.
+ * The default language level is the one that checks for compatibility
+ * between traditional C and C90.  As of 2022, this default is no longer
+ * useful since most traditional C code has already been migrated.
  */
-int	aflag;
-
-/* Print a warning if a break statement cannot be reached. */
-bool	bflag;
-
-/* Print warnings for pointer casts. */
-bool	cflag;
-
-/* Allow features from C11, C99 and C90. */
-bool	c11flag;
-
-/* Perform stricter checking of enum types and operations on enum types. */
-bool	eflag;
-
-/* Print complete pathnames, not only the basename. */
-bool	Fflag;
-
-/* Enable some extensions of gcc */
-bool	gflag;
-
-/* Treat warnings as errors */
-bool	wflag;
-
-/*
- * Apply a number of heuristic tests to attempt to intuit bugs, improve
- * style, and reduce waste.
- */
-bool	hflag;
-
-/* Attempt to check portability to other dialects of C. */
-bool	pflag;
-
-/*
- * In case of redeclarations/redefinitions print the location of the
- * previous declaration/definition.
- */
-bool	rflag;
-
-/* Strict ANSI C mode. */
-bool	sflag;
-
-bool	Tflag;
-
-/* Traditional C mode. */
-bool	tflag;
-
-/* Enable C9X extensions */
-bool	Sflag;
-
-/* Picky flag */
-bool	Pflag;
-
-/*
- * Complain about functions and external variables used and not defined,
- * or defined and not used.
- */
-bool	uflag = true;
-
-/* Complain about unused function arguments. */
-bool	vflag = true;
-
-/* Complain about structures which are never defined. */
-bool	zflag = true;
-
-err_set	msgset;
+bool allow_trad = true;
+bool allow_c90 = true;
+bool allow_c99;
+bool allow_c11;
+bool allow_c23;
+bool allow_gcc;
 
 sig_atomic_t fpe;
 
-static	void	usage(void);
+static void usage(void);
 
 static FILE *
 gcc_builtins(void)
 {
+	/* https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html */
 	static const char builtins[] =
+	    "typedef typeof(sizeof(0)) __lint_size_t;\n"
+
+	    "void *alloca(__lint_size_t);\n"
+	    "void *__builtin_alloca(__lint_size_t);\n"
+	    "void *__builtin_alloca_with_align"
+		"(__lint_size_t, __lint_size_t);\n"
+	    "void *__builtin_alloca_with_align_and_max"
+		"(__lint_size_t, __lint_size_t, __lint_size_t);\n"
+
 	    "int __builtin_isinf(long double);\n"
 	    "int __builtin_isnan(long double);\n"
 	    "int __builtin_copysign(long double, long double);\n";
@@ -168,66 +129,70 @@ sigfpe(int s)
 	fpe = 1;
 }
 
-static void
-suppress_messages(char *ids)
-{
-	char *ptr, *end;
-	long id;
-
-	for (ptr = strtok(ids, ","); ptr != NULL; ptr = strtok(NULL, ",")) {
-		errno = 0;
-		id = strtol(ptr, &end, 0);
-		if ((id == TARG_LONG_MIN || id == TARG_LONG_MAX) &&
-		    errno == ERANGE)
-			err(1, "invalid error message id '%s'", ptr);
-		if (*end != '\0' || ptr == end || id < 0 || id >= ERR_SETSIZE)
-			errx(1, "invalid error message id '%s'", ptr);
-		ERR_SET(id, &msgset);
-	}
-}
-
 int
 main(int argc, char *argv[])
 {
 	int c;
 
+	setlocale(LC_ALL, "");
 	setprogname(argv[0]);
 
-	ERR_ZERO(&msgset);
-	while ((c = getopt(argc, argv, "abceghmprstuvwyzA:FPR:STX:")) != -1) {
+	while ((c = getopt(argc, argv, "abceghpq:rstvwyzA:FPR:STX:")) != -1) {
 		switch (c) {
 		case 'a':	aflag++;	break;
 		case 'b':	bflag = true;	break;
 		case 'c':	cflag = true;	break;
 		case 'e':	eflag = true;	break;
 		case 'F':	Fflag = true;	break;
-		case 'g':	gflag = true;	break;
+		case 'g':	allow_gcc = true;	break;
 		case 'h':	hflag = true;	break;
 		case 'p':	pflag = true;	break;
 		case 'P':	Pflag = true;	break;
+		case 'q':	enable_queries(optarg);	break;
 		case 'r':	rflag = true;	break;
-		case 's':	sflag = true;	break;
-		case 'S':	Sflag = true;	break;
+		case 's':
+			allow_trad = false;
+			allow_c90 = true;
+			allow_c99 = false;
+			allow_c11 = false;
+			allow_c23 = false;
+			break;
+		case 'S':
+			allow_trad = false;
+			allow_c90 = true;
+			allow_c99 = true;
+			allow_c11 = false;
+			allow_c23 = false;
+			break;
 		case 'T':	Tflag = true;	break;
-		case 't':	tflag = true;	break;
-		case 'u':	uflag = false;	break;
+		case 't':
+			allow_trad = true;
+			allow_c90 = false;
+			allow_c99 = false;
+			allow_c11 = false;
+			allow_c23 = false;
+			break;
 		case 'w':	wflag = true;	break;
-		case 'v':	vflag = false;	break;
+		case 'v':	vflag = true;	break;
 		case 'y':	yflag = true;	break;
-		case 'z':	zflag = false;	break;
+		case 'z':	zflag = true;	break;
 
 		case 'A':
-			if (strcmp(optarg, "c11") == 0) {
-				c11flag = true;
-				Sflag = true;
-				sflag = false;
+			if (strcmp(optarg, "c23") == 0) {
+				allow_trad = false;
+				allow_c90 = true;
+				allow_c99 = true;
+				allow_c11 = true;
+				allow_c23 = true;
+			} else if (strcmp(optarg, "c11") == 0) {
+				allow_trad = false;
+				allow_c90 = true;
+				allow_c99 = true;
+				allow_c11 = true;
+				allow_c23 = false;
 			} else
 				usage();
 			break;
-
-		case 'm':
-			msglist();
-			return 0;
 
 		case 'R':
 			add_directory_replacement(optarg);
@@ -246,33 +211,38 @@ main(int argc, char *argv[])
 	if (argc != 2)
 		usage();
 
-
 	/* initialize output */
 	outopen(argv[1]);
 
-#ifdef DEBUG
-	setvbuf(stdout, NULL, _IONBF, 0);
-#endif
-#ifdef YYDEBUG
-	if (yflag)
-		yydebug = 1;
-#endif
-
 	(void)signal(SIGFPE, sigfpe);
-	initmem();
-	initdecl();
-	initscan();
+	init_decl();
+	init_lex();
 
-	if (gflag && !tflag) {
+	if (allow_gcc && allow_c90) {
 		if ((yyin = gcc_builtins()) == NULL)
 			err(1, "cannot open builtins");
+		curr_pos.p_file = "<gcc-builtins>";
+		curr_pos.p_line = 0;
+		lex_next_line();
 		yyparse();
 		(void)fclose(yyin);
 	}
 
+#ifdef DEBUG
+	debug_enabled = true;
+	setvbuf(stdout, NULL, _IONBF, 0);
+#endif
+#if YYDEBUG
+	if (yflag)
+		yydebug = 1;
+#endif
+
 	/* open the input file */
 	if ((yyin = fopen(argv[0], "r")) == NULL)
 		err(1, "cannot open '%s'", argv[0]);
+	curr_pos.p_file = argv[0];
+	curr_pos.p_line = 0;
+	lex_next_line();
 	yyparse();
 	(void)fclose(yyin);
 
@@ -280,24 +250,25 @@ main(int argc, char *argv[])
 	lwarn = LWARN_ALL;
 	debug_step("main lwarn = %d", lwarn);
 
-	check_global_symbols();
+	end_translation_unit();
 
 	outclose();
 
-	return nerr != 0 ? 1 : 0;
+	return seen_error || (wflag && seen_warning) ? 1 : 0;
 }
 
-static void __attribute__((noreturn))
+static void __dead
 usage(void)
 {
 	(void)fprintf(stderr,
-	    "usage: %s [-abceghmprstuvwyzFPST] [-Ac11] [-R old=new]\n"
-	    "       %*s [-X <id>[,<id>]...] src dest\n",
+	    "usage: %s [-abceghmprstvwyzFPST] [-Alevel] [-d directory] "
+	    "[-R old=new]\n"
+	    "       %*s [-X id,...] [-q id,...] src dest\n",
 	    getprogname(), (int)strlen(getprogname()), "");
 	exit(1);
 }
 
-void __attribute__((noreturn))
+void __dead
 norecover(void)
 {
 	/* cannot recover from previous errors */

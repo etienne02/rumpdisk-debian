@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_fault.c,v 1.228 2020/07/09 05:57:15 skrll Exp $	*/
+/*	$NetBSD: uvm_fault.c,v 1.237 2024/03/15 07:09:37 andvar Exp $	*/
 
 /*
  * Copyright (c) 1997 Charles D. Cranor and Washington University.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uvm_fault.c,v 1.228 2020/07/09 05:57:15 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uvm_fault.c,v 1.237 2024/03/15 07:09:37 andvar Exp $");
 
 #include "opt_uvmhist.h"
 
@@ -44,6 +44,7 @@ __KERNEL_RCSID(0, "$NetBSD: uvm_fault.c,v 1.228 2020/07/09 05:57:15 skrll Exp $"
 
 #include <uvm/uvm.h>
 #include <uvm/uvm_pdpolicy.h>
+#include <uvm/uvm_rndsource.h>
 
 /*
  *
@@ -171,12 +172,6 @@ static const struct uvm_advice uvmadvice[] = {
  */
 
 /*
- * externs from other modules
- */
-
-extern int start_init_exec;	/* Is init_main() done / init running? */
-
-/*
  * inline functions
  */
 
@@ -278,7 +273,7 @@ uvmfault_anonget(struct uvm_faultinfo *ufi, struct vm_amap *amap,
 {
 	struct vm_page *pg;
 	krw_t lock_type;
-	int error;
+	int error __unused; /* used for VMSWAP */
 
 	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
 	KASSERT(rw_lock_held(anon->an_lock));
@@ -639,8 +634,17 @@ uvmfault_promote(struct uvm_faultinfo *ufi,
 		goto done;
 	}
 
-	/* copy page [pg now dirty] */
+	/*
+	 * copy the page [pg now dirty]
+	 *
+	 * Remove the pmap entry now for the old page at this address
+	 * so that no thread can modify the new page while any thread
+	 * might still see the old page.
+	 */
 	if (opg) {
+		pmap_remove(vm_map_pmap(ufi->orig_map), ufi->orig_rvaddr,
+			     ufi->orig_rvaddr + PAGE_SIZE);
+		pmap_update(vm_map_pmap(ufi->orig_map));
 		uvm_pagecopy(opg, pg);
 	}
 	KASSERT(uvm_pagegetdirty(pg) == UVM_PAGE_STATUS_DIRTY);
@@ -701,7 +705,7 @@ uvmfault_update_stats(struct uvm_faultinfo *ufi)
  * => called from MD code to resolve a page fault
  * => VM data structures usually should be unlocked.   however, it is
  *	possible to call here with the main map locked if the caller
- *	gets a write lock, sets it recusive, and then calls us (c.f.
+ *	gets a write lock, sets it recursive, and then calls us (c.f.
  *	uvm_map_pageable).   this should be avoided because it keeps
  *	the map locked off during I/O.
  * => MUST NEVER BE CALLED IN INTERRUPT CONTEXT
@@ -752,7 +756,7 @@ struct uvm_faultctx {
 	struct vm_anon *anon_spare;
 
 	/*
-	 * the folloing is actually a uvm_fault_lower() internal.
+	 * the following is actually a uvm_fault_lower() internal.
 	 * it's here merely for debugging.
 	 * (or due to the mechanical separation of the function?)
 	 */
@@ -871,7 +875,7 @@ uvm_fault_internal(struct vm_map *orig_map, vaddr_t vaddr,
 		/* Don't flood RNG subsystem with samples. */
 		if (++(ci->ci_faultrng) == 503) {
 			ci->ci_faultrng = 0;
-			rnd_add_uint32(&curcpu()->ci_data.cpu_uvm->rs,
+			rnd_add_uint32(&uvm_fault_rndsource,
 			    sizeof(vaddr_t) == sizeof(uint32_t) ?
 			    (uint32_t)vaddr : sizeof(vaddr_t) ==
 			    sizeof(uint64_t) ?
@@ -1601,7 +1605,6 @@ uvm_fault_upper_promote(
 	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
 
 	UVMHIST_LOG(maphist, "  case 1B: COW fault",0,0,0,0);
-	cpu_count(CPU_COUNT_FLT_ACOW, 1);
 
 	/* promoting requires a write lock. */
 	error = uvm_fault_upper_upgrade(ufi, flt, amap, NULL);
@@ -1609,6 +1612,8 @@ uvm_fault_upper_promote(
 		return error;
 	}
 	KASSERT(rw_write_held(amap->am_lock));
+
+	cpu_count(CPU_COUNT_FLT_ACOW, 1);
 
 	error = uvmfault_promote(ufi, oanon, PGO_DONTCARE, &anon,
 	    &flt->anon_spare);
@@ -1839,7 +1844,7 @@ uvm_fault_lower_upgrade(struct uvm_faultinfo *ufi, struct uvm_faultctx *flt,
  *
  *	1. check uobj
  *	1.1. if null, ZFOD.
- *	1.2. if not null, look up unnmapped neighbor pages.
+ *	1.2. if not null, look up unmapped neighbor pages.
  *	2. for center page, check if promote.
  *	2.1. ZFOD always needs promotion.
  *	2.2. other uobjs, when entry is marked COW (usually MAP_PRIVATE vnode).
@@ -2123,9 +2128,6 @@ uvm_fault_lower_io(
 	int advice;
 	UVMHIST_FUNC(__func__); UVMHIST_CALLED(maphist);
 
-	/* update rusage counters */
-	curlwp->l_ru.ru_majflt++;
-
 	/* grab everything we need from the entry before we unlock */
 	uoff = (ufi->orig_rvaddr - ufi->entry->start) + ufi->entry->offset;
 	access_type = flt->access_type & MASK(ufi->entry);
@@ -2140,6 +2142,9 @@ uvm_fault_lower_io(
 		return error;
 	}
 	uvmfault_unlockall(ufi, amap, NULL);
+
+	/* update rusage counters */
+	curlwp->l_ru.ru_majflt++;
 
 	/* Locked: uobj(write) */
 	KASSERT(rw_write_held(uobj->vmobjlock));
@@ -2676,7 +2681,8 @@ uvm_fault_unwire_locked(struct vm_map *map, vaddr_t start, vaddr_t end)
 	 * find the beginning map entry for the region.
 	 */
 
-	KASSERT(start >= vm_map_min(map) && end <= vm_map_max(map));
+	KASSERT(start >= vm_map_min(map));
+	KASSERT(end <= vm_map_max(map));
 	if (uvm_map_lookup_entry(map, start, &entry) == false)
 		panic("uvm_fault_unwire_locked: address not in map");
 
@@ -2689,8 +2695,8 @@ uvm_fault_unwire_locked(struct vm_map *map, vaddr_t start, vaddr_t end)
 
 		KASSERT(va >= entry->start);
 		while (va >= entry->end) {
-			KASSERT(entry->next != &map->header &&
-				entry->next->start <= entry->end);
+			KASSERT(entry->next != &map->header);
+			KASSERT(entry->next->start <= entry->end);
 			entry = entry->next;
 		}
 

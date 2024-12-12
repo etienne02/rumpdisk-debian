@@ -1,11 +1,13 @@
-/*	$NetBSD: msg_289.c,v 1.3 2021/08/27 20:49:25 rillig Exp $	*/
+/*	$NetBSD: msg_289.c,v 1.6 2023/07/09 11:01:27 rillig Exp $	*/
 # 3 "msg_289.c"
 
-// Test for message: can't be used together: /* PRINTFLIKE */ /* SCANFLIKE */ [289]
+// Test for message: /* PRINTFLIKE */ and /* SCANFLIKE */ cannot be combined [289]
+
+/* lint1-extra-flags: -X 351 */
 
 /* PRINTFLIKE */ /* SCANFLIKE */
 void
 both(void)
-/* expect+1: warning: can't be used together */
+/* expect+1: warning: ** PRINTFLIKE ** and ** SCANFLIKE ** cannot be combined [289] */
 {
 }

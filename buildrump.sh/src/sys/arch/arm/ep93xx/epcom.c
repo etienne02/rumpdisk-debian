@@ -1,4 +1,4 @@
-/*	$NetBSD: epcom.c,v 1.32 2020/11/20 18:03:52 thorpej Exp $ */
+/*	$NetBSD: epcom.c,v 1.36 2022/10/26 23:38:06 riastradh Exp $ */
 /*
  * Copyright (c) 1998, 1999, 2001, 2002, 2004 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -73,9 +73,8 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: epcom.c,v 1.32 2020/11/20 18:03:52 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: epcom.c,v 1.36 2022/10/26 23:38:06 riastradh Exp $");
 
-#include "opt_ddb.h"
 #include "opt_kgdb.h"
 #include "epcom.h"
 
@@ -112,6 +111,8 @@ __KERNEL_RCSID(0, "$NetBSD: epcom.c,v 1.32 2020/11/20 18:03:52 thorpej Exp $");
 #include <machine/intr.h>
 #include <sys/bus.h>
 
+#include <ddb/db_active.h>
+
 #include <arm/ep93xx/epcomreg.h>
 #include <arm/ep93xx/epcomvar.h>
 #include <arm/ep93xx/ep93xxreg.h>
@@ -144,8 +145,12 @@ static struct epcom_cons_softc {
 	bus_addr_t		sc_hwbase;
 	int			sc_ospeed;
 	tcflag_t		sc_cflag;
-	int			sc_attached;
 } epcomcn_sc;
+
+static int	epcom_common_getc(struct epcom_cons_softc *, dev_t);
+static void	epcom_common_putc(struct epcom_cons_softc *, int);
+static void	epcominit(struct epcom_cons_softc *, bus_space_tag_t,
+			  bus_addr_t, bus_space_handle_t, int, tcflag_t);
 
 static struct cnm_state epcom_cnm_state;
 
@@ -180,6 +185,19 @@ struct consdev epcomcons = {
 	NULL, NULL, NODEV, CN_NORMAL
 };
 
+#if defined(KGDB)
+#include <sys/kgdb.h>
+
+static int	epcom_kgdb_getc(void *);
+static void	epcom_kgdb_putc(void *, int);
+
+/*
+ * Reuse the console softc structure because
+ * we'll be reusing the console I/O code.
+ */
+static struct epcom_cons_softc kgdb_sc;
+#endif
+
 #ifndef DEFAULT_COMSPEED
 #define DEFAULT_COMSPEED 115200
 #endif
@@ -197,7 +215,6 @@ epcom_attach_subr(struct epcom_softc *sc)
 
 	if (sc->sc_iot == epcomcn_sc.sc_iot
 	    && sc->sc_hwbase == epcomcn_sc.sc_hwbase) {
-		epcomcn_sc.sc_attached = 1;
 		sc->sc_lcrlo = EPCOMSPEED2BRD(epcomcn_sc.sc_ospeed) & 0xff;
 		sc->sc_lcrmid = EPCOMSPEED2BRD(epcomcn_sc.sc_ospeed) >> 8;
 
@@ -235,6 +252,18 @@ epcom_attach_subr(struct epcom_softc *sc)
 
 		aprint_normal("%s: console\n", device_xname(sc->sc_dev));
 	}
+
+#ifdef KGDB
+	/*
+	 * Allow kgdb to "take over" this port.  If this is
+	 * the kgdb device, it has exclusive use.
+	 */
+	if (sc->sc_iot == kgdb_sc.sc_iot &&
+	    sc->sc_hwbase == kgdb_sc.sc_hwbase) {
+		SET(sc->sc_hwflags, COM_HW_KGDB);
+		device_printf(sc->sc_dev, "kgdb\n");
+	}
+#endif
 
 	sc->sc_si = softint_establish(SOFTINT_SERIAL, epcomsoft, sc);
 
@@ -291,7 +320,7 @@ epcomparam(struct tty *tp, struct termios *t)
 	sc->sc_lcrhi = cflag2lcrhi(t->c_cflag);
 	sc->sc_lcrlo = EPCOMSPEED2BRD(t->c_ospeed) & 0xff;
 	sc->sc_lcrmid = EPCOMSPEED2BRD(t->c_ospeed) >> 8;
-	
+
 	/* And copy to tty. */
 	tp->t_ispeed = 0;
 	tp->t_ospeed = t->c_ospeed;
@@ -542,7 +571,7 @@ epcomopen(dev_t dev, int flag, int mode, struct lwp *l)
 
 		splx(s2);
 	}
-	
+
 	splx(s);
 
 	error = ttyopen(tp, COMDIALOUT(dev), ISSET(flag, O_NONBLOCK));
@@ -603,7 +632,7 @@ epcomread(dev_t dev, struct uio *uio, int flag)
 
 	if (COM_ISALIVE(sc) == 0)
 		return (EIO);
- 
+
 	return ((*tp->t_linesw->l_read)(tp, uio, flag));
 }
 
@@ -615,7 +644,7 @@ epcomwrite(dev_t dev, struct uio *uio, int flag)
 
 	if (COM_ISALIVE(sc) == 0)
 		return (EIO);
- 
+
 	return ((*tp->t_linesw->l_write)(tp, uio, flag));
 }
 
@@ -627,7 +656,7 @@ epcompoll(dev_t dev, int events, struct lwp *l)
 
 	if (COM_ISALIVE(sc) == 0)
 		return (EIO);
- 
+
 	return ((*tp->t_linesw->l_poll)(tp, events, l));
 }
 
@@ -678,7 +707,7 @@ epcomioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 
 	case TIOCSFLAGS:
 		error = kauth_authorize_device_tty(l->l_cred,
-		    KAUTH_DEVICE_TTY_PRIVSET, tp); 
+		    KAUTH_DEVICE_TTY_PRIVSET, tp);
 		if (error)
 			break;
 		sc->sc_swflags = *(int *)data;
@@ -735,7 +764,7 @@ cflag2lcrhi(tcflag_t cflag)
 	lcrhi |= (cflag & PARODD) ? 0 : LinCtrlHigh_EPS;
 	lcrhi |= (cflag & CSTOPB) ? LinCtrlHigh_STP2 : 0;
 	lcrhi |= LinCtrlHigh_FEN;  /* FIFO always enabled */
-	
+
 	return (lcrhi);
 }
 
@@ -786,35 +815,11 @@ int
 epcomcnattach(bus_space_tag_t iot, bus_addr_t iobase, bus_space_handle_t ioh,
     int ospeed, tcflag_t cflag)
 {
-	u_int lcrlo, lcrmid, lcrhi, ctrl, pwrcnt;
-	bus_space_handle_t syscon_ioh;
-
 	cn_tab = &epcomcons;
 	cn_init_magic(&epcom_cnm_state);
 	cn_set_magic("\047\001");
 
-	epcomcn_sc.sc_iot = iot;
-	epcomcn_sc.sc_ioh = ioh;
-	epcomcn_sc.sc_hwbase = iobase;
-	epcomcn_sc.sc_ospeed = ospeed;
-	epcomcn_sc.sc_cflag = cflag;
-
-	lcrhi = cflag2lcrhi(cflag);
-	lcrlo = EPCOMSPEED2BRD(ospeed) & 0xff;
-	lcrmid = EPCOMSPEED2BRD(ospeed) >> 8;
-	ctrl = Ctrl_UARTE;
-
-	bus_space_map(iot, EP93XX_APB_HWBASE + EP93XX_APB_SYSCON,
-		EP93XX_APB_SYSCON_SIZE, 0, &syscon_ioh);
-	pwrcnt = bus_space_read_4(iot, syscon_ioh, EP93XX_SYSCON_PwrCnt);
-	pwrcnt &= ~(PwrCnt_UARTBAUD);
-	bus_space_write_4(iot, syscon_ioh, EP93XX_SYSCON_PwrCnt, pwrcnt);
-	bus_space_unmap(iot, syscon_ioh, EP93XX_APB_SYSCON_SIZE);
-
-	bus_space_write_4(iot, ioh, EPCOM_LinCtrlLow, lcrlo);
-	bus_space_write_4(iot, ioh, EPCOM_LinCtrlMid, lcrmid);
-	bus_space_write_4(iot, ioh, EPCOM_LinCtrlHigh, lcrhi);
-	bus_space_write_4(iot, ioh, EPCOM_Ctrl, ctrl);
+	epcominit(&epcomcn_sc, iot, iobase, ioh, ospeed, cflag);
 
 	return (0);
 }
@@ -833,9 +838,15 @@ epcomcnpollc(dev_t dev, int on)
 void
 epcomcnputc(dev_t dev, int c)
 {
+	epcom_common_putc(&epcomcn_sc, c);
+}
+
+static void
+epcom_common_putc(struct epcom_cons_softc *sc, int c)
+{
 	int			s;
-	bus_space_tag_t		iot = epcomcn_sc.sc_iot;
-	bus_space_handle_t	ioh = epcomcn_sc.sc_ioh;
+	bus_space_tag_t		iot = sc->sc_iot;
+	bus_space_handle_t	ioh = sc->sc_ioh;
 
 	s = splserial();
 
@@ -857,24 +868,27 @@ epcomcnputc(dev_t dev, int c)
 int
 epcomcngetc(dev_t dev)
 {
+	return epcom_common_getc (&epcomcn_sc, dev);
+}
+
+static int
+epcom_common_getc(struct epcom_cons_softc *sc, dev_t dev)
+{
 	int			c, sts;
 	int			s;
-	bus_space_tag_t		iot = epcomcn_sc.sc_iot;
-	bus_space_handle_t	ioh = epcomcn_sc.sc_ioh;
+	bus_space_tag_t		iot = sc->sc_iot;
+	bus_space_handle_t	ioh = sc->sc_ioh;
 
         s = splserial();
 
-	while((bus_space_read_4(iot, ioh, EPCOM_Flag) & Flag_RXFE) != 0)
-		;
+	while ((bus_space_read_4(iot, ioh, EPCOM_Flag) & Flag_RXFE) != 0)
+		continue;
 
 	c = bus_space_read_4(iot, ioh, EPCOM_Data);
 	sts = bus_space_read_4(iot, ioh, EPCOM_RXSts);
-	if (ISSET(sts, RXSts_BE)) c = CNC_BREAK;
-#ifdef DDB
-	extern int db_active;
-	if (!db_active)
-#endif
-	{
+	if (ISSET(sts, RXSts_BE))
+		c = CNC_BREAK;
+	if (!db_active) {
 		int cn_trapped __unused = 0;
 
 		cn_check_magic(dev, c, epcom_cnm_state);
@@ -971,7 +985,7 @@ epcom_rxsoft(struct epcom_softc *sc, struct tty *tp)
 	if (cc != scc) {
 		sc->sc_rbget = get;
 		s = splserial();
-		
+
 		cc = sc->sc_rbavail += scc - cc;
 		/* Buffers should be ok again, release possible block. */
 		if (cc >= 1) {
@@ -1022,7 +1036,7 @@ epcomintr(void* arg)
 
 	(void) bus_space_read_4(iot, ioh, EPCOM_IntIDIntClr);
 
-	if (COM_ISALIVE(sc) == 0) 
+	if (COM_ISALIVE(sc) == 0)
 		panic("intr on disabled epcom");
 
 	flagr = bus_space_read_4(iot, ioh, EPCOM_Flag);
@@ -1137,4 +1151,80 @@ epcomintr(void* arg)
 #endif
 #endif
 	return (1);
+}
+
+#ifdef KGDB
+int
+epcom_kgdb_attach(bus_space_tag_t iot, bus_addr_t iobase, int rate,
+		  tcflag_t cflag)
+{
+	bus_space_handle_t ioh;
+
+	if (iot == epcomcn_sc.sc_iot && iobase == epcomcn_sc.sc_hwbase) {
+#if !defined(DDB)
+		return EBUSY; /* cannot share with console */
+#else
+		/*
+		 * XXX I have no intention of ever testing and code path
+		 * implied by getting here
+		 */
+		kgdb_sc = epcomcn_sc;
+#endif
+	} else {
+		bus_space_map(iot, iobase, EP93XX_APB_UART_SIZE, 0, &ioh);
+		epcominit(&kgdb_sc, iot, iobase, ioh, rate, cflag);
+	}
+
+	kgdb_attach(epcom_kgdb_getc, epcom_kgdb_putc, &kgdb_sc);
+	kgdb_dev = 123; /* unneeded, only to satisfy some tests */
+
+	return 0;
+}
+
+static int
+epcom_kgdb_getc (void *sc)
+{
+	return epcom_common_getc(sc, NODEV);
+}
+
+static void
+epcom_kgdb_putc (void *sc, int c)
+{
+	epcom_common_putc(sc, c);
+}
+#endif	/* KGDB */
+
+/*
+ * Common code used for initialisation of the console or KGDB connection
+ */
+static void
+epcominit(struct epcom_cons_softc *sc, bus_space_tag_t iot,
+	  bus_addr_t iobase, bus_space_handle_t ioh, int rate, tcflag_t cflag)
+{
+	u_int lcrlo, lcrmid, lcrhi, ctrl, pwrcnt;
+	bus_space_handle_t syscon_ioh;
+
+	sc->sc_iot = iot;
+	sc->sc_ioh = ioh;
+	sc->sc_hwbase = iobase;
+	sc->sc_ospeed = rate;
+	sc->sc_cflag = cflag;
+
+	lcrhi = cflag2lcrhi(cflag);
+	lcrlo = EPCOMSPEED2BRD(rate) & 0xff;
+	lcrmid = EPCOMSPEED2BRD(rate) >> 8;
+	ctrl = Ctrl_UARTE;
+
+	/* Make sure the UARTs are clocked at the system default rate */
+	bus_space_map(iot, EP93XX_APB_HWBASE + EP93XX_APB_SYSCON,
+		EP93XX_APB_SYSCON_SIZE, 0, &syscon_ioh);
+	pwrcnt = bus_space_read_4(iot, syscon_ioh, EP93XX_SYSCON_PwrCnt);
+	pwrcnt &= ~(PwrCnt_UARTBAUD);
+	bus_space_write_4(iot, syscon_ioh, EP93XX_SYSCON_PwrCnt, pwrcnt);
+	bus_space_unmap(iot, syscon_ioh, EP93XX_APB_SYSCON_SIZE);
+
+	bus_space_write_4(iot, ioh, EPCOM_LinCtrlLow, lcrlo);
+	bus_space_write_4(iot, ioh, EPCOM_LinCtrlMid, lcrmid);
+	bus_space_write_4(iot, ioh, EPCOM_LinCtrlHigh, lcrhi);
+	bus_space_write_4(iot, ioh, EPCOM_Ctrl, ctrl);
 }

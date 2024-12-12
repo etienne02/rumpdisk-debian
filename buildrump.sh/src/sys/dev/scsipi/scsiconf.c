@@ -1,4 +1,4 @@
-/*	$NetBSD: scsiconf.c,v 1.292 2021/08/07 16:19:16 thorpej Exp $	*/
+/*	$NetBSD: scsiconf.c,v 1.306 2024/11/22 06:52:57 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2004 The NetBSD Foundation, Inc.
@@ -48,7 +48,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.292 2021/08/07 16:19:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.306 2024/11/22 06:52:57 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -64,6 +64,7 @@ __KERNEL_RCSID(0, "$NetBSD: scsiconf.c,v 1.292 2021/08/07 16:19:16 thorpej Exp $
 #include <sys/scsiio.h>
 #include <sys/queue.h>
 #include <sys/atomic.h>
+#include <sys/kmem.h>
 
 #include <dev/scsipi/scsi_all.h>
 #include <dev/scsipi/scsipi_all.h>
@@ -125,46 +126,6 @@ static int	scsibusprint(void *, const char *);
 static void	scsibus_discover_thread(void *);
 static void	scsibus_config(struct scsibus_softc *);
 
-const struct scsipi_bustype scsi_bustype = {
-	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
-	    SCSIPI_BUSTYPE_SCSI_PSCSI),
-	.bustype_cmd = scsi_scsipi_cmd,
-	.bustype_interpret_sense = scsipi_interpret_sense,
-	.bustype_printaddr = scsi_print_addr,
-	.bustype_kill_pending = scsi_kill_pending,
-	.bustype_async_event_xfer_mode = scsi_async_event_xfer_mode,
-};
-
-const struct scsipi_bustype scsi_fc_bustype = {
-	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
-	    SCSIPI_BUSTYPE_SCSI_FC),
-	.bustype_cmd = scsi_scsipi_cmd,
-	.bustype_interpret_sense = scsipi_interpret_sense,
-	.bustype_printaddr = scsi_print_addr,
-	.bustype_kill_pending = scsi_kill_pending,
-	.bustype_async_event_xfer_mode = scsi_fc_sas_async_event_xfer_mode,
-};
-
-const struct scsipi_bustype scsi_sas_bustype = {
-	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
-	    SCSIPI_BUSTYPE_SCSI_SAS),
-	.bustype_cmd = scsi_scsipi_cmd,
-	.bustype_interpret_sense = scsipi_interpret_sense,
-	.bustype_printaddr = scsi_print_addr,
-	.bustype_kill_pending = scsi_kill_pending,
-	.bustype_async_event_xfer_mode = scsi_fc_sas_async_event_xfer_mode,
-};
-
-const struct scsipi_bustype scsi_usb_bustype = {
-	.bustype_type = SCSIPI_BUSTYPE_BUSTYPE(SCSIPI_BUSTYPE_SCSI,
-	    SCSIPI_BUSTYPE_SCSI_USB),
-	.bustype_cmd = scsi_scsipi_cmd,
-	.bustype_interpret_sense = scsipi_interpret_sense,
-	.bustype_printaddr = scsi_print_addr,
-	.bustype_kill_pending = scsi_kill_pending,
-	.bustype_async_event_xfer_mode = NULL,
-};
-
 static int
 scsibus_init(void)
 {
@@ -173,23 +134,6 @@ scsibus_init(void)
 	mutex_init(&scsibus_qlock, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&scsibus_qcv, "scsinitq");
 	return 0;
-}
-
-int
-scsiprint(void *aux, const char *pnp)
-{
-	struct scsipi_channel *chan = aux;
-	struct scsipi_adapter *adapt = chan->chan_adapter;
-
-	/* only "scsibus"es can attach to "scsi"s; easy. */
-	if (pnp)
-		aprint_normal("scsibus at %s", pnp);
-
-	/* don't print channel if the controller says there can be only one. */
-	if (adapt->adapt_nchannels != 1)
-		aprint_normal(" channel %d", chan->chan_channel);
-
-	return (UNCONF);
 }
 
 static int
@@ -364,10 +308,145 @@ scsibusdetach(device_t self, int flags)
 	cv_destroy(&chan->chan_cv_comp);
 	cv_destroy(&chan->chan_cv_thr);
 
-	if (atomic_dec_uint_nv(&chan_running(chan)) == 0)
+	membar_release();
+	if (atomic_dec_uint_nv(&chan_running(chan)) == 0) {
+		membar_acquire();
 		mutex_destroy(chan_mtx(chan));
+	}
 
 	return 0;
+}
+
+static int
+lun_compar(const void *a, const void *b)
+{
+	const uint16_t * const la = a, * const lb = b;
+
+	if (*la < *lb)
+		return -1;
+	if (*la > *lb)
+		return 1;
+	return 0;
+}
+
+static int
+scsi_report_luns(struct scsibus_softc *sc, int target,
+    uint16_t ** const luns, size_t *nluns)
+{
+	struct scsi_report_luns replun;
+	struct scsi_report_luns_header *rlr;
+	struct scsi_report_luns_lun *lunp;
+
+	struct scsipi_channel *chan = sc->sc_channel;
+	struct scsipi_inquiry_data inqbuf;
+	struct scsipi_periph *periph;
+	uint16_t tmp;
+
+	int error;
+	size_t i, rlrlen, rlrlenmin;
+
+	memset(&replun, 0, sizeof(replun));
+
+	periph = scsipi_alloc_periph(M_WAITOK);
+	periph->periph_channel = chan;
+	periph->periph_switch = &scsi_probe_dev;
+
+	periph->periph_target = target;
+	periph->periph_lun = 0;
+	periph->periph_quirks = chan->chan_defquirks;
+
+	if ((error = scsipi_inquire(periph, &inqbuf,
+	    XS_CTL_DISCOVERY | XS_CTL_SILENT)))
+		goto end2;
+	periph->periph_version = inqbuf.version & SID_ANSII;
+	if (periph->periph_version < 3) {
+		error = ENOTSUP;
+		goto end2;
+	}
+
+	rlrlen = rlrlenmin = sizeof(*rlr) + sizeof(*lunp) * 1;
+
+again:
+	rlr = kmem_zalloc(rlrlen, KM_SLEEP);
+
+	replun.opcode = SCSI_REPORT_LUNS;
+	replun.selectreport = SELECTREPORT_NORMAL;
+	_lto4b(rlrlen, replun.alloclen);
+
+	error = scsipi_command(periph, (void *)&replun, sizeof(replun),
+	    (void *)rlr, rlrlen, SCSIPIRETRIES, 10000, NULL,
+	    XS_CTL_DATA_IN | XS_CTL_DISCOVERY | XS_CTL_SILENT);
+	if (error)
+		goto end;
+
+	if (sizeof(*rlr) + _4btol(rlr->length) > rlrlen) {
+	    	const size_t old_rlrlen = rlrlen;
+		rlrlen = sizeof(*rlr) + uimin(_4btol(rlr->length),
+		    16383 * sizeof(*lunp));
+		kmem_free(rlr, old_rlrlen);
+		rlr = NULL;
+		if (rlrlen < rlrlenmin) {
+			error = EIO;
+			goto end;
+		}
+		goto again;
+	}
+
+	KASSERT(nluns != NULL);
+	*nluns = (rlrlen - sizeof(*rlr)) / sizeof(*lunp);
+
+	KASSERT(luns != NULL);
+	*luns = kmem_alloc(*nluns * sizeof(**luns), KM_SLEEP);
+
+	for (i = 0; i < *nluns; i++) {
+		lunp = &((struct scsi_report_luns_lun *)&rlr[1])[i];
+		switch (lunp->lun[0] & 0xC0) {
+		default:
+			scsi_print_addr(periph);
+			printf("LUN %016"PRIx64" ignored\n", _8btol(lunp->lun));
+			(*luns)[i] = 0;
+			break;
+		case 0x40:
+			(*luns)[i] = _2btol(&lunp->lun[0]) & 0x3FFF;
+			break;
+		case 0x00:
+			(*luns)[i] = _2btol(&lunp->lun[0]) & 0x00FF;
+			break;
+		}
+	}
+
+	kheapsort(*luns, *nluns, sizeof(**luns), lun_compar, &tmp);
+
+end:
+	if (rlr)
+		kmem_free(rlr, rlrlen);
+end2:
+	scsipi_free_periph(periph);
+	return error;
+}
+
+static void
+scsi_discover_luns(struct scsibus_softc *sc, int target, int minlun, int maxlun)
+{
+	uint16_t *luns = NULL;	/* XXX gcc */
+	size_t nluns = 0;	/* XXX gcc */
+
+	if (scsi_report_luns(sc, target, &luns, &nluns) == 0) {
+		for (size_t i = 0; i < nluns; i++)
+			if (luns[i] >= minlun && luns[i] <= maxlun)
+				scsi_probe_device(sc, target, luns[i]);
+		kmem_free(luns, sizeof(*luns) * nluns);
+		return;
+	}
+
+	for (int lun = minlun; lun <= maxlun; lun++) {
+		/*
+		 * See if there's a device present, and configure it.
+		 */
+		if (scsi_probe_device(sc, target, lun) == 0)
+			break;
+		/* otherwise something says we should look further */
+	}
 }
 
 /*
@@ -410,14 +489,8 @@ scsi_probe_bus(struct scsibus_softc *sc, int target, int lun)
 	for (target = mintarget; target <= maxtarget; target++) {
 		if (target == chan->chan_id)
 			continue;
-		for (lun = minlun; lun <= maxlun; lun++) {
-			/*
-			 * See if there's a device present, and configure it.
-			 */
-			if (scsi_probe_device(sc, target, lun) == 0)
-				break;
-			/* otherwise something says we should look further */
-		}
+
+		scsi_discover_luns(sc, target, minlun, maxlun);
 
 		/*
 		 * Now that we've discovered all of the LUNs on this
@@ -664,6 +737,8 @@ static const struct scsi_quirk_inquiry_pattern scsi_quirk_patterns[] = {
 	 "MST     ", "SnapLink        ", ""},     PQUIRK_NOLUNS},
 	{{T_DIRECT, T_FIXED,
 	 "NEC     ", "D3847           ", "0307"}, PQUIRK_NOLUNS},
+	{{T_CDROM, T_REMOV,
+	 "PiSCSI  ", "SCSI CD-ROM     ", ""},     PQUIRK_NOREADDISCINFO},
 	{{T_DIRECT, T_FIXED,
 	 "QUANTUM ", "ELS85S          ", ""},     PQUIRK_AUTOSAVE},
 	{{T_DIRECT, T_FIXED,
@@ -718,6 +793,8 @@ static const struct scsi_quirk_inquiry_pattern scsi_quirk_patterns[] = {
 	 "SEAGATE ", "SX336704LC"   , ""}, PQUIRK_CAP_SYNC | PQUIRK_CAP_WIDE16},
 	{{T_DIRECT, T_FIXED,
 	 "SEAGATE ", "SX173404LC",       ""},     PQUIRK_CAP_SYNC | PQUIRK_CAP_WIDE16},
+	{{T_DIRECT, T_FIXED,
+	 "ORACLE",   "BlockVolume",	 ""},	  PQUIRK_ONLYBIG},
 
 	{{T_DIRECT, T_REMOV,
 	 "IOMEGA", "ZIP 100",		 "J.03"}, PQUIRK_NOLUNS|PQUIRK_NOSYNC},
@@ -788,6 +865,8 @@ static const struct scsi_quirk_inquiry_pattern scsi_quirk_patterns[] = {
 	 "SONY    ", "CDL1100         ", ""},     PQUIRK_NOLUNS},
 	{{T_ENCLOSURE, T_FIXED,
 	 "SUN     ", "SENA            ", ""},     PQUIRK_NOLUNS},
+	{{T_CDROM, T_REMOV,
+	 "SUN     ", "Virtual CDROM   ", ""},     PQUIRK_NOREADDISCINFO},
 };
 
 /*
@@ -1012,6 +1091,7 @@ scsi_probe_device(struct scsibus_softc *sc, int target, int lun)
 	locs[SCSIBUSCF_TARGET] = target;
 	locs[SCSIBUSCF_LUN] = lun;
 
+	KERNEL_LOCK(1, NULL);
 	if ((cf = config_search(sc->sc_dev, &sa,
 				CFARGS(.submatch = config_stdsubmatch,
 				       .locators = locs))) != NULL) {
@@ -1034,9 +1114,11 @@ scsi_probe_device(struct scsibus_softc *sc, int target, int lun)
 		 */
 		config_attach(sc->sc_dev, cf, &sa, scsibusprint,
 		    CFARGS(.locators = locs));
+		KERNEL_UNLOCK_ONE(NULL);
 	} else {
 		scsibusprint(&sa, device_xname(sc->sc_dev));
 		aprint_normal(" not configured\n");
+		KERNEL_UNLOCK_ONE(NULL);
 		goto bad;
 	}
 

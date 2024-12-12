@@ -1,4 +1,4 @@
-/*	$NetBSD: mm.h,v 1.13 2020/02/23 15:46:40 ad Exp $	*/
+/*	$NetBSD: mm.h,v 1.24 2021/12/19 12:21:30 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -32,13 +32,15 @@
 #ifndef _LINUX_MM_H_
 #define _LINUX_MM_H_
 
-#include <sys/malloc.h>
-
 #include <uvm/uvm_extern.h>
 #include <uvm/uvm_object.h>
 
 #include <asm/page.h>
+
+#include <linux/pfn.h>
 #include <linux/shrinker.h>
+#include <linux/slab.h>
+#include <linux/sizes.h>
 
 struct file;
 
@@ -47,7 +49,9 @@ struct file;
 #define	PAGE_MASK	(~(PAGE_SIZE-1))
 
 #define	PAGE_ALIGN(x)		(((x) + (PAGE_SIZE-1)) & ~(PAGE_SIZE-1))
-#define	offset_in_page(x)	((x) & (PAGE_SIZE-1))
+#define	offset_in_page(x)	((uintptr_t)(x) & (PAGE_SIZE-1))
+
+#define	untagged_addr(x)	(x)
 
 struct sysinfo {
 	unsigned long totalram;
@@ -65,6 +69,14 @@ si_meminfo(struct sysinfo *si)
 	/* XXX Fill in more as needed.  */
 }
 
+static inline size_t
+si_mem_available(void)
+{
+
+	/* XXX ? */
+	return uvmexp.free;
+}
+
 static inline unsigned long
 vm_mmap(struct file *file __unused, unsigned long base __unused,
     unsigned long size __unused, unsigned long prot __unused,
@@ -75,22 +87,63 @@ vm_mmap(struct file *file __unused, unsigned long base __unused,
 }
 
 static inline unsigned long
-get_num_physpages(void)
+totalram_pages(void)
 {
+
 	return uvmexp.npages;
 }
 
+static inline unsigned long
+get_num_physpages(void)
+{
+
+	return uvmexp.npages;
+}
+
+static inline void *
+kvmalloc(size_t size, gfp_t gfp)
+{
+
+	return kmalloc(size, gfp);
+}
+
+static inline void *
+kvzalloc(size_t size, gfp_t gfp)
+{
+
+	return kmalloc(size, gfp | __GFP_ZERO);
+}
+
+static inline void *
+kvcalloc(size_t nelem, size_t elemsize, gfp_t gfp)
+{
+
+	KASSERT(elemsize > 0);
+	if (SIZE_MAX/elemsize < nelem)
+		return NULL;
+	return kvzalloc(nelem * elemsize, gfp);
+}
+
+static inline void *
+kvmalloc_array(size_t nelem, size_t elemsize, gfp_t gfp)
+{
+
+	KASSERT(elemsize != 0);
+	if (nelem > SIZE_MAX/elemsize)
+		return NULL;
+	return kmalloc(nelem * elemsize, gfp);
+}
+
 /*
- * XXX Requires that kmalloc in <linux/slab.h> and vmalloc in
- * <linux/vmalloc.h> both use malloc(9).  If you change either of
- * those, be sure to update this.
+ * XXX kvfree must additionally work on kmalloc (linux/slab.h) and
+ * vmalloc (linux/vmalloc.h).  If you change either of those, be sure
+ * to change this too.
  */
+
 static inline void
 kvfree(void *ptr)
 {
-
-	if (ptr != NULL)
-		free(ptr, M_TEMP);
+	kfree(ptr);
 }
 
 static inline void

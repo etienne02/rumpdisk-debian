@@ -1,12 +1,22 @@
-#	$NetBSD: files.ddb,v 1.13 2021/02/06 16:03:26 dbj Exp $
+#	$NetBSD: files.ddb,v 1.16 2023/07/09 17:10:47 riastradh Exp $
 
 #
 # DDB options
 #
 defflag opt_ddb.h		DDB DDB_VERBOSE_HELP
-defparam opt_ddbparam.h		DDB_FROMCONSOLE DDB_ONPANIC DDB_HISTORY_SIZE
-				DDB_BREAK_CHAR DDB_KEYCODE DDB_PANICSTACKFRAMES
-				DDB_COMMANDONENTER DB_MAX_LINE DB_MAX_WIDTH
+
+defparam opt_ddbparam.h		DDB_BREAK_CHAR
+defparam opt_ddbparam.h		DDB_COMMANDONENTER
+defparam opt_ddbparam.h		DDB_DUMPSTACK
+defparam opt_ddbparam.h		DDB_FROMCONSOLE
+defparam opt_ddbparam.h		DDB_HISTORY_SIZE
+defparam opt_ddbparam.h		DDB_KEYCODE
+defparam opt_ddbparam.h		DDB_ONPANIC
+defparam opt_ddbparam.h		DDB_PANICSTACKFRAMES
+
+defparam opt_ddbparam.h		DB_MAX_LINE
+defparam opt_ddbparam.h		DB_MAX_WIDTH
+
 
 define	ddb
 file	ddb/db_access.c			ddb | kgdb
@@ -26,6 +36,7 @@ file	ddb/db_proc.c			ddb
 file	ddb/db_print.c			ddb
 file	ddb/db_run.c			ddb | kgdb	# XXX kgdb reference
 file	ddb/db_sym.c			ddb
+file	ddb/db_syncobj.c		ddb
 file	ddb/db_trap.c                   ddb
 file	ddb/db_variables.c		ddb
 file	ddb/db_watch.c			ddb

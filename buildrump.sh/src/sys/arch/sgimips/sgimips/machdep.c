@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.152 2021/08/12 20:53:18 andvar Exp $	*/
+/*	$NetBSD: machdep.c,v 1.156 2024/05/23 06:14:12 skrll Exp $	*/
 
 /*
  * Copyright (c) 2000 Soren S. Jorvang
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.152 2021/08/12 20:53:18 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.156 2024/05/23 06:14:12 skrll Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -54,7 +54,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.152 2021/08/12 20:53:18 andvar Exp $")
 #include <sys/reboot.h>
 #include <sys/conf.h>
 #include <sys/file.h>
-#include <sys/malloc.h>
 #include <sys/intr.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
@@ -285,6 +284,13 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	}
 
 	cpu_setmodel("%s", arcbios_system_identifier);
+
+	/*
+	 * Copy exception-dispatch code down to exception vector.
+	 * Initialize locore-function vector.
+	 * Clear out the I and D caches.
+	 */
+	mips_vector_init(NULL, false);
 
 	uvm_md_init();
 
@@ -533,7 +539,7 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 
 	case MACH_SGI_IP12:
 		i = *(volatile u_int32_t *)MIPS_PHYS_TO_KSEG1(0x1fbd0000);
-        	mach_boardrev = (i & 0x7000) >> 12; 
+        	mach_boardrev = (i & 0x7000) >> 12;
 
 		if ((i & 0x8000) == 0) {
 			if (mach_boardrev < 7)
@@ -662,13 +668,6 @@ mach_init(int argc, int32_t argv32[], uintptr_t magic, int32_t bip32)
 	arcbios_tree_walk(sgimips_count_cpus, NULL);
 
 	/*
-	 * Copy exception-dispatch code down to exception vector.
-	 * Initialize locore-function vector.
-	 * Clear out the I and D caches.
-	 */
-	mips_vector_init(NULL, false);
-
-	/*
 	 * Initialize error message buffer (at end of core).
 	 */
 	mips_init_msgbuf();
@@ -755,12 +754,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && (waittime < 0)) {
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Clear and disable watchdog timer. */
@@ -793,7 +786,7 @@ haltsys:
 #if NMCCLOCK_MACE > 0
 		if (mach_type == MACH_SGI_IP32) {
 			mcclock_poweroff();
-		} else 
+		} else
 #endif
 			arcbios_PowerDown();
 		printf("WARNING: powerdown failed\n");
@@ -812,7 +805,7 @@ haltsys:
 	if (mach_type == MACH_SGI_IP32) {
 		crime_reboot();
 	} else
-#endif	
+#endif
 		arcbios_Reboot();
 
 	for (;;);

@@ -1,4 +1,4 @@
-/*	$NetBSD: disksubr.c,v 1.70 2019/04/03 22:10:49 christos Exp $	*/
+/*	$NetBSD: disksubr.c,v 1.72 2022/07/05 19:31:04 andvar Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1988 Regents of the University of California.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: disksubr.c,v 1.70 2019/04/03 22:10:49 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: disksubr.c,v 1.72 2022/07/05 19:31:04 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -355,7 +355,7 @@ readdisklabel(dev_t dev, void (*strat)(struct buf *), struct disklabel *lp, stru
 			pp = &lp->d_partitions[0];
 			if (pp->p_size) {
 				printf("WARN: more than one root, ignoring\n");
-				clp->rdblock = RDBNULL;	/* invlidate cpulab */
+				clp->rdblock = RDBNULL;	/* invalidate cpulab */
 				continue;
 			}
 			break;
@@ -363,7 +363,7 @@ readdisklabel(dev_t dev, void (*strat)(struct buf *), struct disklabel *lp, stru
 			pp = &lp->d_partitions[1];
 			if (pp->p_size) {
 				printf("WARN: more than one swap, ignoring\n");
-				clp->rdblock = RDBNULL;	/* invlidate cpulab */
+				clp->rdblock = RDBNULL;	/* invalidate cpulab */
 				continue;
 			}
 			break;
@@ -415,7 +415,7 @@ readdisklabel(dev_t dev, void (*strat)(struct buf *), struct disklabel *lp, stru
 			 * the swap partition. copy BCPL string into packname
 			 * [the reason we use the swap partition: the user
 			 *  can supply a decent packname without worry
-			 *  of having to access an odly named partition
+			 *  of having to access an oddly named partition
 			 *  under AmigaDos]
 			 */
 			s = lp->d_packname;

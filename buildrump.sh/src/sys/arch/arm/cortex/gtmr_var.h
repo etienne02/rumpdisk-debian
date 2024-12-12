@@ -1,4 +1,4 @@
-/* $NetBSD: gtmr_var.h,v 1.14 2020/03/05 15:18:54 riastradh Exp $ */
+/* $NetBSD: gtmr_var.h,v 1.16 2022/11/19 12:12:25 skrll Exp $ */
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -38,7 +38,8 @@ struct gtmr_softc {
 	struct evcnt sc_ev_missing_ticks;
 	uint32_t sc_freq;
 	uint32_t sc_flags;
-#define	GTMR_FLAG_SUN50I_A64_UNSTABLE_TIMER	__BIT(0)
+#define	GTMR_FLAG_SUN50I_A64_UNSTABLE_TIMER		__BIT(0)
+#define	GTMR_FLAG_CPU_REGISTERS_NOT_FW_CONFIGURED	__BIT(1)
 	u_long sc_autoinc;
 	bool sc_physical;
 	void *sc_global_ih;
@@ -50,7 +51,6 @@ struct gtmr_softc {
 #ifdef _KERNEL
 #include "opt_arm_timer.h"
 struct cpu_info;
-void	gtmr_init(device_t);
 int	gtmr_intr(void *);
 void	gtmr_init_cpu_clock(struct cpu_info *);
 void	gtmr_delay(unsigned int n);

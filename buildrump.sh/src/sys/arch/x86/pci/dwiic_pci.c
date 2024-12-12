@@ -1,4 +1,4 @@
-/* $NetBSD: dwiic_pci.c,v 1.6 2021/08/07 16:19:07 thorpej Exp $ */
+/* $NetBSD: dwiic_pci.c,v 1.11 2024/11/11 17:28:38 martin Exp $ */
 
 /*-
  * Copyright (c) 2017 The NetBSD Foundation, Inc.
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dwiic_pci.c,v 1.6 2021/08/07 16:19:07 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dwiic_pci.c,v 1.11 2024/11/11 17:28:38 martin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -50,6 +50,8 @@ __KERNEL_RCSID(0, "$NetBSD: dwiic_pci.c,v 1.6 2021/08/07 16:19:07 thorpej Exp $"
 #include <dev/ic/dwiic_var.h>
 #include <arch/x86/pci/lpssreg.h>
 
+#include "acpica.h"
+
 //#define DWIIC_DEBUG
 
 #ifdef DWIIC_DEBUG
@@ -58,11 +60,125 @@ __KERNEL_RCSID(0, "$NetBSD: dwiic_pci.c,v 1.6 2021/08/07 16:19:07 thorpej Exp $"
 #define DPRINTF(x)
 #endif
 
+#if NACPICA > 0
+#define	I2C_USE_ACPI
+#endif /* NACPICA > 0 */
+
 struct pci_dwiic_softc {
 	struct dwiic_softc	sc_dwiic;
 	pci_chipset_tag_t	sc_pc;
 	pcitag_t		sc_ptag;
 	struct acpi_devnode	*sc_acpinode;
+};
+
+#define VIDDID(a, b) PCI_ID_CODE(PCI_VENDOR_ ## a, PCI_PRODUCT_ ## a ## _ ## b)
+
+static const struct device_compatible_entry compat_data[] = {
+	{ .id = VIDDID(INTEL, CORE4G_M_S_I2C_0) },
+	{ .id = VIDDID(INTEL, CORE4G_M_S_I2C_1) },
+	{ .id = VIDDID(INTEL, 100SERIES_I2C_0) },
+	{ .id = VIDDID(INTEL, 100SERIES_I2C_1) },
+	{ .id = VIDDID(INTEL, 100SERIES_I2C_2) },
+	{ .id = VIDDID(INTEL, 100SERIES_I2C_3) },
+	{ .id = VIDDID(INTEL, 100SERIES_LP_I2C_0) },
+	{ .id = VIDDID(INTEL, 100SERIES_LP_I2C_1) },
+	{ .id = VIDDID(INTEL, 100SERIES_LP_I2C_2) },
+	{ .id = VIDDID(INTEL, 100SERIES_LP_I2C_3) },
+	{ .id = VIDDID(INTEL, 100SERIES_LP_I2C_4) },
+	{ .id = VIDDID(INTEL, 100SERIES_LP_I2C_5) },
+	{ .id = VIDDID(INTEL, 2HS_I2C_0) },
+	{ .id = VIDDID(INTEL, 2HS_I2C_1) },
+	{ .id = VIDDID(INTEL, 2HS_I2C_2) },
+	{ .id = VIDDID(INTEL, 2HS_I2C_3) },
+	{ .id = VIDDID(INTEL, 3HS_I2C_0) },
+	{ .id = VIDDID(INTEL, 3HS_I2C_1) },
+	{ .id = VIDDID(INTEL, 3HS_I2C_2) },
+	{ .id = VIDDID(INTEL, 3HS_I2C_3) },
+	{ .id = VIDDID(INTEL, 3HS_U_I2C_0) },
+	{ .id = VIDDID(INTEL, 3HS_U_I2C_1) },
+	{ .id = VIDDID(INTEL, 3HS_U_I2C_2) },
+	{ .id = VIDDID(INTEL, 3HS_U_I2C_3) },
+	{ .id = VIDDID(INTEL, 3HS_U_I2C_4) },
+	{ .id = VIDDID(INTEL, 3HS_U_I2C_5) },
+	{ .id = VIDDID(INTEL, 4HS_H_I2C_0) },
+	{ .id = VIDDID(INTEL, 4HS_H_I2C_1) },
+	{ .id = VIDDID(INTEL, 4HS_H_I2C_2) },
+	{ .id = VIDDID(INTEL, 4HS_H_I2C_3) },
+	{ .id = VIDDID(INTEL, 4HS_V_I2C_0) },
+	{ .id = VIDDID(INTEL, 4HS_V_I2C_1) },
+	{ .id = VIDDID(INTEL, 4HS_V_I2C_2) },
+	{ .id = VIDDID(INTEL, 4HS_V_I2C_3) },
+	{ .id = VIDDID(INTEL, CMTLK_I2C_0) }, /* 4HS LP */
+	{ .id = VIDDID(INTEL, CMTLK_I2C_1) },
+	{ .id = VIDDID(INTEL, CMTLK_I2C_2) },
+	{ .id = VIDDID(INTEL, CMTLK_I2C_3) },
+	{ .id = VIDDID(INTEL, CMTLK_I2C_4) },
+	{ .id = VIDDID(INTEL, CMTLK_I2C_5) },
+	{ .id = VIDDID(INTEL, 495_YU_I2C_0) },
+	{ .id = VIDDID(INTEL, 495_YU_I2C_1) },
+	{ .id = VIDDID(INTEL, 495_YU_I2C_2) },
+	{ .id = VIDDID(INTEL, 495_YU_I2C_3) },
+	{ .id = VIDDID(INTEL, 495_YU_I2C_4) },
+	{ .id = VIDDID(INTEL, 495_YU_I2C_5) },
+	{ .id = VIDDID(INTEL, 5HS_H_I2C_0) },
+	{ .id = VIDDID(INTEL, 5HS_H_I2C_1) },
+	{ .id = VIDDID(INTEL, 5HS_H_I2C_2) },
+	{ .id = VIDDID(INTEL, 5HS_H_I2C_3) },
+	{ .id = VIDDID(INTEL, 5HS_H_I2C_4) },
+	{ .id = VIDDID(INTEL, 5HS_H_I2C_5) },
+	{ .id = VIDDID(INTEL, 5HS_H_I2C_6) },
+	{ .id = VIDDID(INTEL, 5HS_LP_I2C_0) },
+	{ .id = VIDDID(INTEL, 5HS_LP_I2C_1) },
+	{ .id = VIDDID(INTEL, 5HS_LP_I2C_2) },
+	{ .id = VIDDID(INTEL, 5HS_LP_I2C_3) },
+	{ .id = VIDDID(INTEL, 5HS_LP_I2C_4) },
+	{ .id = VIDDID(INTEL, 5HS_LP_I2C_5) },
+	{ .id = VIDDID(INTEL, BAYTRAIL_SIO_I2C1) },
+	{ .id = VIDDID(INTEL, BAYTRAIL_SIO_I2C2) },
+	{ .id = VIDDID(INTEL, BAYTRAIL_SIO_I2C3) },
+	{ .id = VIDDID(INTEL, BAYTRAIL_SIO_I2C4) },
+	{ .id = VIDDID(INTEL, BAYTRAIL_SIO_I2C5) },
+	{ .id = VIDDID(INTEL, BAYTRAIL_SIO_I2C6) },
+	{ .id = VIDDID(INTEL, BAYTRAIL_SIO_I2C7) },
+	{ .id = VIDDID(INTEL, BSW_SIO_I2C_1) },
+	{ .id = VIDDID(INTEL, BSW_SIO_I2C_2) },
+	{ .id = VIDDID(INTEL, BSW_SIO_I2C_3) },
+	{ .id = VIDDID(INTEL, BSW_SIO_I2C_4) },
+	{ .id = VIDDID(INTEL, BSW_SIO_I2C_5) },
+	{ .id = VIDDID(INTEL, BSW_SIO_I2C_6) },
+	{ .id = VIDDID(INTEL, BSW_SIO_I2C_7) },
+	{ .id = VIDDID(INTEL, APL_I2C_0) },
+	{ .id = VIDDID(INTEL, APL_I2C_1) },
+	{ .id = VIDDID(INTEL, APL_I2C_2) },
+	{ .id = VIDDID(INTEL, APL_I2C_3) },
+	{ .id = VIDDID(INTEL, APL_I2C_4) },
+	{ .id = VIDDID(INTEL, APL_I2C_5) },
+	{ .id = VIDDID(INTEL, APL_I2C_6) },
+	{ .id = VIDDID(INTEL, APL_I2C_7) },
+	{ .id = VIDDID(INTEL, GLK_I2C_0) },
+	{ .id = VIDDID(INTEL, GLK_I2C_1) },
+	{ .id = VIDDID(INTEL, GLK_I2C_2) },
+	{ .id = VIDDID(INTEL, GLK_I2C_3) },
+	{ .id = VIDDID(INTEL, GLK_I2C_4) },
+	{ .id = VIDDID(INTEL, GLK_I2C_5) },
+	{ .id = VIDDID(INTEL, GLK_I2C_6) },
+	{ .id = VIDDID(INTEL, GLK_I2C_7) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_0) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_1) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_2) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_3) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_4) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_5) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_6) },
+	{ .id = VIDDID(INTEL, EHL_SIO_I2C_7) },
+	{ .id = VIDDID(INTEL, JSL_LPSS_I2C_0) },
+	{ .id = VIDDID(INTEL, JSL_LPSS_I2C_1) },
+	{ .id = VIDDID(INTEL, JSL_LPSS_I2C_2) },
+	{ .id = VIDDID(INTEL, JSL_LPSS_I2C_3) },
+	{ .id = VIDDID(INTEL, JSL_LPSS_I2C_4) },
+	{ .id = VIDDID(INTEL, JSL_LPSS_I2C_5) },
+
+	PCI_COMPAT_EOL
 };
 
 static uint32_t
@@ -92,14 +208,7 @@ pci_dwiic_match(device_t parent, cfdata_t match, void *aux)
 {
 	struct pci_attach_args *pa = aux;
 
-	if (PCI_VENDOR(pa->pa_id) != PCI_VENDOR_INTEL)
-		return 0;
-
-	if (PCI_PRODUCT(pa->pa_id) < PCI_PRODUCT_INTEL_100SERIES_LP_I2C_0 ||
-	    PCI_PRODUCT(pa->pa_id) > PCI_PRODUCT_INTEL_100SERIES_LP_I2C_3)
-		return 0;
-
-	return 1;
+	return pci_compatible_match(pa, compat_data);
 }
 
 void
@@ -164,17 +273,24 @@ pci_dwiic_attach(device_t parent, device_t self, void *aux)
 	lpss_write(sc, LPSS_REMAP_HI,
 	    pci_conf_read(sc->sc_pc, sc->sc_ptag, PCI_BAR0 + 0x4));
 
+#ifdef I2C_USE_ACPI
 	sc->sc_acpinode = acpi_pcidev_find(0 /*XXX segment*/,
 	    pa->pa_bus, pa->pa_device, pa->pa_function);
+#else
+	sc->sc_acpinode = NULL;
+#endif
 
 	if (sc->sc_acpinode) {
+#ifdef I2C_USE_ACPI
 		sc->sc_dwiic.sc_iba.iba_child_devices =
 		    acpi_enter_i2c_devs(NULL, sc->sc_acpinode);
+#endif
 	} else {
 		aprint_verbose_dev(self, "no matching ACPI node\n");
 	}
 
-	dwiic_attach(&sc->sc_dwiic);
+	if (!dwiic_attach(&sc->sc_dwiic))
+		goto out;
 
 	config_found(self, &sc->sc_dwiic.sc_iba, iicbus_print, CFARGS_NONE);
 

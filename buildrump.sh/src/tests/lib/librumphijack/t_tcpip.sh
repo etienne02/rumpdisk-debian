@@ -1,4 +1,4 @@
-#       $NetBSD: t_tcpip.sh,v 1.19 2019/05/13 17:55:08 bad Exp $
+#       $NetBSD: t_tcpip.sh,v 1.24 2024/04/28 07:27:41 rillig Exp $
 #
 # Copyright (c) 2011 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -88,25 +88,27 @@ start_sshd() {
 	    cp $(atf_get_srcdir)/ssh_host_key .
 	atf_check -s ignore -o empty -e ignore \
 	    cp $(atf_get_srcdir)/ssh_host_key.pub .
-	atf_check -s eq:0 -o empty -e empty chmod 400 ssh_host_key
-	atf_check -s eq:0 -o empty -e empty chmod 444 ssh_host_key.pub
+	atf_check -s exit:0 -o empty -e empty chmod 400 ssh_host_key
+	atf_check -s exit:0 -o empty -e empty chmod 444 ssh_host_key.pub
 
+# Start in debugging mode so we don't have parent<->child privsep stuff
         env LD_PRELOAD=/usr/lib/librumphijack.so \
-	    /usr/sbin/sshd -e -f ./sshd_config
-	while [ ! -f sshd.pid ]; do
-		sleep 0.01
-	done
-	echo "SSH server started (pid $(cat sshd.pid))"
+	    /usr/sbin/sshd -d -e -E out -f ./sshd_config &
+#	while [ ! -f sshd.pid ]; do
+#		sleep 0.01
+#	done
+#	echo "SSH server started (pid $(cat sshd.pid))"
+	sleep 1
 
 	echo "Setting up SSH client configuration"
-	atf_check -s eq:0 -o empty -e empty \
+	atf_check -s exit:0 -o empty -e empty \
 	    ssh-keygen -f ssh_user_key -t rsa -b 1024 -N "" -q
-	atf_check -s eq:0 -o empty -e empty \
+	atf_check -s exit:0 -o empty -e empty \
 	    cp ssh_user_key.pub authorized_keys
 	echo "127.0.0.1,localhost,::1 " \
 	    "$(cat $(atf_get_srcdir)/ssh_host_key.pub)" >known_hosts || \
 	    atf_fail "Failed to create known_hosts"
-	atf_check -s eq:0 -o empty -e empty chmod 600 authorized_keys
+	atf_check -s exit:0 -o empty -e empty chmod 600 authorized_keys
 	sed -e "s,@SRCDIR@,$(atf_get_srcdir),g" -e "s,@WORKDIR@,$(pwd),g" \
 	    $(atf_get_srcdir)/ssh_config.in >ssh_config || \
 	    atf_fail "Failed to create ssh_config"
@@ -122,8 +124,6 @@ ssh_head()
 
 ssh_body()
 {
-	atf_expect_fail "PR lib/50174"
-
 	atf_check -s exit:0 ${rumpnetsrv} ${RUMP_SERVER}
 	# make sure clients die after we nuke the server
 	export RUMPHIJACK_RETRYCONNECT='die'
@@ -137,7 +137,8 @@ ssh_body()
 	jot 11 12 | xargs mkdir
 	cd ..
 
-	atf_check -s exit:0 -o save:ssh.out				\
+	# ignore stderr for now, prints environment in debug mode
+	atf_check -s exit:0 -o save:ssh.out -e ignore			\
 	    env LD_PRELOAD=/usr/lib/librumphijack.so			\
 	    ssh -T -F ssh_config 127.0.0.1 env BLOCKSIZE=512		\
 	    ls -li $(pwd)/testdir
@@ -181,7 +182,8 @@ test_nfs()
 
 	atf_check -s exit:0 rump.sysctl -q -w kern.module.autoload=1
 
-	atf_check -s exit:0 -e ignore mount_ffs /dk /rump/export
+	atf_check -s exit:0 -e ignore env RUMPHIJACK='path=/rump,blanket=/dk' \
+		mount_ffs /dk /rump/export
 	atf_check -s exit:0 -x "echo ${magicstr} > /rump/export/im_alive"
 
 	# start rpcbind.  we want /var/run/rpcbind.sock
@@ -227,6 +229,11 @@ atf_test_case nfs cleanup
 nfs_head()
 {
         atf_set "descr" "Test hijacked nfsd and mount_nfs"
+
+	# XXX Can probably make this work as nonroot, but need to
+	# convince rpcbind running in the rump kernel server that it
+	# has uid 0.
+	atf_set "require.user" "root"
 }
 
 nfs_body()
@@ -248,11 +255,17 @@ atf_test_case nfs_autoload cleanup
 nfs_autoload_head()
 {
         atf_set "descr" "Test hijacked nfsd with autoload from /stand"
+
+	# XXX Can probably make this work as nonroot, but need to
+	# convince rpcbind running in the rump kernel server that it
+	# has uid 0.
+	atf_set "require.user" "root"
 }
 
 nfs_autoload_body()
 {
 	[ `uname -m` = "i386" ] || atf_skip "test currently valid only on i386"
+	atf_expect_fail "PR lib/54184"
 	test_nfs -lrumpvfs -lrumpdev -lrumpnet -lrumpnet_net		\
 	    -lrumpnet_netinet -lrumpnet_local -lrumpnet_shmif		\
 	    -lrumpdev_disk -d key=/dk,hostpath=ffs.img,size=host

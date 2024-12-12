@@ -1,4 +1,4 @@
-/*	$NetBSD: raw_usrreq.c,v 1.64 2019/08/02 02:17:46 ozaki-r Exp $	*/
+/*	$NetBSD: raw_usrreq.c,v 1.66 2024/07/05 04:31:53 rin Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: raw_usrreq.c,v 1.64 2019/08/02 02:17:46 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: raw_usrreq.c,v 1.66 2024/07/05 04:31:53 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/mbuf.h>
@@ -51,7 +51,6 @@ __KERNEL_RCSID(0, "$NetBSD: raw_usrreq.c,v 1.64 2019/08/02 02:17:46 ozaki-r Exp 
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <net/raw_cb.h>
 
 static inline int
@@ -100,8 +99,7 @@ raw_input(struct mbuf *m0, struct sockproto *proto, struct sockaddr *src,
 			if ((n = m_copypacket(m, M_DONTWAIT)) == NULL ||
 			    sbappendaddr(&last->so_rcv, src, n, NULL) == 0)
 			{
-				if (n != NULL)
-					m_freem(n);
+				m_freem(n);
 				soroverflow(last);
 			} else
 				sorwakeup(last);

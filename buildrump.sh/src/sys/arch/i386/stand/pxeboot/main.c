@@ -1,4 +1,4 @@
-/*	$NetBSD: main.c,v 1.31 2014/06/28 09:16:18 rtr Exp $	*/
+/*	$NetBSD: main.c,v 1.34 2024/11/10 01:54:55 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1996
@@ -96,7 +96,7 @@ alldone(void)
 	clearit();
 }
 
-static int 
+static int
 bootit(const char *filename, int howto)
 {
 	if (exec_netbsd(filename, 0, howto, 0, alldone) < 0)
@@ -104,20 +104,6 @@ bootit(const char *filename, int howto)
 	else
 		printf("boot returned\n");
 	return (-1);
-}
-
-static void
-print_banner(void)
-{
-	int base = getbasemem();
-	int ext = getextmem();
-
-	clearit();
-	printf("\n"
-	       ">> NetBSD/x86 PXE boot, Revision %s (from NetBSD %s)\n"
-	       ">> Memory: %d/%d k\n",
-	       bootprog_rev, bootprog_kernrev,
-	       base, ext);
 }
 
 int
@@ -148,10 +134,12 @@ main(void)
 	 * If console set in boot.cfg, switch to it.
 	 * This will print the banner, so we don't need to explicitly do it
 	 */
-	if (bootcfg_info.consdev)
+	if (bootcfg_info.consdev) {
 		command_consdev(bootcfg_info.consdev);
-	else 
-		print_banner();
+	} else {
+		clearit();
+		print_bootcfg_banner(bootprog_name, bootprog_rev);
+	}
 
 	/* Display the menu, if applicable */
 	twiddle_toggle = 0;
@@ -161,7 +149,8 @@ main(void)
 	}
 #else
 	twiddle_toggle = 0;
-	print_banner();
+	clearit();
+	print_bootcfg_banner(bootprog_name, bootprog_rev);
 #endif
 
 	printf("Press return to boot now, any other key for boot menu\n");
@@ -198,7 +187,7 @@ command_help(char *arg)
 	printf("commands are:\n"
 	       "boot [filename] [-acdsqv]\n"
 	       "     (ex. \"netbsd.old -s\"\n"
-	       "consdev {pc|com[0123]|com[0123]kbd|auto}\n"
+	       "consdev {pc|{com[0123]|com[0123]kbd|auto}[,{speed}]}\n"
 	       "vesa {modenum|on|off|enabled|disabled|list}\n"
 	       "multiboot [filename] [<args>]\n"
 	       "modules {on|off|enabled|disabled}\n"
@@ -250,16 +239,36 @@ void
 command_consdev(char *arg)
 {
 	const struct cons_devs *cdp;
+	char *sep;
+	int speed;
+
+	sep = strchr(arg, ',');
+	if (sep != NULL)
+		*sep++ = '\0';
 
 	for (cdp = cons_devs; cdp->name; cdp++) {
-		if (!strcmp(arg, cdp->name)) {
-			initio(cdp->tag);
-			print_banner();
-			return;
+		if (strcmp(arg, cdp->name) != 0)
+			continue;
+
+		if (sep != NULL) {
+			if (cdp->tag == CONSDEV_PC)
+				goto error;
+
+			speed = atoi(sep);
+			if (speed < 0)
+				goto error;
+			boot_params.bp_conspeed = speed;
 		}
+
+		initio(cdp->tag);
+		clearit();
+		print_bootcfg_banner(bootprog_name, bootprog_rev);
+		return;
 	}
+error:
 	printf("invalid console device.\n");
 }
+
 void
 command_modules(char *arg)
 {

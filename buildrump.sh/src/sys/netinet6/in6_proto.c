@@ -1,4 +1,4 @@
-/*	$NetBSD: in6_proto.c,v 1.128 2020/06/12 11:04:45 roy Exp $	*/
+/*	$NetBSD: in6_proto.c,v 1.131 2024/02/09 22:08:37 andvar Exp $	*/
 /*	$KAME: in6_proto.c,v 1.66 2000/10/10 15:35:47 itojun Exp $	*/
 
 /*
@@ -62,7 +62,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: in6_proto.c,v 1.128 2020/06/12 11:04:45 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: in6_proto.c,v 1.131 2024/02/09 22:08:37 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_gateway.h"
@@ -495,7 +495,6 @@ struct domain inet6domain = {
 	.dom_if_up = in6_if_up, .dom_if_down = in6_if_down,
 	.dom_ifattach = in6_domifattach, .dom_ifdetach = in6_domifdetach,
 	.dom_if_link_state_change = in6_if_link_state_change,
-	.dom_ifqueues = { NULL, NULL },
 	.dom_link = { NULL },
 	.dom_mowner = MOWNER_INIT("",""),
 	.dom_sa_cmpofs = offsetof(struct sockaddr_in6, sin6_addr),
@@ -552,6 +551,7 @@ int ip6_mcast_pmtu = 0;	/* enable pMTU discovery for multicast? */
 int ip6_v6only = 1;
 int ip6_neighborgcthresh = 2048; /* Threshold # of NDP entries for GC */
 int ip6_maxdynroutes = 4096; /* Max # of routes created via redirect */
+int ip6_param_rt_msg = 1; /* How to send parameter changing rtm */
 
 int ip6_keepfaith = 0;
 time_t ip6_log_time = 0;

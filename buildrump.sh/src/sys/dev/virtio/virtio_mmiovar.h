@@ -1,4 +1,4 @@
-/* $NetBSD: virtio_mmiovar.h,v 1.4 2021/02/05 21:25:36 reinoud Exp $ */
+/* $NetBSD: virtio_mmiovar.h,v 1.7 2024/01/06 06:59:33 thorpej Exp $ */
 /*
  * Copyright (c) 2018 Jonathan A. Kollasch
  * All rights reserved.
@@ -36,10 +36,12 @@ struct virtio_mmio_softc {
 	bus_space_tag_t		sc_iot;
 	bus_space_handle_t	sc_ioh;
 	bus_size_t		sc_iosize;
+	uint32_t		sc_mmio_vers;
+	bool			sc_le_regs;
 
 	void			*sc_ih;
 
-	int			(*sc_setup_interrupts)(struct virtio_mmio_softc *);
+	int			(*sc_alloc_interrupts)(struct virtio_mmio_softc *);
 	void			(*sc_free_interrupts)(struct virtio_mmio_softc *);
 
 };

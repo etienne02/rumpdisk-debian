@@ -1,4 +1,4 @@
-/*	$NetBSD: mgx.c,v 1.16 2021/08/07 16:19:15 thorpej Exp $ */
+/*	$NetBSD: mgx.c,v 1.24 2023/07/19 10:22:15 macallan Exp $ */
 
 /*-
  * Copyright (c) 2014 Michael Lorenz
@@ -29,7 +29,7 @@
 /* a console driver for the SSB 4096V-MGX graphics card */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mgx.c,v 1.16 2021/08/07 16:19:15 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mgx.c,v 1.24 2023/07/19 10:22:15 macallan Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -80,7 +80,7 @@ struct mgx_softc {
 	int		sc_fbsize;
 	int		sc_mode;
 	char		sc_name[8];
-	uint32_t	sc_dec;
+	uint32_t	sc_dec, sc_r_dec, sc_r_fg;
 	u_char		sc_cmap_red[256];
 	u_char		sc_cmap_green[256];
 	u_char		sc_cmap_blue[256];
@@ -216,6 +216,24 @@ mgx_write_4(struct mgx_softc *sc, uint32_t reg, uint32_t val)
 	bus_space_write_4(sc->sc_tag, sc->sc_blith, reg, val);
 }
 
+static inline void
+mgx_set_dec(struct mgx_softc *sc, uint32_t dec)
+{
+	if (dec == sc->sc_r_dec) return;
+	sc->sc_r_dec = dec;
+	mgx_wait_engine(sc);
+	mgx_write_4(sc, ATR_DEC, dec);
+}
+
+static inline void
+mgx_set_fg(struct mgx_softc *sc, uint32_t fg)
+{
+	if (fg == sc->sc_r_fg) return;
+	sc->sc_r_fg = fg;
+	mgx_wait_fifo(sc, 1);	
+	mgx_write_4(sc, ATR_FG, fg);
+}
+
 static int
 mgx_match(device_t parent, cfdata_t cf, void *aux)
 {
@@ -342,7 +360,7 @@ mgx_attach(device_t parent, device_t self, void *args)
 	 * leave some room between visible screen and glyph cache for upload
 	 * buffers used by putchar_mono()
 	 */
-	bsize = (32 * 1024 * sc->sc_stride - 1) / sc->sc_stride;
+	bsize = (32 * 1024 + sc->sc_stride - 1) / sc->sc_stride;
 	glyphcache_init(&sc->sc_gc,
 	    sc->sc_height + bsize,
 	    (0x400000 / sc->sc_stride) - (sc->sc_height + bsize),
@@ -531,6 +549,8 @@ mgx_setup(struct mgx_softc *sc, int depth)
 	int i;
 	uint8_t reg;
 
+	sc->sc_r_dec = 0xffffffff;
+	sc->sc_r_fg = 0x12345678;
 	/* wait for everything to go idle */
 	if (mgx_wait_engine(sc) == 0)
 		return;
@@ -643,9 +663,9 @@ mgx_bitblt(void *cookie, int xs, int ys, int xd, int yd, int wi, int he,
 		yd += he - 1;
 		dec |= DEC_DIR_Y_REVERSE;
 	}
-	mgx_wait_fifo(sc, 5);
+	mgx_set_dec(sc, dec);
+	mgx_wait_fifo(sc, 4);
 	mgx_write_1(sc, ATR_ROP, rop);
-	mgx_write_4(sc, ATR_DEC, dec);
 	mgx_write_4(sc, ATR_SRC_XY, (ys << 16) | xs);
 	mgx_write_4(sc, ATR_DST_XY, (yd << 16) | xd);
 	mgx_write_4(sc, ATR_WH, (he << 16) | wi);
@@ -666,10 +686,10 @@ mgx_rectfill(void *cookie, int x, int y, int wi, int he, long fg)
 	dec = sc->sc_dec;
 	dec |= (DEC_COMMAND_RECT << DEC_COMMAND_SHIFT) |
 	       (DEC_START_DIMX << DEC_START_SHIFT);
-	mgx_wait_fifo(sc, 5);
+	mgx_set_dec(sc, dec);
+	mgx_set_fg(sc, col);
+	mgx_wait_fifo(sc, 3);
 	mgx_write_1(sc, ATR_ROP, ROP_SRC);
-	mgx_write_4(sc, ATR_FG, col);
-	mgx_write_4(sc, ATR_DEC, dec);
 	mgx_write_4(sc, ATR_DST_XY, (y << 16) | x);
 	mgx_write_4(sc, ATR_WH, (he << 16) | wi);
 }
@@ -753,8 +773,8 @@ mgx_putchar_mono(void *cookie, int row, int col, u_int c, long attr)
 		return;
 	}
 
-	mgx_wait_fifo(sc, 3);
-	mgx_write_4(sc, ATR_FG, ri->ri_devcmap[fg]);
+	mgx_set_fg(sc, ri->ri_devcmap[fg]);
+	mgx_wait_fifo(sc, 2);
 	mgx_write_4(sc, ATR_BG, ri->ri_devcmap[bg]);
 	mgx_write_1(sc, ATR_ROP, ROP_SRC);
 
@@ -789,10 +809,10 @@ mgx_putchar_mono(void *cookie, int row, int col, u_int c, long attr)
 		for (i = 0; i < ri->ri_fontscale; i++)
 			d[i] = s[i];
 	}
-	mgx_wait_fifo(sc, 5);
-	mgx_write_4(sc, ATR_DEC, sc->sc_dec | (DEC_COMMAND_BLT << DEC_COMMAND_SHIFT) |
+	mgx_set_dec(sc, sc->sc_dec | (DEC_COMMAND_BLT << DEC_COMMAND_SHIFT) |
 	       (DEC_START_DIMX << DEC_START_SHIFT) |
 	       DEC_SRC_LINEAR | DEC_SRC_CONTIGUOUS | DEC_MONOCHROME);
+	mgx_wait_fifo(sc, 3);
 	mgx_write_4(sc, ATR_SRC_XY, ((scratch & 0xfff000) << 4) | (scratch & 0xfff));
 	mgx_write_4(sc, ATR_DST_XY, (y << 16) | x);
 	mgx_write_4(sc, ATR_WH, (he << 16) | wi);
@@ -977,21 +997,21 @@ mgx_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 	struct vcons_screen *ms = vd->active;
 
 	switch (cmd) {
-		case WSDISPLAYIO_GTYPE:
-			*(u_int *)data = WSDISPLAY_TYPE_MGX;
-			return 0;
+	case WSDISPLAYIO_GTYPE:
+		*(u_int *)data = WSDISPLAY_TYPE_MGX;
+		return 0;
 
-		case WSDISPLAYIO_GINFO:
-			wdf = (void *)data;
-			wdf->height = sc->sc_height;
-			wdf->width = sc->sc_width;
-			wdf->depth = 8;
-			wdf->cmsize = 256;
-			return 0;
+	case WSDISPLAYIO_GINFO:
+		wdf = (void *)data;
+		wdf->height = sc->sc_height;
+		wdf->width = sc->sc_width;
+		wdf->depth = 8;
+		wdf->cmsize = 256;
+		return 0;
 
 	case FBIOGTYPE:
 		*(struct fbtype *)data = sc->sc_fb.fb_type;
-		break;
+		return 0;
 
 	case FBIOGATTR:
 #define fba ((struct fbgattr *)data)
@@ -1004,104 +1024,131 @@ mgx_ioctl(void *v, void *vs, u_long cmd, void *data, int flag,
 		fba->emu_types[0] = sc->sc_fb.fb_type.fb_type;
 		fba->emu_types[1] = -1;
 #undef fba
-		break;
-		case FBIOGVIDEO:
-		case WSDISPLAYIO_GVIDEO:
-			*(int *)data = sc->sc_video;
-			return 0;
+		return 0;
+	case FBIOGVIDEO:
+	case WSDISPLAYIO_GVIDEO:
+		*(int *)data = sc->sc_video;
+		return 0;
 
-		case WSDISPLAYIO_SVIDEO:
-		case FBIOSVIDEO:
-			mgx_set_video(sc, *(int *)data);
-			return 0;
+	case WSDISPLAYIO_SVIDEO:
+	case FBIOSVIDEO:
+		mgx_set_video(sc, *(int *)data);
+		return 0;
 
-		case WSDISPLAYIO_LINEBYTES:
+	case WSDISPLAYIO_LINEBYTES:
+		{
+			int *ret = (int *)data;
+			*ret = sc->sc_stride;
+		}
+		return 0;
+
+	case WSDISPLAYIO_SMODE:
+		{
+			int new_mode = *(int*)data;
+			if (new_mode != sc->sc_mode)
 			{
-				int *ret = (int *)data;
-				*ret = sc->sc_stride;
-			}
-			return 0;
-
-		case WSDISPLAYIO_SMODE:
-			{
-				int new_mode = *(int*)data;
-				if (new_mode != sc->sc_mode)
+				sc->sc_mode = new_mode;
+				if (new_mode == WSDISPLAYIO_MODE_EMUL)
 				{
-					sc->sc_mode = new_mode;
-					if (new_mode == WSDISPLAYIO_MODE_EMUL)
-					{
-						mgx_setup(sc, MGX_DEPTH);
-						glyphcache_wipe(&sc->sc_gc);
-						mgx_init_palette(sc);
-						vcons_redraw_screen(ms);
-					} else {
-						mgx_setup(sc, 32);
-						mgx_init_palette(sc);
-					}
+					mgx_setup(sc, MGX_DEPTH);
+					glyphcache_wipe(&sc->sc_gc);
+					mgx_init_palette(sc);
+					vcons_redraw_screen(ms);
+				} else {
+					mgx_setup(sc, MGX_X_DEPTH);
+					mgx_init_palette(sc);
 				}
 			}
-			return 0;
+		}
+		return 0;
 
-		case WSDISPLAYIO_GETCMAP:
-			return mgx_getcmap(sc, (struct wsdisplay_cmap *)data);
+	case WSDISPLAYIO_GETCMAP:
+		return mgx_getcmap(sc, (struct wsdisplay_cmap *)data);
 
-		case WSDISPLAYIO_PUTCMAP:
-			return mgx_putcmap(sc, (struct wsdisplay_cmap *)data);
+	case WSDISPLAYIO_PUTCMAP:
+		return mgx_putcmap(sc, (struct wsdisplay_cmap *)data);
 
-		case WSDISPLAYIO_GCURPOS:
-			{
-				struct wsdisplay_curpos *cp = (void *)data;
+	case FBIOGETCMAP:
+#define	p ((struct fbcmap *)data)
+		{
+			struct wsdisplay_cmap c = {
+				.index = p->index,
+				.count = p->count,
+				.red = p->red,
+				.green = p->green,
+				.blue = p->blue
+			};
+			return mgx_getcmap(sc, &c);
+		}
+		break;
+	case FBIOPUTCMAP:
+		{
+			struct wsdisplay_cmap c = {
+				.index = p->index,
+				.count = p->count,
+				.red = p->red,
+				.green = p->green,
+				.blue = p->blue
+			};
+			return mgx_putcmap(sc, &c);
+		}
+		break;
+#undef p		
+	case WSDISPLAYIO_GCURPOS:
+		{
+			struct wsdisplay_curpos *cp = (void *)data;
 
-				cp->x = sc->sc_cursor_x;
-				cp->y = sc->sc_cursor_y;
-			}
-			return 0;
+			cp->x = sc->sc_cursor_x;
+			cp->y = sc->sc_cursor_y;
+		}
+		return 0;
 
-		case WSDISPLAYIO_SCURPOS:
-			{
-				struct wsdisplay_curpos *cp = (void *)data;
+	case WSDISPLAYIO_SCURPOS:
+		{
+			struct wsdisplay_curpos *cp = (void *)data;
 
-				sc->sc_cursor_x = cp->x;
-				sc->sc_cursor_y = cp->y;
-				mgx_set_cursor(sc);
-			}
-			return 0;
+			sc->sc_cursor_x = cp->x;
+			sc->sc_cursor_y = cp->y;
+			mgx_set_cursor(sc);
+		}
+		return 0;
 
-		case WSDISPLAYIO_GCURMAX:
-			{
-				struct wsdisplay_curpos *cp = (void *)data;
+	case WSDISPLAYIO_GCURMAX:
+		{
+			struct wsdisplay_curpos *cp = (void *)data;
 
-				cp->x = 64;
-				cp->y = 64;
-			}
-			return 0;
+			cp->x = 64;
+			cp->y = 64;
+		}
+		return 0;
 
-		case WSDISPLAYIO_SCURSOR:
-			{
-				struct wsdisplay_cursor *cursor = (void *)data;
+	case WSDISPLAYIO_SCURSOR:
+		{
+			struct wsdisplay_cursor *cursor = (void *)data;
 
-				return mgx_do_cursor(sc, cursor);
-			}
-		case WSDISPLAYIO_GET_FBINFO:
-			{
-				struct wsdisplayio_fbinfo *fbi = data;
+			return mgx_do_cursor(sc, cursor);
+		}
+
+	case WSDISPLAYIO_GET_FBINFO:
+		{
+			struct wsdisplayio_fbinfo *fbi = data;
 	
-				fbi->fbi_fbsize = sc->sc_fbsize - 1024;
-				fbi->fbi_width = sc->sc_width;
-				fbi->fbi_height = sc->sc_height;
-				fbi->fbi_bitsperpixel = sc->sc_depth;
-				fbi->fbi_stride = sc->sc_stride;
-				fbi->fbi_pixeltype = WSFB_RGB;
-				fbi->fbi_subtype.fbi_rgbmasks.red_offset = 8;
-				fbi->fbi_subtype.fbi_rgbmasks.red_size = 8;
-				fbi->fbi_subtype.fbi_rgbmasks.green_offset = 16;
-				fbi->fbi_subtype.fbi_rgbmasks.green_size = 8;
-				fbi->fbi_subtype.fbi_rgbmasks.blue_offset = 24;
-				fbi->fbi_subtype.fbi_rgbmasks.blue_size = 8;
-				fbi->fbi_subtype.fbi_rgbmasks.alpha_offset = 0;
-				fbi->fbi_subtype.fbi_rgbmasks.alpha_size = 8;
-				return 0;
-			}
+			fbi->fbi_fbsize = sc->sc_fbsize - 1024;
+			fbi->fbi_width = sc->sc_width;
+			fbi->fbi_height = sc->sc_height;
+			fbi->fbi_bitsperpixel = sc->sc_depth;
+			fbi->fbi_stride = sc->sc_stride;
+			fbi->fbi_pixeltype = WSFB_RGB;
+			fbi->fbi_subtype.fbi_rgbmasks.red_offset = 8;
+			fbi->fbi_subtype.fbi_rgbmasks.red_size = 8;
+			fbi->fbi_subtype.fbi_rgbmasks.green_offset = 16;
+			fbi->fbi_subtype.fbi_rgbmasks.green_size = 8;
+			fbi->fbi_subtype.fbi_rgbmasks.blue_offset = 24;
+			fbi->fbi_subtype.fbi_rgbmasks.blue_size = 8;
+			fbi->fbi_subtype.fbi_rgbmasks.alpha_offset = 0;
+			fbi->fbi_subtype.fbi_rgbmasks.alpha_size = 8;
+			return 0;
+		}
 	}
 	return EPASSTHROUGH;
 }
@@ -1111,15 +1158,23 @@ mgx_mmap(void *v, void *vs, off_t offset, int prot)
 {
 	struct vcons_data *vd = v;
 	struct mgx_softc *sc = vd->cookie;
+	uint32_t flags = BUS_SPACE_MAP_LINEAR;
+
+#ifdef BUS_SPACE_MAP_LITTLE
+	if (offset & MGX_FLIPOFFSET) {
+		offset &= ~MGX_FLIPOFFSET;
+		flags |= BUS_SPACE_MAP_LITTLE;
+	}
+#endif
 
 	/* regular fb mapping at 0 */
 	if ((offset >= 0) && (offset < sc->sc_fbsize)) {
 		return bus_space_mmap(sc->sc_tag, sc->sc_paddr,
-		    offset, prot, BUS_SPACE_MAP_LINEAR);
+		    offset, prot, flags);
 	}
 
 	/*
-	 * Blitter registers at 0x80000000, only in mapped mode.
+	 * Blitter registers at 0x00800000, only in mapped mode.
 	 * Restrict to root, even though I'm fairly sure the DMA engine lives
 	 * elsewhere ( and isn't documented anyway )
 	 */
@@ -1131,9 +1186,9 @@ mgx_mmap(void *v, void *vs, off_t offset, int prot)
 		return -1;
 	}
 	if ((sc->sc_mode == WSDISPLAYIO_MODE_MAPPED) &&
-	    (offset >= 0x80000000) && (offset < 0x80001000)) {
+	    (offset >= MGX_BLTOFFSET) && (offset < MGX_BLTOFFSET + 0x1000)) {
 		return bus_space_mmap(sc->sc_tag, sc->sc_rpaddr,
-		    offset, prot, BUS_SPACE_MAP_LINEAR);
+		    offset - MGX_BLTOFFSET, prot, BUS_SPACE_MAP_LINEAR);
 	}
 	return -1;
 }
@@ -1261,15 +1316,23 @@ paddr_t
 mgxmmap(dev_t dev, off_t offset, int prot)
 {
 	struct mgx_softc *sc = device_lookup_private(&mgx_cd, minor(dev));
+	uint32_t flags = BUS_SPACE_MAP_LINEAR;
+
+#ifdef BUS_SPACE_MAP_LITTLE
+	if (offset & MGX_FLIPOFFSET) {
+		offset &= ~MGX_FLIPOFFSET;
+		flags |= BUS_SPACE_MAP_LITTLE;
+	}
+#endif
 
 	/* regular fb mapping at 0 */
 	if ((offset >= 0) && (offset < sc->sc_fbsize)) {
 		return bus_space_mmap(sc->sc_tag, sc->sc_paddr,
-		    offset, prot, BUS_SPACE_MAP_LINEAR);
+		    offset, prot, flags);
 	}
 
 	/*
-	 * Blitter registers at 0x80000000, only in mapped mode.
+	 * Blitter registers at 0x00800000, only in mapped mode.
 	 * Restrict to root, even though I'm fairly sure the DMA engine lives
 	 * elsewhere ( and isn't documented anyway )
 	 */
@@ -1281,9 +1344,9 @@ mgxmmap(dev_t dev, off_t offset, int prot)
 		return -1;
 	}
 	if ((sc->sc_mode == WSDISPLAYIO_MODE_MAPPED) &&
-	    (offset >= 0x80000000) && (offset < 0x80001000)) {
+	    (offset >= MGX_BLTOFFSET) && (offset < MGX_BLTOFFSET + 0x1000)) {
 		return bus_space_mmap(sc->sc_tag, sc->sc_rpaddr,
-		    offset, prot, BUS_SPACE_MAP_LINEAR);
+		    offset - MGX_BLTOFFSET, prot, BUS_SPACE_MAP_LINEAR);
 	}
 	return -1;
 }
@@ -1299,7 +1362,7 @@ mgxopen(dev_t dev, int flags, int mode, struct lwp *l)
 	if (sc->sc_mode == WSDISPLAYIO_MODE_MAPPED)
 		return 0;
 	sc->sc_mode = WSDISPLAYIO_MODE_MAPPED;
-	mgx_setup(sc, 32);
+	mgx_setup(sc, MGX_X_DEPTH);
 	mgx_init_palette(sc);
 	return 0;
 }

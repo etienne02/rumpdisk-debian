@@ -1,4 +1,4 @@
-/* $NetBSD: linux_mtio.c,v 1.7 2008/03/21 21:54:58 ad Exp $ */
+/* $NetBSD: linux_mtio.c,v 1.9 2024/10/01 16:41:29 riastradh Exp $ */
 
 /*
  * Copyright (c) 2005 Soren S. Jorvang.  All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_mtio.c,v 1.7 2008/03/21 21:54:58 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_mtio.c,v 1.9 2024/10/01 16:41:29 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -100,12 +100,13 @@ linux_ioctl_mtio(struct lwp *l, const struct linux_sys_ioctl_args *uap,
 			error = EINVAL;
 			break;
 		}
-		
+
 		mt.mt_op = mtop_map[i].op;
 		mt.mt_count = lmtop.mt_count;
 		error = ioctlf(fp, MTIOCTOP, &mt);
 		break;
 	case LINUX_MTIOCGET:
+		memset(&lmtget, 0, sizeof(lmtget));
 		lmtget.mt_type = LINUX_MT_ISUNKNOWN;
 		lmtget.mt_resid = 0;
 		lmtget.mt_dsreg = 0;

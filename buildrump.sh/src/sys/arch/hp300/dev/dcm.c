@@ -1,4 +1,4 @@
-/*	$NetBSD: dcm.c,v 1.89 2020/12/29 16:02:01 tsutsui Exp $	*/
+/*	$NetBSD: dcm.c,v 1.94 2024/01/16 05:48:28 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -78,7 +78,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dcm.c,v 1.89 2020/12/29 16:02:01 tsutsui Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dcm.c,v 1.94 2024/01/16 05:48:28 thorpej Exp $");
 
 #include "opt_kgdb.h"
 
@@ -302,7 +302,7 @@ CFATTACH_DECL_NEW(dcm, sizeof(struct dcm_softc),
 static	struct dcmdevice *dcm_cn = NULL;	/* pointer to hardware */
 static	int dcmconsinit;			/* has been initialized */
 #if 0
-static	int dcm_lastcnpri = CN_DEAD; 	/* XXX last priority */
+static	int dcm_lastcnpri = CN_DEAD;	/* XXX last priority */
 #endif
 
 static struct consdev dcm_cons = {
@@ -408,7 +408,7 @@ dcmattach(device_t parent, device_t self, void *aux)
 	sc->sc_flags |= DCM_ACTIVE;
 
 	/* Establish the interrupt handler. */
-	(void)dio_intr_establish(dcmintr, sc, da->da_ipl, IPL_TTY);
+	(void)dio_intr_establish(dcmintr, sc, da->da_ipl, ISRPRI_TTY);
 
 	if (dcmistype == DIS_TIMER)
 		dcmsetischeme(brd, DIS_RESET|DIS_TIMER);
@@ -482,7 +482,6 @@ dcmattach(device_t parent, device_t self, void *aux)
 #endif /* KGDB */
 }
 
-/* ARGSUSED */
 static int
 dcmopen(dev_t dev, int flag, int mode, struct lwp *l)
 {
@@ -572,7 +571,6 @@ dcmopen(dev_t dev, int flag, int mode, struct lwp *l)
 	return error;
 }
 
-/*ARGSUSED*/
 static int
 dcmclose(dev_t dev, int flag, int mode, struct lwp *l)
 {
@@ -1164,7 +1162,7 @@ dcmstart(struct tty *tp)
 	char buf[16];
 	int s;
 #ifdef DCMSTATS
-	struct dcmstats *dsp = &sc->sc_stats;
+	struct dcmstats *dsp;
 	int tch = 0;
 #endif
 
@@ -1174,6 +1172,9 @@ dcmstart(struct tty *tp)
 
 	sc = device_lookup_private(&dcm_cd, board);
 	dcm = sc->sc_dcm;
+#ifdef DCMSTATS
+	dsp = &sc->sc_stats;
+#endif
 
 	s = spltty();
 #ifdef DCMSTATS
@@ -1365,7 +1366,7 @@ dcmsetischeme(int brd, int flags)
 		    device_xname(sc->sc_dev), perchar, dis->dis_perchar,
 		    dis->dis_intr, dis->dis_char);
 	if ((flags & DIS_RESET) == 0 && perchar == dis->dis_perchar) {
-		printf("%s: dcmsetischeme: redundent request %d\n",
+		printf("%s: dcmsetischeme: redundant request %d\n",
 		    device_xname(sc->sc_dev), perchar);
 		return;
 	}
@@ -1564,7 +1565,6 @@ error:
 	return 1;
 }
 
-/* ARGSUSED */
 static int
 dcmcngetc(dev_t dev)
 {
@@ -1600,7 +1600,6 @@ dcmcngetc(dev_t dev)
 /*
  * Console kernel output character routine.
  */
-/* ARGSUSED */
 static void
 dcmcnputc(dev_t dev, int c)
 {

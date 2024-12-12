@@ -1,4 +1,4 @@
-/*	$NetBSD: disklabel.c,v 1.44 2021/08/08 21:50:10 andvar Exp $	*/
+/*	$NetBSD: disklabel.c,v 1.53 2024/10/04 15:11:09 rillig Exp $	*/
 
 /*
  * Copyright 2018 The NetBSD Foundation, Inc.
@@ -79,7 +79,7 @@ disklabel_init_default_alignment(struct disklabel_disk_partitions *parts,
 	if (MD_DISKLABEL_SET_ALIGN_PRE(parts->ptn_alignment, track))
 		return;
 #endif
-	/* Use 1MB alignemnt for large (>128GB) disks */
+	/* Use 1MB alignment for large (>128GB) disks */
 	if (parts->dp.disk_size > HUGE_DISK_SIZE) {
 		parts->ptn_alignment = 2048;
 	} else if (parts->dp.disk_size > TINY_DISK_SIZE ||
@@ -198,16 +198,7 @@ disklabel_parts_read(const char *disk, daddr_t start, daddr_t len, size_t bps,
 	int fd;
 	char diskpath[MAXPATHLEN];
 	uint flags;
-#ifndef DISKLABEL_NO_ONDISK_VERIFY
-	bool have_raw_label = false;
-
-	/*
-	 * Verify we really have a disklabel.
-	 */
-	if (run_program(RUN_SILENT | RUN_ERROR_OK,
-	    "disklabel -r %s", disk) == 0)
-		have_raw_label = true;
-#endif
+	bool have_own_label = false;
 
 	/* read partitions */
 
@@ -304,8 +295,30 @@ disklabel_parts_read(const char *disk, daddr_t start, daddr_t len, size_t bps,
 	}
 	close(fd);
 
-#ifndef DISKLABEL_NO_ONDISK_VERIFY
-	if (!have_raw_label) {
+	/*
+	 * Verify we really have a disklabel on the target disk.
+	 */
+	if (run_program(RUN_SILENT | RUN_ERROR_OK,
+	    "disklabel -r %s", disk) == 0) {
+		have_own_label = true;
+	}
+#ifdef DISKLABEL_NO_ONDISK_VERIFY
+	else {
+		/*
+		 * disklabel(8) with -r checks a native disklabel at
+		 * LABELOFFSET sector, but several ports don't have
+		 * a native label and use emulated one translated from
+		 * port specific MD disk partition information.
+		 * Unfortunately, there is no MI way to check whether
+		 * the disk has a native BSD disklabel by readdisklabel(9)
+		 * via DIOCGDINFO.  So check if returned label looks
+		 * defaults set by readdisklabel(9) per MD way.
+		 */
+		have_own_label = !md_disklabel_is_default(&parts->l);
+	}
+#endif
+
+	if (!have_own_label) {
 		bool found_real_part = false;
 
 		if (parts->l.d_npartitions <= RAW_PART ||
@@ -338,7 +351,6 @@ no_valid_label:
 			return NULL;
 		}
 	}
-#endif
 
 	return &parts->dp;
 }
@@ -423,7 +435,7 @@ disklabel_write_to_disk(struct disk_partitions *arg)
 		scripting_fprintf(f, "\t:p%c#%" PRIu32 ":o%c#%" PRIu32
 		    ":t%c=%s:", 'a'+i, (uint32_t)lp[i].p_size,
 		    'a'+i, (uint32_t)lp[i].p_offset, 'a'+i,
-		    getfslabelname(lp[i].p_fstype, 0));
+		    fstypenames[lp[i].p_fstype]);
 		if (lp[i].p_fstype == FS_BSDLFS ||
 		    lp[i].p_fstype == FS_BSDFFS)
 			scripting_fprintf (f, "b%c#%" PRIu32 ":f%c#%" PRIu32
@@ -520,6 +532,8 @@ disklabel_delete(struct disk_partitions *arg, part_id id,
 			if (parts->install_target ==
 			    parts->l.d_partitions[part].p_offset)
 				parts->install_target = -1;
+			parts->dp.free_space +=
+			    parts->l.d_partitions[part].p_size;
 			parts->l.d_partitions[part].p_size = 0;
 			parts->l.d_partitions[part].p_offset = 0;
 			parts->l.d_partitions[part].p_fstype = FS_UNUSED;
@@ -780,7 +794,8 @@ disklabel_get_part_info(const struct disk_partitions *arg, part_id id,
 			    parts->l.d_partitions[part].p_fstype == FS_UNUSED)
 				info->flags |=
 				    PTI_PSCHEME_INTERNAL|PTI_RAW_PART;
-			if (info->start == parts->install_target)
+			if (info->start == parts->install_target &&
+			    parts->l.d_partitions[part].p_fstype != FS_UNUSED)
 				info->flags |= PTI_INSTALL_TARGET;
 #if RAW_PART == 3
 			if (part == (RAW_PART-1) && parts->dp.parent != NULL &&
@@ -821,6 +836,16 @@ disklabel_set_part_info(struct disk_partitions *arg, part_id id,
 			was_inst_target = parts->l.d_partitions[part].p_offset
 			    == parts->install_target;
 			parts->l.d_partitions[part].p_offset = info->start;
+			if (part != RAW_PART
+#if RAW_PART == 3
+				&& (part != RAW_PART-1 ||
+				    parts->dp.parent == NULL)
+#endif
+							) {
+				parts->dp.free_space +=
+				    parts->l.d_partitions[part].p_size -
+				    info->size;
+			}
 			parts->l.d_partitions[part].p_size = info->size;
 			parts->l.d_partitions[part].p_fstype =
 			    dl_part_type_from_generic(info->nat_type);
@@ -939,7 +964,8 @@ disklabel_can_add_partition(const struct disk_partitions *arg)
 	if (disklabel_get_free_spaces_internal(parts, &space, 1,
 	    parts->ptn_alignment, parts->ptn_alignment, 0, -1) < 1)
 		return false;
-
+	if (parts->l.d_npartitions < dl_maxpart)
+		return true;
 	for (i = 0; i < parts->l.d_npartitions; i++) {
 		if (i == RAW_PART)
 			continue;
@@ -1104,6 +1130,10 @@ disklabel_add_partition(struct disk_partitions *arg,
 #endif
 		if (parts->l.d_partitions[i].p_size > 0)
 			continue;
+#ifdef	MD_DISKLABEL_PART_INDEX_CHECK
+		if (!MD_DISKLABEL_PART_INDEX_CHECK(&parts->l, i, info))
+			continue;
+#endif
 		part = i;
 		break;
 	}
@@ -1248,7 +1278,8 @@ disklabel_find_by_name(struct disk_partitions *arg, const char *name)
 {
 	const struct disklabel_disk_partitions *parts =
 	    (const struct disklabel_disk_partitions*)arg;
-	char *sl, part;
+	const char *sl;
+	char part;
 	ptrdiff_t n;
 	part_id pno, id, i;
 

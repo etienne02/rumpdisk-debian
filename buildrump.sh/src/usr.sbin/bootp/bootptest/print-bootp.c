@@ -26,7 +26,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: print-bootp.c,v 1.11 2013/10/19 17:16:37 christos Exp $");
+__RCSID("$NetBSD: print-bootp.c,v 1.13 2022/09/10 12:14:18 rillig Exp $");
 /* 93/10/10 <gwr@mc.com> New data-driven option print routine. */
 #endif
 
@@ -68,7 +68,7 @@ bootp_print(struct bootp *bp, int length, u_short sport, u_short dport)
 	if (length != sizeof(struct bootp))
 		(void) printf(" [len=%d]", length);
 
-	/* 'ep' points to the end of avaible data. */
+	/* 'ep' points to the end of available data. */
 	ep = (u_char *) snapend;
 
 	switch (bp->bp_op) {
@@ -185,7 +185,7 @@ bootp_print(struct bootp *bp, int length, u_short sport, u_short dport)
 
 /*
  * Option description data follows.
- * These are decribed in: RFC-1048, RFC-1395, RFC-1497, RFC-1533
+ * These are described in: RFC-1048, RFC-1395, RFC-1497, RFC-1533
  *
  * The first char of each option string encodes the data format:
  * ?: unknown

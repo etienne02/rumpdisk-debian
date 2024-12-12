@@ -1,15 +1,17 @@
-/*	$NetBSD: msg_346.c,v 1.4 2021/08/16 18:51:58 rillig Exp $	*/
+/*	$NetBSD: msg_346.c,v 1.10 2024/08/31 06:57:31 rillig Exp $	*/
 # 3 "msg_346.c"
 
 // Test for message: call to '%s' effectively discards 'const' from argument [346]
 
+/* lint1-extra-flags: -X 351 */
+
 typedef unsigned long size_t;
 
-void* memchr(const void *, int, size_t);		/* C99 7.21.5.1 */
+void *memchr(const void *, int, size_t);		/* C99 7.21.5.1 */
 char *strchr(const char *, int);			/* C99 7.21.5.2 */
-char* strpbrk(const char *, const char *);		/* C99 7.21.5.4 */
-char* strrchr(const char *, int);			/* C99 7.21.5.5 */
-char* strstr(const char *, const char *);		/* C99 7.21.5.7 */
+char *strpbrk(const char *, const char *);		/* C99 7.21.5.4 */
+char *strrchr(const char *, int);			/* C99 7.21.5.5 */
+char *strstr(const char *, const char *);		/* C99 7.21.5.7 */
 
 void take_const_char_ptr(const char *);
 void take_char_ptr(char *);
@@ -56,6 +58,33 @@ void
 edge_cases(void)
 {
 	/* No arguments, to cover the 'an == NULL' in is_first_arg_const. */
-	/* expect+1: error: argument mismatch: 0 arg passed, 2 expected [150] */
+	/* expect+1: error: argument mismatch: 0 arguments passed, 2 expected [150] */
 	take_char_ptr(strchr());
+}
+
+/*
+ * Bsearch is another standard function that effectively discards the 'const'
+ * modifier, but from the second argument, not the first.
+ */
+
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
+	int (*compar) (const void *, const void *));
+
+int cmp(const void *, const void *);
+
+void take_void_ptr(void *);
+void take_const_void_ptr(const void *);
+
+void
+bsearch_example(void)
+{
+	int arr[] = { 1 };
+	const int const_arr[] = { 1 };
+
+	take_const_void_ptr(bsearch("", const_arr, 4, 1, cmp));
+	take_const_void_ptr(bsearch("", arr, 4, 1, cmp));
+	take_void_ptr(bsearch("", arr, 4, 1, cmp));
+
+	/* expect+1: warning: call to 'bsearch' effectively discards 'const' from argument [346] */
+	take_void_ptr(bsearch("", const_arr, 4, 1, cmp));
 }

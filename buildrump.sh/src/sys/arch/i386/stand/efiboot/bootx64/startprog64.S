@@ -1,4 +1,4 @@
-/*	$NetBSD: startprog64.S,v 1.3 2017/02/11 10:23:39 nonaka Exp $	*/
+/*	$NetBSD: startprog64.S,v 1.5 2023/06/24 05:31:04 msaitoh Exp $	*/
 /*	NetBSD: startprog.S,v 1.3 2003/02/01 14:48:18 dsl Exp	*/
 
 /* starts program in protected mode / flat space
@@ -78,7 +78,7 @@ _C_LABEL(startprog64_size):
 	.p2align 4,,15
 
 /*
- * startprog64(loadddr,entry,stack,kern_load,kern_start,kern_size)
+ * startprog64(loaddr,entry,stack,kern_load,kern_start,kern_size)
  */
 ENTRY(startprog64_start)
 start:
@@ -96,6 +96,10 @@ start:
 	cld		/* LynxOS depends on it */
 
 	cli
+
+	/* skip copy if same source and destination */
+	cmpq	%rdi,%rsi
+	jz	.Lcopy_done
 
 	/* Copy kernel */
 	mov	%rcx, %r12		/* original kernel size */

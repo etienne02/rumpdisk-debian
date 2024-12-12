@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.111 2019/11/21 19:24:00 ad Exp $	*/
+/*	$NetBSD: trap.c,v 1.117 2024/01/20 00:15:32 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.111 2019/11/21 19:24:00 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.117 2024/01/20 00:15:32 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_execfmt.h"
@@ -57,6 +57,7 @@ __KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.111 2019/11/21 19:24:00 ad Exp $");
 #include <sys/syslog.h>
 #include <sys/userret.h>
 #include <sys/kauth.h>
+#include <sys/kgdb.h>
 
 #ifdef DEBUG
 #include <dev/cons.h>
@@ -89,8 +90,6 @@ void	dumpwb(int, u_short, u_int, u_int);
 
 static inline void userret(struct lwp *l, struct frame *fp,
     u_quad_t oticks, u_int faultaddr, int fromtrap);
-
-int	astpending;
 
 const char	*trap_type[] = {
 	"Bus error",
@@ -295,7 +294,6 @@ trap(struct frame *fp, int type, unsigned int code, unsigned int v)
 		type |= T_USER;
 		sticks = p->p_sticks;
 		l->l_md.md_regs = fp->f_regs;
-		LWP_CACHE_CREDS(l, p);
 	}
 	switch (type) {
 
@@ -313,7 +311,7 @@ trap(struct frame *fp, int type, unsigned int code, unsigned int v)
 		    (type & T_USER) ? "user" : "kernel", fp->f_pc);
 #ifdef KGDB
 		/* If connected, step or cont returns 1 */
-		if (kgdb_trap(type, fp))
+		if (kgdb_trap(type, (db_regs_t *)fp))
 			goto kgdb_cont;
 #endif
 #ifdef DDB
@@ -327,7 +325,10 @@ trap(struct frame *fp, int type, unsigned int code, unsigned int v)
 			printf("trap during panic!\n");
 #ifdef DEBUG
 			/* XXX should be a machine-dependent hook */
-			printf("(press a key)\n"); (void)cngetc();
+			printf("(press a key)\n");
+			cnpollc(1);
+			(void)cngetc();
+			cnpollc(0);
 #endif
 		}
 		regdump((struct trapframe *)fp, 128);
@@ -561,7 +562,7 @@ trap(struct frame *fp, int type, unsigned int code, unsigned int v)
 		}
 
 #ifdef DIAGNOSTIC
-		if (interrupt_depth && !panicking) {
+		if (intr_depth && !panicking) {
 			printf("trap: calling uvm_fault() from interrupt!\n");
 			goto dopanic;
 		}

@@ -20,7 +20,7 @@
 #if 0
 static const char rcsid[] = "Id: inet_net_pton.c,v 1.4.2.1 2002/08/02 02:17:21 marka Exp ";
 #else
-__RCSID("$NetBSD: inet_net_pton.c,v 1.5 2018/12/13 08:44:11 maya Exp $");
+__RCSID("$NetBSD: inet_net_pton.c,v 1.7 2024/05/12 23:58:18 msaitoh Exp $");
 #endif
 #endif
 
@@ -54,7 +54,7 @@ __weak_alias(inet_net_pton,_inet_net_pton)
  *	accepts hex octets, hex strings, decimal octets, and /CIDR.
  *	"size" is in bytes and describes "dst".
  * return:
- *	number of bits, either imputed classfully or specified with /CIDR,
+ *	number of bits, either inputed classfully or specified with /CIDR,
  *	or -1 if some failure occurred (check errno).  ENOENT means it was
  *	not an IPv4 network specification.
  * note:
@@ -150,7 +150,7 @@ inet_net_pton_ipv4(const char *src, u_char *dst, size_t size)
 			goto enoent;
 	}
 
-	/* Firey death and destruction unless we prefetched EOS. */
+	/* Fiery death and destruction unless we prefetched EOS. */
 	if (ch != '\0')
 		goto enoent;
 
@@ -169,7 +169,7 @@ inet_net_pton_ipv4(const char *src, u_char *dst, size_t size)
 			bits = 16;
 		else			/* Class A */
 			bits = 8;
-		/* If imputed mask is narrower than specified octets, widen. */
+		/* If inputed mask is narrower than specified octets, widen. */
 		if (bits >= 8 && bits < ((dst - odst) * 8))
 			bits = (int)(dst - odst) * 8;
 	}
@@ -392,7 +392,7 @@ inet_net_pton_ipv6(const char *src, u_char *dst, size_t size)
  *	accepts hex octets, hex strings, decimal octets, and /CIDR.
  *	"size" is in bytes and describes "dst".
  * return:
- *	number of bits, either imputed classfully or specified with /CIDR,
+ *	number of bits, either inputed classfully or specified with /CIDR,
  *	or -1 if some failure occurred (check errno).  ENOENT means it was
  *	not a valid network specification.
  * author:

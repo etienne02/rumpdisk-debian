@@ -1,6 +1,4 @@
-#	$NetBSD: files.acpi,v 1.120 2021/01/24 18:02:51 jmcneill Exp $
-
-include "dev/acpi/acpica/files.acpica"
+#	$NetBSD: files.acpi,v 1.134 2024/12/08 20:49:14 jmcneill Exp $
 
 defflag	opt_acpi.h	ACPIVERBOSE ACPI_DEBUG ACPI_ACTIVATE_DEV
 			ACPI_DSDT_OVERRIDE ACPI_SCANPCI ACPI_BREAKPOINT
@@ -16,17 +14,19 @@ define	acpiwdrtbus { }
 define	acpisdtbus { }
 define	acpigtdtbus { }
 define	acpimadtbus { }
+define	apeibus { }
 
-device	acpi: acpica, acpiapmbus, acpinodebus, acpiecdtbus, acpisdtbus, acpigtdtbus, acpimadtbus, acpihpetbus, acpiwdrtbus, sysmon_power, sysmon_taskq
+device	acpi: acpica, acpiapmbus, acpinodebus, acpiecdtbus, acpisdtbus, acpigtdtbus, acpimadtbus, acpihpetbus, acpiwdrtbus, apeibus, sysmon_power, sysmon_taskq
 attach	acpi at acpibus
 file	dev/acpi/acpi.c			acpi
 file	dev/acpi/acpi_debug.c		acpi
 file	dev/acpi/acpi_dev.c		acpi
 file	dev/acpi/acpi_event.c		acpi
+file	dev/acpi/acpi_gpio.c		acpi
 file	dev/acpi/acpi_i2c.c		acpi
 file	dev/acpi/acpi_mcfg.c		acpi & pci
-file	dev/acpi/acpi_pci.c		acpi
-file	dev/acpi/acpi_pci_link.c	acpi
+file	dev/acpi/acpi_pci.c		acpi & pci
+file	dev/acpi/acpi_pci_link.c	acpi & pci
 file	dev/acpi/acpi_power.c		acpi
 file	dev/acpi/acpi_quirks.c		acpi
 file	dev/acpi/acpi_resource.c	acpi
@@ -47,6 +47,7 @@ device	acpiec
 attach	acpiec at acpinodebus
 device	acpiecdt
 attach	acpiecdt at acpiecdtbus
+defparam opt_acpi_ec.h			ACPIEC_DEBUG
 file	dev/acpi/acpi_ec.c		acpiec|acpiecdt
 
 # ACPI Lid Switch
@@ -115,6 +116,28 @@ file	dev/acpi/acpi_pcc.c		acpipcc
 device	acpicppc: acpipcc
 attach	acpicppc at acpinodebus
 file	dev/acpi/acpi_cppc.c		acpicppc
+
+# ACPI Virtual Machine Generation ID
+device	acpivmgenid
+attach	acpivmgenid at acpinodebus
+file	dev/acpi/acpi_vmgenid.c		acpivmgenid
+
+# ACPI Platform Error Interface
+device	apei
+attach	apei at apeibus
+file	dev/acpi/apei.c			apei
+file	dev/acpi/apei_bert.c		apei
+file	dev/acpi/apei_einj.c		apei
+file	dev/acpi/apei_erst.c		apei
+file	dev/acpi/apei_hest.c		apei
+file	dev/acpi/apei_interp.c		apei
+file	dev/acpi/apei_mapreg.c		apei
+file	dev/acpi/apei_reg.c		apei
+
+# ACPI Hardware Error Device
+device	acpihed: apei
+attach	acpihed at acpinodebus
+file	dev/acpi/acpi_hed.c		acpihed
 
 # Serial interface
 attach	com at acpinodebus with com_acpi
@@ -277,6 +300,10 @@ file	dev/acpi/amdccp_acpi.c		amdccp_acpi
 attach	virtio at acpinodebus with virtio_acpi
 file	dev/acpi/virtio_acpi.c		virtio_acpi
 
+# OHCI-compliant USB controller
+attach	ohci at acpinodebus with ohci_acpi
+file	dev/acpi/ohci_acpi.c		ohci_acpi
+
 # EHCI-compliant USB controller
 attach	ehci at acpinodebus with ehci_acpi
 file	dev/acpi/ehci_acpi.c		ehci_acpi
@@ -293,5 +320,31 @@ file	dev/acpi/ipmi_acpi.c		ipmi_acpi
 # Broadcom GENETv5
 attach	genet at acpinodebus with genet_acpi
 file	dev/acpi/genet_acpi.c		genet_acpi
+
+# DesignWare Ethernet Quality-of-Service controller
+attach	eqos at acpinodebus with eqos_acpi
+file	dev/acpi/eqos_acpi.c		eqos_acpi
+
+# Intel GPIO
+attach	igpio at acpinodebus with igpio_acpi
+file	dev/acpi/igpio_acpi.c		igpio_acpi
+
+# DesignWare Mobile Storage Host Controller
+attach	dwcmmc at acpinodebus with dwcmmc_acpi
+file	dev/acpi/dwcmmc_acpi.c		dwcmmc_acpi
+
+# DesignWare Watchdog
+attach	dwcwdt at acpinodebus with dwcwdt_acpi
+file	dev/acpi/dwcwdt_acpi.c		dwcwdt_acpi
+
+# Qualcomm GPIO
+device	qcomgpio: gpiobus
+attach	qcomgpio at acpinodebus
+file	dev/acpi/qcomgpio.c		qcomgpio
+
+# Qualcomm I2C controller
+device	qcomiic: i2cbus
+attach	qcomiic at acpinodebus
+file	dev/acpi/qcomiic.c		qcomiic
 
 include	"dev/acpi/wmi/files.wmi"

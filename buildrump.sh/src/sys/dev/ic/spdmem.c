@@ -1,4 +1,4 @@
-/* $NetBSD: spdmem.c,v 1.35 2020/03/24 03:47:39 msaitoh Exp $ */
+/* $NetBSD: spdmem.c,v 1.38 2022/02/02 22:43:14 nakayama Exp $ */
 
 /*
  * Copyright (c) 2007 Nicolas Joly
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: spdmem.c,v 1.35 2020/03/24 03:47:39 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: spdmem.c,v 1.38 2022/02/02 22:43:14 nakayama Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -81,7 +81,9 @@ static const char* const spdmem_basic_types[] = {
 	"unknown",
 	"DDR4E SDRAM",
 	"LPDDR3 SDRAM",
-	"LPDDR4 SDRAM"
+	"LPDDR4 SDRAM",
+	"LPDDR4X SDRAM",
+	"DDR5 SDRAM"
 };
 
 static const char* const spdmem_ddr4_module_types[] = {
@@ -267,6 +269,14 @@ spdmem_common_probe(struct spdmem_softc *sc)
 		 * it some other time.
 		 */
 		return 1;
+	} else if (spd_type == SPDMEM_MEMTYPE_DDR5SDRAM) {
+		/* XXX Need Datasheet. */
+		(sc->sc_read)(sc, 0, &val);
+		spd_len = val & 0x0f;
+		if ((unsigned int)spd_len >= __arraycount(spd_rom_sizes))
+			return 0;
+		aprint_verbose("DDR5 SPD ROM?\n");
+		return 0;
 	}
 
 	/* For unrecognized memory types, don't match at all */

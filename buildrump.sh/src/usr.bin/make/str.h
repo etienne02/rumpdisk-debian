@@ -1,4 +1,4 @@
-/*	$NetBSD: str.h,v 1.9 2021/05/30 21:16:54 rillig Exp $	*/
+/*	$NetBSD: str.h,v 1.20 2024/07/07 07:50:57 rillig Exp $	*/
 
 /*
  Copyright (c) 2021 Roland Illig <rillig@NetBSD.org>
@@ -39,12 +39,6 @@ typedef struct FStr {
 	void *freeIt;
 } FStr;
 
-/* A modifiable string that may need to be freed after use. */
-typedef struct MFStr {
-	char *str;
-	void *freeIt;
-} MFStr;
-
 /* A read-only range of a character array, NOT null-terminated. */
 typedef struct Substring {
 	const char *start;
@@ -60,7 +54,6 @@ typedef struct LazyBuf {
 	size_t len;
 	size_t cap;
 	const char *expected;
-	void *freeIt;
 } LazyBuf;
 
 /* The result of splitting a string into words. */
@@ -77,28 +70,30 @@ typedef struct SubstringWords {
 	void *freeIt;
 } SubstringWords;
 
+typedef struct StrMatchResult {
+	const char *error;
+	bool matched;
+} StrMatchResult;
 
-MAKE_INLINE FStr
-FStr_Init(const char *str, void *freeIt)
-{
-	FStr fstr;
-	fstr.str = str;
-	fstr.freeIt = freeIt;
-	return fstr;
-}
 
 /* Return a string that is the sole owner of str. */
 MAKE_INLINE FStr
 FStr_InitOwn(char *str)
 {
-	return FStr_Init(str, str);
+	FStr fstr;
+	fstr.str = str;
+	fstr.freeIt = str;
+	return fstr;
 }
 
 /* Return a string that refers to the shared str. */
 MAKE_INLINE FStr
 FStr_InitRefer(const char *str)
 {
-	return FStr_Init(str, NULL);
+	FStr fstr;
+	fstr.str = str;
+	fstr.freeIt = NULL;
+	return fstr;
 }
 
 MAKE_INLINE void
@@ -108,40 +103,6 @@ FStr_Done(FStr *fstr)
 #ifdef CLEANUP
 	fstr->str = NULL;
 	fstr->freeIt = NULL;
-#endif
-}
-
-
-MAKE_INLINE MFStr
-MFStr_Init(char *str, void *freeIt)
-{
-	MFStr mfstr;
-	mfstr.str = str;
-	mfstr.freeIt = freeIt;
-	return mfstr;
-}
-
-/* Return a string that is the sole owner of str. */
-MAKE_INLINE MFStr
-MFStr_InitOwn(char *str)
-{
-	return MFStr_Init(str, str);
-}
-
-/* Return a string that refers to the shared str. */
-MAKE_INLINE MFStr
-MFStr_InitRefer(char *str)
-{
-	return MFStr_Init(str, NULL);
-}
-
-MAKE_INLINE void
-MFStr_Done(MFStr *mfstr)
-{
-	free(mfstr->freeIt);
-#ifdef CLEANUP
-	mfstr->str = NULL;
-	mfstr->freeIt = NULL;
 #endif
 }
 
@@ -182,12 +143,12 @@ Substring_Equals(Substring sub, const char *str)
 	       memcmp(sub.start, str, len) == 0;
 }
 
-MAKE_STATIC Substring
-Substring_Sub(Substring sub, size_t start, size_t end)
+MAKE_INLINE bool
+Substring_Eq(Substring sub, Substring str)
 {
-	assert(start <= Substring_Length(sub));
-	assert(end <= Substring_Length(sub));
-	return Substring_Init(sub.start + start, sub.start + end);
+	size_t len = Substring_Length(sub);
+	return len == Substring_Length(str) &&
+	       memcmp(sub.start, str.start, len) == 0;
 }
 
 MAKE_STATIC bool
@@ -226,7 +187,7 @@ Substring_SkipFirst(Substring sub, char ch)
 }
 
 MAKE_STATIC const char *
-Substring_LastIndex(Substring sub, char ch)
+Substring_FindLast(Substring sub, char ch)
 {
 	const char *p;
 
@@ -266,13 +227,12 @@ LazyBuf_Init(LazyBuf *buf, const char *expected)
 	buf->len = 0;
 	buf->cap = 0;
 	buf->expected = expected;
-	buf->freeIt = NULL;
 }
 
 MAKE_INLINE void
 LazyBuf_Done(LazyBuf *buf)
 {
-	free(buf->freeIt);
+	free(buf->data);
 }
 
 MAKE_STATIC void
@@ -307,19 +267,13 @@ LazyBuf_AddStr(LazyBuf *buf, const char *str)
 		LazyBuf_Add(buf, *p);
 }
 
-MAKE_STATIC void
-LazyBuf_AddBytesBetween(LazyBuf *buf, const char *start, const char *end)
-{
-	const char *p;
-
-	for (p = start; p != end; p++)
-		LazyBuf_Add(buf, *p);
-}
-
 MAKE_INLINE void
 LazyBuf_AddSubstring(LazyBuf *buf, Substring sub)
 {
-	LazyBuf_AddBytesBetween(buf, sub.start, sub.end);
+	const char *p;
+
+	for (p = sub.start; p != sub.end; p++)
+		LazyBuf_Add(buf, *p);
 }
 
 MAKE_STATIC Substring
@@ -329,6 +283,11 @@ LazyBuf_Get(const LazyBuf *buf)
 	return Substring_Init(start, start + buf->len);
 }
 
+/*
+ * Returns the content of the buffer as a newly allocated string.
+ *
+ * See LazyBuf_Get to avoid unnecessary memory allocations.
+ */
 MAKE_STATIC FStr
 LazyBuf_DoneGet(LazyBuf *buf)
 {
@@ -353,6 +312,14 @@ Words_Free(Words w)
 SubstringWords Substring_Words(const char *, bool);
 
 MAKE_INLINE void
+SubstringWords_Init(SubstringWords *w)
+{
+	w->words = NULL;
+	w->len = 0;
+	w->freeIt = NULL;
+}
+
+MAKE_INLINE void
 SubstringWords_Free(SubstringWords w)
 {
 	free(w.words);
@@ -363,4 +330,10 @@ SubstringWords_Free(SubstringWords w)
 char *str_concat2(const char *, const char *);
 char *str_concat3(const char *, const char *, const char *);
 
-bool Str_Match(const char *, const char *);
+StrMatchResult Str_Match(const char *, const char *);
+
+void Str_Intern_Init(void);
+#ifdef CLEANUP
+void Str_Intern_End(void);
+#endif
+const char *Str_Intern(const char *);

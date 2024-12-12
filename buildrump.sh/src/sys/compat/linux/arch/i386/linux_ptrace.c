@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_ptrace.c,v 1.34 2020/05/23 23:42:41 ad Exp $	*/
+/*	$NetBSD: linux_ptrace.c,v 1.36 2022/09/05 14:14:42 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_ptrace.c,v 1.34 2020/05/23 23:42:41 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_ptrace.c,v 1.36 2022/09/05 14:14:42 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -114,7 +114,6 @@ struct linux_user {
 };
 
 #define LUSR_OFF(member)	offsetof(struct linux_user, member)
-#define ISSET(t, f)		((t) & (f))
 
 int linux_ptrace_disabled = 1;	/* bitrotted */
 
@@ -223,6 +222,7 @@ linux_sys_ptrace_arch(struct lwp *l, const struct linux_sys_ptrace_args *uap,
 		if (error) {
 			break;
 		}
+		memset(linux_regs, 0, sizeof(*linux_regs));
 		linux_regs->ebx = regs->r_ebx;
 		linux_regs->ecx = regs->r_ecx;
 		linux_regs->edx = regs->r_edx;

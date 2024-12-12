@@ -1,4 +1,4 @@
-/*	$NetBSD: procfs.h,v 1.80 2020/04/29 07:18:24 riastradh Exp $	*/
+/*	$NetBSD: procfs.h,v 1.87 2024/07/01 01:35:53 christos Exp $	*/
 
 /*
  * Copyright (c) 1993
@@ -75,6 +75,8 @@
 #include <sys/ptrace.h>
 
 #ifdef _KERNEL
+#include <sys/proc.h>
+
 /*
  * The different types of node in a procfs filesystem
  */
@@ -95,11 +97,18 @@ typedef enum {
 	PFSfpregs,	/* the process's FP register set */
 	PFSloadavg,	/* load average (if -o linux) */
 	PFSlimit,	/* resource limits */
+	PFSlimits,	/* resource limits, Linux style (if -o linux) */
 	PFSmap,		/* memory map */
 	PFSmaps,	/* memory map, Linux style (if -o linux) */
 	PFSmem,		/* the process's memory image */
 	PFSmeminfo,	/* system memory info (if -o linux) */
 	PFSmounts,	/* mounted filesystems (if -o linux) */
+	PFSmqueue,	/* sys/fs/mqueue subdirectory (if -o linux) */
+	PFSmq_msg_def,	/* sys/fs/mqueue/msg_default (if -o linux) */
+	PFSmq_msg_max,	/* sys/fs/mqueue/msg_max (if -o linux) */
+	PFSmq_siz_def,	/* sys/fs/mqueue/msgsize_default (if -o linux) */
+	PFSmq_siz_max,	/* sys/fs/mqueue/msgsize_max (if -o linux) */
+	PFSmq_qmax,	/* sys/fs/mqueue/queues_max (if -o linux) */
 	PFSnote,	/* process notifier */
 	PFSnotepg,	/* process group notifier */
 	PFSproc,	/* a process-specific sub-directory */
@@ -109,7 +118,13 @@ typedef enum {
 	PFSstat,	/* process status (if -o linux) */
 	PFSstatm,	/* process memory info (if -o linux) */
 	PFSstatus,	/* process status */
-	PFStask,	/* task subdirector (if -o linux) */
+	PFSsys,		/* sys subdirectory (if -o linux) */
+	PFSsysfs,	/* sys/fs subdirectory (if -o linux) */
+	PFSsysvipc,	/* sysvipc subdirectory (if -o linux) */
+	PFSsysvipc_msg,	/* sysvipc msg info (if -o linux) */
+	PFSsysvipc_sem,	/* sysvipc sem info (if -o linux) */
+	PFSsysvipc_shm,	/* sysvipc shm info (if -o linux) */
+	PFStask,	/* task subdirectory (if -o linux) */
 	PFSuptime,	/* elapsed time since (if -o linux) */
 	PFSversion,	/* kernel version (if -o linux) */
 #ifdef __HAVE_PROCFS_MACHDEP
@@ -127,7 +142,9 @@ struct pfskey {
 	int		pk_fd;		/* associated fd if not -1 */
 };
 struct pfsnode {
+	LIST_ENTRY(pfsnode) pfs_hash;	/* per pid hash list */
 	struct vnode	*pfs_vnode;	/* vnode associated with this pfsnode */
+	struct mount	*pfs_mount;	/* mount associated with this pfsnode */
 	struct pfskey	pfs_key;
 #define pfs_type pfs_key.pk_type
 #define pfs_pid pfs_key.pk_pid
@@ -188,7 +205,6 @@ procfs_fileno(pid_t _pid, pfstype _type, int _fd)
 #define PROCFS_TYPE(type)	((type) % PFSlast)
 
 struct procfsmount {
-	void *pmnt_exechook;
 	int pmnt_flags;
 };
 
@@ -213,6 +229,14 @@ struct mount;
 
 struct proc *procfs_proc_find(struct mount *, pid_t);
 bool procfs_use_linux_compat(struct mount *);
+
+static inline bool
+procfs_proc_is_linux_compat(void)
+{
+	const char *emulname = curlwp->l_proc->p_emul->e_name;
+	return (strncmp(emulname, "linux", 5) == 0);
+}
+
 int procfs_proc_lock(struct mount *, int, struct proc **, int);
 void procfs_proc_unlock(struct proc *);
 int procfs_allocvp(struct mount *, struct vnode **, pid_t, pfstype, int);
@@ -258,8 +282,26 @@ int procfs_doauxv(struct lwp *, struct proc *, struct pfsnode *,
     struct uio *);
 int procfs_dolimit(struct lwp *, struct proc *, struct pfsnode *,
     struct uio *);
+int procfs_dolimits(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_domq_msg_def(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_domq_msg_max(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_domq_siz_def(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_domq_siz_max(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_domq_qmax(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_dosysvipc_msg(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_dosysvipc_sem(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
+int procfs_dosysvipc_shm(struct lwp *, struct proc *, struct pfsnode *,
+    struct uio *);
 
-void procfs_revoke_vnodes(struct proc *, void *);
+void procfs_hashrem(struct pfsnode *);
 int procfs_getfp(struct pfsnode *, struct proc *, struct file **);
 
 /* functions to check whether or not files should be displayed */

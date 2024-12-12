@@ -1,4 +1,4 @@
-/*	$NetBSD: esp.c,v 1.33 2021/03/05 07:15:53 rin Exp $	*/
+/*	$NetBSD: esp.c,v 1.35 2024/06/02 19:27:12 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: esp.c,v 1.33 2021/03/05 07:15:53 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: esp.c,v 1.35 2024/06/02 19:27:12 andvar Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -82,7 +82,6 @@ __KERNEL_RCSID(0, "$NetBSD: esp.c,v 1.33 2021/03/05 07:15:53 rin Exp $");
 #include <sys/buf.h>
 #include <sys/proc.h>
 #include <sys/queue.h>
-#include <sys/malloc.h>
 
 #include <dev/scsipi/scsi_all.h>
 #include <dev/scsipi/scsipi_all.h>
@@ -231,7 +230,7 @@ espattach(device_t parent, device_t self, void *aux)
 
 	sc->sc_maxxfer = 64 * 1024;
 
-	/* and the interuppts */
+	/* and the interrupts */
 	intr_establish_xname(esc->sc_pri, IST_EDGE, IPL_BIO, ncr53c9x_intr, sc,
 	    device_xname(self));
 

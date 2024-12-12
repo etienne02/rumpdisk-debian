@@ -1,4 +1,4 @@
-/*	$NetBSD: dm9000reg.h,v 1.6 2020/10/08 21:00:25 nisimura Exp $	*/
+/*	$NetBSD: dm9000reg.h,v 1.12 2024/07/05 20:19:42 andvar Exp $	*/
 
 /*
  * Copyright (c) 2009 Paul Fleischer
@@ -30,7 +30,7 @@
 #define _DEV_IC_DM9000REG_H_
 
 /*
- * Registers accesible on the DM9000, extracted from pp. 11-12 from
+ * Registers accessible on the DM9000, extracted from pp. 11-12 from
  * the data sheet
  */
 
@@ -59,7 +59,7 @@
 #define  DM9000_NCR_WAKEEN	(1<<6)	/* wakeup event enable */
 #define  DM9000_NCR_EXY_PHY	(1<<7)	/* select ext. PHY, immune SW reset */
 #define DM9000_NSR		0x01	/* "network" status */
-#define  DM9000_NSR_RXOV	(1<<1)	/* receive overflow deteced */
+#define  DM9000_NSR_RXOV	(1<<1)	/* receive overflow detected */
 #define  DM9000_NSR_TX1END	(1<<2)	/* transmit 1 completed, W1C */
 #define  DM9000_NSR_TX2END	(1<<3) 	/* transmit 2 completed, W1C */
 #define  DM9000_NSR_WAKEST	(1<<5)	/* wakeup event, W1C */
@@ -68,10 +68,10 @@
 #define DM9000_TCR		0x02	/* Tx control */
 #define  DM9000_TCR_TXREQ	(1<<0)	/* request to start Tx, self clear */
 #define  DM9000_TCR_CRC_DIS1	(1<<1)	/* disable PAD op on Tx1 */
-#define  DM9000_TCR_PAD_DIS1	(1<<2)	/* disbale CRC append on Tx1 */
+#define  DM9000_TCR_PAD_DIS1	(1<<2)	/* disable CRC append on Tx1 */
 #define  DM9000_TCR_CRC_DIS2	(1<<3)	/* disable PAD op on Tx2 */
-#define  DM9000_TCR_PAD_DIS2	(1<<4)	/* disbale CRC append on Tx2 */
-#define  DM9000_TCR_EXCECM	(1<<5)	/* allow infinate colli. retries */
+#define  DM9000_TCR_PAD_DIS2	(1<<4)	/* disable CRC append on Tx2 */
+#define  DM9000_TCR_EXCECM	(1<<5)	/* allow infinite colli. retries */
 #define  DM9000_TCR_TJDIS	(1<<6)	/* disable xmit jabber, otherwise on */
 #define DM9000_TSR1		0x03	/* transmit completion status 1 */
 #define DM9000_TSR2		0x04	/* transmit completion status 2 */
@@ -99,7 +99,7 @@
 #define  DM9000_RSR_MF		(1<<6)	/* mcast/bcast frame received */
 #define  DM9000_RSR_RF		(1<<7)	/* damaged runt frame received <64 */
 #define DM9000_ROCR		0x07	/* receive overflow counter */
-/* 7: OVF detected, 6:0 statistic couner */
+/* 7: OVF detected, 6:0 statistic counter */
 #define DM9000_BPTR		0x08	/* back pressure threshold */
 /* 7:4 back pressure high watermark (3 def), 3:0 jam pattern time (7 def) */
 #define DM9000_FCTR		0x09	/* flow control threshold */
@@ -161,8 +161,8 @@
 #define DM9000_RWPAH		0x25	/* Rx SRAM read pointer 15:8 */
 
 /* VID 0x0a46, PID 0x9000 */
-#define DM9000_VID0	0x28	/* vender ID 7:0 */
-#define DM9000_VID1	0x29	/* vender ID 15:8 */
+#define DM9000_VID0	0x28	/* vendor ID 7:0 */
+#define DM9000_VID1	0x29	/* vendor ID 15:8 */
 #define DM9000_PID0	0x2A	/* product ID 7:0 */
 #define DM9000_PID1	0x2B	/* product ID 15:8 */
 #define DM9000_CHIPR	0x2C	/* chip revision */
@@ -171,8 +171,8 @@
 #define DM9000_OTCR	0x2E	/* operation test control */
 #define DM9000_SMCR	0x2F	/* special mode control */
 #define  DM9000_FB0	(1<<0)	/* force shortest back-off time */
-#define  DM9000_FB1	(1<<1)	/* force longeset back-off time */
-#define  DM9000_FLC	(1<<2)	/* force late collsion */
+#define  DM9000_FB1	(1<<1)	/* force longest back-off time */
+#define  DM9000_FLC	(1<<2)	/* force late collision */
 #define  DM9000_SM_EN	(1<<7)	/* serial mode enable */
 #define DM9000_ETXCSR	0x30	/* early xmit control and status */
 #define DM9000_TCSCR	0x31	/* xmit checksum control */

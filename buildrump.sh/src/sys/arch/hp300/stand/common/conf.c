@@ -1,4 +1,4 @@
-/*	$NetBSD: conf.c,v 1.12 2007/12/23 03:11:32 tsutsui Exp $	*/
+/*	$NetBSD: conf.c,v 1.15 2024/05/09 15:11:11 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1990, 1993
@@ -41,6 +41,7 @@
 #include <lib/libsa/stand.h>
 #include <lib/libsa/nfs.h>
 #include <lib/libsa/ufs.h>
+#include <lib/libsa/cd9660.h>
 
 #include <hp300/stand/common/conf.h>
 #include <hp300/stand/common/rawfs.h>
@@ -137,27 +138,17 @@ int	npunit = __arraycount(punitsw);
 /*
  * Filesystem configuration
  */
-struct fs_ops file_system_rawfs[] = { FS_OPS(rawfs) };
-struct fs_ops file_system_ufs[] = { FS_OPS(ufs) };
-struct fs_ops file_system_nfs[] = { FS_OPS(nfs) };
+struct fs_ops file_system_rawfs[1] = { FS_OPS(rawfs) };
+struct fs_ops file_system_ufs[NFSYS_FS] = {
+	FS_OPS(ffsv1),
+#ifdef SUPPORT_UFS2
+	FS_OPS(ffsv2),
+#endif
+#ifdef SUPPORT_CD
+	FS_OPS(cd9660),
+#endif
+};
+struct fs_ops file_system_nfs[1] = { FS_OPS(nfs) };
 
-struct fs_ops file_system[1];
-int	nfsys = 1;		/* we always know which one we want */
-
-#if 0
-/*
- * Inititalize controllers
- *
- * XXX this should be a table
- */
-void ctlrinit(void)
-{
-#ifdef SUPPORT_ETHERNET
-	leinit();
-#endif
-#if defined(SUPPORT_DISK) || defined(SUPPORT_TAPE)
-	hpibinit();
-	scsiinit();
-#endif
-}
-#endif
+struct fs_ops file_system[NFSYS_FS];
+int	nfsys = 1;		/* default value; should be overrieded */

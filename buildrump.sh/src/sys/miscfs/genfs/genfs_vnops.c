@@ -1,4 +1,4 @@
-/*	$NetBSD: genfs_vnops.c,v 1.211 2021/06/29 22:34:08 dholland Exp $	*/
+/*	$NetBSD: genfs_vnops.c,v 1.220 2023/03/03 10:02:51 hannken Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -57,7 +57,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: genfs_vnops.c,v 1.211 2021/06/29 22:34:08 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: genfs_vnops.c,v 1.220 2023/03/03 10:02:51 hannken Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -190,6 +190,20 @@ genfs_einval(void *v)
 {
 
 	return (EINVAL);
+}
+
+int
+genfs_erofs_link(void *v)
+{
+	/* also for symlink */
+	struct vop_link_v2_args /* {
+		struct vnode *a_dvp;
+		struct vnode **a_vpp;
+		struct componentname *a_cnp;
+	} */ *ap = v;
+
+	VOP_ABORTOP(ap->a_dvp, ap->a_cnp);
+	return EROFS;
 }
 
 /*
@@ -425,30 +439,6 @@ genfs_islocked(void *v)
 	return 0;
 }
 
-/*
- * Stubs to use when there is no locking to be done on the underlying object.
- */
-int
-genfs_nolock(void *v)
-{
-
-	return (0);
-}
-
-int
-genfs_nounlock(void *v)
-{
-
-	return (0);
-}
-
-int
-genfs_noislocked(void *v)
-{
-
-	return (0);
-}
-
 int
 genfs_mmap(void *v)
 {
@@ -507,9 +497,7 @@ filt_genfsdetach(struct knote *kn)
 {
 	struct vnode *vp = (struct vnode *)kn->kn_hook;
 
-	mutex_enter(vp->v_interlock);
-	SLIST_REMOVE(&vp->v_klist, kn, knote, kn_selnext);
-	mutex_exit(vp->v_interlock);
+	vn_knote_detach(vp, kn);
 }
 
 static int
@@ -525,7 +513,7 @@ filt_genfsread(struct knote *kn, long hint)
 	switch (hint) {
 	case NOTE_REVOKE:
 		KASSERT(mutex_owned(vp->v_interlock));
-		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
+		knote_set_eof(kn, EV_ONESHOT);
 		return (1);
 	case 0:
 		mutex_enter(vp->v_interlock);
@@ -552,7 +540,7 @@ filt_genfswrite(struct knote *kn, long hint)
 	switch (hint) {
 	case NOTE_REVOKE:
 		KASSERT(mutex_owned(vp->v_interlock));
-		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
+		knote_set_eof(kn, EV_ONESHOT);
 		return (1);
 	case 0:
 		mutex_enter(vp->v_interlock);
@@ -575,7 +563,7 @@ filt_genfsvnode(struct knote *kn, long hint)
 	switch (hint) {
 	case NOTE_REVOKE:
 		KASSERT(mutex_owned(vp->v_interlock));
-		kn->kn_flags |= EV_EOF;
+		knote_set_eof(kn, 0);
 		if ((kn->kn_sfflags & hint) != 0)
 			kn->kn_fflags |= hint;
 		return (1);
@@ -596,21 +584,21 @@ filt_genfsvnode(struct knote *kn, long hint)
 }
 
 static const struct filterops genfsread_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD | FILTEROP_MPSAFE,
 	.f_attach = NULL,
 	.f_detach = filt_genfsdetach,
 	.f_event = filt_genfsread,
 };
 
 static const struct filterops genfswrite_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD | FILTEROP_MPSAFE,
 	.f_attach = NULL,
 	.f_detach = filt_genfsdetach,
 	.f_event = filt_genfswrite,
 };
 
 static const struct filterops genfsvnode_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD | FILTEROP_MPSAFE,
 	.f_attach = NULL,
 	.f_detach = filt_genfsdetach,
 	.f_event = filt_genfsvnode,
@@ -644,9 +632,7 @@ genfs_kqfilter(void *v)
 
 	kn->kn_hook = vp;
 
-	mutex_enter(vp->v_interlock);
-	SLIST_INSERT_HEAD(&vp->v_klist, kn, kn_selnext);
-	mutex_exit(vp->v_interlock);
+	vn_knote_attach(vp, kn);
 
 	return (0);
 }
@@ -691,18 +677,6 @@ genfs_node_wrlocked(struct vnode *vp)
 	return rw_write_held(&gp->g_glock);
 }
 
-static int
-groupmember(gid_t gid, kauth_cred_t cred)
-{
-	int ismember;
-	int error = kauth_cred_ismember_gid(cred, gid, &ismember);
-	if (error)
-		return error;
-	if (kauth_cred_getegid(cred) == gid || ismember)
-		return 0;
-	return -1;
-}
-
 /*
  * Common filesystem object access control check routine.  Accepts a
  * vnode, cred, uid, gid, mode, acl, requested access mode.
@@ -740,7 +714,7 @@ genfs_can_access(vnode_t *vp, kauth_cred_t cred, uid_t file_uid, gid_t file_gid,
 
 	/* Otherwise, check the groups (first match) */
 	/* Otherwise, check the groups. */
-	error = groupmember(file_gid, cred);
+	error = kauth_cred_groupmember(cred, file_gid);
 	if (error > 0)
 		return error;
 	if (error == 0) {
@@ -892,7 +866,7 @@ genfs_can_access_acl_posix1e(vnode_t *vp, kauth_cred_t cred, uid_t file_uid,
 		struct acl_entry *ae = &acl->acl_entry[i];
 		switch (ae->ae_tag) {
 		case ACL_GROUP_OBJ:
-			error = groupmember(file_gid, cred);
+			error = kauth_cred_groupmember(cred, file_gid);
 			if (error > 0)
 				return error;
 			if (error)
@@ -913,7 +887,7 @@ genfs_can_access_acl_posix1e(vnode_t *vp, kauth_cred_t cred, uid_t file_uid,
 			break;
 
 		case ACL_GROUP:
-			error = groupmember(ae->ae_id, cred);
+			error = kauth_cred_groupmember(cred, ae->ae_id);
 			if (error > 0)
 				return error;
 			if (error)
@@ -947,7 +921,7 @@ genfs_can_access_acl_posix1e(vnode_t *vp, kauth_cred_t cred, uid_t file_uid,
 			struct acl_entry *ae = &acl->acl_entry[i];
 			switch (ae->ae_tag) {
 			case ACL_GROUP_OBJ:
-				error = groupmember(file_gid, cred);
+				error = kauth_cred_groupmember(cred, file_gid);
 				if (error > 0)
 					return error;
 				if (error)
@@ -963,7 +937,7 @@ genfs_can_access_acl_posix1e(vnode_t *vp, kauth_cred_t cred, uid_t file_uid,
 				goto out;
 
 			case ACL_GROUP:
-				error = groupmember(ae->ae_id, cred);
+				error = kauth_cred_groupmember(cred, ae->ae_id);
 				if (error > 0)
 					return error;
 				if (error)
@@ -1081,14 +1055,14 @@ _acl_denies(const struct acl *aclp, int access_mask, kauth_cred_t cred,
 				continue;
 			break;
 		case ACL_GROUP_OBJ:
-			error = groupmember(file_gid, cred);
+			error = kauth_cred_groupmember(cred, file_gid);
 			if (error > 0)
 				return error;
 			if (error != 0)
 				continue;
 			break;
 		case ACL_GROUP:
-			error = groupmember(ae->ae_id, cred);
+			error = kauth_cred_groupmember(cred, ae->ae_id);
 			if (error > 0)
 				return error;
 			if (error != 0)
@@ -1341,23 +1315,14 @@ genfs_can_chtimes(vnode_t *vp, kauth_cred_t cred, uid_t owner_uid,
 	 * will be allowed to set the times [..] to the current 
 	 * server time.
 	 */
-	if ((error = VOP_ACCESSX(vp, VWRITE_ATTRIBUTES, cred)) != 0)
+	error = VOP_ACCESSX(vp, VWRITE_ATTRIBUTES, cred);
+	if (error != 0 && (vaflags & VA_UTIMES_NULL) != 0)
+		error = VOP_ACCESS(vp, VWRITE, cred);
+
+	if (error)
 		return (vaflags & VA_UTIMES_NULL) == 0 ? EPERM : EACCES;
 
-	/* Must be owner, or... */
-	if (kauth_cred_geteuid(cred) == owner_uid)
-		return (0);
-
-	/* set the times to the current time, and... */
-	if ((vaflags & VA_UTIMES_NULL) == 0)
-		return (EPERM);
-
-	/* have write access. */
-	error = VOP_ACCESS(vp, VWRITE, cred);
-	if (error)
-		return (error);
-
-	return (0);
+	return 0;
 }
 
 /*

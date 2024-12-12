@@ -1,4 +1,4 @@
-/*	$NetBSD: vio9p.c,v 1.3 2021/01/20 19:46:48 reinoud Exp $	*/
+/*	$NetBSD: vio9p.c,v 1.11 2023/03/23 03:55:11 yamaguchi Exp $	*/
 
 /*
  * Copyright (c) 2019 Internet Initiative Japan, Inc.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vio9p.c,v 1.3 2021/01/20 19:46:48 reinoud Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vio9p.c,v 1.11 2023/03/23 03:55:11 yamaguchi Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -60,18 +60,29 @@ __KERNEL_RCSID(0, "$NetBSD: vio9p.c,v 1.3 2021/01/20 19:46:48 reinoud Exp $");
 #define DLOG(fmt, args...) __nothing
 #endif
 
+/* Device-specific feature bits */
+#define VIO9P_F_MOUNT_TAG	(UINT64_C(1) << 0) /* mount tag specified */
+
 /* Configuration registers */
 #define VIO9P_CONFIG_TAG_LEN	0 /* 16bit */
 #define VIO9P_CONFIG_TAG	2
 
-#define VIO9P_FLAG_BITS		VIRTIO_COMMON_FLAG_BITS
+#define VIO9P_FLAG_BITS				\
+	VIRTIO_COMMON_FLAG_BITS			\
+	"b\x00" "MOUNT_TAG\0"
+
 
 // Must be the same as P9P_DEFREQLEN of usr.sbin/puffs/mount_9p/ninepuffs.h
 #define VIO9P_MAX_REQLEN	(16 * 1024)
 #define VIO9P_SEGSIZE		PAGE_SIZE
 #define VIO9P_N_SEGMENTS	(VIO9P_MAX_REQLEN / VIO9P_SEGSIZE)
 
-#define P9_MAX_TAG_LEN		16
+/*
+ * QEMU defines this as 32 but includes the final zero byte into the
+ * limit.  The code below counts the final zero byte separately, so
+ * adjust this define to match.
+ */
+#define P9_MAX_TAG_LEN		31
 
 CTASSERT((PAGE_SIZE) == (VIRTIO_PAGE_SIZE)); /* XXX */
 
@@ -408,7 +419,7 @@ filt_vio9p_read(struct knote *kn, long hint)
 }
 
 static const struct filterops vio9p_read_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_vio9p_detach,
 	.f_event = filt_vio9p_read,
@@ -424,7 +435,7 @@ filt_vio9p_write(struct knote *kn, long hint)
 }
 
 static const struct filterops vio9p_write_filtops = {
-	.f_isfd = 1,
+	.f_flags = FILTEROP_ISFD,
 	.f_attach = NULL,
 	.f_detach = filt_vio9p_detach,
 	.f_event = filt_vio9p_write,
@@ -489,23 +500,18 @@ vio9p_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->sc_virtio = vsc;
 
-	virtio_child_attach_start(vsc, self, IPL_VM, NULL,
-	    NULL, virtio_vq_intr,
-	    VIRTIO_F_INTR_MPSAFE | VIRTIO_F_INTR_SOFTINT, 0,
-	    VIO9P_FLAG_BITS);
+	virtio_child_attach_start(vsc, self, IPL_VM,
+	    VIO9P_F_MOUNT_TAG, VIO9P_FLAG_BITS);
 
 	features = virtio_features(vsc);
-	if (features == 0)
+	if ((features & VIO9P_F_MOUNT_TAG) == 0)
 		goto err_none;
 
-	error = virtio_alloc_vq(vsc, &sc->sc_vq[0], 0, VIO9P_MAX_REQLEN,
+	virtio_init_vq_vqdone(vsc, &sc->sc_vq[0], 0, vio9p_request_done);
+	error = virtio_alloc_vq(vsc, &sc->sc_vq[0], VIO9P_MAX_REQLEN,
 	    VIO9P_N_SEGMENTS * 2, "vio9p");
 	if (error != 0)
 		goto err_none;
-
-	sc->sc_vq[0].vq_done = vio9p_request_done;
-
-	virtio_child_attach_set_vqs(vsc, sc->sc_vq, 1);
 
 	sc->sc_buf_tx = kmem_alloc(VIO9P_MAX_REQLEN, KM_SLEEP);
 	sc->sc_buf_rx = kmem_alloc(VIO9P_MAX_REQLEN, KM_SLEEP);
@@ -547,7 +553,9 @@ vio9p_attach(device_t parent, device_t self, void *aux)
 	vio9p_read_config(sc);
 	aprint_normal_dev(self, "tagged as %s\n", sc->sc_tag);
 
-	error = virtio_child_attach_finish(vsc);
+	error = virtio_child_attach_finish(vsc, sc->sc_vq,
+	    __arraycount(sc->sc_vq), NULL,
+	    VIRTIO_F_INTR_MPSAFE | VIRTIO_F_INTR_SOFTINT);
 	if (error != 0)
 		goto err_mutex;
 
@@ -625,14 +633,15 @@ vio9p_modcmd(modcmd_t cmd, void *opaque)
 #ifdef _MODULE
 	switch (cmd) {
 	case MODULE_CMD_INIT:
-		error = config_init_component(cfdriver_ioconf_vio9p,
-		    cfattach_ioconf_vio9p, cfdata_ioconf_vio9p);
 		devsw_attach(vio9p_cd.cd_name, NULL, &bmajor,
 		    &vio9p_cdevsw, &cmajor);
+		error = config_init_component(cfdriver_ioconf_vio9p,
+		    cfattach_ioconf_vio9p, cfdata_ioconf_vio9p);
 		break;
 	case MODULE_CMD_FINI:
 		error = config_fini_component(cfdriver_ioconf_vio9p,
 		    cfattach_ioconf_vio9p, cfdata_ioconf_vio9p);
+		devsw_detach(NULL, &vio9p_cdevsw);
 		break;
 	default:
 		error = ENOTTY;

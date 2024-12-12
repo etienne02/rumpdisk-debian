@@ -1,7 +1,5 @@
-#	$NetBSD: Makefile,v 1.37 2019/10/13 07:28:19 mrg Exp $
+#	$NetBSD: Makefile,v 1.41 2023/06/03 09:09:21 lukem Exp $
 #
-
-WARNS?=	5
 
 .include <bsd.own.mk>
 
@@ -28,15 +26,17 @@ CPPFLAGS+=	-I${.CURDIR} -I${MKNODSRC} -I${MTREESRC} -DMAKEFS
 .include "${.CURDIR}/msdos/Makefile.inc"
 .include "${.CURDIR}/udf/Makefile.inc"
 
-.if !defined(HOSTPROG)
-DPADD+= ${LIBUTIL}
-LDADD+= -lutil
+.if defined(HOSTPROG)
+LDADD+=	-lm
+.else
+DPADD+= ${LIBUTIL} ${LIBM}
+LDADD+= -lutil -lm
 
-COPTS.cd9660.c+=		${GCC_NO_STRINGOP_TRUNCATION} ${GCC_NO_FORMAT_TRUNCATION}
-COPTS.cd9660_conversion.c+=	${GCC_NO_FORMAT_TRUNCATION}
-COPTS.udf.c+=			${GCC_NO_STRINGOP_TRUNCATION}
-COPTS.v7fs_estimate.c+=		${GCC_NO_STRINGOP_TRUNCATION}
-COPTS.v7fs_populate.c+=		${GCC_NO_STRINGOP_TRUNCATION} ${GCC_NO_FORMAT_TRUNCATION}
+COPTS.cd9660.c+=		${CC_WNO_STRINGOP_TRUNCATION} ${CC_WNO_FORMAT_TRUNCATION}
+COPTS.cd9660_conversion.c+=	${CC_WNO_FORMAT_TRUNCATION}
+COPTS.udf.c+=			${CC_WNO_STRINGOP_TRUNCATION}
+COPTS.v7fs_estimate.c+=		${CC_WNO_STRINGOP_TRUNCATION}
+COPTS.v7fs_populate.c+=		${CC_WNO_STRINGOP_TRUNCATION} ${CC_WNO_FORMAT_TRUNCATION}
 .endif
 
 .include <bsd.prog.mk>

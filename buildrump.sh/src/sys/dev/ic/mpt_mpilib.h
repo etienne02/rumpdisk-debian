@@ -1,4 +1,4 @@
-/*	$NetBSD: mpt_mpilib.h,v 1.4 2021/07/24 21:31:37 andvar Exp $	*/
+/*	$NetBSD: mpt_mpilib.h,v 1.6 2024/02/10 18:43:52 andvar Exp $	*/
 
 /*
  * Copyright (c) 2000, 2001 by LSI Logic Corporation
@@ -2208,7 +2208,7 @@ typedef struct _CONFIG_PAGE_LAN_1
  *  11-02-00  01.01.01  Original release for post 1.0 work
  *  12-04-00  01.01.02  Added messages for Common Transport Send and
  *                      Primitive Send.
- *  01-09-01  01.01.03  Modifed some of the new flags to have an MPI prefix
+ *  01-09-01  01.01.03  Modified some of the new flags to have an MPI prefix
  *                      and modified the FcPrimitiveSend flags.
  *  01-25-01  01.01.04  Move InitiatorIndex in LinkServiceRsp reply to a larger
  *                      field.
@@ -2948,7 +2948,7 @@ typedef struct _MSG_SEP_REPLY
  *  08-08-01  01.02.01  Original release for v1.2 work.
  *                      New format for FWVersion and ProductId in
  *                      MSG_IOC_FACTS_REPLY and MPI_FW_HEADER.
- *  08-31-01  01.02.02  Addded event MPI_EVENT_SCSI_DEVICE_STATUS_CHANGE and
+ *  08-31-01  01.02.02  Added event MPI_EVENT_SCSI_DEVICE_STATUS_CHANGE and
  *                      related structure and defines.
  *                      Added event MPI_EVENT_ON_BUS_TIMER_EXPIRED.
  *                      Added MPI_IOCINIT_FLAGS_DISCARD_FW_IMAGE.

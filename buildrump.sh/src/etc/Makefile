@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.450 2021/05/26 20:22:28 christos Exp $
+#	$NetBSD: Makefile,v 1.473 2024/06/23 00:37:12 mrg Exp $
 #	from: @(#)Makefile	8.7 (Berkeley) 5/25/95
 
 # Environment variables without default values:
@@ -48,17 +48,13 @@ DISTRIBVER!=	${HOST_SH} ${NETBSDSRCDIR}/sys/conf/osrelease.sh
 
 GZIP_FLAGS= -9 ${GZIP_N_FLAG}
 
-# Flags for creating ISO CDROM image
-# mkisofs is expected to be in $PATH, install via pkgsrc/sysutils/cdrtools
-# Note: At least mkisofs 2.0 should be used.
-#
-.if !defined(MKISOFS)
-MKISOFS!=       (which mkisofs || echo true) 2>/dev/null
-.endif
+# Flags for creating ISO CDROM image for mac68k and macppc that require
+# tools mkhybrid(8) to create hybrid ISO9660/HFS images.
+MKISOFS?=	${TOOL_MKHYBRID}
 DISTRIBREV!=	${HOST_SH} ${KERNSRCDIR}/conf/osrelease.sh -s
 # ISO 9660 volume ID.  Note that this can only contain [A-Z0-9_].
 ISO_VOLID!=	echo NETBSD_${DISTRIBREV} | tr a-z A-Z
-MKISOFS_FLAGS+= -J -l -hide-joliet-trans-tbl -r -T \
+MKISOFS_FLAGS+= -J -l -r \
 		-V ${ISO_VOLID} \
 		-publisher "The NetBSD Project" \
 		-m "${RELEASEDIR}/${RELEASEMACHINEDIR}/installation/cdrom"
@@ -119,7 +115,8 @@ BIN1+=	disktab
 .endif
 
 .if exists(etc.${MACHINE}/ld.so.conf) && \
-    empty(MACHINE_ARCH:M*arm*hf*) && empty(MACHINE_ARCH:Maarch64*)
+    empty(MACHINE_ARCH:M*arm*hf*) && empty(MACHINE_ARCH:Maarch64*) && \
+    ${MACHINE_ARCH} != "powerpc64"
 BIN1+=	etc.${MACHINE}/ld.so.conf
 .endif
 
@@ -158,12 +155,10 @@ distribution: .PHONY .MAKE check_DESTDIR distrib-dirs
 	${MAKEDIRTARGET} ${NETBSDSRCDIR} include _DISTRIB=
 	${MAKEDIRTARGET} ${NETBSDSRCDIR} install _DISTRIB=
 .endif	# !INSTALL_DONE
+	${MAKEDIRTARGET} . install-debugkernels
 	${MAKEDIRTARGET} . install-etc-files
 . if ${MKX11} != "no"
 	${MAKEDIRTARGET} ${NETBSDSRCDIR}/external/mit/xorg distribution
-. endif
-. if ${MKEXTSRC} != "no"
-	${MAKEDIRTARGET} ${NETBSDSRCDIR}/extsrc distribution
 . endif
 	${MAKEDIRTARGET} ${NETBSDSRCDIR}/distrib/sets makesetfiles
 .endif	# !DISTRIBUTION_DONE
@@ -349,6 +344,7 @@ install-etc-files: .PHONY .MAKE check_DESTDIR MAKEDEV
 .endfor
 	${MAKEDIRTARGET} ${NETBSDSRCDIR}/external/bsd/dhcpcd/sbin/dhcpcd configinstall
 	${MAKEDIRTARGET} ${NETBSDSRCDIR}/usr.bin/mail configinstall
+	${MAKEDIRTARGET} ${NETBSDSRCDIR}/usr.sbin/certctl configinstall
 .if (${MKPF} != "no")
 	${MAKEDIRTARGET} ${NETBSDSRCDIR}/usr.sbin/pf configinstall
 .endif
@@ -368,7 +364,7 @@ install-etc-files: .PHONY .MAKE check_DESTDIR MAKEDEV
 #	Install var/db/obsolete set lists; this is performed by "make build"
 #
 OBSOLETE.dir=		${.OBJDIR}/obsolete.dir
-OBSOLETE.files=		base comp etc games man misc rescue text
+OBSOLETE.files=		base comp etc games gpufw man misc rescue text
 .if ${MKDEBUG} != "no"
 OBSOLETE.files+=	debug
 .endif
@@ -393,10 +389,10 @@ install-obsolete-lists: .PHONY .MAKE
 	mkdir -p ${OBSOLETE.dir}
 .if ${MKX11} != "no"
 	(cd ${NETBSDSRCDIR}/distrib/sets && \
-	    AWK=${TOOL_AWK:Q} MAKE=${MAKE:Q} ${HOST_SH} ./makeobsolete -b -t ${OBSOLETE.dir})
+	    AWK=${TOOL_AWK:Q} SED=${TOOL_SED:Q} MAKE=${MAKE:Q} ${HOST_SH} ./makeobsolete -b -t ${OBSOLETE.dir})
 .else
 	(cd ${NETBSDSRCDIR}/distrib/sets && \
-	    AWK=${TOOL_AWK:Q} MAKE=${MAKE:Q} ${HOST_SH} ./makeobsolete -t ${OBSOLETE.dir})
+	    AWK=${TOOL_AWK:Q} SED=${TOOL_SED:Q} MAKE=${MAKE:Q} ${HOST_SH} ./makeobsolete -t ${OBSOLETE.dir})
 .endif
 .for file in ${OBSOLETE.files}
 	${_MKMSG_INSTALL} ${DESTDIR}/var/db/obsolete/${file}
@@ -415,7 +411,7 @@ distrib-dirs: .PHONY check_DESTDIR
 	cd ${NETBSDSRCDIR}/etc/mtree && ${MAKE} distrib-dirs
 
 COMPRESS_PROGRAM=${"${USE_XZ_SETS:Uno}"!="no":?${TOOL_XZ}:${TOOL_GZIP}}
-XZ_OPT=-9
+XZ_OPT?=-9
 TAR_SUFF=${"${USE_XZ_SETS:Uno}"!="no":?tar.xz:tgz}
 
 # release, snapshot --
@@ -442,14 +438,9 @@ CDROM.pathlist=	${.OBJDIR}/cdrom.pathlist
 
 iso-image:
 
-.if ${MKISOFS} != true
 do-iso-image: .PHONY check_DESTDIR check_RELEASEDIR iso-image-md-post
 	${MAKESUMS} -t ${RELEASEDIR}/images/ '*.iso'
 	@echo "iso-image created as: ${CDROM_IMAGE}"
-.else
-do-iso-image:
-	@echo iso-image: mkisofs not found
-.endif
 
 iso-image-setup: .PHONY check_RELEASEDIR
 	rm -f ${CDROM.pathlist}
@@ -468,10 +459,6 @@ check_imagedir:
 #	Create the image after the MD operations have completed.
 #
 iso-image-mi: .PHONY check_DESTDIR check_RELEASEDIR iso-image-md-pre check_imagedir
-	@if ! ${MKISOFS} --version; then \
-		echo "install pkgsrc/sysutils/cdrtools and run 'make iso-image'." ; \
-		false; \
-	fi
 	${MKISOFS} ${MKISOFS_FLAGS} -graft-points -path-list ${CDROM.pathlist} \
 	    -o ${CDROM_IMAGE} ${CDROM.dir}
 
@@ -589,13 +576,16 @@ build_kernels: .PHONY
 .for configfile in ${ALL_KERNELS:O:u}					# {
 build_kernels: kern-${configfile}
 kern-${configfile}: .PHONY .MAKE
+	umask 022 && \
 	cd ${KERNCONFDIR} && ${TOOL_CONFIG} ${CONFIGOPTS} -s ${KERNSRCDIR} \
+	    ${MKDEBUGKERNEL == "yes" :? -DDEBUG=-g :} \
 	    -b ${KERNOBJDIR}/${configfile:C/.*\///} ${configfile}
 .if ${MKUPDATE} == "no"
 	${MAKE} -C ${KERNOBJDIR}/${configfile:C/.*\///} distclean
 .endif
 	${MAKE} -C ${KERNOBJDIR}/${configfile:C/.*\///} depend && \
-	${MAKE} -C ${KERNOBJDIR}/${configfile:C/.*\///} 
+	${MAKE} -C ${KERNOBJDIR}/${configfile:C/.*\///} && \
+	${MAKE} -C ${KERNOBJDIR}/${configfile:C/.*\///} debuginstall
 .endfor	# ALL_KERNELS							# }
 .endif	# KERNELS_DONE							# }
 
@@ -613,6 +603,7 @@ kernset-${configfile}: .PHONY build_kernels snap_pre
 	kernsuffixes="${KERNEL_SUFFIXES:S/^/./}"; \
 	kern_tgz=${RELEASEDIR}/${RELEASEMACHINEDIR}/binary/sets/kern-${configfile}.${TAR_SUFF}; \
 	pax_cmd="GZIP=${GZIP_FLAGS:Q} XZ_OPT=${XZ_OPT:Q} ${TOOL_PAX} ${PAX_TIMESTAMP} --use-compress-program ${COMPRESS_PROGRAM:Q} -O -w -M -N ${NETBSDSRCDIR}/etc -f $${kern_tgz}"; \
+	umask 022 && \
 	cd $${kerndir} && { \
 		kernels=; newest=; \
 		for kernel in $${kernlist}; do \
@@ -622,6 +613,9 @@ kernset-${configfile}: .PHONY build_kernels snap_pre
 				kernels="$${kernels} $${ks}"; \
 				[ -z "$${newest}" -o $${ks} \
 				    -nt "$${newest}" ] && newest=$${ks}; \
+				[ ${MKDEBUGKERNEL} = "no" -o \
+				     ! -f $${ks}.gdb ] && continue; \
+				kernels="$${kernels} $${ks}.gdb"; \
 			done; \
 		done; \
 		[ $${kern_tgz} -nt "$${newest}" ] || { \
@@ -672,6 +666,7 @@ releasekern-${configfile}: .PHONY build_kernels snap_pre
 	kerndir=${KERNOBJDIR}/${configfile:C/.*\///}; \
 	kernsuffixes="${KERNEL_SUFFIXES:S/^/./}"; \
 	dest="${RELEASEDIR}/${RELEASEMACHINEDIR}/binary/kernel"; \
+	umask 022 && \
 	cd $${kerndir} && {	\
 		for kernel in $${kernlist}; do \
 			for s in "" $${kernsuffixes}; do \
@@ -688,6 +683,27 @@ releasekern-${configfile}: .PHONY build_kernels snap_pre
 .endif
 .endfor
 .endfor	# KERNEL_SETS EXTRA_KERNELS					# }
+
+# install-debugkernels:
+#	Create fake kernel debug files to satisfy the sets requirements
+#	They will be later replaced with the real ones if we are building
+#	kernels. This mess is needed because checkflist runs before the
+#	kernels are built. It should really run before the sets are build.
+install-debugkernels:
+.if ${MKDEBUG:Uno} == "yes"
+	@for i in $$(${NETBSDSRCDIR}/distrib/sets/makeflist debug | \
+	    ${TOOL_GREP} -E '^./usr/libdata/debug/(nfs)?netbsd-'); do \
+		echo touch ${DESTDIR}/$$i; \
+		touch ${DESTDIR}/$$i; \
+	done
+.	for k in ${ALL_KERNELS}
+install-debugkernels: ${DESTDIR}${DEBUGDIR}/netbsd-${k}.debug
+		
+${DESTDIR}${DEBUGDIR}/netbsd-${k}.debug:
+	${_MKTARGET_INSTALL}
+	touch ${.TARGET}
+.	endfor
+.endif
 
 # snap_md_post --
 #	Machine dependent distribution media operations.

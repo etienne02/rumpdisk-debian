@@ -1,4 +1,4 @@
-/* $NetBSD: t_siginfo.c,v 1.45 2021/01/13 06:44:55 skrll Exp $ */
+/* $NetBSD: t_siginfo.c,v 1.55 2024/09/04 03:33:29 rin Exp $ */
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -306,7 +306,7 @@ ATF_TC_HEAD(sigfpe_flt, tc)
 ATF_TC_BODY(sigfpe_flt, tc)
 {
 	struct sigaction sa;
-	double d = strtod("0", NULL);
+	volatile double d = strtod("0", NULL);
 
 	if (isQEMU())
 		atf_tc_skip("Test does not run correctly under QEMU");
@@ -318,6 +318,8 @@ ATF_TC_BODY(sigfpe_flt, tc)
 	 */
 	if (0 == fpsetmask(fpsetmask(FP_X_INV)))
 		atf_tc_skip("FPU does not implement traps on FP exceptions");
+#elif defined __riscv__
+	atf_tc_skip("RISC-V does not support floating-point exception traps");
 #endif
 	if (sigsetjmp(sigfpe_flt_env, 0) == 0) {
 		sa.sa_flags = SA_SIGINFO;
@@ -365,9 +367,9 @@ ATF_TC_HEAD(sigfpe_int, tc)
 ATF_TC_BODY(sigfpe_int, tc)
 {
 	struct sigaction sa;
-	long l = strtol("0", NULL, 10);
 
-#if defined(__powerpc__) || defined(__aarch64__)
+#if defined(__aarch64__) || defined(__powerpc__) || defined(__sh3__) || \
+    defined(__riscv__)
 	atf_tc_skip("Integer division by zero doesn't trap");
 #endif
 	if (sigsetjmp(sigfpe_int_env, 0) == 0) {
@@ -380,7 +382,13 @@ ATF_TC_BODY(sigfpe_int, tc)
 #elif defined(_FLOAT_IEEE754)
 		fpsetmask(FP_X_INV|FP_X_DZ|FP_X_OFL|FP_X_UFL|FP_X_IMP);
 #endif
-		printf("%ld\n", 1 / l);
+		/*
+		 * Do not use constant 1 here. GCC >= 12 optimizes
+		 * (1 / i) to (abs(i) == 1 ? i : 0), even for -O0.
+		 */
+		volatile long unity = strtol("1", NULL, 10),
+		     zero  = strtol("0", NULL, 10);
+		printf("%ld\n", unity / zero);
 	}
 	if (intdiv_signalled == 0)
 		atf_tc_fail("FPE signal handler was not invoked");
@@ -434,8 +442,9 @@ sigbus_action(int signo, siginfo_t *info, void *ptr)
 	ATF_REQUIRE_EQ(info->si_code, BUS_ADRALN);
 
 #if defined(__i386__) || defined(__x86_64__)
-	atf_tc_expect_fail("x86 architecture does not correctly "
-	    "report the address where the unaligned access occured");
+	atf_tc_skip("Data address is not provided for "
+	    "x86 alignment check exception, and NetBSD/x86 reports "
+	    "faulting PC instead");
 #endif
 	ATF_REQUIRE_EQ(info->si_addr, (volatile void *)addr);
 
@@ -477,7 +486,9 @@ ATF_TC_BODY(sigbus_adraln, tc)
 	/* m68k (except sun2) never issue SIGBUS (PR lib/49653),
 	 * same for armv8 or newer */
 #if (defined(__m68k__) && !defined(__mc68010__)) || \
-    defined(__aarch64__)
+    defined(__aarch64__) || \
+    defined(__riscv__) || \
+    defined(__vax__)
 	atf_tc_skip("No SIGBUS signal for unaligned accesses");
 #endif
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_output.c,v 1.320 2020/09/08 14:12:57 christos Exp $	*/
+/*	$NetBSD: ip_output.c,v 1.326 2023/04/19 22:00:18 mlelstv Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -91,7 +91,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip_output.c,v 1.320 2020/09/08 14:12:57 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip_output.c,v 1.326 2023/04/19 22:00:18 mlelstv Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -348,11 +348,6 @@ ip_output(struct mbuf *m0, struct mbuf *opt, struct route *ro, int flags,
 		}
 		mtu = ifp->if_mtu;
 		ia = in_get_ia_from_ifp_psref(ifp, &psref_ia);
-		if (ia == NULL) {
-			IP_STATINC(IP_STAT_IFNOADDR);
-			error = EADDRNOTAVAIL;
-			goto bad;
-		}
 		if (IN_MULTICAST(ip->ip_dst.s_addr) ||
 		    ip->ip_dst.s_addr == INADDR_BROADCAST) {
 			isbroadcast = 0;
@@ -763,7 +758,7 @@ fragment:
 	if (ntohs(ip->ip_off) & IP_DF) {
 		if (flags & IP_RETURNMTU) {
 			KASSERT(inp != NULL);
-			inp->inp_errormtu = mtu;
+			in4p_errormtu(inp) = mtu;
 		}
 		error = EMSGSIZE;
 		IP_STATINC(IP_STAT_CANTFRAG);
@@ -1088,7 +1083,7 @@ int
 ip_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 {
 	struct inpcb *inp = sotoinpcb(so);
-	struct ip *ip = &inp->inp_ip;
+	struct ip *ip = &in4p_ip(inp);
 	int inpflags = inp->inp_flags;
 	int optval = 0, error = 0;
 	struct in_pktinfo pktinfo;
@@ -1136,7 +1131,7 @@ ip_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 
 			case IP_MINTTL:
 				if (optval > 0 && optval <= MAXTTL)
-					inp->inp_ip_minttl = optval;
+					in4p_ip_minttl(inp) = optval;
 				else
 					error = EINVAL;
 				break;
@@ -1193,7 +1188,7 @@ ip_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 				break;
 
 			if (pktinfo.ipi_ifindex == 0) {
-				inp->inp_prefsrcip = pktinfo.ipi_addr;
+				in4p_prefsrcip(inp) = pktinfo.ipi_addr;
 				break;
 			}
 
@@ -1216,7 +1211,7 @@ ip_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 				error = EADDRNOTAVAIL;
 				break;
 			}
-			inp->inp_prefsrcip = IA_SIN(ia)->sin_addr;
+			in4p_prefsrcip(inp) = IA_SIN(ia)->sin_addr;
 			pserialize_read_exit(s);
 			break;
 		break;
@@ -1256,8 +1251,7 @@ ip_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 			if (error)
 				break;
 
-			error = portalgo_algo_index_select(
-			    (struct inpcb_hdr *)inp, optval);
+			error = portalgo_algo_index_select(inp, optval);
 			break;
 
 #if defined(IPSEC)
@@ -1316,11 +1310,11 @@ ip_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 				break;
 
 			case IP_MINTTL:
-				optval = inp->inp_ip_minttl;
+				optval = in4p_ip_minttl(inp);
 				break;
 
 			case IP_ERRORMTU:
-				optval = inp->inp_errormtu;
+				optval = in4p_errormtu(inp);
 				break;
 
 #define	OPTBIT(bit)	(inpflags & bit ? 1 : 0)
@@ -1366,7 +1360,7 @@ ip_ctloutput(int op, struct socket *so, struct sockopt *sopt)
 			case sizeof(struct in_pktinfo):
 				/* Solaris compatibility */
 				pktinfo.ipi_ifindex = 0;
-				pktinfo.ipi_addr = inp->inp_prefsrcip;
+				pktinfo.ipi_addr = in4p_prefsrcip(inp);
 				error = sockopt_set(sopt, &pktinfo,
 				    sizeof(pktinfo));
 				break;
@@ -1442,7 +1436,7 @@ ip_pktinfo_prepare(const struct inpcb *inp, const struct in_pktinfo *pktinfo,
 	if (!in_nullhost(pktinfo->ipi_addr)) {
 		pktopts->ippo_laddr.sin_addr = pktinfo->ipi_addr;
 		/* EADDRNOTAVAIL? */
-		error = in_pcbbindableaddr(inp, &pktopts->ippo_laddr, cred);
+		error = inpcb_bindableaddr(inp, &pktopts->ippo_laddr, cred);
 		if (error != 0)
 			return error;
 		addrset = true;
@@ -1504,8 +1498,8 @@ ip_setpktopts(struct mbuf *control, struct ip_pktopts *pktopts, int *flags,
 
 	pktopts->ippo_imo = inp->inp_moptions;
 
-	struct in_addr *ia = in_nullhost(inp->inp_prefsrcip) ? &inp->inp_laddr :
-	    &inp->inp_prefsrcip;
+	struct in_addr *ia = in_nullhost(in4p_prefsrcip(inp)) ? &in4p_laddr(inp) :
+	    &in4p_prefsrcip(inp);
 	sockaddr_in_init(&pktopts->ippo_laddr, ia, 0);
 
 	if (control == NULL)

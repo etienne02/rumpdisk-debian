@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_descrip.c,v 1.37 2020/02/23 15:46:41 ad Exp $	*/
+/*	$NetBSD: sys_descrip.c,v 1.51 2024/05/20 09:37:34 martin Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2020 The NetBSD Foundation, Inc.
@@ -67,7 +67,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_descrip.c,v 1.37 2020/02/23 15:46:41 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_descrip.c,v 1.51 2024/05/20 09:37:34 martin Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -149,13 +149,15 @@ dodup(struct lwp *l, int from, int to, int flags, register_t *retval)
 }
 
 int
-sys_dup3(struct lwp *l, const struct sys_dup3_args *uap, register_t *retval)
+sys___dup3100(struct lwp *l, const struct sys___dup3100_args *uap, register_t *retval)
 {
 	/* {
 		syscallarg(int)	from;
 		syscallarg(int)	to;
 		syscallarg(int)	flags;
 	} */
+	if (SCARG(uap, from) == SCARG(uap, to))
+		return EINVAL;
 	return dodup(l, SCARG(uap, from), SCARG(uap, to), SCARG(uap, flags),
 	    retval);
 }
@@ -234,17 +236,19 @@ fcntl_forfs(int fd, file_t *fp, int cmd, void *arg)
 int
 do_fcntl_lock(int fd, int cmd, struct flock *fl)
 {
-	file_t *fp;
-	vnode_t *vp;
+	struct file *fp = NULL;
 	proc_t *p;
+	int (*fo_advlock)(struct file *, void *, int, struct flock *, int);
 	int error, flg;
 
-	if ((error = fd_getvnode(fd, &fp)) != 0)
-		return error;
-
-	vp = fp->f_vnode;
-	if (fl->l_whence == SEEK_CUR)
-		fl->l_start += fp->f_offset;
+	if ((fp = fd_getfile(fd)) == NULL) {
+		error = EBADF;
+		goto out;
+	}
+	if ((fo_advlock = fp->f_ops->fo_advlock) == NULL) {
+		error = EINVAL;
+		goto out;
+	}
 
 	flg = F_POSIX;
 	p = curproc;
@@ -267,7 +271,7 @@ do_fcntl_lock(int fd, int cmd, struct flock *fl)
 				p->p_flag |= PK_ADVLOCK;
 				mutex_exit(p->p_lock);
 			}
-			error = VOP_ADVLOCK(vp, p, F_SETLK, fl, flg);
+			error = (*fo_advlock)(fp, p, F_SETLK, fl, flg);
 			break;
 
 		case F_WRLCK:
@@ -280,11 +284,11 @@ do_fcntl_lock(int fd, int cmd, struct flock *fl)
 				p->p_flag |= PK_ADVLOCK;
 				mutex_exit(p->p_lock);
 			}
-			error = VOP_ADVLOCK(vp, p, F_SETLK, fl, flg);
+			error = (*fo_advlock)(fp, p, F_SETLK, fl, flg);
 			break;
 
 		case F_UNLCK:
-			error = VOP_ADVLOCK(vp, p, F_UNLCK, fl, F_POSIX);
+			error = (*fo_advlock)(fp, p, F_UNLCK, fl, F_POSIX);
 			break;
 
 		default:
@@ -300,7 +304,7 @@ do_fcntl_lock(int fd, int cmd, struct flock *fl)
 			error = EINVAL;
 			break;
 		}
-		error = VOP_ADVLOCK(vp, p, F_GETLK, fl, F_POSIX);
+		error = (*fo_advlock)(fp, p, F_GETLK, fl, F_POSIX);
 		break;
 
 	default:
@@ -308,30 +312,11 @@ do_fcntl_lock(int fd, int cmd, struct flock *fl)
 		break;
 	}
 
-	fd_putfile(fd);
+out:	if (fp)
+		fd_putfile(fd);
 	return error;
 }
 
-static int
-do_fcntl_getpath(struct lwp *l, file_t *fp, char *upath)
-{
-	char *kpath;
-	int error;
-
-	if (fp->f_type != DTYPE_VNODE)
-		return EOPNOTSUPP;
-
-	kpath = PNBUF_GET();
-
-	error = vnode_to_path(kpath, MAXPATHLEN, fp->f_vnode, l, l->l_proc);
-	if (!error)
-		error = copyoutstr(kpath, upath, MAXPATHLEN, NULL);
-
-	PNBUF_PUT(kpath);
-
-	return error;
-}
-	
 /*
  * The file control system call.
  */
@@ -347,6 +332,7 @@ sys_fcntl(struct lwp *l, const struct sys_fcntl_args *uap, register_t *retval)
 	filedesc_t *fdp;
 	fdtab_t *dt;
 	file_t *fp;
+	char *kpath;
 	struct flock fl;
 	bool cloexec = false;
 
@@ -483,7 +469,30 @@ sys_fcntl(struct lwp *l, const struct sys_fcntl_args *uap, register_t *retval)
 		break;
 
 	case F_GETPATH:
-		error = do_fcntl_getpath(l, fp, SCARG(uap, arg));
+		kpath = PNBUF_GET();
+
+		/* vnodes need extra context, so are handled separately */
+		if (fp->f_type == DTYPE_VNODE)
+			error = vnode_to_path(kpath, MAXPATHLEN, fp->f_vnode,
+			    l, l->l_proc);
+		else
+			error = (*fp->f_ops->fo_fcntl)(fp, F_GETPATH, kpath);
+
+		if (error == 0)
+			error = copyoutstr(kpath, SCARG(uap, arg), MAXPATHLEN,
+			    NULL);
+
+		PNBUF_PUT(kpath);
+		break;
+
+	case F_ADD_SEALS:
+		tmp = (int)(uintptr_t) SCARG(uap, arg);
+		error = (*fp->f_ops->fo_fcntl)(fp, F_ADD_SEALS, &tmp);
+		break;
+
+	case F_GET_SEALS:
+		error = (*fp->f_ops->fo_fcntl)(fp, F_GET_SEALS, &tmp);
+		*retval = tmp;
 		break;
 
 	default:
@@ -573,39 +582,21 @@ sys_fpathconf(struct lwp *l, const struct sys_fpathconf_args *uap,
 		syscallarg(int)	fd;
 		syscallarg(int)	name;
 	} */
-	int fd, error;
+	int fd, name, error;
 	file_t *fp;
 
 	fd = SCARG(uap, fd);
+	name = SCARG(uap, name);
 	error = 0;
 
-	if ((fp = fd_getfile(fd)) == NULL) {
-		return (EBADF);
-	}
-	switch (fp->f_type) {
-	case DTYPE_SOCKET:
-	case DTYPE_PIPE:
-		if (SCARG(uap, name) != _PC_PIPE_BUF)
-			error = EINVAL;
-		else
-			*retval = PIPE_BUF;
-		break;
-
-	case DTYPE_VNODE:
-		error = VOP_PATHCONF(fp->f_vnode, SCARG(uap, name), retval);
-		break;
-
-	case DTYPE_KQUEUE:
-		error = EINVAL;
-		break;
-
-	default:
+	if ((fp = fd_getfile(fd)) == NULL)
+		return EBADF;
+	if (fp->f_ops->fo_fpathconf == NULL)
 		error = EOPNOTSUPP;
-		break;
-	}
-
+	else
+		error = (*fp->f_ops->fo_fpathconf)(fp, name, retval);
 	fd_putfile(fd);
-	return (error);
+	return error;
 }
 
 /*
@@ -623,17 +614,23 @@ sys_flock(struct lwp *l, const struct sys_flock_args *uap, register_t *retval)
 		syscallarg(int)	how;
 	} */
 	int fd, how, error;
-	file_t *fp;
-	vnode_t	*vp;
+	struct file *fp = NULL;
+	int (*fo_advlock)(struct file *, void *, int, struct flock *, int);
 	struct flock lf;
 
 	fd = SCARG(uap, fd);
 	how = SCARG(uap, how);
 
-	if ((error = fd_getvnode(fd, &fp)) != 0)
-		return error == EINVAL ? EOPNOTSUPP : error;
+	if ((fp = fd_getfile(fd)) == NULL) {
+		error = EBADF;
+		goto out;
+	}
+	if ((fo_advlock = fp->f_ops->fo_advlock) == NULL) {
+		KASSERT((atomic_load_relaxed(&fp->f_flag) & FHASLOCK) == 0);
+		error = EOPNOTSUPP;
+		goto out;
+	}
 
-	vp = fp->f_vnode;
 	lf.l_whence = SEEK_SET;
 	lf.l_start = 0;
 	lf.l_len = 0;
@@ -642,9 +639,8 @@ sys_flock(struct lwp *l, const struct sys_flock_args *uap, register_t *retval)
 	case LOCK_UN:
 		lf.l_type = F_UNLCK;
 		atomic_and_uint(&fp->f_flag, ~FHASLOCK);
-		error = VOP_ADVLOCK(vp, fp, F_UNLCK, &lf, F_FLOCK);
-		fd_putfile(fd);
-		return error;
+		error = (*fo_advlock)(fp, fp, F_UNLCK, &lf, F_FLOCK);
+		goto out;
 	case LOCK_EX:
 		lf.l_type = F_WRLCK;
 		break;
@@ -652,17 +648,18 @@ sys_flock(struct lwp *l, const struct sys_flock_args *uap, register_t *retval)
 		lf.l_type = F_RDLCK;
 		break;
 	default:
-		fd_putfile(fd);
-		return EINVAL;
+		error = EINVAL;
+		goto out;
 	}
 
 	atomic_or_uint(&fp->f_flag, FHASLOCK);
 	if (how & LOCK_NB) {
-		error = VOP_ADVLOCK(vp, fp, F_SETLK, &lf, F_FLOCK);
+		error = (*fo_advlock)(fp, fp, F_SETLK, &lf, F_FLOCK);
 	} else {
-		error = VOP_ADVLOCK(vp, fp, F_SETLK, &lf, F_FLOCK|F_WAIT);
+		error = (*fo_advlock)(fp, fp, F_SETLK, &lf, F_FLOCK|F_WAIT);
 	}
-	fd_putfile(fd);
+out:	if (fp)
+		fd_putfile(fd);
 	return error;
 }
 
@@ -670,96 +667,16 @@ int
 do_posix_fadvise(int fd, off_t offset, off_t len, int advice)
 {
 	file_t *fp;
-	vnode_t *vp;
-	off_t endoffset;
 	int error;
 
-	CTASSERT(POSIX_FADV_NORMAL == UVM_ADV_NORMAL);
-	CTASSERT(POSIX_FADV_RANDOM == UVM_ADV_RANDOM);
-	CTASSERT(POSIX_FADV_SEQUENTIAL == UVM_ADV_SEQUENTIAL);
-
-	if (offset < 0) {
-		return EINVAL;
-	}
-	if (len == 0) {
-		endoffset = INT64_MAX;
-	} else if (len > 0 && (INT64_MAX - offset) >= len) {
-		endoffset = offset + len;
-	} else {
-		return EINVAL;
-	}
-	if ((fp = fd_getfile(fd)) == NULL) {
+	if ((fp = fd_getfile(fd)) == NULL)
 		return EBADF;
+	if (fp->f_ops->fo_posix_fadvise == NULL) {
+		error = EOPNOTSUPP;
+	} else {
+		error = (*fp->f_ops->fo_posix_fadvise)(fp, offset, len,
+		    advice);
 	}
-	if (fp->f_type != DTYPE_VNODE) {
-		if (fp->f_type == DTYPE_PIPE || fp->f_type == DTYPE_SOCKET) {
-			error = ESPIPE;
-		} else {
-			error = EOPNOTSUPP;
-		}
-		fd_putfile(fd);
-		return error;
-	}
-
-	switch (advice) {
-	case POSIX_FADV_WILLNEED:
-	case POSIX_FADV_DONTNEED:
-		vp = fp->f_vnode;
-		if (vp->v_type != VREG && vp->v_type != VBLK) {
-			fd_putfile(fd);
-			return 0;
-		}
-		break;
-	}
-
-	switch (advice) {
-	case POSIX_FADV_NORMAL:
-	case POSIX_FADV_RANDOM:
-	case POSIX_FADV_SEQUENTIAL:
-		/*
-		 * We ignore offset and size.  Must lock the file to
-		 * do this, as f_advice is sub-word sized.
-		 */
-		mutex_enter(&fp->f_lock);
-		fp->f_advice = (u_char)advice;
-		mutex_exit(&fp->f_lock);
-		error = 0;
-		break;
-
-	case POSIX_FADV_WILLNEED:
-		vp = fp->f_vnode;
-		error = uvm_readahead(&vp->v_uobj, offset, endoffset - offset);
-		break;
-
-	case POSIX_FADV_DONTNEED:
-		vp = fp->f_vnode;
-		/*
-		 * Align the region to page boundaries as VOP_PUTPAGES expects
-		 * by shrinking it.  We shrink instead of expand because we
-		 * do not want to deactivate cache outside of the requested
-		 * region.  It means that if the specified region is smaller
-		 * than PAGE_SIZE, we do nothing.
-		 */
-		if (round_page(offset) < trunc_page(endoffset) &&
-		    offset <= round_page(offset)) {
-			rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
-			error = VOP_PUTPAGES(vp,
-			    round_page(offset), trunc_page(endoffset),
-			    PGO_DEACTIVATE | PGO_CLEANIT);
-		} else {
-			error = 0;
-		}
-		break;
-
-	case POSIX_FADV_NOREUSE:
-		/* Not implemented yet. */
-		error = 0;
-		break;
-	default:
-		error = EINVAL;
-		break;
-	}
-
 	fd_putfile(fd);
 	return error;
 }

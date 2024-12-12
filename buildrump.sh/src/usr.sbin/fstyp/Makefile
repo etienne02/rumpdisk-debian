@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.11 2021/02/02 21:31:11 joerg Exp $
+#	$NetBSD: Makefile,v 1.15 2024/04/26 18:21:25 christos Exp $
 
 .include <bsd.own.mk>
 
@@ -14,22 +14,25 @@ MAN=	fstyp.8
 WARNS?=	6
 
 .if (${MKZFS} != "no")
-CFLAGS+=	-DHAVE_ZFS
 COPTS.zfs.c+=	-Wno-unknown-pragmas
 COPTS.zfs.c+=	-Wno-sign-conversion
 COPTS.zfs.c+=	-Wno-strict-prototypes
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external/cddl/osnet/include
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external/cddl/osnet/sys
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external/cddl/osnet/dist/head
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external/cddl/osnet/dist/lib/libzpool/common
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external/cddl/osnet/dist/uts/common
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external/cddl/osnet/dist/uts/common/fs/zfs
-COPTS.zfs.c+=	-I${NETBSDSRCDIR}/external/cddl/osnet/dist/lib/libnvpair
-LDADD+=	-lnvpair -lzfs
+LDADD+=	-lnvpair
+DPADD+= ${LIBNVPAIR}
+
+OSNET=${NETBSDSRCDIR}/external/cddl/osnet
+CPPFLAGS+=	-DHAVE_ZFS
+CPPFLAGS.zfs.c+=	-I${NETBSDSRCDIR}/external
+CPPFLAGS.zfs.c+=	-I${OSNET}/include
+CPPFLAGS.zfs.c+=	-I${OSNET}/sys
+CPPFLAGS.zfs.c+=	-I${OSNET}/dist/head
+CPPFLAGS.zfs.c+=	-I${OSNET}/dist/lib/libzpool/common
+CPPFLAGS.zfs.c+=	-I${OSNET}/dist/uts/common
+CPPFLAGS.zfs.c+=	-I${OSNET}/dist/uts/common/fs/zfs
+CPPFLAGS.zfs.c+=	-I${OSNET}/dist/lib/libnvpair
 .endif
 
-CWARNFLAGS.clang+=	-Wno-unknown-pragmas -Wno-error=address-of-packed-member
-CWARNFLAGS.gcc+=        ${GCC_NO_ADDR_OF_PACKED_MEMBER}
+CWARNFLAGS.clang+=	-Wno-unknown-pragmas
+CWARNFLAGS+=        	${CC_WNO_ADDRESS_OF_PACKED_MEMBER}
 
 .include <bsd.prog.mk>

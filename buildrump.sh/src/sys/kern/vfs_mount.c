@@ -1,4 +1,4 @@
-/*	$NetBSD: vfs_mount.c,v 1.86 2021/02/16 09:56:32 hannken Exp $	*/
+/*	$NetBSD: vfs_mount.c,v 1.110 2024/12/07 02:27:38 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997-2020 The NetBSD Foundation, Inc.
@@ -67,7 +67,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_mount.c,v 1.86 2021/02/16 09:56:32 hannken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_mount.c,v 1.110 2024/12/07 02:27:38 riastradh Exp $");
+
+#include "veriexec.h"
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -75,22 +77,25 @@ __KERNEL_RCSID(0, "$NetBSD: vfs_mount.c,v 1.86 2021/02/16 09:56:32 hannken Exp $
 #include <sys/atomic.h>
 #include <sys/buf.h>
 #include <sys/conf.h>
+#include <sys/device.h>
+#include <sys/extattr.h>
 #include <sys/fcntl.h>
 #include <sys/filedesc.h>
-#include <sys/device.h>
+#include <sys/fstrans.h>
 #include <sys/kauth.h>
 #include <sys/kmem.h>
 #include <sys/module.h>
 #include <sys/mount.h>
-#include <sys/fstrans.h>
 #include <sys/namei.h>
-#include <sys/extattr.h>
+#include <sys/sdt.h>
 #include <sys/syscallargs.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
+#include <sys/verified_exec.h>
 #include <sys/vfs_syscalls.h>
 #include <sys/vnode_impl.h>
 
+#include <miscfs/deadfs/deadfs.h>
 #include <miscfs/genfs/genfs.h>
 #include <miscfs/specfs/specdev.h>
 
@@ -186,18 +191,18 @@ vfs_rootmountalloc(const char *fstypename, const char *devname,
 
 	mutex_enter(&vfs_list_lock);
 	LIST_FOREACH(vfsp, &vfs_list, vfs_list)
-		if (!strncmp(vfsp->vfs_name, fstypename, 
+		if (!strncmp(vfsp->vfs_name, fstypename,
 		    sizeof(mp->mnt_stat.f_fstypename)))
 			break;
 	if (vfsp == NULL) {
 		mutex_exit(&vfs_list_lock);
-		return (ENODEV);
+		return SET_ERROR(ENODEV);
 	}
 	vfsp->vfs_refcount++;
 	mutex_exit(&vfs_list_lock);
 
 	if ((mp = vfs_mountalloc(vfsp, NULL)) == NULL)
-		return ENOMEM;
+		return SET_ERROR(ENOMEM);
 	error = vfs_busy(mp);
 	KASSERT(error == 0);
 	mp->mnt_flag = MNT_RDONLY;
@@ -220,23 +225,41 @@ void
 vfs_getnewfsid(struct mount *mp)
 {
 	static u_short xxxfs_mntid;
+	struct mountlist_entry *me;
 	fsid_t tfsid;
 	int mtype;
 
 	mutex_enter(&mntid_lock);
-	mtype = makefstype(mp->mnt_op->vfs_name);
-	mp->mnt_stat.f_fsidx.__fsid_val[0] = makedev(mtype, 0);
-	mp->mnt_stat.f_fsidx.__fsid_val[1] = mtype;
-	mp->mnt_stat.f_fsid = mp->mnt_stat.f_fsidx.__fsid_val[0];
 	if (xxxfs_mntid == 0)
 		++xxxfs_mntid;
+	mtype = makefstype(mp->mnt_op->vfs_name);
 	tfsid.__fsid_val[0] = makedev(mtype & 0xff, xxxfs_mntid);
 	tfsid.__fsid_val[1] = mtype;
-	while (vfs_getvfs(&tfsid)) {
-		tfsid.__fsid_val[0]++;
-		xxxfs_mntid++;
+	/* Always increment to not return the same fsid to parallel mounts. */
+	xxxfs_mntid++;
+
+	/*
+	 * Directly walk mountlist to prevent deadlock through
+	 * mountlist_iterator_next() -> vfs_busy().
+	 */
+	mutex_enter(&mountlist_lock);
+	for (me = TAILQ_FIRST(&mountlist); me != TAILQ_END(&mountlist); ) {
+		if (me->me_type == ME_MOUNT &&
+		    me->me_mount->mnt_stat.f_fsidx.__fsid_val[0] ==
+		    tfsid.__fsid_val[0] &&
+		    me->me_mount->mnt_stat.f_fsidx.__fsid_val[1] ==
+		    tfsid.__fsid_val[1]) {
+			tfsid.__fsid_val[0]++;
+			xxxfs_mntid++;
+			me = TAILQ_FIRST(&mountlist);
+		} else {
+			me = TAILQ_NEXT(me, me_list);
+		}
 	}
+	mutex_exit(&mountlist_lock);
+
 	mp->mnt_stat.f_fsidx.__fsid_val[0] = tfsid.__fsid_val[0];
+	mp->mnt_stat.f_fsidx.__fsid_val[1] = tfsid.__fsid_val[1];
 	mp->mnt_stat.f_fsid = mp->mnt_stat.f_fsidx.__fsid_val[0];
 	mutex_exit(&mntid_lock);
 }
@@ -283,9 +306,11 @@ void
 vfs_rele(struct mount *mp)
 {
 
+	membar_release();
 	if (__predict_true((int)atomic_dec_uint_nv(&mp->mnt_refcnt) > 0)) {
 		return;
 	}
+	membar_acquire();
 
 	/*
 	 * Nothing else has visibility of the mount: we can now
@@ -328,11 +353,11 @@ _vfs_busy(struct mount *mp, bool wait)
 		fstrans_start(mp);
 	} else {
 		if (fstrans_start_nowait(mp))
-			return EBUSY;
+			return SET_ERROR(EBUSY);
 	}
 	if (__predict_false((mp->mnt_iflag & IMNT_GONE) != 0)) {
 		fstrans_done(mp);
-		return ENOENT;
+		return SET_ERROR(ENOENT);
 	}
 	vfs_ref(mp);
 	return 0;
@@ -365,6 +390,53 @@ vfs_unbusy(struct mount *mp)
 
 	fstrans_done(mp);
 	vfs_rele(mp);
+}
+
+/*
+ * Change a file systems lower mount.
+ * Both the current and the new lower mount may be NULL.  The caller
+ * guarantees exclusive access to the mount and holds a pre-existing
+ * reference to the new lower mount.
+ */
+int
+vfs_set_lowermount(struct mount *mp, struct mount *lowermp)
+{
+	struct mount *oldlowermp;
+	int error;
+
+#ifdef DEBUG
+	/*
+	 * Limit the depth of file system stack so kernel sanitizers
+	 * may stress mount/unmount without exhausting the kernel stack.
+	 */
+	int depth;
+	struct mount *mp2;
+
+	for (depth = 0, mp2 = lowermp; mp2; depth++, mp2 = mp2->mnt_lower) {
+		if (depth == 23)
+			return SET_ERROR(EINVAL);
+	}
+#endif
+
+	if (lowermp) {
+		if (lowermp == dead_rootmount)
+			return SET_ERROR(ENOENT);
+		error = vfs_busy(lowermp);
+		if (error)
+			return error;
+		vfs_ref(lowermp);
+	}
+
+	oldlowermp = mp->mnt_lower;
+	mp->mnt_lower = lowermp;
+
+	if (lowermp)
+		vfs_unbusy(lowermp);
+
+	if (oldlowermp)
+		vfs_rele(oldlowermp);
+
+	return 0;
 }
 
 struct vnode_iterator {
@@ -428,7 +500,7 @@ vfs_vnode_iterator_next1(struct vnode_iterator *vni,
 again:
 		if (vip == NULL) {
 			mutex_exit(lock);
-	       		return NULL;
+			return NULL;
 		}
 		vp = VIMPL_TO_VNODE(vip);
 		KASSERT(vp != NULL);
@@ -441,7 +513,8 @@ again:
 			goto again;
 		}
 
-		TAILQ_INSERT_AFTER(&mp->mnt_vnodelist, vip, mvip, vi_mntvnodes);
+		TAILQ_INSERT_AFTER(&mp->mnt_vnodelist, vip, mvip,
+		    vi_mntvnodes);
 		VIMPL_TO_VNODE(mvip)->v_usecount = 1;
 		mutex_exit(lock);
 		error = vcache_vget(vp);
@@ -525,6 +598,7 @@ vflushnext(struct vnode_iterator *marker, int *when)
 		yield();
 		*when = getticks() + hz / 10;
 	}
+	preempt_point();
 	return vfs_vnode_iterator_next1(marker, NULL, NULL, true);
 }
 
@@ -590,7 +664,7 @@ vflush_one(vnode_t *vp, vnode_t *skipvp, int flags)
 		return 0;
 	}
 	vrele(vp);
-	return EBUSY;
+	return SET_ERROR(EBUSY);
 }
 
 int
@@ -631,7 +705,7 @@ vflush(struct mount *mp, vnode_t *skipvp, int flags)
 	if (error)
 		return error;
 	if (busy)
-		return EBUSY;
+		return SET_ERROR(EBUSY);
 	return 0;
 }
 
@@ -717,7 +791,7 @@ start_extattr(struct mount *mp)
 	int error;
 
 	error = VFS_EXTATTRCTL(mp, EXTATTR_CMD_START, NULL, 0, NULL);
-	if (error) 
+	if (error)
 		printf("%s: failed to start extattr: error = %d\n",
 		       mp->mnt_stat.f_mntonname, error);
 
@@ -744,17 +818,17 @@ mount_domount(struct lwp *l, vnode_t **vpp, struct vfsops *vfsops,
 	/* Cannot make a non-dir a mount-point (from here anyway). */
 	if (vp->v_type != VDIR) {
 		vfs_delref(vfsops);
-		return ENOTDIR;
+		return SET_ERROR(ENOTDIR);
 	}
 
 	if (flags & MNT_EXPORTED) {
 		vfs_delref(vfsops);
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 	}
 
 	if ((mp = vfs_mountalloc(vfsops, vp)) == NULL) {
 		vfs_delref(vfsops);
-		return ENOMEM;
+		return SET_ERROR(ENOMEM);
 	}
 
 	mp->mnt_stat.f_owner = kauth_cred_geteuid(l->l_cred);
@@ -767,12 +841,20 @@ mount_domount(struct lwp *l, vnode_t **vpp, struct vfsops *vfsops,
 	 */
 	mp->mnt_flag = flags & (MNT_BASIC_FLAGS | MNT_FORCE | MNT_IGNORE);
 
-	mutex_enter(mp->mnt_updating);
 	error = VFS_MOUNT(mp, path, data, data_len);
 	mp->mnt_flag &= ~MNT_OP_FLAGS;
 
-	if (error != 0)
-		goto err_unmounted;
+	if (error != 0) {
+		vfs_rele(mp);
+		return error;
+	}
+
+	/* Suspend new file system before taking mnt_updating. */
+	do {
+		error2 = vfs_suspend(mp, 0);
+	} while (error2 == EINTR || error2 == ERESTART);
+	KASSERT(error2 == 0 || error2 == EOPNOTSUPP);
+	mutex_enter(mp->mnt_updating);
 
 	/*
 	 * Validate and prepare the mount point.
@@ -789,12 +871,12 @@ mount_domount(struct lwp *l, vnode_t **vpp, struct vfsops *vfsops,
 	}
 	if (nd.ni_vp != vp) {
 		vput(nd.ni_vp);
-		error = EINVAL;
+		error = SET_ERROR(EINVAL);
 		goto err_mounted;
 	}
 	if (vp->v_mountedhere != NULL) {
 		vput(nd.ni_vp);
-		error = EBUSY;
+		error = SET_ERROR(EBUSY);
 		goto err_mounted;
 	}
 	error = vinvalbuf(vp, V_SAVE, l->l_cred, l, 0, 0);
@@ -817,6 +899,8 @@ mount_domount(struct lwp *l, vnode_t **vpp, struct vfsops *vfsops,
 
 	mount_checkdirs(vp);
 	mutex_exit(mp->mnt_updating);
+	if (error2 == 0)
+		vfs_resume(mp);
 
 	/* Hold an additional reference to the mount across VFS_START(). */
 	vfs_ref(mp);
@@ -834,20 +918,12 @@ mount_domount(struct lwp *l, vnode_t **vpp, struct vfsops *vfsops,
 	return error;
 
 err_mounted:
-	do {
-		error2 = vfs_suspend(mp, 0);
-	} while (error2 == EINTR || error2 == ERESTART);
-	KASSERT(error2 == 0 || error2 == EOPNOTSUPP);
-
 	if (VFS_UNMOUNT(mp, MNT_FORCE) != 0)
 		panic("Unmounting fresh file system failed");
-
+	mutex_exit(mp->mnt_updating);
 	if (error2 == 0)
 		vfs_resume(mp);
-
-err_unmounted:
-	vp->v_mountedhere = NULL;
-	mutex_exit(mp->mnt_updating);
+	vfs_set_lowermount(mp, NULL);
 	vfs_rele(mp);
 
 	return error;
@@ -862,7 +938,8 @@ err_unmounted:
 int
 dounmount(struct mount *mp, int flags, struct lwp *l)
 {
-	vnode_t *coveredvp;
+	struct vnode *coveredvp, *vp;
+	struct vnode_impl *vip;
 	int error, async, used_syncer, used_extattr;
 	const bool was_suspended = fstrans_is_owner(mp);
 
@@ -886,6 +963,10 @@ dounmount(struct mount *mp, int flags, struct lwp *l)
 
 	mp->mnt_iflag |= IMNT_UNMOUNT;
 	mutex_enter(mp->mnt_updating);
+	/*
+	 * Temporarily clear the MNT_ASYNC flags so that bwrite() doesn't
+	 * convert the sync writes to delayed writes.
+	 */
 	async = mp->mnt_flag & MNT_ASYNC;
 	mp->mnt_flag &= ~MNT_ASYNC;
 	cache_purgevfs(mp);	/* remove cache entries for this file sys */
@@ -900,9 +981,9 @@ dounmount(struct mount *mp, int flags, struct lwp *l)
 	}
 	if (error) {
 		mp->mnt_iflag &= ~IMNT_UNMOUNT;
+		mp->mnt_flag |= async;
 		if ((mp->mnt_flag & (MNT_RDONLY | MNT_ASYNC)) == 0)
 			vfs_syncer_add_to_worklist(mp);
-		mp->mnt_flag |= async;
 		mutex_exit(mp->mnt_updating);
 		if (!was_suspended)
 			vfs_resume(mp);
@@ -922,19 +1003,22 @@ dounmount(struct mount *mp, int flags, struct lwp *l)
 	 * vfs_busy() from succeeding.
 	 */
 	mp->mnt_iflag |= IMNT_GONE;
+	if ((coveredvp = mp->mnt_vnodecovered) != NULLVP) {
+		coveredvp->v_mountedhere = NULL;
+	}
 	if (!was_suspended)
 		vfs_resume(mp);
 
-	if ((coveredvp = mp->mnt_vnodecovered) != NULLVP) {
-		vn_lock(coveredvp, LK_EXCLUSIVE | LK_RETRY);
-		coveredvp->v_mountedhere = NULL;
-		VOP_UNLOCK(coveredvp);
-	}
 	mountlist_remove(mp);
-	if (TAILQ_FIRST(&mp->mnt_vnodelist) != NULL)
+
+	if ((vip = TAILQ_FIRST(&mp->mnt_vnodelist)) != NULL) {
+		vp = VIMPL_TO_VNODE(vip);
+		vprint("dangling", vp);
 		panic("unmount: dangling vnode");
+	}
 	vfs_hooks_unmount(mp);
 
+	vfs_set_lowermount(mp, NULL);
 	vfs_rele(mp);	/* reference from mount() */
 	if (coveredvp != NULLVP) {
 		vrele(coveredvp);
@@ -977,7 +1061,7 @@ vfs_unmount_next(uint64_t gen)
 
 	mountlist_iterator_init(&iter);
 	while ((mp = mountlist_iterator_next(iter)) != NULL) {
-		if ((nmp == NULL || mp->mnt_gen > nmp->mnt_gen) && 
+		if ((nmp == NULL || mp->mnt_gen > nmp->mnt_gen) &&
 		    mp->mnt_gen < gen) {
 			if (nmp != NULL)
 				vfs_rele(nmp);
@@ -1105,7 +1189,7 @@ vfs_shutdown(void)
 	vfs_sync_all(l);
 
 	/*
-	 * If we have paniced - do not make the situation potentially
+	 * If we have panicked - do not make the situation potentially
 	 * worse by unmounting the file systems.
 	 */
 	if (panicstr != NULL) {
@@ -1173,7 +1257,9 @@ vfs_mountroot(void)
 			panic("vfs_mountroot: rootdev not set for DV_DISK");
 	        if (bdevvp(rootdev, &rootvp))
 	                panic("vfs_mountroot: can't get vnode for rootdev");
+		vn_lock(rootvp, LK_EXCLUSIVE | LK_RETRY);
 		error = VOP_OPEN(rootvp, FREAD, FSCRED);
+		VOP_UNLOCK(rootvp);
 		if (error) {
 			printf("vfs_mountroot: can't open root device\n");
 			return (error);
@@ -1186,7 +1272,7 @@ vfs_mountroot(void)
 	default:
 		printf("%s: inappropriate for root file system\n",
 		    device_xname(root_device));
-		return (ENODEV);
+		return SET_ERROR(ENODEV);
 	}
 
 	/*
@@ -1195,7 +1281,7 @@ vfs_mountroot(void)
 	 */
 	if (strcmp(rootfstype, ROOT_FSTYPE_ANY) != 0) {
 		v = vfs_getopsbyname(rootfstype);
-		error = EFTYPE;
+		error = SET_ERROR(EFTYPE);
 		if (v != NULL) {
 			if (v->vfs_mountroot != NULL) {
 				error = (v->vfs_mountroot)();
@@ -1234,18 +1320,19 @@ vfs_mountroot(void)
 		if (device_class(root_device) == DV_DISK)
 			printf(" (dev 0x%llx)", (unsigned long long)rootdev);
 		printf("\n");
-		error = EFTYPE;
+		error = SET_ERROR(EFTYPE);
 	}
 
 done:
 	if (error && device_class(root_device) == DV_DISK) {
+		vn_lock(rootvp, LK_EXCLUSIVE | LK_RETRY);
 		VOP_CLOSE(rootvp, FREAD, FSCRED);
+		VOP_UNLOCK(rootvp);
 		vrele(rootvp);
 	}
 	if (error == 0) {
 		mount_iterator_t *iter;
 		struct mount *mp;
-		extern struct cwdinfo cwdi0;
 
 		mountlist_iterator_init(&iter);
 		mp = mountlist_iterator_next(iter);
@@ -1315,7 +1402,7 @@ mount_initspecific(struct mount *mp)
 	int error __diagused;
 
 	error = specificdata_init(mount_specificdata_domain,
-				  &mp->mnt_specdataref);
+	    &mp->mnt_specdataref);
 	KASSERT(error == 0);
 }
 
@@ -1339,7 +1426,7 @@ mount_getspecific(struct mount *mp, specificdata_key_t key)
 {
 
 	return specificdata_getspecific(mount_specificdata_domain,
-					 &mp->mnt_specdataref, key);
+	    &mp->mnt_specdataref, key);
 }
 
 /*
@@ -1351,7 +1438,7 @@ mount_setspecific(struct mount *mp, specificdata_key_t key, void *data)
 {
 
 	specificdata_setspecific(mount_specificdata_domain,
-				 &mp->mnt_specdataref, key, data);
+	    &mp->mnt_specdataref, key, data);
 }
 
 /*
@@ -1364,12 +1451,13 @@ vfs_mountedon(vnode_t *vp)
 	int error = 0;
 
 	if (vp->v_type != VBLK)
-		return ENOTBLK;
+		return SET_ERROR(ENOTBLK);
 	if (spec_node_getmountedfs(vp) != NULL)
-		return EBUSY;
-	if (spec_node_lookup_by_dev(vp->v_type, vp->v_rdev, &vq) == 0) {
+		return SET_ERROR(EBUSY);
+	if (spec_node_lookup_by_dev(vp->v_type, vp->v_rdev, VDEAD_NOWAIT, &vq)
+	    == 0) {
 		if (spec_node_getmountedfs(vq) != NULL)
-			error = EBUSY;
+			error = SET_ERROR(EBUSY);
 		vrele(vq);
 	}
 
@@ -1395,7 +1483,7 @@ rawdev_mounted(vnode_t *vp, vnode_t **bvpp)
 	d_type = D_OTHER;
 
 	if (iskmemvp(vp))
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 
 	switch (vp->v_type) {
 	case VCHR: {
@@ -1417,7 +1505,7 @@ rawdev_mounted(vnode_t *vp, vnode_t **bvpp)
 		}
 
 		break;
-		}
+	}
 
 	case VBLK: {
 		const struct bdevsw *bdev;
@@ -1430,14 +1518,14 @@ rawdev_mounted(vnode_t *vp, vnode_t **bvpp)
 		bvp = vp;
 
 		break;
-		}
+	}
 
 	default:
 		break;
 	}
 
 	if (d_type != D_DISK)
-		return EINVAL;
+		return SET_ERROR(EINVAL);
 
 	if (bvpp != NULL)
 		*bvpp = bvp;
@@ -1448,7 +1536,7 @@ rawdev_mounted(vnode_t *vp, vnode_t **bvpp)
 	 * XXX: if it's on a disk with any other mounted slice.
 	 */
 	if (vfs_mountedon(bvp))
-		return EBUSY;
+		return SET_ERROR(EBUSY);
 
 	return 0;
 }
@@ -1599,7 +1687,8 @@ mountlist_append(struct mount *mp)
 
 /*
  * Remove mount from mount list.
- */void
+ */
+void
 mountlist_remove(struct mount *mp)
 {
 	struct mountlist_entry *me;

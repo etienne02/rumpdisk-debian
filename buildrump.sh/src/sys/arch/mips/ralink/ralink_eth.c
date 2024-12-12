@@ -1,4 +1,4 @@
-/*	$NetBSD: ralink_eth.c,v 1.22 2021/08/17 22:00:30 andvar Exp $	*/
+/*	$NetBSD: ralink_eth.c,v 1.26 2022/09/29 07:00:47 skrll Exp $	*/
 /*-
  * Copyright (c) 2011 CradlePoint Technology, Inc.
  * All rights reserved.
@@ -29,7 +29,7 @@
 /* ralink_eth.c -- Ralink Ethernet Driver */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ralink_eth.c,v 1.22 2021/08/17 22:00:30 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ralink_eth.c,v 1.26 2022/09/29 07:00:47 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -40,7 +40,6 @@ __KERNEL_RCSID(0, "$NetBSD: ralink_eth.c,v 1.22 2021/08/17 22:00:30 andvar Exp $
 #include <sys/ioctl.h>
 #include <sys/intr.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
@@ -1057,7 +1056,6 @@ ralink_eth_init(struct ifnet *ifp)
 	if (!error) {
 		/* Note that the interface is now running. */
 		ifp->if_flags |= IFF_RUNNING;
-		ifp->if_flags &= ~IFF_OACTIVE;
 	}
 
 	return error;
@@ -1095,7 +1093,7 @@ ralink_eth_stop(struct ifnet *ifp, int disable)
 	ralink_eth_disable(sc);
 
 	/* Mark the interface down and cancel the watchdog timer.  */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 }
 
@@ -1162,7 +1160,7 @@ ralink_eth_start(struct ifnet *ifp)
 	int error;
 	int s;
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	s = splnet();
@@ -1295,11 +1293,6 @@ ralink_eth_start(struct ifnet *ifp)
 		fe_write(sc, RA_FE_PDMA_TX0_CPU_IDX, tx_cpu_idx);
 	}
 
-	if (txs == NULL) {
-		/* No more slots left; notify upper layer. */
-		ifp->if_flags |= IFF_OACTIVE;
-	}
-
 	splx(s);
 }
 
@@ -1325,14 +1318,14 @@ ralink_eth_watchdog(struct ifnet *ifp)
 		sc->sc_evcnt_wd_tx.ev_count++;
 	} else {
 		RALINK_DEBUG(RALINK_DEBUG_ERROR,
-		    "%s: spurious watchog timeout\n", ifp->if_xname);
+		    "%s: spurious watchdog timeout\n", ifp->if_xname);
 		sc->sc_evcnt_wd_spurious.ev_count++;
 		return;
 	}
 
 	sc->sc_evcnt_wd_reactivate.ev_count++;
 	const int s = splnet();
-	/* deactive the active partitions, retaining the active information */
+	/* deactivate the active partitions, retaining the active information */
 	ralink_eth_disable(sc);
 	ralink_eth_enable(sc);
 	splx(s);
@@ -1625,7 +1618,6 @@ ralink_eth_txintr(ralink_eth_softc_t *sc)
 		SIMPLEQ_INSERT_TAIL(&sc->sc_txfreeq, txs, txs_q);
 
 		struct ifnet *ifp = &sc->sc_ethercom.ec_if;
-		ifp->if_flags &= ~IFF_OACTIVE;
 		if_statinc(ifp, if_opackets);
 		sc->sc_evcnt_output.ev_count++;
 

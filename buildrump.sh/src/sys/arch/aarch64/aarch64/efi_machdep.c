@@ -1,4 +1,4 @@
-/* $NetBSD: efi_machdep.c,v 1.10 2021/03/21 07:09:54 skrll Exp $ */
+/* $NetBSD: efi_machdep.c,v 1.14 2023/07/10 07:00:11 rin Exp $ */
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -30,12 +30,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: efi_machdep.c,v 1.10 2021/03/21 07:09:54 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: efi_machdep.c,v 1.14 2023/07/10 07:00:11 rin Exp $");
 
 #include <sys/param.h>
+
 #include <uvm/uvm_extern.h>
 
 #include <arm/cpufunc.h>
+#include <arm/efirt.h>
 
 #include <arm/arm/efi_runtime.h>
 
@@ -46,35 +48,69 @@ static struct {
 	bool		fpu_used;
 } arm_efirt_state;
 
+static bool efi_userva = true;
+
 void
-arm_efirt_md_map_range(vaddr_t va, paddr_t pa, size_t sz, enum arm_efirt_mem_type type)
+cpu_efirt_map_range(vaddr_t va, paddr_t pa, size_t sz,
+    enum cpu_efirt_mem_type type)
 {
-	pt_entry_t attr;
+	int flags = 0;
+	int prot = 0;
 
 	switch (type) {
 	case ARM_EFIRT_MEM_CODE:
-		attr = LX_BLKPAG_AF | LX_BLKPAG_AP_RW | LX_BLKPAG_UXN |
-		       LX_BLKPAG_ATTR_NORMAL_WB;
+		/* need write permission because fw devs */
+		prot = VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE;
 		break;
 	case ARM_EFIRT_MEM_DATA:
-		attr = LX_BLKPAG_AF | LX_BLKPAG_AP_RW | LX_BLKPAG_UXN | LX_BLKPAG_PXN |
-		       LX_BLKPAG_ATTR_NORMAL_WB;
+		prot = VM_PROT_READ | VM_PROT_WRITE;
 		break;
 	case ARM_EFIRT_MEM_MMIO:
-		attr = LX_BLKPAG_AF | LX_BLKPAG_AP_RW | LX_BLKPAG_UXN | LX_BLKPAG_PXN |
-		       LX_BLKPAG_ATTR_DEVICE_MEM;
+		prot = VM_PROT_READ | VM_PROT_WRITE;
+		flags = PMAP_DEV;
 		break;
 	default:
-		panic("arm_efirt_md_map_range: unsupported type %d", type);
+		panic("%s: unsupported type %d", __func__, type);
 	}
 
-	pmapboot_enter(va, pa, sz, L3_SIZE, attr, NULL);
+	/* even if TBI is disabled, AARCH64_ADDRTOP_TAG means KVA */
+	bool kva = (va & AARCH64_ADDRTOP_TAG) != 0;
+	if (kva) {
+		if (va < EFI_RUNTIME_VA ||
+		    va >= EFI_RUNTIME_VA + EFI_RUNTIME_SIZE) {
+			printf("Incorrect EFI mapping address %" PRIxVADDR "\n", va);
+		    return;
+		}
+		efi_userva = false;
+	} else {
+		if (!efi_userva) {
+			printf("Can't mix EFI RT address spaces\n");
+			return;
+		}
+	}
+
+	while (sz != 0) {
+		if (kva) {
+			pmap_kenter_pa(va, pa, prot, flags);
+		} else {
+			pmap_enter(pmap_efirt(), va, pa, prot, flags | PMAP_WIRED);
+		}
+		va += PAGE_SIZE;
+		pa += PAGE_SIZE;
+		sz -= PAGE_SIZE;
+	}
+	if (kva)
+		pmap_update(pmap_kernel());
+	else
+		pmap_update(pmap_efirt());
 }
 
 int
 arm_efirt_md_enter(void)
 {
-	struct lwp *l = curlwp;
+	kpreempt_disable();
+
+	struct lwp * const l = curlwp;
 
 	/* Save FPU state */
 	arm_efirt_state.fpu_used = fpu_used_p(l) != 0;
@@ -89,13 +125,31 @@ arm_efirt_md_enter(void)
 	 * Install custom fault handler. EFI lock is held across calls so
 	 * shared faultbuf is safe here.
 	 */
-	return cpu_set_onfault(&arm_efirt_state.faultbuf);
+	int err = cpu_set_onfault(&arm_efirt_state.faultbuf);
+	if (err)
+		return err;
+
+	if (efi_userva) {
+		if ((l->l_flag & LW_SYSTEM) == 0) {
+			pmap_deactivate(l);
+		}
+		pmap_activate_efirt();
+	}
+
+	return 0;
 }
 
 void
 arm_efirt_md_exit(void)
 {
-	struct lwp *l = curlwp;
+	struct lwp * const l = curlwp;
+
+	if (efi_userva) {
+		pmap_deactivate_efirt();
+		if ((l->l_flag & LW_SYSTEM) == 0) {
+			pmap_activate(l);
+		}
+	}
 
 	/* Disable FP access */
 	reg_cpacr_el1_write(CPACR_FPEN_NONE);
@@ -107,4 +161,6 @@ arm_efirt_md_exit(void)
 
 	/* Remove custom fault handler */
 	cpu_unset_onfault();
+
+	kpreempt_enable();
 }

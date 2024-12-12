@@ -1,4 +1,4 @@
-/*	$NetBSD: gtidmac.c,v 1.18 2021/07/24 21:31:37 andvar Exp $	*/
+/*	$NetBSD: gtidmac.c,v 1.21 2024/06/12 20:03:56 andvar Exp $	*/
 /*
  * Copyright (c) 2008, 2012, 2016 KIYOHARA Takashi
  * All rights reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gtidmac.c,v 1.18 2021/07/24 21:31:37 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gtidmac.c,v 1.21 2024/06/12 20:03:56 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -1020,7 +1020,7 @@ gtidmac_setup(void *tag, int chan, int ninputs, bus_dmamap_t *dmamap_in,
 			ccl |= GTIDMAC_CCLR_SBL_128B;
 		else
 			panic("gtidmac_setup: chan%d source:"
-			    " unsupport hold size", chan);
+			    " unsupported hold size", chan);
 	} else
 		ccl |= GTIDMAC_CCLR_SBL_128B;
 	if (size != (*dmamap_out)->dm_mapsize) {
@@ -1886,14 +1886,14 @@ gtidmac_dump_idmacreg(struct gtidmac_softc *sc, int chan)
 	    (val & GTIDMAC_CCLR_SBL_MASK) == GTIDMAC_CCLR_SBL_32B ? "32" :
 	    (val & GTIDMAC_CCLR_SBL_MASK) == GTIDMAC_CCLR_SBL_16B ? "16" :
 	    (val & GTIDMAC_CCLR_SBL_MASK) == GTIDMAC_CCLR_SBL_8B ? "8" :
-	    "unknwon");
+	    "unknown");
 	printf("    DstBurstLimit            : %s Bytes\n",
 	  (val & GTIDMAC_CCLR_DBL_MASK) == GTIDMAC_CCLR_DBL_128B ? "128" :
 	    (val & GTIDMAC_CCLR_DBL_MASK) == GTIDMAC_CCLR_DBL_64B ? "64" :
 	    (val & GTIDMAC_CCLR_DBL_MASK) == GTIDMAC_CCLR_DBL_32B ? "32" :
 	    (val & GTIDMAC_CCLR_DBL_MASK) == GTIDMAC_CCLR_DBL_16B ? "16" :
 	    (val & GTIDMAC_CCLR_DBL_MASK) == GTIDMAC_CCLR_DBL_8B ? "8" :
-	    "unknwon");
+	    "unknown");
 	printf("    ChainMode                : %sChained\n",
 	    val & GTIDMAC_CCLR_CHAINMODE_NC ? "Non-" : "");
 	printf("    TransferMode             : %s\n",
@@ -1987,12 +1987,12 @@ gtidmac_dump_xorereg(struct gtidmac_softc *sc, int chan)
 	  (val & MVXORE_XEXCR_SBL_MASK) == MVXORE_XEXCR_SBL_128B ? "128" :
 	    (val & MVXORE_XEXCR_SBL_MASK) == MVXORE_XEXCR_SBL_64B ? "64" :
 	    (val & MVXORE_XEXCR_SBL_MASK) == MVXORE_XEXCR_SBL_32B ? "32" :
-	    "unknwon");
+	    "unknown");
 	printf("    DstBurstLimit : %s Bytes\n",
 	  (val & MVXORE_XEXCR_SBL_MASK) == MVXORE_XEXCR_SBL_128B ? "128" :
 	    (val & MVXORE_XEXCR_SBL_MASK) == MVXORE_XEXCR_SBL_64B ? "64" :
 	    (val & MVXORE_XEXCR_SBL_MASK) == MVXORE_XEXCR_SBL_32B ? "32" :
-	    "unknwon");
+	    "unknown");
 	val =
 	    bus_space_read_4(sc->sc_iot, sc->sc_ioh, MVXORE_XEXACTR(sc, chan));
 	printf("  Activation      : 0x%08x\n", val);
@@ -2010,10 +2010,10 @@ gtidmac_dump_xorereg(struct gtidmac_softc *sc, int chan)
 		    MVXORE_XEXNDPR(sc, chan)));
 		printf("  CurrentDescPtr  : 0x%08x\n",
 		    bus_space_read_4(sc->sc_iot, sc->sc_ioh,
-		    MVXORE_XEXCDPR(chan)));
+		    MVXORE_XEXCDPR(sc, chan)));
 	}
 	printf("  ByteCnt         : 0x%08x\n",
-	    bus_space_read_4(sc->sc_iot, sc->sc_ioh, MVXORE_XEXBCR(chan)));
+	    bus_space_read_4(sc->sc_iot, sc->sc_ioh, MVXORE_XEXBCR(sc, chan)));
 
 	if (opmode == MVXORE_XEXCR_OM_ECC ||
 	    opmode == MVXORE_XEXCR_OM_MEMINIT) {

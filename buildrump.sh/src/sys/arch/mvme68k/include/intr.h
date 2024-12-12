@@ -1,11 +1,11 @@
-/*	$NetBSD: intr.h,v 1.21 2018/04/19 21:50:07 christos Exp $	*/
+/*	$NetBSD: intr.h,v 1.24 2024/01/19 03:09:05 thorpej Exp $	*/
 
 /*-
- * Copyright (c) 2000 The NetBSD Foundation, Inc.
+ * Copyright (c) 2024 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by Jason R. Thorpe and Steve C. Woodford.
+ * by Jason R. Thorpe.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,62 +29,25 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _MVME68K_INTR_H
-#define _MVME68K_INTR_H
-
-#include <machine/psl.h>
-
-#define	IPL_NONE	0	/* disable only this interrupt */
-#define	IPL_SOFTCLOCK	1	/* clock software interrupts */
-#define	IPL_SOFTBIO	2	/* block software interrupts */
-#define	IPL_SOFTNET	3	/* network software interrupts */
-#define	IPL_SOFTSERIAL	4	/* serial software interrupts */
-#define	IPL_VM		5
-#define	IPL_SCHED	6
-#define	IPL_HIGH	7
-#define	NIPL		8
+#ifndef _MVME68K_INTR_H_
+#define _MVME68K_INTR_H_
 
 #ifdef _KERNEL
-#define spl0()			_spl0()
-#define splsoftclock()		splraise1()
-#define splsoftbio()		splraise1()
-#define splsoftnet()		splraise1()
-#define splsoftserial()		splraise1()
-#define splvm()			splraise3()
-#define splsched()		spl7()
-#define splhigh()		spl7()
 
-#ifndef _LOCORE
+#include <m68k/psl.h>
 
-extern const uint16_t ipl2psl_table[NIPL];
+#define	MACHINE_PSL_IPL_SOFTCLOCK	PSL_IPL1
+#define	MACHINE_PSL_IPL_SOFTBIO		PSL_IPL1
+#define	MACHINE_PSL_IPL_SOFTNET		PSL_IPL1
+#define	MACHINE_PSL_IPL_SOFTSERIAL	PSL_IPL1
+#define	MACHINE_PSL_IPL_VM		PSL_IPL3
+#define	MACHINE_PSL_IPL_SCHED		PSL_IPL7
 
-typedef int ipl_t;
-typedef struct {
-	uint16_t _psl;
-} ipl_cookie_t;
+#define	MACHINE_INTREVCNT_NAMES						\
+	{ "spur", "lev1", "lev2", "lev3", "lev4", "clock", "lev6", "nmi" }
 
-static __inline ipl_cookie_t
-makeiplcookie(ipl_t ipl)
-{
-
-	return (ipl_cookie_t){._psl = ipl2psl_table[ipl]};
-}
-
-static __inline int
-splraiseipl(ipl_cookie_t icookie)
-{
-
-	return _splraise(icookie._psl);
-}
-
-static __inline void
-splx(int sr)
-{
-
-	__asm volatile("movw %0,%%sr" : : "di" (sr));
-}
-
-#endif /* !_LOCORE */
 #endif /* _KERNEL */
 
-#endif /* _MVME68K_INTR_H */
+#include <m68k/intr.h>
+
+#endif	/* _MVME68K_INTR_H */

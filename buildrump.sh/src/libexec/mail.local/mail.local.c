@@ -1,4 +1,4 @@
-/*	$NetBSD: mail.local.c,v 1.28 2016/07/21 12:29:37 shm Exp $	*/
+/*	$NetBSD: mail.local.c,v 1.33 2023/09/06 22:08:38 christos Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993, 1994
@@ -36,7 +36,7 @@ __COPYRIGHT("@(#) Copyright (c) 1990, 1993, 1994\
 #if 0
 static char sccsid[] = "@(#)mail.local.c	8.22 (Berkeley) 6/21/95";
 #else
-__RCSID("$NetBSD: mail.local.c,v 1.28 2016/07/21 12:29:37 shm Exp $");
+__RCSID("$NetBSD: mail.local.c,v 1.33 2023/09/06 22:08:38 christos Exp $");
 #endif
 #endif /* not lint */
 
@@ -51,6 +51,7 @@ __RCSID("$NetBSD: mail.local.c,v 1.28 2016/07/21 12:29:37 shm Exp $");
 #include <pwd.h>
 #include <netdb.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -124,7 +125,7 @@ main(int argc, char *argv[])
 		if (eval == EX_OK && rval != EX_OK)
 			eval = rval;
 	}
-	exit (eval);
+	return eval;
 }
 
 static int
@@ -137,7 +138,7 @@ store(const char *from)
 
 	tn = strdup(_PATH_LOCTMP);
 	if (!tn)
-		logerr(EX_OSERR, "not enough core");
+		logerr(EX_OSERR, "not enough memory");
 	if ((fd = mkstemp(tn)) == -1 || !(fp = fdopen(fd, "w+")))
 		logerr(EX_OSERR, "unable to open temporary file");
 	(void)unlink(tn);
@@ -172,7 +173,22 @@ store(const char *from)
 	if ((fd = dup(fd)) == -1) 
 		logerr(EX_OSERR, "dup failed");
 	(void)fclose(fp);
-	return(fd);
+	return fd;
+}
+
+static bool
+badfile(const char *path, const struct stat *sb)
+{
+	if (!S_ISREG(sb->st_mode)) {
+		logwarn("%s: not a regular file", path);
+		return true;
+	}
+
+	if (sb->st_nlink != 1) {
+		logwarn("%s: linked file", path);
+		return true;
+	}
+	return false;
 }
 
 static int
@@ -181,7 +197,7 @@ deliver(int fd, char *name, int lockfile)
 	struct stat sb, nsb;
 	struct passwd pwres, *pw;
 	char pwbuf[1024];
-	int created = 0, mbfd, nr, nw, off, rval=EX_OK, lfd = -1;
+	int created = 0, mbfd = -1, nr, nw, off, rval = EX_OSERR, lfd = -1;
 	char biffmsg[100], buf[8*1024], path[MAXPATHLEN], lpath[MAXPATHLEN];
 	off_t curoff;
 
@@ -191,11 +207,11 @@ deliver(int fd, char *name, int lockfile)
 	 */
 	if ((getpwnam_r(name, &pwres, pwbuf, sizeof(pwbuf), &pw)) != 0) {
 		logwarn("unable to find user %s: %s", name, strerror(errno));
-		return(EX_TEMPFAIL);
+		return EX_TEMPFAIL;
 	}
 	if (pw == NULL) {
 		logwarn("unknown name: %s", name);
-		return(EX_NOUSER);
+		return EX_NOUSER;
 	}
 
 	(void)snprintf(path, sizeof path, "%s/%s", _PATH_MAILDIR, name);
@@ -206,67 +222,77 @@ deliver(int fd, char *name, int lockfile)
 
 		if((lfd = open(lpath, O_CREAT|O_WRONLY|O_EXCL,
 		    S_IRUSR|S_IWUSR)) < 0) {
-			logwarn("%s: %s", lpath, strerror(errno));
-			return(EX_OSERR);
+			logwarn("%s: can't create: %s", lpath, strerror(errno));
+			return EX_OSERR;
 		}
 	}
 
-	if ((lstat(path, &sb) != -1) &&
-	    (sb.st_nlink != 1 || S_ISLNK(sb.st_mode))) {
-		logwarn("%s: linked file", path);
-		return(EX_OSERR);
+	if (lstat(path, &sb) == -1) {
+		if (errno != ENOENT) {
+			logwarn("%s: can't stat: %s", path, strerror(errno));
+			goto bad;
+		}
+		memset(&sb, 0, sizeof(sb));
+		sb.st_dev = NODEV;
+	} else if (badfile(path, &sb)) {
+		goto bad;
 	}
 	
-	if ((mbfd = open(path, O_APPEND|O_WRONLY|O_EXLOCK,
+	if ((mbfd = open(path, O_APPEND|O_WRONLY|O_EXLOCK|O_NOFOLLOW,
 	    S_IRUSR|S_IWUSR)) == -1) {
 		/* create file */
-		if ((mbfd = open(path, O_APPEND|O_CREAT|O_WRONLY|O_EXLOCK,
-		    S_IRUSR|S_IWUSR)) == -1) {
-			logwarn("%s: %s", path, strerror(errno));
-			rval = EX_OSERR;
+		if (errno != ENOENT ||
+		   (mbfd = open(path, O_APPEND|O_CREAT|O_WRONLY|O_EXLOCK|O_EXCL,
+		     S_IRUSR|S_IWUSR)) == -1) {
+			logwarn("%s: can't create: %s", path, strerror(errno));
 			goto bad;
 		}
 		created = 1;
 	} else {
 		/* opened existing file, check for TOCTTOU */
 		if (fstat(mbfd, &nsb) == -1) {
-			rval = EX_OSERR;
+			logwarn("%s: can't stat: %s", path, strerror(errno));
+			goto bad;
+		}
+
+		if (badfile(path, &nsb)) {
 			goto bad;
 		}
 
 		/* file is not what we expected */
 		if (nsb.st_ino != sb.st_ino || nsb.st_dev != sb.st_dev) {
-			rval = EX_OSERR;
+			logwarn("%s: file has changed", path);
 			goto bad;
 		}
 	}
 
 	if ((curoff = lseek(mbfd, 0, SEEK_END)) == (off_t)-1) {
-		logwarn("%s: %s", path, strerror(errno));
-		rval = EX_OSERR;
+		logwarn("%s: can't seek: %s", path, strerror(errno));
 		goto bad;
 	}
 
 	(void)snprintf(biffmsg, sizeof biffmsg, "%s@%lld\n", name,
 	    (long long)curoff);
 	if (lseek(fd, 0, SEEK_SET) == (off_t)-1) {
-		logwarn("temporary file: %s", strerror(errno));
-		rval = EX_OSERR;
+		logwarn("can't seek: %s", strerror(errno));
 		goto bad;
 	}
 
 	while ((nr = read(fd, buf, sizeof(buf))) > 0)
 		for (off = 0; off < nr;  off += nw)
 			if ((nw = write(mbfd, buf + off, nr - off)) < 0) {
-				logwarn("%s: %s", path, strerror(errno));
+				logwarn("%s: can't write: %s", path,
+				    strerror(errno));
 				goto trunc;
 			}
+
 	if (nr < 0) {
-		logwarn("temporary file: %s", strerror(errno));
+		logwarn("can't read: %s", strerror(errno));
 trunc:		(void)ftruncate(mbfd, curoff);
-		rval = EX_OSERR;
+		goto bad;
 	}
 
+	rval = EX_OK;
 	/*
 	 * Set the owner and group.  Historically, binmail repeated this at
 	 * each mail delivery.  We no longer do this, assuming that if the

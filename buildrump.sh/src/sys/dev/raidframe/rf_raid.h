@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_raid.h,v 1.51 2021/08/07 16:19:15 thorpej Exp $	*/
+/*	$NetBSD: rf_raid.h,v 1.53 2023/09/25 21:59:38 oster Exp $	*/
 /*
  * Copyright (c) 1995 Carnegie-Mellon University.
  * All rights reserved.
@@ -116,7 +116,8 @@ struct RF_Raid_s {
 
 	RF_RaidLayout_t Layout;	/* all information related to layout */
 	RF_RaidDisk_t *Disks;	/* all information related to physical disks */
-	RF_DiskQueue_t *Queues;/* all information related to disk queues */
+	RF_DiskQueue_t *Queues; /* all information related to disk queues */
+	u_int   maxQueue;	/* initialized queues in Queues array */
 	const RF_DiskQueueSW_t *qType;/* pointer to the DiskQueueSW used for the
 					 component queues. */
 	/* NOTE:  This is an anchor point via which the queues can be
@@ -208,15 +209,13 @@ struct RF_Raid_s {
          * Statistics
          */
 	RF_StripeCount_t     parity_rewrite_stripes_done;
-	RF_StripeCount_t     copyback_stripes_done;
 
 	int     recon_in_progress;
 	int     parity_rewrite_in_progress;
-	int     copyback_in_progress;
-	int     adding_hot_spare;
+	int     changing_components;
 
 	rf_declare_cond2(parity_rewrite_cv);
-	rf_declare_cond2(adding_hot_spare_cv);
+	rf_declare_cond2(changing_components_cv);
 
 	/*
          * Engine thread control
@@ -225,7 +224,6 @@ struct RF_Raid_s {
 	rf_declare_cond2(node_queue_cv);
 	RF_DagNode_t *node_queue;
 	RF_Thread_t parity_rewrite_thread;
-	RF_Thread_t copyback_thread;
 	RF_Thread_t engine_thread;
 	RF_Thread_t engine_helper_thread;
 	RF_Thread_t recon_thread;
@@ -258,6 +256,8 @@ struct RF_Raid_s {
 	rf_declare_cond2(outstandingCond);
 	int     waitShutdown;
 	int     nAccOutstanding;
+
+	int     *abortRecon;	/* Abort background operations requested */
 
 	RF_DiskId_t **diskids;
 

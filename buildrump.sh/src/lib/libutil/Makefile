@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.85 2019/10/13 07:28:11 mrg Exp $
+#	$NetBSD: Makefile,v 1.87 2023/06/03 09:09:11 lukem Exp $
 #	@(#)Makefile	8.1 (Berkeley) 6/4/93
 
 USE_SHLIBDIR=	yes
@@ -38,9 +38,10 @@ MAN=	efun.3 \
 CPPFLAGS.sockaddr_snprintf.c+=-DHAVE_UTIL_H
 CPPFLAGS.sockaddr_snprintf.c+=-DHAVE_NETATALK_AT_H
 CPPFLAGS.sockaddr_snprintf.c+=-DHAVE_NET_IF_DL_H
+LINTFLAGS.if_media.c+=	-X 351	# 'extern' declaration outside header
 
-COPTS.logwtmp.c+=	${GCC_NO_STRINGOP_TRUNCATION}
-COPTS.logwtmpx.c+=	${GCC_NO_STRINGOP_TRUNCATION}
+COPTS.logwtmp.c+=	${CC_WNO_STRINGOP_TRUNCATION}
+COPTS.logwtmpx.c+=	${CC_WNO_STRINGOP_TRUNCATION}
 
 YPREFIX=__pd
 .PATH:	${NETBSDSRCDIR}/lib/libc/gen

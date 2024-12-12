@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_bootdhcp.c,v 1.56 2016/06/10 13:27:16 ozaki-r Exp $	*/
+/*	$NetBSD: nfs_bootdhcp.c,v 1.60 2024/10/20 14:01:52 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1997 The NetBSD Foundation, Inc.
@@ -44,7 +44,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_bootdhcp.c,v 1.56 2016/06/10 13:27:16 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_bootdhcp.c,v 1.60 2024/10/20 14:01:52 mlelstv Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_nfs_boot.h"
@@ -309,7 +309,7 @@ bootpset(struct mbuf *m, void *context, int waited)
 {
 	struct bootp *bootp;
 
-	/* we know it's contigous (in 1 mbuf cluster) */
+	/* we know it's contiguous (in 1 mbuf cluster) */
 	bootp = mtod(m, struct bootp*);
 
 	bootp->bp_secs = htons(waited);
@@ -594,13 +594,14 @@ bootpc_call(struct nfs_diskless *nd, struct lwp *lwp, int *flags)
 	 * Allocate buffer used for request
 	 */
 	m = m_gethdr(M_WAIT, MT_DATA);
+	MCLAIM(m, &nfs_mowner);
 	m_clget(m, M_WAIT);
 	bootp = mtod(m, struct bootp*);
 	m->m_pkthdr.len = m->m_len = BOOTP_SIZE_MAX;
 	m_reset_rcvif(m);
 
 	/*
-	 * Build the BOOTP reqest message.
+	 * Build the BOOTP request message.
 	 * Note: xid is host order! (opaque to server)
 	 */
 	memset((void *)bootp, 0, BOOTP_SIZE_MAX);
@@ -684,8 +685,7 @@ bootpc_call(struct nfs_diskless *nd, struct lwp *lwp, int *flags)
 out:
 	if (bpc.replybuf)
 		free(bpc.replybuf, M_DEVBUF);
-	if (m)
-		m_freem(m);
+	m_freem(m);
 	soclose(so);
 	return (error);
 }

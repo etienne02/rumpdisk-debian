@@ -1,4 +1,4 @@
-/* $NetBSD: edid.c,v 1.15 2020/01/25 15:59:11 maxv Exp $ */
+/* $NetBSD: edid.c,v 1.18 2022/09/25 21:27:39 thorpej Exp $ */
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -32,13 +32,21 @@
  */ 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: edid.c,v 1.15 2020/01/25 15:59:11 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: edid.c,v 1.18 2022/09/25 21:27:39 thorpej Exp $");
 
+#ifdef _KERNEL
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
+#else
+#include <stdlib.h>
+#include <inttypes.h>
+#include <string.h>
+#include <errno.h>
+#include <stdio.h>
+#endif
+
 #include <dev/videomode/videomode.h>
 #include <dev/videomode/ediddevs.h>
 #include <dev/videomode/edidreg.h>
@@ -132,7 +140,7 @@ edid_is_valid(uint8_t *d)
 {
 	int sum = 0, i;
 	uint8_t sig[8] = EDID_SIGNATURE;
-	
+
 	if (memcmp(d, sig, 8) != 0)
 		return EINVAL;
 	
@@ -186,7 +194,7 @@ edid_print(struct edid_info *edid)
 		if (edid->edid_video_input & EDID_VIDEO_INPUT_BLANK_TO_BLACK)
 			printf("\tBlank-to-black setup\n");
 		if (edid->edid_video_input & EDID_VIDEO_INPUT_SEPARATE_SYNCS)
-			printf("\tSeperate syncs\n");
+			printf("\tSeparate syncs\n");
 		if (edid->edid_video_input & EDID_VIDEO_INPUT_COMPOSITE_SYNC)
 			printf("\tComposite sync\n");
 		if (edid->edid_video_input & EDID_VIDEO_INPUT_SYNC_ON_GRN)
@@ -430,7 +438,7 @@ static void bump_preferred_mode(struct edid_info *edid, struct videomode *m)
 	 */
 	if (edid->edid_preferred_mode == NULL) {
 		edid->edid_preferred_mode = m;
-	} else if ((strncmp(edid->edid_vendor, "IVM", 3) == 0) &&
+	} else if ((strncmp((char*)edid->edid_vendor, "IVM", 3) == 0) &&
 	           (edid->edid_product == 0x4800) &&
 	           (edid->edid_preferred_mode->dot_clock < m->dot_clock))
 		edid->edid_preferred_mode = m;
@@ -546,14 +554,14 @@ edid_parse(uint8_t *data, struct edid_info *edid)
 	edid->edid_product = data[EDID_OFFSET_PRODUCT_ID] + 
 	    (data[EDID_OFFSET_PRODUCT_ID + 1] << 8);
 
-	name = edid_findvendor(edid->edid_vendor);
+	name = edid_findvendor((char *)edid->edid_vendor);
 	if (name != NULL)
 		strlcpy(edid->edid_vendorname, name,
 		    sizeof(edid->edid_vendorname));
 	else
 		edid->edid_vendorname[0] = '\0';
 
-	name = edid_findproduct(edid->edid_vendor, edid->edid_product);
+	name = edid_findproduct((char *)edid->edid_vendor, edid->edid_product);
 	if (name != NULL)
 		strlcpy(edid->edid_productname, name,
 		    sizeof(edid->edid_productname));
@@ -647,8 +655,10 @@ edid_parse(uint8_t *data, struct edid_info *edid)
 		if (edid->edid_modes[i].dot_clock > max_dotclock)
 			max_dotclock = edid->edid_modes[i].dot_clock;
 
+#ifdef _KERNEL
 	aprint_debug("max_dotclock according to supported modes: %d\n",
 	    max_dotclock);
+#endif
 
 	mhz = (max_dotclock + 999) / 1000;
 

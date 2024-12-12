@@ -1,4 +1,4 @@
-/*	$NetBSD: audiodef.h,v 1.16 2021/08/21 10:18:14 andvar Exp $	*/
+/*	$NetBSD: audiodef.h,v 1.20 2022/08/13 06:47:41 isaki Exp $	*/
 
 /*
  * Copyright (C) 2017 Tetsuya Isaki. All rights reserved.
@@ -33,13 +33,28 @@
 #include "opt_audio.h"
 #endif
 
-/* Number of HW buffer's blocks. */
+/* Number of blocks in HW buffer. */
 #define NBLKHW (3)
 
-/* Number of track output buffer's blocks.  Must be > NBLKHW */
+/* Number of blocks in output buffer on playback track.  Must be > NBLKHW */
 #define NBLKOUT	(4)
 
-/* Minimum number of usrbuf's blocks. */
+/*
+ * Number of blocks in input buffer on recording track.
+ *
+ * For references:
+ *  On 48000Hz/2ch (blk_ms=10), the buffer time is 160 [msec], and
+ *  the input buffer size is 30720 [bytes] (= 1920 [byte/block] * 16).
+ *
+ *  On 192000Hz/12ch (blk_ms=10), the buffer time is 160 [msec], and
+ *  the input buffer size is 737280 [bytes] (= 46080 [byte/block] * 16).
+ *
+ *  On 8000Hz/1ch (blk_ms=40), the buffer time is 640 [msec], and
+ *  the input buffer size = 10240 [bytes] (= 640 [byte/block] * 16).
+ */
+#define NBLKIN	(16)
+
+/* Minimum number of blocks in usrbuf on playback track. */
 #define AUMINNOBLK	(3)
 
 /*
@@ -104,10 +119,8 @@ struct audio_track {
 
 	audio_ring_t	usrbuf;		/* user i/o buffer */
 	u_int		usrbuf_blksize;	/* usrbuf block size in bytes */
-	struct uvm_object *uobj;
+	u_int		usrbuf_allocsize; /* allocation size in bytes */
 	bool		mmapped;	/* device is mmap()-ed */
-	u_int		usrbuf_stamp;	/* transferred bytes from/to stage */
-	u_int		usrbuf_stamp_last; /* last stamp */
 	u_int		usrbuf_usedhigh;/* high water mark in bytes */
 	u_int		usrbuf_usedlow;	/* low water mark in bytes */
 
@@ -147,6 +160,13 @@ struct audio_track {
 	u_int		volume;
 #endif
 
+	/*
+	 * For AUDIO_GET[IO]OFFS.
+	 * No locks are required for these.
+	 */
+	u_int		stamp;		/* number of transferred blocks */
+	u_int		last_stamp;
+
 	audio_trackmixer_t *mixer;	/* connected track mixer */
 
 	/* Sequence number picked up by track mixer. */
@@ -155,11 +175,7 @@ struct audio_track {
 	audio_state_t	pstate;		/* playback state */
 	bool		is_pause;
 
-	/* Statistic counters. */
-	uint64_t	inputcounter;	/* # of frames input to track */
-	uint64_t	outputcounter;	/* # of frames output from track */
-	uint64_t	useriobytes;	/* # of bytes xfer to/from userland */
-	uint64_t	dropframes;	/* # of frames dropped */
+	uint64_t	dropframes;	/* number of dropped frames */
 	int		eofcounter;	/* count of zero-sized write */
 
 	/*

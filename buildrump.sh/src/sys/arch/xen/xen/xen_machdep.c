@@ -1,4 +1,4 @@
-/*	$NetBSD: xen_machdep.c,v 1.26 2020/06/04 08:24:44 msaitoh Exp $	*/
+/*	$NetBSD: xen_machdep.c,v 1.29 2023/10/17 10:24:11 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -53,7 +53,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xen_machdep.c,v 1.26 2020/06/04 08:24:44 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xen_machdep.c,v 1.29 2023/10/17 10:24:11 riastradh Exp $");
 
 #include "opt_xen.h"
 
@@ -70,10 +70,14 @@ __KERNEL_RCSID(0, "$NetBSD: xen_machdep.c,v 1.26 2020/06/04 08:24:44 msaitoh Exp
 #include <sys/pmf.h>
 #include <sys/xcall.h>
 
+#include <dev/cons.h>
+
 #include <xen/intr.h>
 #include <xen/hypervisor.h>
 #include <xen/shutdown_xenbus.h>
 #include <xen/include/public/version.h>
+
+#include <machine/pmap_private.h>
 
 #define DPRINTK(x) printk x
 #if 0
@@ -438,6 +442,41 @@ printk(const char *fmt, ...)
 	(void)HYPERVISOR_console_io(CONSOLEIO_write, ret, buf);
 }
 
+static int early_xenconscn_getc(dev_t);
+static void early_xenconscn_putc(dev_t, int);
+static void early_xenconscn_pollc(dev_t, int);
+
+static struct consdev early_xencons = {
+	NULL, NULL,
+	early_xenconscn_getc, early_xenconscn_putc, early_xenconscn_pollc,
+	NULL, NULL, NULL, NODEV, CN_NORMAL
+};
+
+void
+xen_early_console(void)
+{
+	cn_tab = &early_xencons; /* fallback console */
+}
+
+static int
+early_xenconscn_getc(dev_t dev)
+{
+	while(1)
+		;
+	return -1;
+}
+
+static void
+early_xenconscn_putc(dev_t dev, int c)
+{
+	printk("%c", c);
+}
+
+static void
+early_xenconscn_pollc(dev_t dev, int on)
+{
+	return;
+}
 bool xen_feature_tables[XENFEAT_NR_SUBMAPS * 32];
 
 void

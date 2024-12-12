@@ -1,4 +1,4 @@
-/*	$NetBSD: sig_machdep.c,v 1.4 2020/11/04 07:09:46 skrll Exp $	*/
+/*	$NetBSD: sig_machdep.c,v 1.6 2024/08/04 08:16:26 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -32,7 +32,7 @@
 #include <sys/cdefs.h>
 
 #ifndef COMPATNAME1
-__RCSID("$NetBSD: sig_machdep.c,v 1.4 2020/11/04 07:09:46 skrll Exp $");
+__RCSID("$NetBSD: sig_machdep.c,v 1.6 2024/08/04 08:16:26 skrll Exp $");
 #endif
 
 #include <sys/param.h>
@@ -44,6 +44,7 @@ __RCSID("$NetBSD: sig_machdep.c,v 1.4 2020/11/04 07:09:46 skrll Exp $");
 #include <sys/signalvar.h>
 
 #include <riscv/locore.h>
+#include <riscv/frame.h>
 
 #ifndef COMPATNAME1
 #define COMPATNAME1(x)		x
@@ -106,7 +107,7 @@ sendsig_siginfo(const ksiginfo_t *ksi, const sigset_t *mask)
 
 	mutex_exit(p->p_lock);
 	COMPATNAME2(cpu_getmcontext)(l, &ksf.sf_uc.uc_mcontext,
-	     &ksf.sf_uc.uc_flags);
+	    &ksf.sf_uc.uc_flags);
 	int error = copyout(&ksf, sf, sizeof(ksf));
 	mutex_enter(p->p_lock);
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_urtw.c,v 1.24 2020/03/15 23:04:51 thorpej Exp $	*/
+/*	$NetBSD: if_urtw.c,v 1.27 2024/07/05 04:31:52 rin Exp $	*/
 /*	$OpenBSD: if_urtw.c,v 1.39 2011/07/03 15:47:17 matthew Exp $	*/
 
 /*-
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_urtw.c,v 1.24 2020/03/15 23:04:51 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_urtw.c,v 1.27 2024/07/05 04:31:52 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -829,24 +829,17 @@ urtw_close_pipes(struct urtw_softc *sc)
 	usbd_status error = 0;
 
 	if (sc->sc_rxpipe != NULL) {
-		error = usbd_close_pipe(sc->sc_rxpipe);
-		if (error != 0)
-			goto fail;
+		usbd_close_pipe(sc->sc_rxpipe);
 		sc->sc_rxpipe = NULL;
 	}
 	if (sc->sc_txpipe_low != NULL) {
-		error = usbd_close_pipe(sc->sc_txpipe_low);
-		if (error != 0)
-			goto fail;
+		usbd_close_pipe(sc->sc_txpipe_low);
 		sc->sc_txpipe_low = NULL;
 	}
 	if (sc->sc_txpipe_normal != NULL) {
-		error = usbd_close_pipe(sc->sc_txpipe_normal);
-		if (error != 0)
-			goto fail;
+		usbd_close_pipe(sc->sc_txpipe_normal);
 		sc->sc_txpipe_normal = NULL;
 	}
-fail:
 	return error;
 }
 
@@ -963,10 +956,8 @@ urtw_free_rx_data_list(struct urtw_softc *sc)
 			usbd_destroy_xfer(data->xfer);
 			data->xfer = NULL;
 		}
-		if (data->m != NULL) {
-			m_freem(data->m);
-			data->m = NULL;
-		}
+		m_freem(data->m);
+		data->m = NULL;
 	}
 }
 
@@ -1045,7 +1036,7 @@ urtw_media_change(struct ifnet *ifp)
 
 	if ((ifp->if_flags & (IFF_UP | IFF_RUNNING)) ==
 	    (IFF_UP | IFF_RUNNING))
-		ifp->if_init(ifp);
+		if_init(ifp);
 
 	return 0;
 }
@@ -2395,7 +2386,7 @@ urtw_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		case IFF_UP|IFF_RUNNING:
 			break;
 		case IFF_UP:
-			ifp->if_init(ifp);
+			if_init(ifp);
 			break;
 		case IFF_RUNNING:
 			urtw_stop(ifp, 1);
@@ -2419,7 +2410,7 @@ urtw_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 	if (error == ENETRESET) {
 		if (IS_RUNNING(ifp) &&
 		    (ic->ic_roaming != IEEE80211_ROAMING_MANUAL))
-			ifp->if_init(ifp);
+			if_init(ifp);
 		error = 0;
 	}
 

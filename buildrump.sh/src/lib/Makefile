@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.292 2021/04/25 23:43:48 christos Exp $
+#	$NetBSD: Makefile,v 1.303 2024/10/30 18:09:18 christos Exp $
 #	from: @(#)Makefile	5.25.1.1 (Berkeley) 5/7/91
 
 .include <bsd.own.mk>
@@ -33,6 +33,9 @@ SUBDIR+=	libarch \
 SUBDIR+=	libkern
 .endif
 
+.if (${MACHINE} == "evbppc" && ${MACHINE_ARCH} == "powerpc")
+SUBDIR+=	libc_aligned
+.endif
 .if (${MACHINE_CPU} == "arm" || ${MACHINE_CPU} == "aarch64")
 LIBC_MACHINE_ARCH?=${MACHINE_ARCH}
 LIBC_MACHINE_CPU?=${MACHINE_CPU}
@@ -54,6 +57,10 @@ SUBDIR+=	libskey
 SUBDIR+=	libnvmm
 .endif
 
+.if (${MKARGON2} != "no")
+SUBDIR+=	../external/apache2/argon2/lib/libargon2
+.endif
+
 .if (${MKMDNS} != "no")
 SUBDIR+=	../external/apache2/mDNSResponder/lib
 .endif
@@ -62,7 +69,8 @@ SUBDIR+=	../external/bsd/am-utils/lib
 
 SUBDIR+=	../external/bsd/flex/lib
 SUBDIR+=	../external/bsd/tre/lib
-SUBDIR+=	../external/bsd/elftoolchain/lib
+ELFTOOLCHAINLIB=../external/bsd/elftoolchain/lib/
+.include "${ELFTOOLCHAINLIB}Makefile.subdir"
 SUBDIR+=	../external/bsd/liblzf/lib
 SUBDIR+=	../external/bsd/libpcap/lib
 
@@ -84,19 +92,19 @@ SUBDIR+=	../external/mit/expat/lib
 
 SUBDIR+=	../external/gpl2/libmalloc
 
-SUBDIR+=	../external/bsd/jemalloc/lib
+SUBDIR+=	../external/bsd/${EXTERNAL_JEMALLOC_SUBDIR}/lib
 
 .if (${MKGCC} != "no")
 SUBDIR+=	../external/gpl3/${EXTERNAL_GCC_SUBDIR}/lib/libobjc
 SUBDIR+=	../external/gpl3/${EXTERNAL_GCC_SUBDIR}/lib/libgomp
-# Should probably move GMP, MPFR and MPC builds into the GCC >= 4.5
-# specific build area, but we get better parallelism this way.
-# We don't build compat versions of these.
-. if !defined(MLIBDIR) && (${MKGCCCMDS} != "no")
-SUBDIR+=	../external/lgpl3/gmp/lib/libgmp
+.endif
+
+# GCC and GDB >= 13 require GMP.
+# We don't build compat versions of these
+.if !defined(MLIBDIR) && (${MKGCCCMDS} != "no" || ${MKGDB} != "no")
 SUBDIR+=	../external/lgpl3/mpfr/lib/libmpfr
 SUBDIR+=	../external/lgpl3/mpc/lib/libmpc
-. endif
+SUBDIR+=	../external/lgpl3/gmp/lib/libgmp
 .endif
 
 #
@@ -139,7 +147,8 @@ SUBDIR+=	librumpuser	# depends on libpthread
 SUBDIR+=	libnpf		# depends on libnv
 .endif
 
-SUBDIR+=	../crypto/external/bsd/${EXTERNAL_OPENSSL_SUBDIR}/lib # depends on libcrypt
+OSSL=../crypto/external/bsd/${EXTERNAL_OPENSSL_SUBDIR}/lib/
+.include "${.CURDIR}/${OSSL}Makefile.subdir" # depends on libcrypt
 
 .if (${MKISCSI} != "no")
 SUBDIR+=	../external/bsd/iscsi/lib	# depends on libpthread
@@ -180,18 +189,21 @@ SUBDIR+=	.WAIT
 SUBDIR+=	libwrap
 
 .if (${MKGCC} != "no" && ${MKCXX} != "no" && ${MKLIBSTDCXX} != "no")
+.if ${MKGCCCMDS} != "no"
 .for sanitizer in asan lsan ubsan
 .if exists(../external/gpl3/${EXTERNAL_GCC_SUBDIR}/lib/lib${sanitizer})
 SUBDIR+= ../external/gpl3/${EXTERNAL_GCC_SUBDIR}/lib/lib${sanitizer}
 .endif
 .endfor
 .endif
+.endif
 
 .if (${MKLLVMRT} != "no" && (!defined(MLIBDIR) || ${MKCOMPATX11} != "no"))
 SUBDIR+=	../external/apache2/llvm/librt
 .endif
 
-SUBDIR+=	../external/bsd/libarchive/lib	# depends on libxz
+SUBDIR+=	../external/bsd/zstd/lib
+SUBDIR+=	../external/bsd/libarchive/lib	# depends on libxz, zstd
 
 SUBDIR+=	../external/bsd/file/lib	# depends on libz, libbz2, libxz
 
@@ -200,7 +212,8 @@ SUBDIR+=	npf		# depends on libnpf
 .endif
 
 .if (${MKATF} != "no")
-SUBDIR+=	../external/bsd/atf/lib		# depends on libstdc++
+ATFLIB=	../external/bsd/atf/lib/
+.include "${ATFLIB}Makefile.subdir"		# depends on libstdc++
 .endif
 
 .if (${MKKYUA} != "no")
@@ -216,20 +229,25 @@ SUBDIR+=	librump		# depends on librumpuser
 .endif
 
 .if (${MKKERBEROS} != "no")
-SUBDIR+=	../crypto/external/bsd/heimdal/lib	# depends on libcrypto
+# heimdal depends on libcrypto, libedit, libterminfo
+HEIMDALLIB=	../crypto/external/bsd/heimdal/lib/
+.include "${HEIMDALLIB}Makefile.subdir"			# depends on libcrypto
 							# libedit, libterminfo,
 .endif
 
 SUBDIR+=	../external/bsd/libfido2/lib	# depends on libcbor
-SUBDIR+=	../crypto/external/bsd/netpgp/lib  # depends on libcrypto, ...
-SUBDIR+=	../external/bsd/libevent/lib	# depends on libcrypto
+NETPGPLIB=	../crypto/external/bsd/netpgp/lib/
+.include "${NETPGPLIB}Makefile.subdir"		# depends on libcrypto, ...
+LIBEVENTLIB=	../external/bsd/libevent/lib/
+.include "${LIBEVENTLIB}Makefile.subdir"	# depends on libcrypto
 .if ${MKDTRACE} != "no"
 SUBDIR+=	../external/bsd/libproc/lib	# depends on libstdc++, libctf
 .endif
 SUBDIR+=	../external/bsd/fetch/lib	# depends on libssl
 
 .if (${MKLDAP} != "no")
-SUBDIR+=	../external/bsd/openldap/lib	# depends on libcrypto, ...
+OPENLDAPLIB=	../external/bsd/openldap/lib/	# depends on libcrypto, ...
+.include "${OPENLDAPLIB}Makefile.subdir"
 .endif
 
 .if (${MKZFS} != "no")

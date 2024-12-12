@@ -1,4 +1,4 @@
-/* $NetBSD: usbroothub.c,v 1.10 2021/07/21 06:35:45 skrll Exp $ */
+/* $NetBSD: usbroothub.c,v 1.16 2024/02/04 05:43:06 mrg Exp $ */
 
 /*-
  * Copyright (c) 1998, 2004, 2011, 2012 The NetBSD Foundation, Inc.
@@ -7,7 +7,7 @@
  * This code is derived from software contributed to The NetBSD Foundation
  * by Lennart Augustsson (lennart@augustsson.net) at
  * Carlstedt Research & Technology, Jared D. McNeill (jmcneill@invisible.ca),
- * Matthew R. Green (mrg@eterna.com.au) and Nick Hudson.
+ * Matthew R. Green (mrg@eterna23.net) and Nick Hudson.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: usbroothub.c,v 1.10 2021/07/21 06:35:45 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: usbroothub.c,v 1.16 2024/02/04 05:43:06 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>		/* for ostype */
@@ -68,8 +68,6 @@ __KERNEL_RCSID(0, "$NetBSD: usbroothub.c,v 1.10 2021/07/21 06:35:45 skrll Exp $"
 #include <dev/usb/usbdivar.h>
 #include <dev/usb/usbroothub.h>
 #include <dev/usb/usbhist.h>
-
-extern int usbdebug;
 
 /* helper functions for USB root hub emulation */
 
@@ -345,16 +343,6 @@ static const usb_hub_descriptor_t usbroothub_hubd = {
 usbd_status
 roothub_ctrl_transfer(struct usbd_xfer *xfer)
 {
-	struct usbd_pipe *pipe = xfer->ux_pipe;
-	struct usbd_bus *bus = pipe->up_dev->ud_bus;
-	usbd_status err;
-
-	/* Insert last in queue. */
-	mutex_enter(bus->ub_lock);
-	err = usb_insert_transfer(xfer);
-	mutex_exit(bus->ub_lock);
-	if (err)
-		return err;
 
 	/* Pipe isn't running, start first */
 	return roothub_ctrl_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
@@ -372,6 +360,16 @@ roothub_ctrl_start(struct usbd_xfer *xfer)
 	void *buf;
 
 	USBHIST_FUNC();
+
+	/*
+	 * XXX Should really assert pipe lock, in case ever have
+	 * per-pipe locking instead of using the bus lock for all
+	 * pipes.
+	 */
+	KASSERT(bus->ub_usepolling || mutex_owned(bus->ub_lock));
+
+	/* Roothub xfers are serialized through the pipe.  */
+	KASSERTMSG(bus->ub_rhxfer == NULL, "rhxfer=%p", bus->ub_rhxfer);
 
 	KASSERT(xfer->ux_rqflags & URQ_REQUEST);
 	req = &xfer->ux_request;
@@ -554,7 +552,19 @@ roothub_ctrl_start(struct usbd_xfer *xfer)
 		break;
 	}
 
+	KASSERTMSG(bus->ub_rhxfer == NULL, "rhxfer=%p", bus->ub_rhxfer);
+	bus->ub_rhxfer = xfer;
+	if (!bus->ub_usepolling)
+		mutex_exit(bus->ub_lock);
+
 	actlen = bus->ub_methods->ubm_rhctrl(bus, req, buf, buflen);
+
+	if (!bus->ub_usepolling)
+		mutex_enter(bus->ub_lock);
+	KASSERTMSG(bus->ub_rhxfer == xfer, "rhxfer=%p", bus->ub_rhxfer);
+	bus->ub_rhxfer = NULL;
+	cv_signal(&bus->ub_rhxfercv);
+
 	if (actlen < 0)
 		goto fail;
 
@@ -566,9 +576,7 @@ roothub_ctrl_start(struct usbd_xfer *xfer)
 	    (uintptr_t)xfer, buflen, actlen, err);
 
 	xfer->ux_status = err;
-	mutex_enter(bus->ub_lock);
 	usb_transfer_complete(xfer);
-	mutex_exit(bus->ub_lock);
 
 	return USBD_NORMAL_COMPLETION;
 }
@@ -577,8 +585,19 @@ roothub_ctrl_start(struct usbd_xfer *xfer)
 Static void
 roothub_ctrl_abort(struct usbd_xfer *xfer)
 {
+	struct usbd_bus *bus = xfer->ux_bus;
 
-	/* Nothing to do, all transfers are synchronous. */
+	KASSERT(mutex_owned(bus->ub_lock));
+	KASSERTMSG(bus->ub_rhxfer == xfer, "rhxfer=%p", bus->ub_rhxfer);
+
+	/*
+	 * No mechanism to abort the xfer (would have to coordinate
+	 * with the bus's ubm_rhctrl to be useful, and usually at most
+	 * there's some short bounded delays of a few tens of
+	 * milliseconds), so just wait for it to complete.
+	 */
+	while (bus->ub_rhxfer == xfer)
+		cv_wait(&bus->ub_rhxfercv, bus->ub_lock);
 }
 
 /* Close the root pipe. */

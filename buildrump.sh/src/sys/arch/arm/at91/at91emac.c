@@ -1,4 +1,4 @@
-/*	$NetBSD: at91emac.c,v 1.32 2020/02/19 02:51:54 thorpej Exp $	*/
+/*	$NetBSD: at91emac.c,v 1.36 2024/07/05 04:31:49 rin Exp $	*/
 
 /*
  * Copyright (c) 2007 Embedtronics Oy
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: at91emac.c,v 1.32 2020/02/19 02:51:54 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: at91emac.c,v 1.36 2024/07/05 04:31:49 rin Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -40,7 +40,6 @@ __KERNEL_RCSID(0, "$NetBSD: at91emac.c,v 1.32 2020/02/19 02:51:54 thorpej Exp $"
 #include <sys/ioctl.h>
 #include <sys/kernel.h>
 #include <sys/proc.h>
-#include <sys/malloc.h>
 #include <sys/time.h>
 #include <sys/device.h>
 #include <uvm/uvm_extern.h>
@@ -180,7 +179,6 @@ emac_attach(device_t parent, device_t self, void *aux)
 static int
 emac_gctx(struct emac_softc *sc)
 {
-	struct ifnet * ifp = &sc->sc_ec.ec_if;
 	uint32_t tsr;
 
 	tsr = EMAC_READ(ETH_TSR);
@@ -204,8 +202,8 @@ emac_gctx(struct emac_softc *sc)
 	}
 
 	// mark we're free
-	if (ifp->if_flags & IFF_OACTIVE) {
-		ifp->if_flags &= ~IFF_OACTIVE;
+	if (sc->tx_busy) {
+		sc->tx_busy = false;
 		/* Disable transmit-buffer-free interrupt */
 		/*EMAC_WRITE(ETH_IDR, ETH_ISR_TBRE);*/
 	}
@@ -301,9 +299,7 @@ emac_intr(void *arg)
 				/* Drop packets until we can get replacement
 				 * empty mbufs for the RXDQ.
 				 */
-				if (m != NULL) {
-					m_freem(m);
-				}
+				m_freem(m);
 				if_statinc(ifp, if_ierrors);
 			}
 			sc->rxqi++;
@@ -615,7 +611,7 @@ start:
 	if (emac_gctx(sc) == 0) {
 		/* Enable transmit-buffer-free interrupt */
 		EMAC_WRITE(ETH_IER, ETH_ISR_TBRE);
-		ifp->if_flags |= IFF_OACTIVE;
+		sc->tx_busy = true;
 		ifp->if_timer = 10;
 		splx(s);
 		return;
@@ -754,7 +750,7 @@ emac_ifstop(struct ifnet *ifp, int disable)
 	/* Down the MII. */
 	mii_down(&sc->sc_mii);
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
 	sc->sc_mii.mii_media_status &= ~IFM_ACTIVE;
 }
@@ -774,7 +770,7 @@ emac_setaddr(struct ifnet *ifp)
 	/* disable receiver temporarily */
 	EMAC_WRITE(ETH_CTL, ctl & ~ETH_CTL_RE);
 
-	cfg &= ~(ETH_CFG_MTI | ETH_CFG_UNI | ETH_CFG_CAF | ETH_CFG_UNI);
+	cfg &= ~(ETH_CFG_MTI | ETH_CFG_UNI | ETH_CFG_CAF);
 
 	if (ifp->if_flags & IFF_PROMISC) {
 		cfg |=	ETH_CFG_CAF;

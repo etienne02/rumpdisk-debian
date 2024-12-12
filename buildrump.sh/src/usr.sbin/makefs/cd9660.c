@@ -1,4 +1,4 @@
-/*	$NetBSD: cd9660.c,v 1.57 2020/11/10 20:48:29 reinoud Exp $	*/
+/*	$NetBSD: cd9660.c,v 1.60 2023/12/28 12:13:55 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 2005 Daniel Watt, Walter Deignan, Ryan Gabrys, Alan
@@ -103,7 +103,7 @@
 
 #include <sys/cdefs.h>
 #if defined(__RCSID) && !defined(__lint)
-__RCSID("$NetBSD: cd9660.c,v 1.57 2020/11/10 20:48:29 reinoud Exp $");
+__RCSID("$NetBSD: cd9660.c,v 1.60 2023/12/28 12:13:55 tsutsui Exp $");
 #endif  /* !__lint */
 
 #include <string.h>
@@ -737,7 +737,10 @@ cd9660_populate_iso_dir_record(struct _iso_directory_record_cd9660 *record,
 			       u_char ext_attr_length, u_char flags,
 			       u_char name_len, const char * name)
 {
+	time_t tstamp = stampst.st_ino ? stampst.st_mtime : time(NULL);
+
 	record->ext_attr_length[0] = ext_attr_length;
+	cd9660_time_915(record->date, tstamp);
 	record->flags[0] = ISO_FLAG_CLEAR | flags;
 	record->file_unit_size[0] = 0;
 	record->interleave[0] = 0;
@@ -824,7 +827,6 @@ cd9660_fill_extended_attribute_record(cd9660node *node)
 static int
 cd9660_translate_node_common(iso9660_disk *diskStructure, cd9660node *newnode)
 {
-	time_t tstamp = stampst.st_ino ? stampst.st_mtime : time(NULL);
 	u_char flag;
 	char temp[ISO_FILENAME_MAXLENGTH_WITH_PADDING];
 
@@ -840,12 +842,6 @@ cd9660_translate_node_common(iso9660_disk *diskStructure, cd9660node *newnode)
 
 	cd9660_populate_iso_dir_record(newnode->isoDirRecord, 0,
 	    flag, strlen(temp), temp);
-
-	/* Set the various dates */
-
-	/* If we want to use the current date and time */
-
-	cd9660_time_915(newnode->isoDirRecord->date, tstamp);
 
 	cd9660_bothendian_dword(newnode->fileDataLength,
 	    newnode->isoDirRecord->size);
@@ -1011,7 +1007,7 @@ cd9660_sorted_child_insert(cd9660node *parent, cd9660node *cn_new)
 
 /*
  * Called After cd9660_sorted_child_insert
- * handles file collisions by suffixing each filname with ~n
+ * handles file collisions by suffixing each filename with ~n
  * where n represents the files respective place in the ordering
  */
 static int
@@ -1192,7 +1188,7 @@ cd9660_copy_filenames(iso9660_disk *diskStructure, cd9660node *node)
 
 	if (TAILQ_FIRST(&node->cn_children)->isoDirRecord == NULL) {
 		debug_print_tree(diskStructure, diskStructure->rootNode, 0);
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	TAILQ_FOREACH(cn, &node->cn_children, cn_next_child) {

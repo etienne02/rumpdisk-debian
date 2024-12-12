@@ -1,4 +1,4 @@
-/*	$NetBSD: if_upl.c,v 1.71 2020/03/15 23:04:51 thorpej Exp $	*/
+/*	$NetBSD: if_upl.c,v 1.77 2022/03/03 05:56:28 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_upl.c,v 1.71 2020/03/15 23:04:51 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_upl.c,v 1.77 2022/03/03 05:56:28 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -111,10 +111,8 @@ static void upl_uno_rx_loop(struct usbnet *, struct usbnet_chain *, uint32_t);
 static unsigned upl_uno_tx_prepare(struct usbnet *, struct mbuf *,
 			       struct usbnet_chain *);
 static int upl_uno_ioctl(struct ifnet *, u_long, void *);
-static int upl_uno_init(struct ifnet *);
 
 static const struct usbnet_ops upl_ops = {
-	.uno_init = upl_uno_init,
 	.uno_tx_prepare = upl_uno_tx_prepare,
 	.uno_rx_loop = upl_uno_rx_loop,
 	.uno_ioctl = upl_uno_ioctl,
@@ -207,7 +205,7 @@ upl_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	usbnet_attach(un, "upldet");
+	usbnet_attach(un);
 
 	/* Initialize interface info.*/
 	struct ifnet *ifp = usbnet_ifp(un);
@@ -249,22 +247,6 @@ upl_uno_tx_prepare(struct usbnet *un, struct mbuf *m, struct usbnet_chain *c)
 		     device_xname(un->un_dev), __func__, total_len));
 
 	return total_len;
-}
-
-static int
-upl_uno_init(struct ifnet *ifp)
-{
-	struct usbnet * const un = ifp->if_softc;
-	int rv;
-
-	usbnet_lock_core(un);
-	if (usbnet_isdying(un))
-		rv = EIO;
-	else
-		rv = usbnet_init_rx_tx(un);
-	usbnet_unlock_core(un);
-
-	return rv;
 }
 
 static int

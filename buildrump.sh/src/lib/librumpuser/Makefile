@@ -1,5 +1,7 @@
-#	$NetBSD: Makefile,v 1.28 2019/10/13 07:28:11 mrg Exp $
+#	$NetBSD: Makefile,v 1.30 2023/06/03 09:09:10 lukem Exp $
 #
+
+NOFULLRELRO=	yes
 
 .include <bsd.own.mk>
 
@@ -54,6 +56,6 @@ INCS=		rumpuser_component.h rumpuser_port.h
 
 CPPFLAGS+=	-D_REENTRANT
 
-COPTS.rumpuser_sp.c+=	${GCC_NO_CAST_FUNCTION_TYPE}
+COPTS.rumpuser_sp.c+=	${CC_WNO_CAST_FUNCTION_TYPE}
 
 .include <bsd.lib.mk>

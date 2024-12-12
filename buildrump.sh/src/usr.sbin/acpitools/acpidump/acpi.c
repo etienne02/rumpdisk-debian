@@ -1,4 +1,4 @@
-/* $NetBSD: acpi.c,v 1.50 2021/01/20 15:27:51 skrll Exp $ */
+/* $NetBSD: acpi.c,v 1.56 2024/05/12 23:00:21 msaitoh Exp $ */
 
 /*-
  * Copyright (c) 1998 Doug Rabson
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: acpi.c,v 1.50 2021/01/20 15:27:51 skrll Exp $");
+__RCSID("$NetBSD: acpi.c,v 1.56 2024/05/12 23:00:21 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/endian.h>
@@ -83,7 +83,7 @@ static void	acpi_print_io_apic(uint32_t apic_id, uint32_t int_base,
 		    uint64_t apic_addr);
 static void	acpi_print_mps_flags(uint16_t flags);
 static void	acpi_print_intr(uint32_t intr, uint16_t mps_flags);
-static void	acpi_print_local_nmi(u_int lint, uint16_t mps_flags);
+static void	acpi_print_local_nmi(u_int local_int, uint16_t mps_flags);
 static void	acpi_print_madt(ACPI_SUBTABLE_HEADER *mp);
 static void	acpi_handle_bert(ACPI_TABLE_HEADER *sdp);
 static void	acpi_handle_bgrt(ACPI_TABLE_HEADER *sdp);
@@ -979,7 +979,12 @@ static void
 acpi_print_gicc_flags(uint32_t flags)
 {
 
-	printf("\tFlags={Performance intr=");
+	printf("\tFlags={");
+	if (flags & ACPI_MADT_ENABLED)
+		printf("enabled");
+	else
+		printf("disabled");
+	printf(", Performance intr=");
 	if (flags & ACPI_MADT_PERFORMANCE_IRQ_MODE)
 		printf("edge");
 	else
@@ -1001,10 +1006,10 @@ acpi_print_intr(uint32_t intr, uint16_t mps_flags)
 }
 
 static void
-acpi_print_local_nmi(u_int lint, uint16_t mps_flags)
+acpi_print_local_nmi(u_int local_int, uint16_t mps_flags)
 {
 
-	printf("\tLINT Pin=%d\n", lint);
+	printf("\tLINT Pin=%d\n", local_int);
 	acpi_print_mps_flags(mps_flags);
 }
 
@@ -1146,7 +1151,7 @@ acpi_print_madt(ACPI_SUBTABLE_HEADER *mp)
 		printf("\tGICR ADDR=%016jx\n",
 		    (uintmax_t)gicc->GicrBaseAddress);
 		printf("\tMPIDR=%jx\n", (uintmax_t)gicc->ArmMpidr);
-		printf("\tEfficency Class=%d\n", (u_int)gicc->EfficiencyClass);
+		printf("\tEfficiency Class=%d\n", (u_int)gicc->EfficiencyClass);
 		break;
 	case ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR:
 		gicd = (ACPI_MADT_GENERIC_DISTRIBUTOR *)mp;
@@ -2110,7 +2115,7 @@ acpi_print_iort_memory_access(ACPI_IORT_MEMORY_ACCESS *memacc)
 		printf("Not coherent\n");
 		break;
 	default:
-		printf("resrved (%u)\n", memacc->CacheCoherency);
+		printf("reserved (%u)\n", memacc->CacheCoherency);
 		break;
 	}
 	printf("\t\tAllocation Hints=");
@@ -2300,7 +2305,7 @@ acpi_print_iort_smmuv3(ACPI_IORT_NODE *node)
 	printf("\tSync GSIV=%u\n", smmu->SyncGsiv);
 	printf("\tProximity domain=%u\n", smmu->Pxm);
 
-	/* XXX should we print the refered contents? */
+	/* XXX should we print the referred contents? */
 	printf("\tDevice ID mapping index=%u\n", smmu->IdMappingIndex);
 }
 
@@ -2419,7 +2424,7 @@ acpi_print_lpit(ACPI_LPIT_HEADER *lpit)
 #undef PRINTFLAG
 
 	if (lpit->Type == ACPI_LPIT_TYPE_NATIVE_CSTATE)
-		return acpi_print_native_lpit((ACPI_LPIT_NATIVE *)lpit);
+		acpi_print_native_lpit((ACPI_LPIT_NATIVE *)lpit);
 }
 
 static void
@@ -4714,7 +4719,7 @@ aml_disassemble(ACPI_TABLE_HEADER *rsdt, ACPI_TABLE_HEADER *dsdp)
 		goto out;
 	}
 	if (status != 0) {
-		fprintf(stderr, "iast exit status = %d\n", status);
+		fprintf(stderr, "iasl exit status = %d\n", status);
 	}
 
 	/* Dump iasl's output to stdout */

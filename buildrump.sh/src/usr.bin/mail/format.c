@@ -1,4 +1,4 @@
-/*	$NetBSD: format.c,v 1.16 2021/04/19 17:49:28 christos Exp $	*/
+/*	$NetBSD: format.c,v 1.19 2024/10/06 19:31:26 rillig Exp $	*/
 
 /*-
  * Copyright (c) 2006 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #ifndef __lint__
-__RCSID("$NetBSD: format.c,v 1.16 2021/04/19 17:49:28 christos Exp $");
+__RCSID("$NetBSD: format.c,v 1.19 2024/10/06 19:31:26 rillig Exp $");
 #endif /* not __lint__ */
 
 #include <time.h>
@@ -54,13 +54,21 @@ __RCSID("$NetBSD: format.c,v 1.16 2021/04/19 17:49:28 christos Exp $");
 static void
 check_bufsize(char **buf, size_t *bufsize, char **p, size_t cnt)
 {
-	char *q;
-	if (*p + cnt < *buf + *bufsize)
+	size_t offset = (size_t)(*p - *buf);
+
+	/* enough buffer allocated already */
+	if (cnt < *bufsize - offset)
 		return;
-	*bufsize *= 2;
-	q = erealloc(*buf, *bufsize);
-	*p = q + (*p - *buf);
-	*buf = q;
+
+	/* expand buffer till it's sufficient to handle the data */
+	while (cnt >= *bufsize - offset) {
+		if (*bufsize > SIZE_MAX/2)
+			errx(1, "out of memory");
+		*bufsize *= 2;
+	}
+
+	*buf = erealloc(*buf, *bufsize);
+	*p = *buf + offset;
 }
 
 static const char *
@@ -130,7 +138,7 @@ sfmtdepth(char *str, int depth)
 static const char *
 sfmtfield(const char **fmtbeg, const char *fmtch, struct message *mp)
 {
-	char *q;
+	const char *q;
 	q = strchr(fmtch + 1, '?');
 	if (q) {
 		size_t len;
@@ -262,7 +270,7 @@ sfmtflag(const char **fmtbeg, const char *fmtch, struct message *mp)
 static const char *
 login_name(const char *addr)
 {
-	char *p;
+	const char *p;
 	p = strchr(addr, '@');
 	if (p) {
 		char *q;
@@ -726,7 +734,7 @@ dateof(struct tm *tm, struct message *mp, int use_hl_date)
 	 * the "Date:" field.
 	 *
 	 * NOTE: The range for the time is 00:00 to 23:60 (to allow
-	 * for a leep second), but I have seen this violated making
+	 * for a leap second), but I have seen this violated making
 	 * strptime() fail, e.g.,
 	 *
 	 *   Date: Tue, 24 Oct 2006 24:07:58 +0400

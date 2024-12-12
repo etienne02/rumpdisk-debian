@@ -1,4 +1,4 @@
-.\"	$NetBSD: rcmd.3,v 1.28 2010/03/22 19:30:54 joerg Exp $
+.\"	$NetBSD: rcmd.3,v 1.30 2022/12/04 11:25:08 uwe Exp $
 .\"
 .\" Copyright (c) 1983, 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -258,7 +258,7 @@ When using the
 function, this variable is used as the program to run instead of
 .Xr rcmd 1 .
 .El
-.Sh DIAGNOSTICS
+.Sh RETURN VALUES
 The
 .Fn rcmd
 function
@@ -275,7 +275,7 @@ They return \-1 on error with the global value
 .Va errno
 set according to the reason for failure.
 The error code
-.Dv EAGAIN
+.Er EAGAIN
 is overloaded to mean ``All network ports in use.''
 .Sh SEE ALSO
 .Xr rcmd 1 ,

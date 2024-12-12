@@ -1,4 +1,4 @@
-/*	$NetBSD: exfat.c,v 1.4 2021/01/24 14:37:32 tkusumi Exp $	*/
+/*	$NetBSD: exfat.c,v 1.6 2021/09/17 21:06:35 christos Exp $	*/
 
 /*
  * Copyright (c) 2017 Conrad Meyer <cem@FreeBSD.org>
@@ -26,7 +26,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: exfat.c,v 1.4 2021/01/24 14:37:32 tkusumi Exp $");
+__RCSID("$NetBSD: exfat.c,v 1.6 2021/09/17 21:06:35 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/endian.h>

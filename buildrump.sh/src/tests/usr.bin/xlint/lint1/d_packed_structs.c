@@ -1,7 +1,9 @@
-/*	$NetBSD: d_packed_structs.c,v 1.3 2021/01/31 14:57:28 rillig Exp $	*/
+/*	$NetBSD: d_packed_structs.c,v 1.6 2023/08/05 10:00:59 rillig Exp $	*/
 # 3 "d_packed_structs.c"
 
 /* packed tests */
+
+/* lint1-extra-flags: -X 351 */
 
 struct in_addr {
 	int x;
@@ -28,12 +30,17 @@ typedef struct __packed {
 
 struct x {
 	char c;
-	long l;
+	long long l;
 } __packed;
 
 struct y {
 	char c;
-	long l;
+	long long l;
 };
 
 int a[sizeof(struct y) - sizeof(struct x) - 1];
+
+/* expect+1: error: negative array dimension (-9) [20] */
+typedef int sizeof_x[-(int)sizeof(struct x)];
+/* expect+1: error: negative array dimension (-16) [20] */
+typedef int sizeof_y[-(int)sizeof(struct y)];

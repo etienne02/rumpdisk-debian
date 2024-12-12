@@ -1,4 +1,4 @@
-/* $NetBSD: dwcmmc_fdt.c,v 1.18 2021/03/24 18:19:31 skrll Exp $ */
+/* $NetBSD: dwcmmc_fdt.c,v 1.24 2024/08/19 07:35:16 skrll Exp $ */
 
 /*-
  * Copyright (c) 2015-2018 Jared McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dwcmmc_fdt.c,v 1.18 2021/03/24 18:19:31 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dwcmmc_fdt.c,v 1.24 2024/08/19 07:35:16 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -74,6 +74,7 @@ static const struct dwcmmc_fdt_config dwmmc_default_config = {
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "rockchip,rk3288-dw-mshc",	.data = &dwcmmc_rk3288_config },
 	{ .compat = "snps,dw-mshc",		.data = &dwmmc_default_config },
+	{ .compat = "starfive,jh7110-mmc",	.data = &dwmmc_default_config },
 	DEVICE_COMPAT_EOL
 };
 
@@ -167,6 +168,12 @@ dwcmmc_fdt_attach(device_t parent, device_t self, void *aux)
 	sc->sc_intr_cardmask = esc->sc_conf->intr_cardmask;
 	sc->sc_ciu_div = esc->sc_conf->ciu_div;
 	sc->sc_flags = esc->sc_conf->flags;
+	if (of_getprop_bool(phandle, "non-removable")) {
+		sc->sc_flags |= DWC_MMC_F_NON_REMOVABLE;
+	}
+	if (of_getprop_bool(phandle, "broken-cd")) {
+		sc->sc_flags |= DWC_MMC_F_BROKEN_CD;
+	}
 	sc->sc_pre_power_on = dwcmmc_fdt_pre_power_on;
 	sc->sc_post_power_on = dwcmmc_fdt_post_power_on;
 	sc->sc_bus_clock = dwcmmc_fdt_bus_clock;
@@ -230,7 +237,7 @@ static int
 dwcmmc_fdt_bus_clock(struct dwc_mmc_softc *sc, int rate)
 {
 	struct dwcmmc_fdt_softc *esc = device_private(sc->sc_dev);
-        const u_int ciu_div = sc->sc_ciu_div > 0 ? sc->sc_ciu_div : 1;
+	const u_int ciu_div = sc->sc_ciu_div > 0 ? sc->sc_ciu_div : 1;
 	int error;
 
 	error = clk_set_rate(esc->sc_clk_ciu, 1000 * rate * ciu_div);
@@ -243,7 +250,7 @@ dwcmmc_fdt_bus_clock(struct dwc_mmc_softc *sc, int rate)
 	sc->sc_clock_freq = clk_get_rate(esc->sc_clk_ciu);
 
 	aprint_debug_dev(sc->sc_dev, "set clock rate to %u kHz (target %u kHz)\n",
-	    sc->sc_clock_freq, rate);
+	    sc->sc_clock_freq / 1000, rate);
 
 	return 0;
 }

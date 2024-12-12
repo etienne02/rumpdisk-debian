@@ -1,4 +1,4 @@
-/*	$NetBSD: bootcfg.c,v 1.6 2021/05/30 05:59:23 mlelstv Exp $	*/
+/*	$NetBSD: bootcfg.c,v 1.9 2022/01/05 16:01:54 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -38,7 +38,9 @@
 #define MENUFORMAT_LETTER 2
 
 #define DEFAULT_FORMAT  MENUFORMAT_AUTO
+#ifndef DEFAULT_TIMEOUT
 #define DEFAULT_TIMEOUT 10
+#endif
 
 struct bootcfg_def bootcfg_info;
 
@@ -90,7 +92,7 @@ bootcfg_do_noop(const char *cmd, char *arg)
  * menu=Boot NetBSD:boot netbsd
  * menu=Boot into single user mode:boot netbsd -s
  * menu=:boot hd1a:netbsd -cs
- * menu=Goto boot comand line:prompt
+ * menu=Goto boot command line:prompt
  * timeout=10
  * consdev=com0
  * default=1
@@ -277,4 +279,27 @@ perform_bootcfg(const char *conf, bootcfg_command command, const off_t maxsz)
 		bootcfg_info.def = cmenu - 1;
 
 	return 0;
+}
+
+void
+print_bootcfg_banner(const char *bootprog_name, const char *bootprog_rev)
+{
+	int n = 0;
+
+	if (bootcfg_info.banner[0]) {  
+		for (; n < BOOTCFG_MAXBANNER && bootcfg_info.banner[n]; n++) 
+			printf("%s\n", bootcfg_info.banner[n]);
+		return;
+	}
+
+	/* If the user has not specified a banner, print a default one. */
+
+	printf("\n");
+	printf("  \\\\-__,------,___.\n");
+	printf("   \\\\        __,---`  %s\n", bootprog_name);
+	printf("    \\\\       `---,_.  Revision %s\n", bootprog_rev);
+	printf("     \\\\-,_____,.---`\n");
+	printf("      \\\\\n");
+	printf("       \\\\\n");
+	printf("        \\\\\n\n");
 }

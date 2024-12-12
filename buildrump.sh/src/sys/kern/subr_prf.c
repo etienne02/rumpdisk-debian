@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_prf.c,v 1.186 2021/03/10 13:27:51 simonb Exp $	*/
+/*	$NetBSD: subr_prf.c,v 1.203 2023/08/29 21:23:14 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1986, 1988, 1991, 1993
@@ -37,7 +37,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_prf.c,v 1.186 2021/03/10 13:27:51 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_prf.c,v 1.203 2023/08/29 21:23:14 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
@@ -96,17 +96,16 @@ static bool kprintf_inited = false;
  */
 
 static void	 putchar(int, int, struct tty *);
+static void	 kprintf_internal(const char *, int, void *, char *, ...);
 
 
 /*
  * globals
  */
 
-extern	struct tty *constty;	/* pointer to console "window" tty */
-extern	int log_open;	/* subr_log: is /dev/klog open? */
 const	char *panicstr; /* arg to first call to panic (used as a flag
 			   to indicate that panic has already been called). */
-struct cpu_info *paniccpu;	/* cpu that first paniced */
+struct cpu_info *paniccpu;	/* cpu that first panicked */
 long	panicstart, panicend;	/* position in the msgbuf of the start and
 				   end of the formatted panicstr. */
 int	doing_shutdown;	/* set to indicate shutdown in progress */
@@ -147,7 +146,8 @@ void
 kprintf_init(void)
 {
 
-	KASSERT(!kprintf_inited && cold); /* not foolproof, but ... */
+	KASSERT(!kprintf_inited); /* not foolproof, but ... */
+	KASSERT(cold);
 	mutex_init(&kprintf_mtx, MUTEX_DEFAULT, IPL_HIGH);
 #ifdef RND_PRINTF
 	rnd_attach_source(&rnd_printf_source, "printf", RND_TYPE_UNKNOWN,
@@ -222,9 +222,9 @@ vpanic(const char *fmt, va_list ap)
 
 	if (lwp0.l_cpu && curlwp) {
 		/*
-		 * Disable preemption.  If already panicing on another CPU, sit
+		 * Disable preemption.  If already panicking on another CPU, sit
 		 * here and spin until the system is rebooted.  Allow the CPU that
-		 * first paniced to panic again.
+		 * first panicked to panic again.
 		 */
 		kpreempt_disable();
 		ci = curcpu();
@@ -261,28 +261,26 @@ vpanic(const char *fmt, va_list ap)
 	if (logenabled(msgbufp))
 		panicstart = msgbufp->msg_bufx;
 
-	printf("panic: ");
+	kprintf_lock();
+	kprintf_internal("panic: ", TOLOG|TOCONS, NULL, NULL);
 	if (panicstr == NULL) {
 		/* first time in panic - store fmt first for precaution */
 		panicstr = fmt;
 
 		vsnprintf(scratchstr, sizeof(scratchstr), fmt, ap);
-		printf("%s", scratchstr);
+		kprintf_internal("%s", TOLOG|TOCONS, NULL, NULL, scratchstr);
 		panicstr = scratchstr;
 	} else {
-		vprintf(fmt, ap);
+		kprintf(fmt, TOLOG|TOCONS, NULL, NULL, ap);
 	}
-	printf("\n");
+	kprintf_internal("\n", TOLOG|TOCONS, NULL, NULL);
+	kprintf_unlock();
 
 	if (logenabled(msgbufp))
 		panicend = msgbufp->msg_bufx;
 
 #ifdef KGDB
 	kgdb_panic();
-#endif
-#ifdef KADB
-	if (boothowto & RB_KDB)
-		kdbpanic();
 #endif
 #ifdef DDB
 	db_panic();
@@ -398,22 +396,40 @@ addlog(const char *fmt, ...)
 static void
 putone(int c, int flags, struct tty *tp)
 {
-	if (panicstr)
-		constty = NULL;
+	struct tty *ctp;
+	int s;
+	bool do_ps = !cold;
 
-	if ((flags & TOCONS) && tp == NULL && constty) {
-		tp = constty;
+	ctp = NULL;	/* XXX gcc i386 -Os */
+
+	/*
+	 * Ensure whatever constty points to can't go away while we're
+	 * trying to use it.
+	 */
+	if (__predict_true(do_ps))
+		s = pserialize_read_enter();
+
+	if (panicstr)
+		atomic_store_relaxed(&constty, NULL);
+
+	if ((flags & TOCONS) &&
+	    (ctp = atomic_load_consume(&constty)) != NULL &&
+	    tp == NULL) {
+		tp = ctp;
 		flags |= TOTTY;
 	}
 	if ((flags & TOTTY) && tp &&
 	    tputchar(c, flags, tp) < 0 &&
-	    (flags & TOCONS) && tp == constty)
-		constty = NULL;
+	    (flags & TOCONS))
+		atomic_cas_ptr(&constty, tp, NULL);
 	if ((flags & TOLOG) &&
 	    c != '\0' && c != '\r' && c != 0177)
 	    	logputchar(c);
-	if ((flags & TOCONS) && constty == NULL && c != '\0')
+	if ((flags & TOCONS) && ctp == NULL && c != '\0')
 		(*v_putc)(c);
+
+	if (__predict_true(do_ps))
+		pserialize_read_exit(s);
 }
 
 static void
@@ -501,7 +517,7 @@ putchar(int c, int flags, struct tty *tp)
 #ifdef RND_PRINTF
 	if (__predict_true(kprintf_inited)) {
 		unsigned char ch = c;
-		rnd_add_data(&rnd_printf_source, &ch, 1, 0);
+		rnd_add_data_intr(&rnd_printf_source, &ch, 1, 0);
 	}
 #endif
 }
@@ -622,7 +638,7 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 	va_list ap;
 
 	/* mutex_enter(&proc_lock); XXXSMP */
-	if (sess && sess->s_ttyvp && ttycheckoutq(sess->s_ttyp, 0)) {
+	if (sess && sess->s_ttyvp && ttycheckoutq(sess->s_ttyp)) {
 		flags |= TOTTY;
 		tp = sess->s_ttyp;
 	}
@@ -1221,11 +1237,12 @@ device_printf(device_t dev, const char *fmt, ...)
 {
 	va_list ap;
 
+	kprintf_lock();
+	kprintf_internal("%s: ", TOCONS|TOLOG, NULL, NULL, device_xname(dev));
 	va_start(ap, fmt);
-	printf("%s: ", device_xname(dev));
-	vprintf(fmt, ap);
+	kprintf(fmt, TOCONS|TOLOG, NULL, NULL, ap);
 	va_end(ap);
-	return;
+	kprintf_unlock();
 }
 
 /*
@@ -1603,7 +1620,7 @@ done:
 
 #ifdef RND_PRINTF
 	if (__predict_true(kprintf_inited))
-		rnd_add_data(&rnd_printf_source, NULL, 0, 0);
+		rnd_add_data_intr(&rnd_printf_source, NULL, 0, 0);
 #endif
 	return ret;
 }

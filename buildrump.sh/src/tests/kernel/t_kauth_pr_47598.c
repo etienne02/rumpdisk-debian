@@ -27,7 +27,7 @@
 #include <sys/cdefs.h>
 __COPYRIGHT("@(#) Copyright (c) 2013\
  The NetBSD Foundation, inc. All rights reserved.");
-__RCSID("$NetBSD: t_kauth_pr_47598.c,v 1.4 2020/02/10 16:51:48 riastradh Exp $");
+__RCSID("$NetBSD: t_kauth_pr_47598.c,v 1.6 2022/01/26 11:48:54 andvar Exp $");
 
 #include <errno.h>
 #include <unistd.h>
@@ -117,7 +117,7 @@ ATF_TC_BODY(kauth_curtain, tc)
 	set_curtain(1);
 
 	/*
-	 * create a socket and bind it to some arbitray free port
+	 * create a socket and bind it to some arbitrary free port
 	 */
 	s = socket(PF_INET, SOCK_STREAM|SOCK_NONBLOCK, 0);
 	ATF_REQUIRE_MSG(s != -1, "socket: %d", errno);
@@ -140,7 +140,7 @@ ATF_TC_BODY(kauth_curtain, tc)
 	printf("port is %d\n", ntohs(sa.sin_port));
 	err = connect(s2, (struct sockaddr *)&sa, sizeof(sa));
 	ATF_REQUIRE_MSG(err == -1 && errno == EINPROGRESS,
-	    "conect returned %d with errno %d", err, errno);
+	    "connect returned %d with errno %d", err, errno);
 	fflush(stdout);
 	fflush(stderr);
 

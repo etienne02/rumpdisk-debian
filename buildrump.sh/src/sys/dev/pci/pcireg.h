@@ -1,4 +1,4 @@
-/*	$NetBSD: pcireg.h,v 1.156 2021/08/17 22:00:32 andvar Exp $	*/
+/*	$NetBSD: pcireg.h,v 1.171 2024/06/14 03:15:04 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1995, 1996, 1999, 2000
@@ -135,7 +135,7 @@ typedef u_int8_t pci_interface_t;
 typedef u_int8_t pci_revision_t;
 
 #define	PCI_CLASS_SHIFT			24
-#define	PCI_CLASS_MASK			0xff
+#define	PCI_CLASS_MASK			0xffU
 #define	PCI_CLASS(cr) \
 	    (((cr) >> PCI_CLASS_SHIFT) & PCI_CLASS_MASK)
 
@@ -188,6 +188,11 @@ typedef u_int8_t pci_revision_t;
 
 /* 0x01 mass storage subclasses */
 #define	PCI_SUBCLASS_MASS_STORAGE_SCSI		0x00
+#define		PCI_INTERFACE_SCSI_VND			0x00
+#define		PCI_INTERFACE_SCSI_PQI_STORAGE		0x11
+#define		PCI_INTERFACE_SCSI_PQI_CNTRL		0x12
+#define		PCI_INTERFACE_SCSI_PQI_STORAGE_CNTRL	0x13
+#define		PCI_INTERFACE_SCSI_NVME			0x21
 #define	PCI_SUBCLASS_MASS_STORAGE_IDE		0x01
 #define	PCI_SUBCLASS_MASS_STORAGE_FLOPPY	0x02
 #define	PCI_SUBCLASS_MASS_STORAGE_IPI		0x03
@@ -203,7 +208,11 @@ typedef u_int8_t pci_revision_t;
 #define	PCI_SUBCLASS_MASS_STORAGE_NVM		0x08
 #define		PCI_INTERFACE_NVM_VND			0x00
 #define		PCI_INTERFACE_NVM_NVMHCI10		0x01
-#define		PCI_INTERFACE_NVM_NVME			0x02
+#define		PCI_INTERFACE_NVM_NVME_IO		0x02
+#define		PCI_INTERFACE_NVM_NVME_ADMIN		0x03
+#define	PCI_SUBCLASS_MASS_STORAGE_UFS		0x09
+#define		PCI_INTERFACE_UFS_VND			0x00
+#define		PCI_INTERFACE_UFS_UFSHCI		0x01
 #define	PCI_SUBCLASS_MASS_STORAGE_MISC		0x80
 
 /* 0x02 network subclasses */
@@ -215,6 +224,7 @@ typedef u_int8_t pci_revision_t;
 #define	PCI_SUBCLASS_NETWORK_WORLDFIP		0x05
 #define	PCI_SUBCLASS_NETWORK_PCIMGMULTICOMP	0x06
 #define	PCI_SUBCLASS_NETWORK_INFINIBAND		0x07
+#define	PCI_SUBCLASS_NETWORK_HFC		0x08
 #define	PCI_SUBCLASS_NETWORK_MISC		0x80
 
 /* 0x03 display subclasses */
@@ -230,6 +240,8 @@ typedef u_int8_t pci_revision_t;
 #define	PCI_SUBCLASS_MULTIMEDIA_AUDIO		0x01
 #define	PCI_SUBCLASS_MULTIMEDIA_TELEPHONY	0x02
 #define	PCI_SUBCLASS_MULTIMEDIA_HDAUDIO		0x03
+#define		PCI_INTERFACE_HDAUDIO			0x00
+#define		PCI_INTERFACE_HDAUDIO_VND		0x80
 #define	PCI_SUBCLASS_MULTIMEDIA_MISC		0x80
 
 /* 0x05 memory subclasses */
@@ -345,6 +357,7 @@ typedef u_int8_t pci_revision_t;
 #define		PCI_INTERFACE_USB_OHCI			0x10
 #define		PCI_INTERFACE_USB_EHCI			0x20
 #define		PCI_INTERFACE_USB_XHCI			0x30
+#define		PCI_INTERFACE_USB_USB4HCI		0x40
 #define		PCI_INTERFACE_USB_OTHERHC		0x80
 #define		PCI_INTERFACE_USB_DEVICE		0xfe
 #define	PCI_SUBCLASS_SERIALBUS_FIBER		0x04	/* XXX _FIBRECHANNEL */
@@ -356,6 +369,7 @@ typedef u_int8_t pci_revision_t;
 #define		PCI_INTERFACE_IPMI_BLOCKXFER		0x02
 #define	PCI_SUBCLASS_SERIALBUS_SERCOS		0x08
 #define	PCI_SUBCLASS_SERIALBUS_CANBUS		0x09
+#define	PCI_SUBCLASS_SERIALBUS_MIPI_I3C		0x0a
 #define	PCI_SUBCLASS_SERIALBUS_MISC		0x80
 
 /* 0x0d wireless subclasses */
@@ -368,6 +382,8 @@ typedef u_int8_t pci_revision_t;
 #define	PCI_SUBCLASS_WIRELESS_BROADBAND		0x12
 #define	PCI_SUBCLASS_WIRELESS_802_11A		0x20
 #define	PCI_SUBCLASS_WIRELESS_802_11B		0x21
+#define	PCI_SUBCLASS_WIRELESS_CELL		0x40
+#define	PCI_SUBCLASS_WIRELESS_CELL_E		0x41
 #define	PCI_SUBCLASS_WIRELESS_MISC		0x80
 
 /* 0x0e I2O (Intelligent I/O) subclasses */
@@ -459,7 +475,7 @@ typedef u_int8_t pci_revision_t;
 #define PCI_BAR4		0x20
 #define PCI_BAR5		0x24
 
-#define	PCI_BAR(__n)		(PCI_MAPREG_START + 4 * (__n))
+#define	PCI_BAR(n)		(PCI_MAPREG_START + 4 * (n))
 
 #define	PCI_MAPREG_TYPE(mr)						\
 	    ((mr) & PCI_MAPREG_TYPE_MASK)
@@ -567,7 +583,7 @@ typedef u_int8_t pci_revision_t;
 #define	PCI_CAP_SUBVENDOR	0x0d
 #define	PCI_CAP_AGP8		0x0e
 #define	PCI_CAP_SECURE		0x0f
-#define	PCI_CAP_PCIEXPRESS     	0x10
+#define	PCI_CAP_PCIEXPRESS	0x10
 #define	PCI_CAP_MSIX		0x11
 #define	PCI_CAP_SATA		0x12
 #define	PCI_CAP_PCIAF		0x13
@@ -972,13 +988,13 @@ typedef u_int8_t pci_revision_t;
 #define	PCIE_XCAP_TYPE(x)	__SHIFTOUT((x), PCIE_XCAP_TYPE_MASK)
 #define	 PCIE_XCAP_TYPE_PCIE_DEV	0x0
 #define	 PCIE_XCAP_TYPE_PCI_DEV		0x1
-#define	 PCIE_XCAP_TYPE_ROOT		0x4
+#define	 PCIE_XCAP_TYPE_RP		0x4
 #define	 PCIE_XCAP_TYPE_UP		0x5
 #define	 PCIE_XCAP_TYPE_DOWN		0x6
 #define	 PCIE_XCAP_TYPE_PCIE2PCI	0x7
 #define	 PCIE_XCAP_TYPE_PCI2PCIE	0x8
-#define	 PCIE_XCAP_TYPE_ROOT_INTEP	0x9
-#define	 PCIE_XCAP_TYPE_ROOT_EVNTC	0xa
+#define	 PCIE_XCAP_TYPE_RCIEP		0x9
+#define	 PCIE_XCAP_TYPE_RC_EVNTC	0xa
 #define PCIE_XCAP_SI		__SHIFTIN(__BIT(8), PCIE_XCAP_MASK) /* Slot Implemented */
 #define PCIE_XCAP_IRQ		__SHIFTIN(__BITS(13, 9), PCIE_XCAP_MASK)
 #define PCIE_DCAP	0x04	/* Device Capabilities Register */
@@ -1017,6 +1033,12 @@ typedef u_int8_t pci_revision_t;
 #define PCIE_DCSR_EMGPWRREDD	__BIT(6 + 16)  /* Emg. Pwr. Reduct. Detected */
 #define PCIE_LCAP	0x0c	/* Link Capabilities Register */
 #define PCIE_LCAP_MAX_SPEED	__BITS(3, 0)   /* Max Link Speed */
+#define  PCIE_LCAP_MAX_SPEED_2	1	       /* 2.5GT/s */
+#define  PCIE_LCAP_MAX_SPEED_5	2	       /* 5GT/s */
+#define  PCIE_LCAP_MAX_SPEED_8	3	       /* 8GT/s */
+#define  PCIE_LCAP_MAX_SPEED_16	4	       /* 16GT/s */
+#define  PCIE_LCAP_MAX_SPEED_32	5	       /* 32GT/s */
+#define  PCIE_LCAP_MAX_SPEED_64	6	       /* 64GT/s */
 #define PCIE_LCAP_MAX_WIDTH	__BITS(9, 4)   /* Maximum Link Width */
 #define PCIE_LCAP_ASPM		__BITS(11, 10) /* Active State Link PM Supp. */
 #define PCIE_LCAP_L0S_EXIT	__BITS(14, 12) /* L0s Exit Latency */
@@ -1041,10 +1063,23 @@ typedef u_int8_t pci_revision_t;
 #define PCIE_LCSR_LABIE		__BIT(11)      /* Link Autonomous BW Intr En */
 #define	PCIE_LCSR_DRSSGNL	__BITS(15, 14) /* DRS Signaling */
 #define	PCIE_LCSR_LINKSPEED	__BITS(19, 16) /* Link Speed */
+#define  PCIE_LCSR_LINKSPEED_2	1	       /* 2.5GT/s */
+#define  PCIE_LCSR_LINKSPEED_5	2	       /* 5GT/s */
+#define  PCIE_LCSR_LINKSPEED_8	3	       /* 8GT/s */
+#define  PCIE_LCSR_LINKSPEED_16	4	       /* 16GT/s */
+#define  PCIE_LCSR_LINKSPEED_32	5	       /* 32GT/s */
+#define  PCIE_LCSR_LINKSPEED_64	6	       /* 64GT/s */
 #define	PCIE_LCSR_NLW		__BITS(25, 20) /* Negotiated Link Width */
+#define  PCIE_LCSR_NLW_X1	__BIT(20)	/* Negotiated x1 */
+#define  PCIE_LCSR_NLW_X2	__BIT(21)	/* Negotiated x2 */
+#define  PCIE_LCSR_NLW_X4	__BIT(22)	/* Negotiated x4 */
+#define  PCIE_LCSR_NLW_X8	__BIT(23)	/* Negotiated x8 */
+#define  PCIE_LCSR_NLW_X12	__BITS(22, 23)	/* Negotiated x12 */
+#define  PCIE_LCSR_NLW_X16	__BIT(24)	/* Negotiated x16 */
+#define  PCIE_LCSR_NLW_X32	__BIT(25)	/* Negotiated x32 */
 #define	PCIE_LCSR_LINKTRAIN_ERR	__BIT(10 + 16) /* Link Training Error */
 #define	PCIE_LCSR_LINKTRAIN	__BIT(11 + 16) /* Link Training */
-#define	PCIE_LCSR_SLOTCLKCFG 	__BIT(12 + 16) /* Slot Clock Configuration */
+#define	PCIE_LCSR_SLOTCLKCFG	__BIT(12 + 16) /* Slot Clock Configuration */
 #define	PCIE_LCSR_DLACTIVE	__BIT(13 + 16) /* Data Link Layer Link Active*/
 #define	PCIE_LCSR_LINK_BW_MGMT	__BIT(14 + 16) /* Link BW Management Status */
 #define	PCIE_LCSR_LINK_AUTO_BW	__BIT(15 + 16) /* Link Autonomous BW Status */
@@ -1136,6 +1171,12 @@ typedef u_int8_t pci_revision_t;
 #define PCIE_DCSR2_EETLP	__BIT(15)      /* End-End TLP Prefix Blcking */
 #define PCIE_LCAP2	0x2c	/* Link Capabilities 2 Register */
 #define PCIE_LCAP2_SUP_LNKSV	__BITS(7, 1)   /* Supported Link Speeds Vect */
+#define  PCIE_LCAP2_SUP_LNKS2	__BIT(1)       /* Supported Speed 2.5GT/ */
+#define  PCIE_LCAP2_SUP_LNKS5	__BIT(2)       /* Supported Speed 5GT/ */
+#define  PCIE_LCAP2_SUP_LNKS8	__BIT(3)       /* Supported Speed 8GT/ */
+#define  PCIE_LCAP2_SUP_LNKS16	__BIT(4)       /* Supported Speed 16GT/ */
+#define  PCIE_LCAP2_SUP_LNKS32	__BIT(5)       /* Supported Speed 32GT/ */
+#define  PCIE_LCAP2_SUP_LNKS64	__BIT(6)       /* Supported Speed 64GT/ */
 #define PCIE_LCAP2_CROSSLNK	__BIT(8)       /* Crosslink Supported */
 #define PCIE_LCAP2_LOWSKPOS_GENSUPPSV __BITS(15, 9)
 				  /* Lower SKP OS Generation Supp. Spd. Vect */
@@ -1145,13 +1186,16 @@ typedef u_int8_t pci_revision_t;
 #define PCIE_LCAP2_DRS		__BIT(31)       /* DRS Supported */
 #define PCIE_LCSR2	0x30	/* Link Control & Status 2 Register */
 #define PCIE_LCSR2_TGT_LSPEED	__BITS(3, 0)   /* Target Link Speed */
+#define  PCIE_LCSR2_TGT_LSPEED_2_5G  0x1       /* 2.5GT/s supported */
+#define  PCIE_LCSR2_TGT_LSPEED_5G    0x2       /* 5.0GT/s supported */
+#define  PCIE_LCSR2_TGT_LSPEED_8G    0x3       /* 8.0GT/s supported */
 #define PCIE_LCSR2_ENT_COMPL	__BIT(4)       /* Enter Compliance */
 #define PCIE_LCSR2_HW_AS_DIS	__BIT(5)       /* HW Autonomous Speed Disabl */
 #define PCIE_LCSR2_SEL_DEEMP	__BIT(6)       /* Selectable De-emphasis */
 #define PCIE_LCSR2_TX_MARGIN	__BITS(9, 7)   /* Transmit Margin */
 #define PCIE_LCSR2_EN_MCOMP	__BIT(10)      /* Enter Modified Compliance */
 #define PCIE_LCSR2_COMP_SOS	__BIT(11)      /* Compliance SOS */
-#define PCIE_LCSR2_COMP_DEEMP	__BITS(15, 12) /* Compliance Present/De-emph */
+#define PCIE_LCSR2_COMP_DEEMP	__BITS(15, 12) /* Compliance Preset/De-emph */
 #define PCIE_LCSR2_DEEMP_LVL	__BIT(0 + 16)  /* Current De-emphasis Level */
 #define PCIE_LCSR2_EQ_COMPL	__BIT(1 + 16)  /* Equalization Complete */
 #define PCIE_LCSR2_EQP1_SUC	__BIT(2 + 16)  /* Equaliz Phase 1 Successful */
@@ -1175,12 +1219,12 @@ typedef u_int8_t pci_revision_t;
  * Other than Root Complex Integrated Endpoint and Root Complex Event Collector
  * have link related registers.
  */
-#define PCIE_HAS_LINKREGS(type) (((type) != PCIE_XCAP_TYPE_ROOT_INTEP) && \
-	    ((type) != PCIE_XCAP_TYPE_ROOT_EVNTC))
+#define PCIE_HAS_LINKREGS(type) (((type) != PCIE_XCAP_TYPE_RCIEP) &&	\
+	    ((type) != PCIE_XCAP_TYPE_RC_EVNTC))
 
 /* Only root port and root complex event collector have PCIE_RCR & PCIE_RSR */
-#define PCIE_HAS_ROOTREGS(type) (((type) == PCIE_XCAP_TYPE_ROOT) || \
-	    ((type) == PCIE_XCAP_TYPE_ROOT_EVNTC))
+#define PCIE_HAS_ROOTREGS(type) (((type) == PCIE_XCAP_TYPE_RP) || \
+	    ((type) == PCIE_XCAP_TYPE_RC_EVNTC))
 
 
 /*
@@ -1544,9 +1588,13 @@ struct pci_rom {
 #define	PCI_EXTCAP_DESIGVNDSP	0x0023	/* Designated Vendor-Specific */
 #define	PCI_EXTCAP_VF_RESIZBAR	0x0024	/* VF Resizable BAR */
 #define	PCI_EXTCAP_DLF		0x0025	/* Data link Feature */
-#define	PCI_EXTCAP_PYSLAY_16GT	0x0026	/* Physical Layer 16.0 GT/s */
+#define	PCI_EXTCAP_PL16G	0x0026	/* Physical Layer 16.0 GT/s */
+#define	PCI_EXTCAP_LMR		0x0027	/* Lane Margining at the Receiver */
 #define	PCI_EXTCAP_HIERARCHYID	0x0028	/* Hierarchy ID */
 #define	PCI_EXTCAP_NPEM		0x0029	/* Native PCIe Enclosure Management */
+#define	PCI_EXTCAP_PL32G	0x002a	/* Physical Layer 32.0 GT/s */
+#define	PCI_EXTCAP_AP		0x002b	/* Alternate Protocol */
+#define	PCI_EXTCAP_SFI		0x002c	/* System Firmware Intermediary */
 
 /*
  * Extended capability ID: 0x0001
@@ -1915,8 +1963,8 @@ struct pci_rom {
 #define  PCI_EA_PROP_MEM_NONPREF	0x00	/* Memory Space, Non-Prefetchable */
 #define  PCI_EA_PROP_MEM_PREF		0x01	/* Memory Space, Prefetchable */
 #define  PCI_EA_PROP_IO			0x02	/* I/O Space */
-#define  PCI_EA_PROP_VF_MEM_NONPREF	0x03	/* Resorce for VF use. Mem. Non-Pref */
-#define  PCI_EA_PROP_VF_MEM_PREF	0x04	/* Resorce for VF use. Mem. Prefetch */
+#define  PCI_EA_PROP_VF_MEM_NONPREF	0x03	/* Resource for VF use. Mem. Non-Pref */
+#define  PCI_EA_PROP_VF_MEM_PREF	0x04	/* Resource for VF use. Mem. Prefetch */
 #define  PCI_EA_PROP_BB_MEM_NONPREF	0x05	/* Behind Bridge: MEM. Non-Pref */
 #define  PCI_EA_PROP_BB_MEM_PREF	0x06	/* Behind Bridge: MEM. Prefetch */
 #define  PCI_EA_PROP_BB_IO		0x07	/* Behind Bridge: I/O Space */
@@ -1972,9 +2020,9 @@ struct pci_rom {
 #define	PCI_TPH_REQ_CAP_DEVSPEC	__BIT(2)   /* Device Specific Mode Supported */
 #define	PCI_TPH_REQ_CAP_XTPHREQ	__BIT(8)    /* Extend TPH Requester Supported */
 #define	PCI_TPH_REQ_CAP_STTBLLOC __BITS(10, 9)	/* ST Table Location */
-#define	PCI_TPH_REQ_STTBLLOC_NONE 	0	/* not present */
-#define	PCI_TPH_REQ_STTBLLOC_TPHREQ 	1	/* in the TPHREQ cap */
-#define	PCI_TPH_REQ_STTBLLOC_MSIX 	2	/* in the MSI-X table */
+#define	PCI_TPH_REQ_STTBLLOC_NONE	0	 /* not present */
+#define	PCI_TPH_REQ_STTBLLOC_TPHREQ	1	 /* in the TPHREQ cap */
+#define	PCI_TPH_REQ_STTBLLOC_MSIX	2	 /* in the MSI-X table */
 #define	PCI_TPH_REQ_CAP_STTBLSIZ __BITS(26, 16)	/* ST Table Size */
 #define	PCI_TPH_REQ_CTL	0x08	/* TPH Requester Control */
 #define	PCI_TPH_REQ_CTL_STSEL	__BITS(2, 0)	/* ST Mode Select */
@@ -2068,7 +2116,7 @@ struct pci_rom {
 #define	PCI_DPCCTL_DLACTECOR	__BIT(23)      /* DL_Active ERR_COR Enable */
 
 #define	PCI_DPC_STATESID 0x08	/* Status and Error Source ID Register */
-#define	PCI_DPCSTAT_TSTAT	__BIT(0)       /* DPC Trigger Staus */
+#define	PCI_DPCSTAT_TSTAT	__BIT(0)       /* DPC Trigger Status */
 #define	PCI_DPCSTAT_TREASON	__BITS(2, 1)   /* DPC Trigger Reason */
 #define	PCI_DPCSTAT_ISTAT	__BIT(3)       /* DPC Interrupt Status */
 #define	PCI_DPCSTAT_RPBUSY	__BIT(4)       /* DPC RP Busy */
@@ -2184,6 +2232,37 @@ struct pci_rom {
  * Extended capability ID: 0x0026
  * Physical Layer 16.0 GT/s
  */
+#define	PCI_PL16G_CAP	0x04	/* Capabilities Register */
+#define	PCI_PL16G_CTL	0x08	/* Control Register */
+#define	PCI_PL16G_STAT	0x0c	/* Status Register */
+#define	PCI_PL16G_STAT_EQ_COMPL __BIT(0) /* Equalization 16.0 GT/s Complete */
+#define	PCI_PL16G_STAT_EQ_P1S	__BIT(1) /* Eq. 16.0 GT/s Phase 1 Successful */
+#define	PCI_PL16G_STAT_EQ_P2S	__BIT(2) /* Eq. 16.0 GT/s Phase 2 Successful */
+#define	PCI_PL16G_STAT_EQ_P3S	__BIT(3) /* Eq. 16.0 GT/s Phase 3 Successful */
+#define	PCI_PL16G_STAT_LEQR	__BIT(4) /* Link Eq. Request 16.0 GT/s */
+#define	PCI_PL16G_LDPMS	0x10	/* Local Data Parity Mismatch Status reg. */
+#define	PCI_PL16G_FRDPMS 0x14	/* First Retimer Data Parity Mismatch Status */
+#define	PCI_PL16G_SRDPMS 0x18  /* Second Retimer Data Parity Mismatch Status */
+  /* 0x1c reserved */
+#define	PCI_PL16G_LEC	0x20	/* Lane Equalization Control Register */
+
+/*
+ * Extended capability ID: 0x0027
+ * Lane Margining at the Receiver
+ */
+#define	PCI_LMR_PCAPSTAT 0x04	/* Port Capabilities and Status Register */
+#define	PCI_LMR_PCAP_MUDS	__BIT(0)   /* Margining uses Driver Software */
+#define	PCI_LMR_PSTAT_MR	__BIT(16)  /* Margining Ready */
+#define	PCI_LMR_PSTAT_MSR	__BIT(17)  /* Margining Software Ready */
+#define	PCI_LMR_LANECSR	0x08	/* Lane Control and Status Register */
+#define	PCI_LMR_LCTL_RNUM	__BITS(2, 0)	/* Receive Number */
+#define	PCI_LMR_LCTL_MTYPE	__BITS(5, 3)	/* Margin Type */
+#define	PCI_LMR_LCTL_UMODEL	__BIT(6)	/* Usage Model */
+#define	PCI_LMR_LCTL_MPAYLOAD	__BITS(15, 8)	/* Margin Payload */
+#define	PCI_LMR_LSTAT_RNUM	__BITS(18, 16)	/* Receive Number */
+#define	PCI_LMR_LSTAT_MTYPE	__BITS(21, 19)	/* Margin Type */
+#define	PCI_LMR_LSTAT_UMODEL	__BIT(22)	/* Usage Model */
+#define	PCI_LMR_LSTAT_MPAYLOAD	__BITS(31, 24)	/* Margin Payload */
 
 /*
  * Extended capability ID: 0x0028

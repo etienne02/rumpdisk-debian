@@ -1,4 +1,4 @@
-/*	$NetBSD: sl811hs.c,v 1.107 2021/08/09 20:49:10 andvar Exp $	*/
+/*	$NetBSD: sl811hs.c,v 1.112 2022/05/03 20:52:32 andvar Exp $	*/
 
 /*
  * Not (c) 2007 Matthew Orgass
@@ -59,7 +59,7 @@
 
 /*
  * XXX TODO:
- *   copy next output packet while transfering
+ *   copy next output packet while transferring
  *   usb suspend
  *   could keep track of known values of all buffer space?
  *   combined print/log function for errors
@@ -68,7 +68,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sl811hs.c,v 1.107 2021/08/09 20:49:10 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sl811hs.c,v 1.112 2022/05/03 20:52:32 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_slhci.h"
@@ -839,32 +839,13 @@ usbd_status
 slhci_transfer(struct usbd_xfer *xfer)
 {
 	SLHCIHIST_FUNC(); SLHCIHIST_CALLED();
-	struct slhci_softc *sc = SLHCI_XFER2SC(xfer);
 	usbd_status error;
 
 	DLOG(D_TRACE, "transfer type %jd xfer %#jx spipe %#jx ",
 	    SLHCI_XFER_TYPE(xfer), (uintptr_t)xfer, (uintptr_t)xfer->ux_pipe,
 	    0);
 
-	/* Insert last in queue */
-	mutex_enter(&sc->sc_lock);
-	error = usb_insert_transfer(xfer);
-	mutex_exit(&sc->sc_lock);
-	if (error) {
-		if (error != USBD_IN_PROGRESS)
-			DLOG(D_ERR, "usb_insert_transfer returns %jd!", error,
-			    0,0,0);
-		return error;
-	}
-
-	/*
-	 * Pipe isn't running (otherwise error would be USBD_INPROG),
-	 * so start it first.
-	 */
-
-	/*
-	 * Start will take the lock.
-	 */
+	/* Pipe isn't running, so start it first.  */
 	error = xfer->ux_pipe->up_methods->upm_start(SIMPLEQ_FIRST(&xfer->ux_pipe->up_queue));
 
 	return error;
@@ -882,7 +863,7 @@ slhci_start(struct usbd_xfer *xfer)
 	usb_endpoint_descriptor_t *ed = pipe->up_endpoint->ue_edesc;
 	unsigned int max_packet;
 
-	mutex_enter(&sc->sc_lock);
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
 
 	max_packet = UGETW(ed->wMaxPacketSize);
 
@@ -1004,8 +985,6 @@ slhci_start(struct usbd_xfer *xfer)
 
 	slhci_start_entry(sc, spipe);
 
-	mutex_exit(&sc->sc_lock);
-
 	return USBD_IN_PROGRESS;
 }
 
@@ -1027,13 +1006,13 @@ slhci_root_start(struct usbd_xfer *xfer)
 	DLOG(D_TRACE, "transfer type %jd start",
 	    SLHCI_XFER_TYPE(xfer), 0, 0, 0);
 
+	KASSERT(sc->sc_bus.ub_usepolling || mutex_owned(&sc->sc_lock));
+
 	KASSERT(spipe->ptype == PT_ROOT_INTR);
 
-	mutex_enter(&sc->sc_intr_lock);
 	KASSERT(t->rootintr == NULL);
 	t->rootintr = xfer;
 	xfer->ux_status = USBD_IN_PROGRESS;
-	mutex_exit(&sc->sc_intr_lock);
 
 	return USBD_IN_PROGRESS;
 }
@@ -2026,7 +2005,7 @@ slhci_abdone(struct slhci_softc *sc, int ab)
 	 * However, I have seen this problem again ("done but not started"
 	 * errors), which in some cases cases the SETUP status bit to remain
 	 * set on future transfers.  In other cases, the SETUP bit is not set
-	 * and no data corruption occurs.  This occured while using both umass
+	 * and no data corruption occurs.  This occurred while using both umass
 	 * and aue on a powered hub (maybe triggered by some local activity
 	 * also) and needs several reads of the 200MB file to trigger.  The
 	 * driver now halts if SETUP is detected.

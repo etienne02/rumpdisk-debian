@@ -1,4 +1,4 @@
-/*	$NetBSD: intiovar.h,v 1.13 2008/04/28 20:23:19 martin Exp $	*/
+/*	$NetBSD: intiovar.h,v 1.15 2024/01/28 17:31:40 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1998, 2001 The NetBSD Foundation, Inc.
@@ -56,6 +56,7 @@ struct intio_builtins {
 	const char *ib_modname;			/* module name */
 	bus_size_t ib_offset;			/* intio offset */
 	int ib_ipl;				/* interrupt priority level */
+	uint32_t ib_spumask;			/* which machines have it */
 };
 
 /*
@@ -99,7 +100,7 @@ intio_device_writecmd(bus_space_tag_t bst, bus_space_handle_t bsh,
 	WAIT(bst, bsh);
 	bus_space_write_1(bst, bsh, INTIO_DEV_3xx_CMD, cmd);
 	while (len--) {
-	WAIT(bst, bsh);
+		WAIT(bst, bsh);
 		bus_space_write_1(bst, bsh, INTIO_DEV_3xx_DATA, *datap++);
 	}
 	return (0);

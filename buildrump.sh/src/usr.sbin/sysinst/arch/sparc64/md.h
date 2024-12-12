@@ -1,4 +1,4 @@
-/*	$NetBSD: md.h,v 1.5 2019/06/20 18:32:33 martin Exp $	*/
+/*	$NetBSD: md.h,v 1.8 2022/06/17 14:08:54 tsutsui Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -35,9 +35,6 @@
 
 /* md.h -- Machine specific definitions for the sparc */
 
-/* Constants and defines */
-#define	DEFSWAPSIZE	(-1)
-
 /*
  * Symbolic names for disk partitions.
  */
@@ -47,8 +44,8 @@
 #define PART_USR	PART_G	/* Can be after PART_FIRST_FREE */
 #define PART_FIRST_FREE	PART_D
 
-#define DEFSWAPRAM	64	/* Assume at least this RAM for swap calc */
 #define DEFROOTSIZE	64	/* Default root size */
+#define DEFSWAPSIZE	(-1)	/* Default swap size */
 #define DEFVARSIZE	32	/* Default /var size, if created */
 #define DEFUSRSIZE	1200	/* Default /usr size, if /home */
 #define XNEEDMB		300	/* Extra megs for full X installation */

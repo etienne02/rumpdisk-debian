@@ -1,4 +1,4 @@
-/*	$NetBSD: mha.c,v 1.56 2021/08/07 16:19:07 thorpej Exp $	*/
+/*	$NetBSD: mha.c,v 1.62 2024/09/08 17:28:36 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1996-1999 The NetBSD Foundation, Inc.
@@ -59,13 +59,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mha.c,v 1.56 2021/08/07 16:19:07 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mha.c,v 1.62 2024/09/08 17:28:36 rillig Exp $");
 
 #include "opt_ddb.h"
 
 /* Synchronous data transfers? */
 #define SPC_USE_SYNCHRONOUS	0
-#define SPC_SYNC_REQ_ACK_OFS 	8
+#define SPC_SYNC_REQ_ACK_OFS	8
 
 /* Default DMA mode? */
 #define MHA_DMA_LIMIT_XFER	1
@@ -117,6 +117,8 @@ __KERNEL_RCSID(0, "$NetBSD: mha.c,v 1.56 2021/08/07 16:19:07 thorpej Exp $");
 #include <x68k/dev/mhavar.h>
 #include <x68k/dev/intiovar.h>
 #include <x68k/dev/scsiromvar.h>
+
+#include "ioconf.h"
 
 #if 0
 #define WAIT {if (sc->sc_pc[2]) {printf("[W_%d", __LINE__); while (sc->sc_pc[2] & 0x40);printf("]");}}
@@ -245,7 +247,7 @@ int	mha_datain_pio(struct mha_softc *, u_char *, int);
 int	mha_dataout(struct mha_softc *, u_char *, int);
 int	mha_datain(struct mha_softc *, u_char *, int);
 void	mha_abort(struct mha_softc *, struct acb *);
-void 	mha_init(struct mha_softc *);
+void	mha_init(struct mha_softc *);
 void	mha_scsi_request(struct scsipi_channel *, scsipi_adapter_req_t, void *);
 void	mha_poll(struct mha_softc *, struct acb *);
 void	mha_sched(struct mha_softc *);
@@ -266,8 +268,6 @@ static int mha_dataio_dma(int, int, struct mha_softc *, u_char *, int);
 
 CFATTACH_DECL_NEW(mha, sizeof(struct mha_softc),
     mhamatch, mhaattach, NULL, NULL);
-
-extern struct cfdriver mha_cd;
 
 /*
  * returns non-zero value if a controller is found.
@@ -683,7 +683,7 @@ mha_scsi_request(struct scsipi_channel *chan, scsipi_adapter_req_t req,
 
 		SPC_TRACE(("[mha_scsi_cmd] "));
 		SPC_CMDS(("[0x%x, %d]->%d ", (int)xs->cmd->opcode, xs->cmdlen,
-		    periph->periph_target));
+		    xs->xs_periph->periph_target));
 
 		flags = xs->xs_control;
 
@@ -812,7 +812,7 @@ mha_setsync(struct mha_softc *sc, struct spc_tinfo *ti)
 /*
  * Schedule a SCSI operation.  This has now been pulled out of the interrupt
  * handler so that we may call it from mha_scsi_cmd and mha_done.  This may
- * save us an unecessary interrupt just to get things going.  Should only be
+ * save us an unnecessary interrupt just to get things going.  Should only be
  * called when state == SPC_IDLE and at bio pl.
  */
 void
@@ -1042,7 +1042,7 @@ mha_msgin(struct mha_softc *sc)
 		/*
 		 * This testing is suboptimal, but most
 		 * messages will be of the one byte variety, so
-		 * it should not effect performance
+		 * it should not affect performance
 		 * significantly.
 		 */
 		if (sc->sc_imlen == 1 && MSG_IS1BYTE(sc->sc_imess[0]))
@@ -1215,7 +1215,7 @@ printf("%s: unimplemented message: %d\n", device_xname(sc->sc_dev), sc->sc_imess
 		struct spc_tinfo *ti;
 		u_char lunit;
 
-		if (MSG_ISIDENTIFY(sc->sc_imess[0])) { 	/* Identify? */
+		if (MSG_ISIDENTIFY(sc->sc_imess[0])) {	/* Identify? */
 			SPC_MISC(("searching "));
 			/*
 			 * Search wait queue for disconnected cmd
@@ -1566,7 +1566,7 @@ mha_dataio_dma(int dw, int cw, struct mha_softc *sc, u_char *p, int n)
 	if (n > MAXBSIZE)
 		panic("transfer size exceeds MAXBSIZE");
 	if (sc->sc_dmasize > 0)
-		panic("DMA request while another DMA transfer is in pregress");
+		panic("DMA request while another DMA transfer is in progress");
 
 	if (cw == CMD_SEND_FROM_DMA) {
 		memcpy(sc->sc_dmabuf, p, n);

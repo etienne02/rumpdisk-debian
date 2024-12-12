@@ -1,4 +1,4 @@
-/*	$NetBSD: vt220iso8x16.h,v 1.7 2005/12/11 12:24:12 christos Exp $	*/
+/*	$NetBSD: vt220iso8x16.h,v 1.9 2023/09/21 09:31:50 msaitoh Exp $	*/
 
 /*
  *  Copyright (c) 1992, 1993, 1994 Hellmuth Michaelis and Joerg Wunsch
@@ -33,7 +33,7 @@
  */
 
 /*
- * Translated into compiler and human readable for for the Atari-TT port of
+ * Translated into compiler and human readable for the Atari-TT port of
  * NetBSD by Leo Weppelman.
  *
  * Reorganized and edited some chars to fit the iso-8859-1 fontset by
@@ -226,9 +226,9 @@ static u_char vt220iso8x16_data[] = {
 	0x00,	/* ........ */
 	0x00,	/* ........ */
 	0x88,	/* *...*... */
-	0x98,	/* *..**... */
-	0xa8,	/* *.*.*... */
 	0xc8,	/* **..*... */
+	0xa8,	/* *.*.*... */
+	0x98,	/* *..**... */
 	0x88,	/* *...*... */
 	0x00,	/* ........ */
 	0x10,	/* ...*.... */

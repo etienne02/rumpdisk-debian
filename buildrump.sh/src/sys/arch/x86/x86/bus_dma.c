@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_dma.c,v 1.82 2020/03/14 18:08:38 ad Exp $	*/
+/*	$NetBSD: bus_dma.c,v 1.91 2024/06/04 21:42:58 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2007, 2020 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.82 2020/03/14 18:08:38 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.91 2024/06/04 21:42:58 riastradh Exp $");
 
 /*
  * The following is included because _bus_dma_uiomove is derived from
@@ -106,6 +106,7 @@ __KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.82 2020/03/14 18:08:38 ad Exp $");
 #ifdef MPBIOS
 #include <machine/mpbiosvar.h>
 #endif
+#include <machine/pmap_private.h>
 
 #if NISA > 0
 #include <dev/isa/isareg.h>
@@ -206,14 +207,15 @@ _bus_dmamem_alloc_range(bus_dma_tag_t t, bus_size_t size,
 	/* Always round the size. */
 	size = round_page(size);
 
-	KASSERT(boundary >= PAGE_SIZE || boundary == 0);
+	KASSERTMSG(boundary >= PAGE_SIZE || boundary == 0,
+	    "boundary=0x%"PRIxBUSSIZE, boundary);
 
 	/*
 	 * Allocate pages from the VM system.
 	 * We accept boundaries < size, splitting in multiple segments
 	 * if needed. uvm_pglistalloc does not, so compute an appropriate
-         * boundary: next power of 2 >= size
-         */
+	 * boundary: next power of 2 >= size
+	 */
 
 	if (boundary == 0)
 		uboundary = 0;
@@ -239,13 +241,12 @@ _bus_dmamem_alloc_range(bus_dma_tag_t t, bus_size_t size,
 
 	for (; m != NULL; m = m->pageq.queue.tqe_next) {
 		curaddr = VM_PAGE_TO_PHYS(m);
-#ifdef DIAGNOSTIC
-		if (curaddr < low || curaddr >= high) {
-			printf("vm_page_alloc_memory returned non-sensical"
-			    " address %#" PRIxPADDR "\n", curaddr);
-			panic("_bus_dmamem_alloc_range");
-		}
-#endif
+		KASSERTMSG(curaddr >= low, "curaddr=%#"PRIxPADDR
+		    " low=%#"PRIxBUSADDR" high=%#"PRIxBUSADDR,
+		    curaddr, low, high);
+		KASSERTMSG(curaddr < high, "curaddr=%#"PRIxPADDR
+		    " low=%#"PRIxBUSADDR" high=%#"PRIxBUSADDR,
+		    curaddr, low, high);
 		if (curaddr == (lastaddr + PAGE_SIZE) &&
 		    (lastaddr & boundary) == (curaddr & boundary)) {
 			segs[curseg].ds_len += PAGE_SIZE;
@@ -308,7 +309,7 @@ _bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,
 	map->dm_mapsize = 0;		/* no valid mappings */
 	map->dm_nsegs = 0;
 
-	if (t->_bounce_thresh == 0 || _BUS_AVAIL_END <= t->_bounce_thresh)
+	if (t->_bounce_thresh == 0 || _BUS_AVAIL_END <= t->_bounce_thresh - 1)
 		map->_dm_bounce_thresh = 0;
 	cookieflags = 0;
 
@@ -389,7 +390,9 @@ _bus_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map, void *buf,
 	 */
 	map->dm_mapsize = 0;
 	map->dm_nsegs = 0;
-	KASSERT(map->dm_maxsegsz <= map->_dm_maxmaxsegsz);
+	KASSERTMSG(map->dm_maxsegsz <= map->_dm_maxmaxsegsz,
+	    "maxsegsz=0x%"PRIxBUSSIZE", maxmaxsegsz=0x%"PRIxBUSSIZE,
+	    map->dm_maxsegsz, map->_dm_maxmaxsegsz);
 
 	if (buflen > map->_dm_size)
 		return EINVAL;
@@ -517,13 +520,12 @@ _bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dmamap_t map, struct mbuf *m0,
 	 */
 	map->dm_mapsize = 0;
 	map->dm_nsegs = 0;
-	KASSERT(map->dm_maxsegsz <= map->_dm_maxmaxsegsz);
+	KASSERTMSG(map->dm_maxsegsz <= map->_dm_maxmaxsegsz,
+	    "maxsegsz=0x%"PRIxBUSSIZE", maxmaxsegsz=0x%"PRIxBUSSIZE,
+	    map->dm_maxsegsz, map->_dm_maxmaxsegsz);
 
-#ifdef DIAGNOSTIC
-	if ((m0->m_flags & M_PKTHDR) == 0)
-		panic("_bus_dmamap_load_mbuf: no packet header");
-#endif
-
+	KASSERTMSG(m0->m_flags & M_PKTHDR, "m0=%p m_flags=0x%x", m0,
+	    m0->m_flags);
 	if (m0->m_pkthdr.len > map->_dm_size)
 		return (EINVAL);
 
@@ -549,9 +551,15 @@ _bus_dmamap_load_mbuf(bus_dma_tag_t t, bus_dmamap_t map, struct mbuf *m0,
 			break;
 
 		case M_EXT|M_EXT_PAGES:
-			KASSERT(m->m_ext.ext_buf <= m->m_data);
-			KASSERT(m->m_data <=
-			    m->m_ext.ext_buf + m->m_ext.ext_size);
+			KASSERTMSG(m->m_ext.ext_buf <= m->m_data,
+			    "m=%p m_ext.ext_buf=%p m_ext.ext_size=%zu"
+			    " m_data=%p",
+			    m, m->m_ext.ext_buf, m->m_ext.ext_size, m->m_data);
+			KASSERTMSG((m->m_data <=
+				m->m_ext.ext_buf + m->m_ext.ext_size),
+			    "m=%p m_ext.ext_buf=%p m_ext.ext_size=%zu"
+			    " m_data=%p",
+			    m, m->m_ext.ext_buf, m->m_ext.ext_size, m->m_data);
 
 			offset = (vaddr_t)m->m_data -
 			    trunc_page((vaddr_t)m->m_ext.ext_buf);
@@ -659,7 +667,9 @@ _bus_dmamap_load_uio(bus_dma_tag_t t, bus_dmamap_t map, struct uio *uio,
 	 */
 	map->dm_mapsize = 0;
 	map->dm_nsegs = 0;
-	KASSERT(map->dm_maxsegsz <= map->_dm_maxmaxsegsz);
+	KASSERTMSG(map->dm_maxsegsz <= map->_dm_maxmaxsegsz,
+	    "maxsegsz=0x%"PRIxBUSSIZE", maxmaxsegsz=0x%"PRIxBUSSIZE,
+	    map->dm_maxsegsz, map->_dm_maxmaxsegsz);
 
 	resid = uio->uio_resid;
 	iov = uio->uio_iov;
@@ -736,7 +746,9 @@ _bus_dmamap_load_raw(bus_dma_tag_t t, bus_dmamap_t map,
 	 */
 	map->dm_mapsize = 0;
 	map->dm_nsegs = 0;
-	KASSERT(map->dm_maxsegsz <= map->_dm_maxmaxsegsz);
+	KASSERTMSG(map->dm_maxsegsz <= map->_dm_maxmaxsegsz,
+	    "maxsegsz=0x%"PRIxBUSSIZE", maxmaxsegsz=0x%"PRIxBUSSIZE,
+	    map->dm_maxsegsz, map->_dm_maxmaxsegsz);
 
 	if (size0 > map->_dm_size)
 		return EINVAL;
@@ -789,6 +801,13 @@ _bus_dmamap_unload(bus_dma_tag_t t, bus_dmamap_t map)
 
 /*
  * Synchronize a DMA map.
+ *
+ * Reference:
+ *
+ *	AMD64 Architecture Programmer's Manual, Volume 2: System
+ *	Programming, 24593--Rev. 3.38--November 2021, Sec. 7.4.2 Memory
+ *	Barrier Interaction with Memory Types, Table 7-3, p. 196.
+ *	https://web.archive.org/web/20220625040004/https://www.amd.com/system/files/TechDocs/24593.pdf#page=256
  */
 static void
 _bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
@@ -803,17 +822,31 @@ _bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 	    (ops & (BUS_DMASYNC_POSTREAD|BUS_DMASYNC_POSTWRITE)) != 0)
 		panic("%s: mix PRE and POST", __func__);
 
-#ifdef DIAGNOSTIC
 	if ((ops & (BUS_DMASYNC_PREWRITE|BUS_DMASYNC_POSTREAD)) != 0) {
-		if (offset >= map->dm_mapsize)
-			panic("%s: bad offset 0x%jx >= 0x%jx", __func__,
-			(intmax_t)offset, (intmax_t)map->dm_mapsize);
-		if ((offset + len) > map->dm_mapsize)
-			panic("%s: bad length 0x%jx + 0x%jx > 0x%jx", __func__,
-			    (intmax_t)offset, (intmax_t)len,
-			    (intmax_t)map->dm_mapsize);
+		KASSERTMSG(offset < map->dm_mapsize,
+		    "bad offset 0x%"PRIxBUSADDR" >= 0x%"PRIxBUSSIZE,
+		    offset, map->dm_mapsize);
+		KASSERTMSG(len <= map->dm_mapsize - offset,
+		    "bad length 0x%"PRIxBUSADDR" + 0x%"PRIxBUSSIZE
+		    " > 0x%"PRIxBUSSIZE,
+		    offset, len, map->dm_mapsize);
 	}
-#endif
+
+	/*
+	 * BUS_DMASYNC_POSTREAD: The caller has been alerted to DMA
+	 * completion by reading a register or DMA descriptor, and the
+	 * caller is about to read out of the DMA memory buffer that
+	 * the device just filled.
+	 *
+	 * => LFENCE ensures that these happen in order so that the
+	 *    caller, or the bounce buffer logic here, doesn't proceed
+	 *    to read any stale data from cache or speculation.  x86
+	 *    never reorders loads from wp/wt/wb or uc memory, but it
+	 *    may execute loads from wc/wc+ memory early, e.g. with
+	 *    BUS_SPACE_MAP_PREFETCHABLE.
+	 */
+	if (ops & BUS_DMASYNC_POSTREAD)
+		x86_lfence();
 
 	/*
 	 * If we're not bouncing, just return; nothing to do.
@@ -944,20 +977,46 @@ _bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 		break;
 	}
 end:
-	if (ops & (BUS_DMASYNC_PREWRITE|BUS_DMASYNC_POSTWRITE)) {
-		/*
-		 * from the memory POV a load can be reordered before a store
-		 * (a load can fetch data from the write buffers, before
-		 * data hits the cache or memory), a mfence avoids it.
-		 */
-		x86_mfence();
-	} else if (ops & (BUS_DMASYNC_PREREAD|BUS_DMASYNC_POSTREAD)) {
-		/*
-		 * all past reads should have completed at before this point,
-		 * and future reads should not have started yet.
-		 */
-		x86_lfence();
-	}
+	/*
+	 * BUS_DMASYNC_PREREAD: The caller may have previously been
+	 * using a DMA memory buffer, with loads and stores, and is
+	 * about to trigger DMA by writing to a register or DMA
+	 * descriptor.
+	 *
+	 * => SFENCE ensures that the stores happen in order, in case
+	 *    the latter one is non-temporal or to wc/wc+ memory and
+	 *    thus may be executed early.  x86 never reorders
+	 *    load;store to store;load for any memory type, so no
+	 *    barrier is needed for prior loads.
+	 *
+	 * BUS_DMASYNC_PREWRITE: The caller has just written to a DMA
+	 * memory buffer, or we just wrote to to the bounce buffer,
+	 * data that the device needs to use, and the caller is about
+	 * to trigger DMA by writing to a register or DMA descriptor.
+	 *
+	 * => SFENCE ensures that these happen in order so that any
+	 *    buffered stores are visible to the device before the DMA
+	 *    is triggered.  x86 never reorders (non-temporal) stores
+	 *    to wp/wt/wb or uc memory, but it may reorder two stores
+	 *    if one is to wc/wc+ memory, e.g. if the DMA descriptor is
+	 *    mapped with BUS_SPACE_MAP_PREFETCHABLE.
+	 */
+	if (ops & (BUS_DMASYNC_PREREAD|BUS_DMASYNC_PREWRITE))
+		x86_sfence();
+
+	/*
+	 * BUS_DMASYNC_POSTWRITE: The caller has been alerted to DMA
+	 * completion by reading a register or DMA descriptor, and the
+	 * caller may proceed to reuse the DMA memory buffer, with
+	 * loads and stores.
+	 *
+	 * => No barrier is needed.  Since the DMA memory buffer is not
+	 *    changing (we're sending data to the device, not receiving
+	 *    data from the device), prefetched loads are safe.  x86
+	 *    never reoreders load;store to store;load for any memory
+	 *    type, so early execution of stores prior to witnessing
+	 *    the DMA completion is not possible.
+	 */
 }
 
 /*
@@ -970,10 +1029,10 @@ _bus_dmamem_alloc(bus_dma_tag_t t, bus_size_t size, bus_size_t alignment,
 {
 	bus_addr_t high;
 
-	if (t->_bounce_alloc_hi != 0 && _BUS_AVAIL_END > t->_bounce_alloc_hi)
-		high = trunc_page(t->_bounce_alloc_hi);
+	if (t->_bounce_alloc_hi != 0 && _BUS_AVAIL_END > t->_bounce_alloc_hi - 1)
+		high = t->_bounce_alloc_hi - 1;
 	else
-		high = trunc_page(_BUS_AVAIL_END);
+		high = _BUS_AVAIL_END;
 
 	return (_BUS_DMAMEM_ALLOC_RANGE(t, size, alignment, boundary,
 	    segs, nsegs, rsegs, flags, t->_bounce_alloc_lo, high));
@@ -986,10 +1045,7 @@ _bus_dma_alloc_bouncebuf(bus_dma_tag_t t, bus_dmamap_t map,
 	struct x86_bus_dma_cookie *cookie = map->_dm_cookie;
 	int error = 0;
 
-#ifdef DIAGNOSTIC
-	if (cookie == NULL)
-		panic("_bus_dma_alloc_bouncebuf: no cookie");
-#endif
+	KASSERT(cookie != NULL);
 
 	cookie->id_bouncebuflen = round_page(size);
 	error = _bus_dmamem_alloc(t, cookie->id_bouncebuflen,
@@ -1023,10 +1079,7 @@ _bus_dma_free_bouncebuf(bus_dma_tag_t t, bus_dmamap_t map)
 {
 	struct x86_bus_dma_cookie *cookie = map->_dm_cookie;
 
-#ifdef DIAGNOSTIC
-	if (cookie == NULL)
-		panic("_bus_dma_free_bouncebuf: no cookie");
-#endif
+	KASSERT(cookie != NULL);
 
 	STAT_DECR(nbouncebufs);
 
@@ -1111,7 +1164,7 @@ _bus_dmamem_free(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs)
 /*
  * Common function for mapping DMA-safe memory.  May be called by
  * bus-specific DMA memory map functions.
- * This supports BUS_DMA_NOCACHE.
+ * This supports BUS_DMA_NOCACHE and BUS_DMA_PREFETCHABLE.
  */
 static int
 _bus_dmamem_map(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
@@ -1125,8 +1178,13 @@ _bus_dmamem_map(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
 	u_int pmapflags = PMAP_WIRED | VM_PROT_READ | VM_PROT_WRITE;
 
 	size = round_page(size);
+	KASSERTMSG(((flags & (BUS_DMA_NOCACHE|BUS_DMA_PREFETCHABLE)) !=
+		(BUS_DMA_NOCACHE|BUS_DMA_PREFETCHABLE)),
+	    "BUS_DMA_NOCACHE and BUS_DMA_PREFETCHABLE are mutually exclusive");
 	if (flags & BUS_DMA_NOCACHE)
 		pmapflags |= PMAP_NOCACHE;
+	if (flags & BUS_DMA_PREFETCHABLE)
+		pmapflags |= PMAP_WRITE_COMBINE;
 
 	va = uvm_km_alloc(kernel_map, size, 0, UVM_KMF_VAONLY | kmflags);
 
@@ -1162,18 +1220,15 @@ _bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 	pt_entry_t *pte, opte;
 	vaddr_t va, sva, eva;
 
-#ifdef DIAGNOSTIC
-	if ((u_long)kva & PGOFSET)
-		panic("_bus_dmamem_unmap");
-#endif
+	KASSERTMSG(((uintptr_t)kva & PGOFSET) == 0, "kva=%p", kva);
 
 	size = round_page(size);
 	sva = (vaddr_t)kva;
 	eva = sva + size;
 
 	/*
-         * mark pages cacheable again.
-         */
+	 * mark pages cacheable again.
+	 */
 	for (va = sva; va < eva; va += PAGE_SIZE) {
 		pte = kvtopte(va);
 		opte = *pte;
@@ -1196,15 +1251,11 @@ _bus_dmamem_mmap(bus_dma_tag_t t, bus_dma_segment_t *segs, int nsegs,
 	int i;
 
 	for (i = 0; i < nsegs; i++) {
-#ifdef DIAGNOSTIC
-		if (off & PGOFSET)
-			panic("_bus_dmamem_mmap: offset unaligned");
-		if (segs[i].ds_addr & PGOFSET)
-			panic("_bus_dmamem_mmap: segment unaligned");
-		if (segs[i].ds_len & PGOFSET)
-			panic("_bus_dmamem_mmap: segment size not multiple"
-			    " of page size");
-#endif
+		KASSERTMSG((off & PGOFSET) == 0, "off=0x%jx", (uintmax_t)off);
+		KASSERTMSG((segs[i].ds_addr & PGOFSET) == 0,
+		    "segs[%u].ds_addr=%"PRIxBUSADDR, i, segs[i].ds_addr);
+		KASSERTMSG((segs[i].ds_len & PGOFSET) == 0,
+		    "segs[%u].ds_len=%"PRIxBUSSIZE, i, segs[i].ds_len);
 		if (off >= segs[i].ds_len) {
 			off -= segs[i].ds_len;
 			continue;
@@ -1278,8 +1329,8 @@ _bus_dmatag_subregion(bus_dma_tag_t tag, bus_addr_t min_addr,
 		      bus_addr_t max_addr, bus_dma_tag_t *newtag, int flags)
 {
 
-	if ((tag->_bounce_thresh != 0   && max_addr >= tag->_bounce_thresh) &&
-	    (tag->_bounce_alloc_hi != 0 && max_addr >= tag->_bounce_alloc_hi) &&
+	if ((tag->_bounce_thresh != 0   && max_addr >= tag->_bounce_thresh - 1) &&
+	    (tag->_bounce_alloc_hi != 0 && max_addr >= tag->_bounce_alloc_hi - 1) &&
 	    (min_addr <= tag->_bounce_alloc_lo)) {
 		*newtag = tag;
 		/* if the tag must be freed, add a reference */
@@ -1339,9 +1390,6 @@ bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t p, bus_addr_t o, bus_size_t l,
 		    l, ops);
 		return;
 	}
-
-	if (ops & BUS_DMASYNC_POSTREAD)
-		x86_lfence();
 
 	_bus_dmamap_sync(t, p, o, l, ops);
 }

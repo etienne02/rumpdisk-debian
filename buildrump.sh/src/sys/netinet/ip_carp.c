@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_carp.c,v 1.115 2021/06/16 00:21:19 riastradh Exp $	*/
+/*	$NetBSD: ip_carp.c,v 1.120 2023/08/01 07:04:16 mrg Exp $	*/
 /*	$OpenBSD: ip_carp.c,v 1.113 2005/11/04 08:11:54 mcbride Exp $	*/
 
 /*
@@ -33,7 +33,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ip_carp.c,v 1.115 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ip_carp.c,v 1.120 2023/08/01 07:04:16 mrg Exp $");
 
 /*
  * TODO:
@@ -68,7 +68,6 @@ __KERNEL_RCSID(0, "$NetBSD: ip_carp.c,v 1.115 2021/06/16 00:21:19 riastradh Exp 
 #include <net/if_types.h>
 #include <net/if_ether.h>
 #include <net/route.h>
-#include <net/netisr.h>
 #include <net/net_stats.h>
 #include <netinet/if_inarp.h>
 #include <netinet/wqinput.h>
@@ -113,6 +112,7 @@ struct carp_softc {
 	struct ethercom sc_ac;
 #define	sc_if		sc_ac.ec_if
 #define	sc_carpdev	sc_ac.ec_if.if_carpdev
+	void *sc_linkstate_hook;
 	int ah_cookie;
 	int lh_cookie;
 	struct ip_moptions sc_imo;
@@ -186,10 +186,10 @@ struct carp_if {
 	}
 
 static void	carp_hmac_prepare(struct carp_softc *);
-static void	carp_hmac_generate(struct carp_softc *, u_int32_t *,
-		    unsigned char *);
-static int	carp_hmac_verify(struct carp_softc *, u_int32_t *,
-		    unsigned char *);
+static void	carp_hmac_generate(struct carp_softc *, u_int32_t[2],
+		    unsigned char[20]);
+static int	carp_hmac_verify(struct carp_softc *, u_int32_t[2],
+		    unsigned char[20]);
 static void	carp_setroute(struct carp_softc *, int);
 static void	carp_proto_input_c(struct mbuf *, struct carp_header *,
 		    sa_family_t);
@@ -907,6 +907,7 @@ carp_clone_destroy(struct ifnet *ifp)
 static void
 carpdetach(struct carp_softc *sc)
 {
+	struct ifnet *ifp;
 	struct carp_if *cif;
 	int s;
 
@@ -929,13 +930,16 @@ carpdetach(struct carp_softc *sc)
 
 	KERNEL_LOCK(1, NULL);
 	s = splnet();
-	if (sc->sc_carpdev != NULL) {
-		/* XXX linkstatehook removal */
-		cif = (struct carp_if *)sc->sc_carpdev->if_carp;
+	ifp = sc->sc_carpdev;
+	if (ifp != NULL) {
+		if_linkstate_change_disestablish(ifp,
+		    sc->sc_linkstate_hook, NULL);
+
+		cif = (struct carp_if *)ifp->if_carp;
 		TAILQ_REMOVE(&cif->vhif_vrs, sc, sc_list);
 		if (!--cif->vhif_nvrs) {
-			ifpromisc(sc->sc_carpdev, 0);
-			sc->sc_carpdev->if_carp = NULL;
+			ifpromisc(ifp, 0);
+			ifp->if_carp = NULL;
 			free(cif, M_IFADDR);
 		}
 	}
@@ -1087,6 +1091,8 @@ carp_send_ad(void *v)
 		_s = pserialize_read_enter();
 		ifa = ifaof_ifpforaddr(&sa, sc->sc_carpdev);
 		if (ifa == NULL)
+			ifa = ifaof_ifpforaddr(&sa, &sc->sc_if);
+		if (ifa == NULL)
 			ip->ip_src.s_addr = 0;
 		else
 			ip->ip_src.s_addr =
@@ -1138,6 +1144,7 @@ carp_send_ad(void *v)
 	if (sc->sc_naddrs6) {
 		struct ip6_hdr *ip6;
 		struct ifaddr *ifa;
+		struct ifnet *ifp;
 		int _s;
 
 		MGETHDR(m, M_DONTWAIT, MT_HEADER);
@@ -1164,7 +1171,12 @@ carp_send_ad(void *v)
 		memset(&sa, 0, sizeof(sa));
 		sa.sa_family = AF_INET6;
 		_s = pserialize_read_enter();
-		ifa = ifaof_ifpforaddr(&sa, sc->sc_carpdev);
+		ifp = sc->sc_carpdev;
+		ifa = ifaof_ifpforaddr(&sa, ifp);
+		if (ifa == NULL) {	/* This should never happen with IPv6 */
+			ifp = &sc->sc_if;
+			ifa = ifaof_ifpforaddr(&sa, ifp);
+		}
 		if (ifa == NULL)	/* This should never happen with IPv6 */
 			memset(&ip6->ip6_src, 0, sizeof(struct in6_addr));
 		else
@@ -1175,7 +1187,7 @@ carp_send_ad(void *v)
 
 		ip6->ip6_dst.s6_addr16[0] = htons(0xff02);
 		ip6->ip6_dst.s6_addr8[15] = 0x12;
-		if (in6_setscope(&ip6->ip6_dst, &sc->sc_if, NULL) != 0) {
+		if (in6_setscope(&ip6->ip6_dst, ifp, NULL) != 0) {
 			if_statinc(&sc->sc_if, if_oerrors);
 			m_freem(m);
 			CARP_LOG(sc, ("in6_setscope failed"));
@@ -1708,9 +1720,10 @@ carp_set_ifp(struct carp_softc *sc, struct ifnet *ifp)
 		if (sc->sc_naddrs || sc->sc_naddrs6)
 			sc->sc_if.if_flags |= IFF_UP;
 		carp_set_enaddr(sc);
+		sc->sc_linkstate_hook = if_linkstate_change_establish(ifp,
+		    carp_carpdev_state, (void *)ifp);
 		KERNEL_LOCK(1, NULL);
 		s = splnet();
-		/* XXX linkstatehooks establish */
 		carp_carpdev_state(ifp);
 		splx(s);
 		KERNEL_UNLOCK_ONE(NULL);
@@ -1871,6 +1884,9 @@ carp_join_multicast(struct carp_softc *sc)
 	struct ip_moptions *imo = &sc->sc_imo, tmpimo;
 	struct in_addr addr;
 
+	if (sc->sc_carpdev == NULL)
+		return (ENETDOWN);
+
 	memset(&tmpimo, 0, sizeof(tmpimo));
 	addr.s_addr = INADDR_CARP_GROUP;
 	if ((tmpimo.imo_membership[0] =
@@ -1880,7 +1896,7 @@ carp_join_multicast(struct carp_softc *sc)
 
 	imo->imo_membership[0] = tmpimo.imo_membership[0];
 	imo->imo_num_memberships = 1;
-	imo->imo_multicast_if_index = sc->sc_if.if_index;
+	imo->imo_multicast_if_index = sc->sc_carpdev->if_index;
 	imo->imo_multicast_ttl = CARP_DFLTTL;
 	imo->imo_multicast_loop = 0;
 	return (0);
@@ -1965,6 +1981,9 @@ carp_join_multicast6(struct carp_softc *sc)
 	struct sockaddr_in6 addr6;
 	int error;
 
+	if (sc->sc_carpdev == NULL)
+		return (ENETDOWN);
+
 	/* Join IPv6 CARP multicast group */
 	memset(&addr6, 0, sizeof(addr6));
 	addr6.sin6_family = AF_INET6;
@@ -1991,7 +2010,7 @@ carp_join_multicast6(struct carp_softc *sc)
 	}
 
 	/* apply v6 multicast membership */
-	im6o->im6o_multicast_if_index = sc->sc_if.if_index;
+	im6o->im6o_multicast_if_index = sc->sc_carpdev->if_index;
 	if (imm)
 		LIST_INSERT_HEAD(&im6o->im6o_memberships, imm,
 		    i6mm_chain);

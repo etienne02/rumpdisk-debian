@@ -1,4 +1,4 @@
-/* $Id: imx23_ssp.c,v 1.6 2021/08/07 16:18:44 thorpej Exp $ */
+/* $Id: imx23_ssp.c,v 1.8 2021/10/21 13:21:54 andvar Exp $ */
 
 /*
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -332,7 +332,7 @@ issp_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	/* Device instance was succesfully attached. */
+	/* Device instance was successfully attached. */
 	if (aa->aa_addr == HW_SSP1_BASE)
 		ssp_attached |= SSP1_ATTACHED;
 	if (aa->aa_addr == HW_SSP2_BASE)
@@ -550,7 +550,7 @@ issp_exec_command(sdmmc_chipset_handle_t sch, struct sdmmc_command *cmd)
 		cmd->c_error = sc->sc_irq_error >> 8;
 	}
 
-	/* Check reponse from the card if such was requested. */
+	/* Check response from the card if such was requested. */
 	if (ISSET(cmd->c_flags, SCF_RSP_PRESENT)) {
 		cmd->c_resp[0] = SSP_RD(sc, HW_SSP_SDRESP0);
 		if (ISSET(cmd->c_flags, SCF_RSP_136)) {

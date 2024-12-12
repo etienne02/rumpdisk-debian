@@ -40,7 +40,7 @@
  * $FreeBSD: /repoman/r/ncvs/src/sys/dev/aic7xxx/aic7xxx.seq,v 1.123 2003/01/20 20:44:55 gibbs Exp $
  */
 
-VERSION = "$NetBSD: aic7xxx.seq,v 1.20 2019/06/04 10:15:22 msaitoh Exp $"
+VERSION = "$NetBSD: aic7xxx.seq,v 1.24 2024/02/10 08:36:04 andvar Exp $"
 PATCH_ARG_LIST = "struct ahc_softc *ahc"
 PREFIX = "ahc_"
 
@@ -57,7 +57,7 @@ PREFIX = "ahc_"
  * a later time.  This problem cannot be resolved by holding a single entry
  * in scratch ram since a reconnecting target can request sense and this will
  * create yet another SCB waiting for selection.  The solution used here is to
- * use byte 27 of the SCB as a psuedo-next pointer and to thread a list
+ * use byte 27 of the SCB as a pseudo-next pointer and to thread a list
  * of SCBs that are awaiting selection.  Since 0-0xfe are valid SCB indexes,
  * SCB_LIST_NULL is 0xff which is out of range.  An entry is also added to
  * this list everytime a request sense occurs or after completing a non-tagged
@@ -751,7 +751,7 @@ idle_loop:
 
 	/*
 	 * We fetch a "cacheline aligned" and sized amount of data
-	 * so we don't end up referencing a non-existant page.
+	 * so we don't end up referencing a non-existent page.
 	 * Cacheline aligned is in quotes because the kernel will
 	 * set the prefetch amount to a reasonable level if the
 	 * cacheline size is unknown.
@@ -1476,7 +1476,7 @@ p_status_okay:
 
 /*
  * Message out phase.  If MSG_OUT is MSG_IDENTIFYFLAG, build a full
- * indentify message sequence and send it to the target.  The host may
+ * identify message sequence and send it to the target.  The host may
  * override this behavior by setting the MK_MESSAGE bit in the SCB
  * control byte.  This will cause us to interrupt the host and allow
  * it to handle the message phase completely on its own.  If the bit
@@ -1486,9 +1486,9 @@ p_status_okay:
  *
  * If MSG_OUT is == HOST_MSG, also interrupt the host and take a message.
  * This is done to allow the host to send messages outside of an identify
- * sequence while protecting the seqencer from testing the MK_MESSAGE bit
+ * sequence while protecting the sequencer from testing the MK_MESSAGE bit
  * on an SCB that might not be for the current nexus. (For example, a
- * BDR message in responce to a bad reselection would leave us pointed to
+ * BDR message in response to a bad reselection would leave us pointed to
  * an SCB that doesn't have anything to do with the current target).
  *
  * Otherwise, treat MSG_OUT as a 1 byte message to send (abort, abort tag,
@@ -1648,7 +1648,7 @@ mesgin_complete:
 
 complete_accepted:
 	/*
-	 * See if we attempted to deliver a message but the target ingnored us.
+	 * See if we attempted to deliver a message but the target ignored us.
 	 */
 	test	SCB_CONTROL, MK_MESSAGE jz . + 2;
 	mvi	MKMSG_FAILED call set_seqint;
@@ -1696,7 +1696,7 @@ if ((ahc->flags & AHC_INITIATORROLE) != 0) {
  * Is it a disconnect message?  Set a flag in the SCB to remind us
  * and await the bus going free.  If this is an untagged transaction
  * store the SCB id for it in our untagged target table for lookup on
- * a reselction.
+ * a reselection.
  */
 mesgin_disconnect:
 	/*

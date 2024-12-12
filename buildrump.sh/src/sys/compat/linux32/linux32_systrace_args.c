@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_systrace_args.c,v 1.1 2015/03/07 15:16:12 christos Exp $	*/
+/*	$NetBSD: linux32_systrace_args.c,v 1.2 2021/11/25 03:08:05 ryo Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -32,9 +32,11 @@
 /* XXX XXX This exists to keep kdump and friends happy. */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: linux32_systrace_args.c,v 1.1 2015/03/07 15:16:12 christos Exp $");
+__KERNEL_RCSID(1, "$NetBSD: linux32_systrace_args.c,v 1.2 2021/11/25 03:08:05 ryo Exp $");
 
-#if defined(__amd64__)
+#if defined(__aarch64__)
+#include "../../sys/compat/linux32/arch/aarch64/linux32_systrace_args.c"
+#elif defined(__amd64__)
 #include "../../sys/compat/linux32/arch/amd64/linux32_systrace_args.c"
 #else
 #error "fix me"

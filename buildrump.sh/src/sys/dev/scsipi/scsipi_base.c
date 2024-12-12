@@ -1,4 +1,4 @@
-/*	$NetBSD: scsipi_base.c,v 1.187 2020/09/17 01:19:41 jakllsch Exp $	*/
+/*	$NetBSD: scsipi_base.c,v 1.193 2024/10/29 15:50:07 nat Exp $	*/
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2002, 2003, 2004 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: scsipi_base.c,v 1.187 2020/09/17 01:19:41 jakllsch Exp $");
+__KERNEL_RCSID(0, "$NetBSD: scsipi_base.c,v 1.193 2024/10/29 15:50:07 nat Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_scsi.h"
@@ -1056,6 +1056,13 @@ scsipi_interpret_sense(struct scsipi_xfer *xs)
 		case SKEY_VOLUME_OVERFLOW:
 			error = ENOSPC;
 			break;
+		case SKEY_MEDIUM_ERROR:
+			if (xs->xs_retries != 0) {
+				xs->xs_retries--;
+				error = ERESTART;
+			} else
+				error = EIO;
+			break;
 		default:
 			error = EIO;
 			break;
@@ -1404,6 +1411,7 @@ scsipi_get_opcodeinfo(struct scsipi_periph *periph)
 	u_int8_t *data;
 	int len = 16*1024;
 	int rc;
+	int retries;
 	struct scsi_repsuppopcode cmd;
 	
 	/* refrain from asking for supported opcodes */
@@ -1420,7 +1428,6 @@ scsipi_get_opcodeinfo(struct scsipi_periph *periph)
 	 *   enumerate all codes
 	 *     if timeout exists insert maximum into opcode table
 	 */
-
 	data = malloc(len, M_DEVBUF, M_WAITOK|M_ZERO);
 
 	memset(&cmd, 0, sizeof(cmd));
@@ -1429,9 +1436,22 @@ scsipi_get_opcodeinfo(struct scsipi_periph *periph)
 	cmd.repoption = RSOC_RCTD|RSOC_ALL;
 	_lto4b(len, cmd.alloclen);
 	
-	rc = scsipi_command(periph, (void *)&cmd, sizeof(cmd),
-			    (void *)data, len, 0, 1000, NULL,
-			    XS_CTL_DATA_IN|XS_CTL_SILENT);
+	/* loop to skip any UNIT ATTENTIONS at this point */
+	retries = 3;
+	do {
+		rc = scsipi_command(periph, (void *)&cmd, sizeof(cmd),
+				    (void *)data, len, 0, 60000, NULL,
+				    XS_CTL_DATA_IN|XS_CTL_SILENT);
+#ifdef SCSIPI_DEBUG
+		if (rc != 0) {
+			SC_DEBUG(periph, SCSIPI_DB3,
+				("SCSI_MAINTENANCE_IN"
+			 	"[RSOC_REPORT_SUPPORTED_OPCODES] command"
+				" failed: rc=%d, retries=%d\n",
+				rc, retries));
+		}
+#endif
+        } while (rc == EIO && retries-- > 0);
 
 	if (rc == 0) {
 		int count;
@@ -2733,8 +2753,10 @@ void
 scsipi_adapter_delref(struct scsipi_adapter *adapt)
 {
 
+	membar_release();
 	if (atomic_dec_uint_nv(&adapt->adapt_refcnt) == 0
 	    && adapt->adapt_enable != NULL) {
+		membar_acquire();
 		scsipi_adapter_lock(adapt);
 		(void) scsipi_adapter_enable(adapt, 0);
 		scsipi_adapter_unlock(adapt);

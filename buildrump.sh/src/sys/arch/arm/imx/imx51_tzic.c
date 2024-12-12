@@ -1,7 +1,7 @@
-/*	$NetBSD: imx51_tzic.c,v 1.7 2014/07/25 07:49:56 hkenken Exp $	*/
+/*	$NetBSD: imx51_tzic.c,v 1.9 2024/02/07 04:20:26 msaitoh Exp $	*/
 
 /*-
- * Copyright (c) 2010 SHIMIZU Ryo <ryo@nerv.org>
+ * Copyright (c) 2010 SHIMIZU Ryo
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: imx51_tzic.c,v 1.7 2014/07/25 07:49:56 hkenken Exp $");
+__KERNEL_RCSID(0, "$NetBSD: imx51_tzic.c,v 1.9 2024/02/07 04:20:26 msaitoh Exp $");
 
 #define	_INTR_PRIVATE	/* for arm/pic/picvar.h */
 
@@ -124,7 +124,7 @@ tzic_attach(device_t parent, device_t self, void *aux)
 	int error;
 
 	KASSERT(aa->aa_irqbase != AXICF_IRQBASE_DEFAULT);
-	KASSERT(self->dv_unit == 0);
+	KASSERT(device_unit(self) == 0);
 
 	aprint_normal(": TrustZone Interrupt Controller\n");
 	aprint_naive("\n");

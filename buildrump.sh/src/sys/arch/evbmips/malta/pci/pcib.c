@@ -1,4 +1,4 @@
-/*	$NetBSD: pcib.c,v 1.22 2021/08/07 16:18:51 thorpej Exp $	*/
+/*	$NetBSD: pcib.c,v 1.25 2024/02/08 20:11:56 andvar Exp $	*/
 
 /*
  * Copyright 2002 Wasabi Systems, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pcib.c,v 1.22 2021/08/07 16:18:51 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pcib.c,v 1.25 2024/02/08 20:11:56 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -196,7 +196,7 @@ pcib_attach(device_t parent, device_t self, void *aux)
 	 * Initialize the DMA tag used for ISA DMA.
 	 */
 	error = bus_dmatag_subregion(pa->pa_dmat, MALTA_DMA_ISA_PHYSBASE,
-	    MALTA_DMA_ISA_PHYSBASE + MALTA_DMA_ISA_SIZE, &sc->sc_dmat, 0);
+	    MALTA_DMA_ISA_PHYSBASE + MALTA_DMA_ISA_SIZE - 1, &sc->sc_dmat, 0);
 	if (error)
 		panic("malta_dma_init: failed to create ISA dma tag: %d",
 		    error);
@@ -426,7 +426,7 @@ pcib_intr(void *v)
 		 * From YAMON source code:
 		 *
 		 * IRQ7 is used to detect spurious interrupts.
-		 * The interrupt acknowledge cycle returns IRQ7, if no 
+		 * The interrupt acknowledge cycle returns IRQ7, if no
 		 * interrupts is requested.
 		 * We can differentiate between this situation and a
 		 * "Normal" IRQ7 by reading the ISR.
@@ -585,7 +585,7 @@ pcib_isa_intr_alloc(void *v, int mask, int type, int *irq)
 			if (type != my_sc->sc_intrtab[i].intr_type)
 				continue;
 			/*
-			 * If the IRQ is sharable, count the number of
+			 * If the IRQ is shareable, count the number of
 			 * other handlers, and if it's smaller than the
 			 * last IRQ like this, remember it.
 			 */
@@ -600,7 +600,7 @@ pcib_isa_intr_alloc(void *v, int mask, int type, int *irq)
 			break;
 
 		case IST_PULSE:
-		/* This just isn't sharable. */
+		/* This just isn't shareable. */
 		continue;
 		}
 	}

@@ -1,12 +1,19 @@
-#	$NetBSD: Makefile.boot,v 1.23 2020/10/25 13:25:19 rillig Exp $
+#	$NetBSD: Makefile.boot,v 1.25 2022/04/15 13:44:57 rillig Exp $
 #
 # A very simple makefile...
 #
 # You only want to use this if you aren't running NetBSD.
 #
 # Modify MACHINE and MACHINE_ARCH as appropriate for your target architecture.
-# See config.h and the various #ifdef directives for further configuration.
+# Add the following definitions to EXTRA_CFLAGS as necessary:
 #
+#	-DHAVE_SETENV
+#	-DHAVE_SETPGID
+#	-DHAVE_SETRLIMIT
+#	-DHAVE_STRERROR
+#	-DHAVE_STRSEP
+#	-DHAVE_VSNPRINTF
+#	-DUSE_SELECT
 
 PROG=		bmake
 MACHINE=	i386
@@ -16,7 +23,7 @@ CFLAGS=		-O -g
 EXTRA_CFLAGS=
 EXTRA_LIBS=
 
-OBJS=	arch.o buf.o compat.o cond.o dir.o enum.o for.o hash.o \
+OBJS=	arch.o buf.o compat.o cond.o dir.o for.o hash.o \
 	job.o lst.o main.o make.o make_malloc.o metachar.o parse.o \
 	str.o suff.o targ.o trace.o var.o util.o
 

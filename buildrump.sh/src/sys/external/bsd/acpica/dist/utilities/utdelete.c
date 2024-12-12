@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -185,7 +185,7 @@ AcpiUtDeleteInternalObj (
             /* Global Lock has extra semaphore */
 
             (void) AcpiOsDeleteSemaphore (AcpiGbl_GlobalLockSemaphore);
-            AcpiGbl_GlobalLockSemaphore = NULL;
+            AcpiGbl_GlobalLockSemaphore = ACPI_SEMAPHORE_NULL;
 
             AcpiOsDeleteMutex (Object->Mutex.OsMutex);
             AcpiGbl_GlobalLockMutex = NULL;
@@ -204,7 +204,7 @@ AcpiUtDeleteInternalObj (
             Object, Object->Event.OsSemaphore));
 
         (void) AcpiOsDeleteSemaphore (Object->Event.OsSemaphore);
-        Object->Event.OsSemaphore = NULL;
+        Object->Event.OsSemaphore = ACPI_SEMAPHORE_NULL;
         break;
 
     case ACPI_TYPE_METHOD:
@@ -486,6 +486,7 @@ AcpiUtUpdateRefCount (
             ACPI_WARNING ((AE_INFO,
                 "Obj %p, Reference Count is already zero, cannot decrement\n",
                 Object));
+	    return;
         }
 
         ACPI_DEBUG_PRINT_RAW ((ACPI_DB_ALLOCATIONS,

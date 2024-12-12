@@ -1,4 +1,4 @@
-/* $NetBSD: omrasopsvar.h,v 1.5 2019/09/22 05:49:16 rin Exp $ */
+/* $NetBSD: omrasopsvar.h,v 1.8 2022/10/03 17:42:35 tsutsui Exp $ */
 /*
  * Copyright (c) 2013 Kenji Aoyama
  *
@@ -15,27 +15,26 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <machine/board.h>
+
 /*
  * Base addresses of LUNA's frame buffer
  * XXX: We consider only 1bpp and 4bpp for now
  */
 
-#include <machine/board.h>
+#define OMFB_PLANEMASK		BMAP_BMSEL	/* BMSEL register */
+#define OMFB_ROP_COMMON		BMAP_FN		/* common ROP */
+#define OMFB_ROP_P0		BMAP_FN0
 
-#define OMFB_PLANEMASK	BMAP_BMSEL	/* BMSEL register */
-#define OMFB_FB_WADDR	(BMAP_BMP + 8)	/* common plane */
-#define OMFB_FB_RADDR	(BMAP_BMAP0 + 8)/* plane #0 */
-#define OMFB_ROPFUNC	BMAP_FN		/* common ROP function */
+/* will be merged in near future */
+#define OMFB_ROPFUNC		BMAP_FN		/* common ROP function */
 
-/*
- * Helper macros
- */
-#define W(addr)  ((uint32_t *)(addr))
-#define R(addr)  ((uint32_t *)((uint8_t *)(addr) +  0x40000))
-#define P0(addr) ((uint32_t *)((uint8_t *)(addr) +  0x40000))
-#define P1(addr) ((uint32_t *)((uint8_t *)(addr) +  0x80000))
-#define P2(addr) ((uint32_t *)((uint8_t *)(addr) +  0xC0000))
-#define P3(addr) ((uint32_t *)((uint8_t *)(addr) + 0x100000))
+#define OMFB_MAX_PLANECOUNT	(8)
+#define OMFB_PLANEOFFS		(0x40000)	/* plane offset */
+#define OMFB_STRIDE		(2048/8)	/* stride [byte] */
+
+/* TODO: should be improved... */
+extern int hwplanemask;
 
 /*
  * ROP function
@@ -51,7 +50,7 @@
 
 /* operation		index	the video RAM contents will be */
 #define ROP_ZERO	 0	/* all 0	*/
-#define ROP_AND1	 1	/* D & M	*/ 
+#define ROP_AND1	 1	/* D & M	*/
 #define ROP_AND2	 2	/* ~D & M	*/
 /* Not used on LUNA	 3			*/
 #define ROP_AND3	 4	/* D & ~M	*/

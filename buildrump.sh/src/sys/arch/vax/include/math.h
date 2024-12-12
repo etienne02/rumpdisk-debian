@@ -1,9 +1,10 @@
-/*	$NetBSD: math.h,v 1.8 2017/07/27 12:15:59 martin Exp $	*/
+/*	$NetBSD: math.h,v 1.10 2024/10/30 15:56:12 riastradh Exp $	*/
 
 #ifndef _VAX_MATH_H_
 #define _VAX_MATH_H_
 
 #include <sys/cdefs.h>
+#include <sys/featuretest.h>
 
 #if __GNUC_PREREQ__(3, 3)
 #define	__INFINITY	__builtin_huge_valf()
@@ -11,8 +12,8 @@
 #define	__INFINITY	1.0E+39F
 #endif
 
-static __inline int __isinf(double __x) { return 0; }
-static __inline int __isnan(double __x) { return 0; }
+static __inline int __isinf(double __x __unused) { return 0; }
+static __inline int __isnan(double __x __unused) { return 0; }
 #define	__HAVE_INLINE___ISINF
 #define	__HAVE_INLINE___ISNAN
 

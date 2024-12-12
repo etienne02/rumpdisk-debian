@@ -1,4 +1,4 @@
-/*	$NetBSD: main.c,v 1.89 2020/04/06 09:54:24 martin Exp $	*/
+/*	$NetBSD: main.c,v 1.92 2023/07/04 20:40:53 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1980, 1986, 1993\
 #if 0
 static char sccsid[] = "@(#)main.c	8.6 (Berkeley) 5/14/95";
 #else
-__RCSID("$NetBSD: main.c,v 1.89 2020/04/06 09:54:24 martin Exp $");
+__RCSID("$NetBSD: main.c,v 1.92 2023/07/04 20:40:53 riastradh Exp $");
 #endif
 #endif /* not lint */
 
@@ -102,11 +102,14 @@ int	zflag;
 int	cvtlevel;
 int	doinglevel1;
 int	doinglevel2;
+int	doing2ea;
+int	doing2noea;
 int	newinofmt;
 char	usedsoftdep;
 int	preen;
 int	forceimage;
 int	is_ufs2;
+int	is_ufs2ea;
 int	markclean;
 char	havesb;
 char	skipclean;
@@ -194,6 +197,14 @@ main(int argc, char *argv[])
 
 		case 'c':
 			skipclean = 0;
+			if (strcmp(optarg, "ea") == 0) {
+				doing2ea = 1;
+				break;
+			}
+			if (strcmp(optarg, "no-ea") == 0) {
+				doing2noea = 1;
+				break;
+			}
 			cvtlevel = argtoi('c', "conversion level", optarg, 10);
 			if (cvtlevel > 4) {
 				cvtlevel = 4;
@@ -201,7 +212,7 @@ main(int argc, char *argv[])
 				    cvtlevel);
 			}
 			break;
-		
+
 		case 'd':
 			debug++;
 			break;
@@ -273,7 +284,6 @@ main(int argc, char *argv[])
 			snap_internal = 0;
 		}
 	}
-			
 
 	argc -= optind;
 	argv += optind;
@@ -307,7 +317,7 @@ main(int argc, char *argv[])
 
 		if (path == NULL)
 			pfatal("Can't check %s\n", *argv);
-		
+
 		if (snap_backup || snap_internal) {
 			char *snap_dev;
 			int snapfd;
@@ -357,7 +367,7 @@ checkfilesys(const char *filesys, const char *origfs, int child)
 	daddr_t n_ffree, n_bfree;
 	struct dups *dp;
 	struct zlncnt *zlnp;
-	int cylno;
+	uint32_t cylno;
 #ifdef LITE2BORKEN
 	int flags;
 #endif

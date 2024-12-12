@@ -1,4 +1,4 @@
-/*	$NetBSD: if_faith.c,v 1.62 2021/06/16 00:21:19 riastradh Exp $	*/
+/*	$NetBSD: if_faith.c,v 1.64 2024/09/07 06:17:37 andvar Exp $	*/
 /*	$KAME: if_faith.c,v 1.21 2001/02/20 07:59:26 itojun Exp $	*/
 
 /*
@@ -40,7 +40,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_faith.c,v 1.62 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_faith.c,v 1.64 2024/09/07 06:17:37 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -63,7 +63,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_faith.c,v 1.62 2021/06/16 00:21:19 riastradh Exp 
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
 #include <net/if_faith.h>
@@ -143,7 +142,7 @@ faith_clone_create(struct if_clone *ifc, int unit)
 	if_initname(ifp, ifc->ifc_name, unit);
 
 	ifp->if_mtu = FAITHMTU;
-	/* Change to BROADCAST experimentaly to announce its prefix. */
+	/* Change to BROADCAST experimentally to announce its prefix. */
 	ifp->if_flags = /* IFF_LOOPBACK */ IFF_BROADCAST | IFF_MULTICAST;
 	ifp->if_ioctl = faithioctl;
 	ifp->if_output = faithoutput;

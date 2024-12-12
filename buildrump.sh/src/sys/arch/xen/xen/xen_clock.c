@@ -1,4 +1,4 @@
-/*	$NetBSD: xen_clock.c,v 1.8 2020/11/30 17:05:02 bouyer Exp $	*/
+/*	$NetBSD: xen_clock.c,v 1.20 2024/12/01 20:36:00 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2017, 2018 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: xen_clock.c,v 1.8 2020/11/30 17:05:02 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: xen_clock.c,v 1.20 2024/12/01 20:36:00 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -49,6 +49,7 @@ __KERNEL_RCSID(0, "$NetBSD: xen_clock.c,v 1.8 2020/11/30 17:05:02 bouyer Exp $")
 #include <sys/kernel.h>
 #include <sys/lwp.h>
 #include <sys/proc.h>
+#include <sys/sdt.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/time.h>
@@ -74,6 +75,62 @@ static uint64_t	xen_vcputime_raw_systime_ns(void);
 static uint64_t	xen_global_systime_ns(void);
 static unsigned	xen_get_timecount(struct timecounter *);
 static int	xen_timer_handler(void *, struct clockframe *);
+
+/*
+ * dtrace probes
+ */
+SDT_PROBE_DEFINE7(sdt, xen, clock, tsc__backward,
+    "uint64_t"/*raw_systime_ns*/,
+    "uint64_t"/*tsc_timestamp*/,
+    "uint64_t"/*tsc_to_system_mul*/,
+    "int"/*tsc_shift*/,
+    "uint64_t"/*delta_ns*/,
+    "uint64_t"/*tsc*/,
+    "uint64_t"/*systime_ns*/);
+SDT_PROBE_DEFINE7(sdt, xen, clock, tsc__delta__negative,
+    "uint64_t"/*raw_systime_ns*/,
+    "uint64_t"/*tsc_timestamp*/,
+    "uint64_t"/*tsc_to_system_mul*/,
+    "int"/*tsc_shift*/,
+    "uint64_t"/*delta_ns*/,
+    "uint64_t"/*tsc*/,
+    "uint64_t"/*systime_ns*/);
+SDT_PROBE_DEFINE7(sdt, xen, clock, systime__wraparound,
+    "uint64_t"/*raw_systime_ns*/,
+    "uint64_t"/*tsc_timestamp*/,
+    "uint64_t"/*tsc_to_system_mul*/,
+    "int"/*tsc_shift*/,
+    "uint64_t"/*delta_ns*/,
+    "uint64_t"/*tsc*/,
+    "uint64_t"/*systime_ns*/);
+SDT_PROBE_DEFINE7(sdt, xen, clock, systime__backward,
+    "uint64_t"/*raw_systime_ns*/,
+    "uint64_t"/*tsc_timestamp*/,
+    "uint64_t"/*tsc_to_system_mul*/,
+    "int"/*tsc_shift*/,
+    "uint64_t"/*delta_ns*/,
+    "uint64_t"/*tsc*/,
+    "uint64_t"/*systime_ns*/);
+
+SDT_PROBE_DEFINE3(sdt, xen, timecounter, backward,
+    "uint64_t"/*local*/,
+    "uint64_t"/*skew*/,
+    "uint64_t"/*global*/);
+
+SDT_PROBE_DEFINE2(sdt, xen, hardclock, systime__backward,
+    "uint64_t"/*last_systime_ns*/,
+    "uint64_t"/*this_systime_ns*/);
+SDT_PROBE_DEFINE2(sdt, xen, hardclock, tick,
+    "uint64_t"/*last_systime_ns*/,
+    "uint64_t"/*this_systime_ns*/);
+SDT_PROBE_DEFINE3(sdt, xen, hardclock, jump,
+    "uint64_t"/*last_systime_ns*/,
+    "uint64_t"/*this_systime_ns*/,
+    "uint64_t"/*nticks*/);
+SDT_PROBE_DEFINE3(sdt, xen, hardclock, missed,
+    "uint64_t"/*last_systime_ns*/,
+    "uint64_t"/*this_systime_ns*/,
+    "uint64_t"/*remaining_ns*/);
 
 /*
  * xen timecounter:
@@ -277,7 +334,11 @@ xen_vcputime_systime_ns(void)
 		 * Notify the console that the CPU's tsc appeared to
 		 * run behind Xen's idea of it, and pretend it hadn't.
 		 */
-#if XEN_CLOCK_DEBUG		/* XXX dtrace hook */
+		SDT_PROBE7(sdt, xen, clock, tsc__backward,
+		    raw_systime_ns, tsc_timestamp,
+		    tsc_to_system_mul, tsc_shift, /*delta_ns*/0, tsc,
+		    /*systime_ns*/raw_systime_ns);
+#if XEN_CLOCK_DEBUG
 		device_printf(ci->ci_dev, "xen cpu tsc %"PRIu64
 		    " ran backwards from timestamp %"PRIu64
 		    " by %"PRIu64"\n",
@@ -301,9 +362,13 @@ xen_vcputime_systime_ns(void)
 	 * This doesn't make sense but I include it out of paranoia.
 	 */
 	if (__predict_false((int64_t)delta_ns < 0)) {
-#if XEN_CLOCK_DEBUG		/* XXX dtrace hook */
-		device_printf(ci->ci_dev, "xen tsc delta in ns went negative: %"PRId64"\n",
-		    delta_ns);
+		SDT_PROBE7(sdt, xen, clock, tsc__delta__negative,
+		    raw_systime_ns, tsc_timestamp,
+		    tsc_to_system_mul, tsc_shift, delta_ns, tsc,
+		    /*systime_ns*/raw_systime_ns);
+#if XEN_CLOCK_DEBUG
+		device_printf(ci->ci_dev, "xen tsc delta in ns went negative:"
+		    " %"PRId64"\n", delta_ns);
 #endif
 		ci->ci_xen_tsc_delta_negative_evcnt.ev_count++;
 		delta_ns = 0;
@@ -322,7 +387,11 @@ xen_vcputime_systime_ns(void)
 	 * (2^64 ns is approximately half a millennium.)
 	 */
 	if (__predict_false(systime_ns < raw_systime_ns)) {
-#if XEN_CLOCK_DEBUG		/* XXX dtrace hook */
+		SDT_PROBE7(sdt, xen, clock, systime__wraparound,
+		    raw_systime_ns, tsc_timestamp,
+		    tsc_to_system_mul, tsc_shift, delta_ns, tsc,
+		    systime_ns);
+#if XEN_CLOCK_DEBUG
 		printf("xen raw systime + tsc delta wrapped around:"
 		    " %"PRIu64" + %"PRIu64" = %"PRIu64"\n",
 		    raw_systime_ns, delta_ns, systime_ns);
@@ -336,7 +405,11 @@ xen_vcputime_systime_ns(void)
 	 * forward.  This seems to happen pretty regularly under load.
 	 */
 	if (__predict_false(ci->ci_xen_last_systime_ns > systime_ns)) {
-#if XEN_CLOCK_DEBUG		/* XXX dtrace hook */
+		SDT_PROBE7(sdt, xen, clock, systime__backward,
+		    raw_systime_ns, tsc_timestamp,
+		    tsc_to_system_mul, tsc_shift, delta_ns, tsc,
+		    systime_ns);
+#if XEN_CLOCK_DEBUG
 		printf("xen raw systime + tsc delta went backwards:"
 		    " %"PRIu64" > %"PRIu64"\n",
 		    ci->ci_xen_last_systime_ns, systime_ns);
@@ -449,7 +522,7 @@ static uint64_t
 xen_global_systime_ns(void)
 {
 	struct cpu_info *ci;
-	uint64_t local, global, result;
+	uint64_t local, global, skew, result;
 
 	/*
 	 * Find the local timecount on this CPU, and make sure it does
@@ -463,13 +536,24 @@ xen_global_systime_ns(void)
 	ci = curcpu();
 	do {
 		local = xen_vcputime_systime_ns();
-		local += ci->ci_xen_systime_ns_skew;
+		skew = ci->ci_xen_systime_ns_skew;
 		global = xen_global_systime_ns_stamp;
-		if (__predict_false(local < global + 1)) {
+		if (__predict_false(local + skew < global + 1)) {
+			SDT_PROBE3(sdt, xen, timecounter, backward,
+			    local, skew, global);
+#if XEN_CLOCK_DEBUG
+			device_printf(ci->ci_dev,
+			    "xen timecounter went backwards:"
+			    " local=%"PRIu64" skew=%"PRIu64" global=%"PRIu64","
+			    " adding %"PRIu64" to skew\n",
+			    local, skew, global, global + 1 - (local + skew));
+#endif
+			ci->ci_xen_timecounter_backwards_evcnt.ev_count++;
 			result = global + 1;
-			ci->ci_xen_systime_ns_skew += global + 1 - local;
+			ci->ci_xen_systime_ns_skew += global + 1 -
+			    (local + skew);
 		} else {
-			result = local;
+			result = local + skew;
 		}
 	} while (atomic_cas_64(&xen_global_systime_ns_stamp, global, result)
 	    != global);
@@ -596,11 +680,31 @@ xen_suspendclocks(struct cpu_info *ci)
 	KASSERT(ci == curcpu());
 	KASSERT(kpreempt_disabled());
 
+	/*
+	 * Find the VIRQ_TIMER event channel and close it so new timer
+	 * interrupt events stop getting delivered to it.
+	 *
+	 * XXX Should this happen later?  This is not the reverse order
+	 * of xen_resumeclocks.  It is apparently necessary in this
+	 * order only because we don't stash evtchn anywhere, but we
+	 * could stash it.
+	 */
 	evtch = unbind_virq_from_evtch(VIRQ_TIMER);
 	KASSERT(evtch != -1);
 
+	/*
+	 * Mask the event channel so we stop getting new interrupts on
+	 * it.
+	 */
 	hypervisor_mask_event(evtch);
-	event_remove_handler(evtch, 
+
+	/*
+	 * Now that we are no longer getting new interrupts, remove the
+	 * handler and wait for any existing calls to the handler to
+	 * complete.  After this point, there can be no concurrent
+	 * calls to xen_timer_handler.
+	 */
+	event_remove_handler(evtch,
 	    __FPTRCAST(int (*)(void *), xen_timer_handler), ci);
 
 	aprint_verbose("Xen clock: removed event channel %d\n", evtch);
@@ -628,9 +732,16 @@ xen_resumeclocks(struct cpu_info *ci)
 	KASSERT(ci == curcpu());
 	KASSERT(kpreempt_disabled());
 
+	/*
+	 * Allocate an event channel to receive VIRQ_TIMER events.
+	 */
 	evtch = bind_virq_to_evtch(VIRQ_TIMER);
 	KASSERT(evtch != -1);
 
+	/*
+	 * Set an event handler for VIRQ_TIMER events to call
+	 * xen_timer_handler.
+	 */
 	snprintf(intr_xname, sizeof(intr_xname), "%s clock",
 	    device_xname(ci->ci_dev));
 	/* XXX sketchy function pointer cast -- fix the API, please */
@@ -638,8 +749,6 @@ xen_resumeclocks(struct cpu_info *ci)
 	    __FPTRCAST(int (*)(void *), xen_timer_handler),
 	    ci, IPL_CLOCK, NULL, intr_xname, true, ci) == NULL)
 		panic("failed to establish timer interrupt handler");
-
-	hypervisor_unmask_event(evtch);
 
 	aprint_verbose("Xen %s: using event channel %d\n", intr_xname, evtch);
 
@@ -658,6 +767,12 @@ xen_resumeclocks(struct cpu_info *ci)
 	    NS_PER_TICK);
 	KASSERT(error == 0);
 
+	/*
+	 * Ready to go.  Unmask the event.  After this point, Xen may
+	 * start calling xen_timer_handler.
+	 */
+	hypervisor_unmask_event(evtch);
+
 	/* We'd better not have switched CPUs.  */
 	KASSERT(ci == curcpu());
 }
@@ -674,6 +789,7 @@ xen_resumeclocks(struct cpu_info *ci)
 static int
 xen_timer_handler(void *cookie, struct clockframe *frame)
 {
+	const uint64_t ns_per_tick = NS_PER_TICK;
 	struct cpu_info *ci = curcpu();
 	uint64_t last, now, delta, next;
 	int error;
@@ -684,20 +800,27 @@ xen_timer_handler(void *cookie, struct clockframe *frame)
 #if defined(XENPV)
 	frame = NULL; /* We use values cached in curcpu()  */
 #endif
-again:
 	/*
 	 * Find how many nanoseconds of Xen system time has elapsed
 	 * since the last hardclock tick.
 	 */
 	last = ci->ci_xen_hardclock_systime_ns;
 	now = xen_vcputime_systime_ns();
-	if (now < last) {
-#if XEN_CLOCK_DEBUG		/* XXX dtrace hook */
-		device_printf(ci->ci_dev, "xen systime ran backwards in hardclock %"PRIu64"ns\n",
+	SDT_PROBE2(sdt, xen, hardclock, tick,  last, now);
+	if (__predict_false(now < last)) {
+		SDT_PROBE2(sdt, xen, hardclock, systime__backward,
+		    last, now);
+#if XEN_CLOCK_DEBUG
+		device_printf(ci->ci_dev, "xen systime ran backwards"
+		    " in hardclock %"PRIu64"ns\n",
 		    last - now);
 #endif
 		ci->ci_xen_systime_backwards_hardclock_evcnt.ev_count++;
-		now = last;
+		/*
+		 * we've lost track of time. Just pretends that one
+		 * tick elapsed, and reset our idea of last tick.
+		 */
+		ci->ci_xen_hardclock_systime_ns = last = now - ns_per_tick;
 	}
 	delta = now - last;
 
@@ -706,23 +829,55 @@ again:
 	 * times as appears necessary based on how much time has
 	 * passed.
 	 */
-	while (delta >= NS_PER_TICK) {
-		ci->ci_xen_hardclock_systime_ns += NS_PER_TICK;
-		delta -= NS_PER_TICK;
+	if (__predict_false(delta >= 2*ns_per_tick)) {
+		SDT_PROBE3(sdt, xen, hardclock, jump,
+		    last, now, delta/ns_per_tick);
+
+		/*
+		 * Warn if we violate timecounter(9) contract: with a
+		 * k-bit timecounter (here k = 32), and timecounter
+		 * frequency f (here f = 1 GHz), the maximum period
+		 * between hardclock calls is 2^k / f.
+		 */
+		if (delta > xen_timecounter.tc_counter_mask) {
+			printf("WARNING: hardclock skipped %"PRIu64"ns"
+			    " (%"PRIu64" -> %"PRIu64"),"
+			    " exceeding maximum of %"PRIu32"ns"
+			    " for timecounter(9)\n",
+			    last, now, delta,
+			    xen_timecounter.tc_counter_mask);
+			ci->ci_xen_timecounter_jump_evcnt.ev_count++;
+		}
+		/* don't try to catch up more than one second at once */
+		if (delta > 1000000000UL)
+			delta = 1000000000UL;
+	}
+	while (delta >= ns_per_tick) {
+		ci->ci_xen_hardclock_systime_ns += ns_per_tick;
+		delta -= ns_per_tick;
 		hardclock(frame);
-		if (__predict_false(delta >= NS_PER_TICK))
+		if (__predict_false(delta >= ns_per_tick)) {
+			SDT_PROBE3(sdt, xen, hardclock, missed,
+			    last, now, delta);
 			ci->ci_xen_missed_hardclock_evcnt.ev_count++;
+		}
 	}
 
 	/*
 	 * Re-arm the timer.  If it fails, it's probably because the
-	 * time is in the past, so update our idea of what the Xen
-	 * system time is and try again.
+	 * time is in the past, possibly because we're in the
+	 * process of catching up missed hardclock calls.
+	 * In this case schedule a tick in the nead future.
 	 */
-	next = ci->ci_xen_hardclock_systime_ns + NS_PER_TICK;
+	next = ci->ci_xen_hardclock_systime_ns + ns_per_tick;
 	error = HYPERVISOR_set_timer_op(next);
-	if (error)
-		goto again;
+	if (error) {
+		next = xen_vcputime_systime_ns() + ns_per_tick / 2;
+		error = HYPERVISOR_set_timer_op(next);
+		if (error) {
+			panic("failed to re-arm Xen timer %d", error);
+		}
+	}
 
 	/* Success!  */
 	return 0;
@@ -763,6 +918,12 @@ xen_initclocks(void)
 	evcnt_attach_dynamic(&ci->ci_xen_missed_hardclock_evcnt,
 	    EVCNT_TYPE_INTR, NULL, device_xname(ci->ci_dev),
 	    "missed hardclock");
+	evcnt_attach_dynamic(&ci->ci_xen_timecounter_backwards_evcnt,
+	    EVCNT_TYPE_INTR, NULL, device_xname(ci->ci_dev),
+	    "timecounter went backwards");
+	evcnt_attach_dynamic(&ci->ci_xen_timecounter_jump_evcnt,
+	    EVCNT_TYPE_INTR, NULL, device_xname(ci->ci_dev),
+	    "hardclock jumped past timecounter max");
 
 	/* Fire up the clocks.  */
 	xen_resumeclocks(ci);
@@ -945,6 +1106,7 @@ xen_rtc_set(struct todr_chip_handle *todr, struct timeval *tvp)
 		systime_ns = xen_global_systime_ns();
 
 		/* Set the hypervisor wall clock time.  */
+		memset(&op, 0, sizeof(op));
 		op.cmd = XENPF_settime;
 		op.u.settime.secs = tvp->tv_sec;
 		op.u.settime.nsecs = tvp->tv_usec * 1000;

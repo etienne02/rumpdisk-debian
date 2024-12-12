@@ -1,4 +1,4 @@
-/*	$NetBSD: grfioctl.h,v 1.10 2015/09/07 03:49:45 dholland Exp $	*/
+/*	$NetBSD: grfioctl.h,v 1.13 2023/01/06 10:28:28 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -51,7 +51,7 @@ struct grfdyninfo {
 	int	gdi_dwidth;	/* displayed part width		*/
 	int	gdi_dheight;	/* displayed part height	*/
 	int	gdi_dx;		/* displayed part x offset	*/
-	int	gdi_dy;		/* displayed part y offset	*/ 
+	int	gdi_dy;		/* displayed part y offset	*/
 };
 
 struct	grfinfo {
@@ -69,11 +69,11 @@ struct	grfinfo {
 	int	gd_fbwidth;	/* frame buffer width		*/
 	int	gd_fbheight;	/* frame buffer height		*/
 
-	struct grfdyninfo gd_dyn; /* everything changable by GRFIOCSINFO */
+	struct grfdyninfo gd_dyn; /* everything changeable by GRFIOCSINFO */
 /* compatibility... */
 #define gd_fbx		gd_dyn.gdi_fbx
 #define gd_fby		gd_dyn.gdi_fby
-#define gd_dwidth 	gd_dyn.gdi_dwidth
+#define gd_dwidth	gd_dyn.gdi_dwidth
 #define gd_dheight	gd_dyn.gdi_dheight
 #define gd_dx		gd_dyn.gdi_dx
 #define gd_dy		gd_dyn.gdi_dy
@@ -83,7 +83,7 @@ struct	grfinfo {
 };
 
 
-/* video mode, should be display-independent, but it might need 
+/* video mode, should be display-independent, but it might need
    modifications in the future to really become hardware-independent. */
 
 struct grfvideo_mode {
@@ -93,8 +93,8 @@ struct grfvideo_mode {
   u_short disp_width;		/* width of displayed video (incl overscan) */
   u_short disp_height;		/* height "" */
   u_short depth;		/* number of bitplanes resp. bits per pixel */
-  u_short hblank_start;		
-  u_short hblank_stop;		
+  u_short hblank_start;
+  u_short hblank_stop;
   u_short hsync_start;		/* video-parameters, take care not to   */
   u_short hsync_stop;		/* use parameters that violete specs of */
   u_short htotal;		/* your monitor !                       */
@@ -130,14 +130,14 @@ struct grfvideo_mode {
 /*
  * generic framebuffer-related ioctls. These are somewhat
  * similar to SunOS fb-ioctls since I liked them reading
- * thru the X11-server code. 
+ * thru the X11-server code.
  */
 
 /*
  * colormap related information. Every grf has an associated
  * colormap. Depending on the capabilities of the hardware, more
  * or less of the information provided may be used.
- * Maxium value of "index" can be deduced from grfinfo->gd_colors.
+ * Maximum value of "index" can be deduced from grfinfo->gd_colors.
  */
 struct grf_colormap {
   int	 index;	    /* start at red[index],green[index],blue[index] */

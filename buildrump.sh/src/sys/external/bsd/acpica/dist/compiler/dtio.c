@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -844,7 +844,7 @@ DtDumpBuffer (
     UINT8                   BufChar;
 
 
-    FlPrintFile (FileId, "Output: [%3.3Xh %4.4d %3d] ",
+    FlPrintFile (FileId, "Output: [%3.3Xh %4.4d %3.3Xh] ",
         Offset, Offset, Length);
 
     i = 0;

@@ -1,9 +1,9 @@
-/*	$NetBSD: bozohttpd.c,v 1.136 2021/08/24 09:47:36 mrg Exp $	*/
+/*	$NetBSD: bozohttpd.c,v 1.148 2024/10/04 08:45:46 rillig Exp $	*/
 
 /*	$eterna: bozohttpd.c,v 1.178 2011/11/18 09:21:15 mrg Exp $	*/
 
 /*
- * Copyright (c) 1997-2021 Matthew R. Green
+ * Copyright (c) 1997-2024 Matthew R. Green
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -75,7 +75,7 @@
  *
  *	- 3.5/3.6: content/transfer codings.  probably can ignore
  *	  this?  we "SHOULD"n't.  but 4.4 says we should ignore a
- *	  `content-length' header upon reciept of a `transfer-encoding'
+ *	  `content-length' header upon receipt of a `transfer-encoding'
  *	  header.
  *
  *	- 5.1.1: request methods.  only MUST support GET and HEAD,
@@ -108,7 +108,7 @@
 #define INDEX_HTML		"index.html"
 #endif
 #ifndef SERVER_SOFTWARE
-#define SERVER_SOFTWARE		"bozohttpd/20210824"
+#define SERVER_SOFTWARE		"bozohttpd/20240428"
 #endif
 #ifndef PUBLIC_HTML
 #define PUBLIC_HTML		"public_html"
@@ -177,7 +177,6 @@ struct {
 	const char *file;
 	const char *name;
 } specials[] = {
-	{ DIRECT_ACCESS_FILE, "rejected direct access request" },
 	{ REDIRECT_FILE,      "rejected redirect request" },
 	{ ABSREDIRECT_FILE,   "rejected absredirect request" },
 	{ REMAP_FILE,         "rejected remap request" },
@@ -1084,7 +1083,7 @@ handle_redirect(bozo_httpreq_t *request, const char *url, int absolute)
 #endif /* !NO_USER_SUPPORT */
 
 	if (absolute) {
-		char *sep = NULL;
+		const char *sep = NULL;
 		const char *s;
 
 		/*
@@ -1565,9 +1564,14 @@ bozo_decode_url_percent(bozo_httpreq_t *request, char *str)
 				*t++ = *s++;
 			break;
 		}
-		debug((httpd, DEBUG_EXPLODING,
-			"fu_%%: got s == %%, s[1]s[2] == %c%c",
-			s[1], s[2]));
+		if (&s[2] < end)
+			debug((httpd, DEBUG_EXPLODING,
+				"fu_%%: got s == %%, s[1]s[2] == %c%c",
+				s[1], s[2]));
+		else
+			debug((httpd, DEBUG_EXPLODING,
+			    "fu_%%: got s == %%, s[1] == %c s[2] is not set",
+				s[1]));
 		if (s[1] == '\0' || s[2] == '\0')
 			return bozo_http_error(httpd, 400, request,
 			    "percent hack missing two chars afterwards");
@@ -2023,11 +2027,13 @@ debug__(bozohttpd_t *httpd, int level, const char *fmt, ...)
 
 	savederrno = errno;
 	va_start(ap, fmt);
-	if (httpd->logstderr) {
-		vfprintf(stderr, fmt, ap);
-		fputs("\n", stderr);
-	} else
-		vsyslog(LOG_DEBUG, fmt, ap);
+	if (!httpd->nolog) {
+		if (httpd->logstderr) {
+			vfprintf(stderr, fmt, ap);
+			fputs("\n", stderr);
+		} else
+			vsyslog(LOG_DEBUG, fmt, ap);
+	}
 	va_end(ap);
 	errno = savederrno;
 }
@@ -2040,12 +2046,14 @@ bozowarn(bozohttpd_t *httpd, const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	if (httpd->logstderr || isatty(STDERR_FILENO)) {
-		//fputs("warning: ", stderr);
-		vfprintf(stderr, fmt, ap);
-		fputs("\n", stderr);
-	} else
-		vsyslog(LOG_INFO, fmt, ap);
+	if (!httpd->nolog) {
+		if (httpd->logstderr || isatty(STDERR_FILENO)) {
+			//fputs("warning: ", stderr);
+			vfprintf(stderr, fmt, ap);
+			fputs("\n", stderr);
+		} else
+			vsyslog(LOG_INFO, fmt, ap);
+	}
 	va_end(ap);
 }
 
@@ -2055,12 +2063,14 @@ bozoerr(bozohttpd_t *httpd, int code, const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	if (httpd->logstderr || isatty(STDERR_FILENO)) {
-		//fputs("error: ", stderr);
-		vfprintf(stderr, fmt, ap);
-		fputs("\n", stderr);
-	} else
-		vsyslog(LOG_ERR, fmt, ap);
+	if (!httpd->nolog) {
+		if (httpd->logstderr || isatty(STDERR_FILENO)) {
+			//fputs("error: ", stderr);
+			vfprintf(stderr, fmt, ap);
+			fputs("\n", stderr);
+		} else
+			vsyslog(LOG_ERR, fmt, ap);
+	}
 	va_end(ap);
 	exit(code);
 }
@@ -2164,7 +2174,7 @@ static struct errors_map {
 	{ 413, 	"413 Payload Too Large", "Use smaller requests", },
 	{ 417,	"417 Expectation Failed","Expectations not available", },
 	{ 420,	"420 Enhance Your Calm","Chill, Winston", },
-	{ 500,	"500 Internal Error",	"An error occured on the server", },
+	{ 500,	"500 Internal Error",	"An error occurred on the server", },
 	{ 501,	"501 Not Implemented",	"This request is not available", },
 	{ 0,	NULL,			NULL, },
 };
@@ -2521,26 +2531,26 @@ bozo_init_httpd(bozohttpd_t *httpd)
 int
 bozo_init_prefs(bozohttpd_t *httpd, bozoprefs_t *prefs)
 {
-	int rv = 0;
+	int rv = 1;
 
 	/* make sure everything is clean */
 	(void) memset(prefs, 0x0, sizeof(*prefs));
 
 	/* set up default values */
 	if (!bozo_set_pref(httpd, prefs, "server software", SERVER_SOFTWARE))
-		rv = 1;
+		rv = 0;
 	if (!bozo_set_pref(httpd, prefs, "index.html", INDEX_HTML))
-		rv = 1;
+		rv = 0;
 	if (!bozo_set_pref(httpd, prefs, "public_html", PUBLIC_HTML))
-		rv = 1;
+		rv = 0;
 	if (!bozo_set_pref(httpd, prefs, "ssl timeout", SSL_TIMEOUT))
-		rv = 1;
+		rv = 0;
 	if (!bozo_set_pref(httpd, prefs, "initial timeout", INITIAL_TIMEOUT))
-		rv = 1;
+		rv = 0;
 	if (!bozo_set_pref(httpd, prefs, "header timeout", HEADER_WAIT_TIME))
-		rv = 1;
+		rv = 0;
 	if (!bozo_set_pref(httpd, prefs, "request timeout", TOTAL_MAX_REQ_TIME))
-		rv = 1;
+		rv = 0;
 
 	return rv;
 }
@@ -2591,6 +2601,10 @@ bozo_setup(bozohttpd_t *httpd, bozoprefs_t *prefs, const char *vhost,
 	if ((cp = bozo_get_pref(prefs, "log to stderr")) != NULL &&
 	    strcmp(cp, "true") == 0) {
 		httpd->logstderr = 1;
+	}
+	if ((cp = bozo_get_pref(prefs, "no log")) != NULL &&
+	    strcmp(cp, "true") == 0) {
+		httpd->nolog = 1;
 	}
 	if ((cp = bozo_get_pref(prefs, "bind address")) != NULL) {
 		httpd->bindaddress = bozostrdup(httpd, NULL, cp);
@@ -2719,6 +2733,11 @@ bozo_cleanup(bozohttpd_t *httpd, bozoprefs_t *prefs)
 	free(httpd->errorbuf);
 	free(httpd->getln_buffer);
 	free(httpd->slashdir);
+	free(httpd->bindport);
+	free(httpd->pidfile);
+	free(httpd->cgibin);
+	free(httpd->virtbase);
+	free(httpd->dynamic_content_map);
 #define bozo_unconst(x) ((void *)(uintptr_t)x)
 	free(bozo_unconst(httpd->server_software));
 	free(bozo_unconst(httpd->index_html));

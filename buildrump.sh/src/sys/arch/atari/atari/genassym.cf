@@ -1,12 +1,12 @@
-#	$NetBSD: genassym.cf,v 1.35 2020/02/20 08:27:38 skrll Exp $
+#	$NetBSD: genassym.cf,v 1.39 2024/01/09 04:16:23 thorpej Exp $
 
 #-
 # Copyright (c) 1997 The NetBSD Foundation, Inc.
 # All rights reserved.
-# 
+#
 #  This code is derived from software contributed to The NetBSD Foundation
 #  by Leo Weppelman.
-# 
+#
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
 #  are met:
@@ -15,7 +15,7 @@
 #  2. Redistributions in binary form must reproduce the above copyright
 #     notice, this list of conditions and the following disclaimer in the
 #     documentation and/or other materials provided with the distribution.
-# 
+#
 #  THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
 #  ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
 #  TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -43,6 +43,7 @@ include <sys/syscall.h>
 include <uvm/uvm_extern.h>
 
 include <machine/cpu.h>
+include <machine/fcode.h>
 include <machine/trap.h>
 include <machine/psl.h>
 include <machine/pcb.h>
@@ -66,6 +67,14 @@ endif
 ifdef M68060
 define	M68060			1
 endif
+
+# MMU configuration constants (from pmap.h)
+export	MMU51_SRP_BITS
+export	MMU51_CRP_BITS
+export	MMU51_TCR_BITS
+export	MMU40_TCR_BITS
+
+define	M68K_MMU_MOTOROLA	1
 
 # lwp & proc fields and values
 define	L_PCB			offsetof(struct lwp, l_addr)
@@ -156,7 +165,7 @@ define	SIZEOF_PCB		sizeof(struct pcb)
 
 # frame offsets
 define	TF_PC			offsetof(struct frame, f_pc)
- 
+
 # exception frame offset/sizes
 define	FR_SP			offsetof(struct frame, f_regs[15])
 define	FR_HW			offsetof(struct frame, f_sr)

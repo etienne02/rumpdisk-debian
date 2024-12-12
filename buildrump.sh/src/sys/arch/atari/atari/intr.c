@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.c,v 1.28 2021/01/03 17:42:10 thorpej Exp $	*/
+/*	$NetBSD: intr.c,v 1.33 2024/01/19 20:55:42 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: intr.c,v 1.28 2021/01/03 17:42:10 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: intr.c,v 1.33 2024/01/19 20:55:42 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -51,9 +51,9 @@ __KERNEL_RCSID(0, "$NetBSD: intr.c,v 1.28 2021/01/03 17:42:10 thorpej Exp $");
 #define	UVEC_LOC	64
 
 typedef LIST_HEAD(, intrhand) ih_list_t;
-ih_list_t autovec_list[AVEC_MAX - AVEC_MIN + 1];
-ih_list_t uservec_list[UVEC_MAX - UVEC_MIN + 1];
-int idepth;
+static ih_list_t autovec_list[AVEC_MAX - AVEC_MIN + 1];
+static ih_list_t uservec_list[UVEC_MAX - UVEC_MIN + 1];
+volatile unsigned int intr_depth;
 volatile int ssir;
 
 void
@@ -129,9 +129,9 @@ intr_establish(int vector, int type, int pri, hw_ifun_t ih_fun, void *ih_arg)
 			kmem_free(ih, sizeof(*ih));
 			return NULL;
 		}
-		vec_list = &autovec_list[vector-1];
-		hard_vec = &autovects[vector-1];
-		ih->ih_intrcnt = &intrcnt_auto[vector-1];
+		vec_list = &autovec_list[vector - 1];
+		hard_vec = &autovects[vector - 1];
+		ih->ih_intrcnt = &intrcnt_auto[vector - 1];
 		break;
 	case USER_VEC:
 		if (vector < UVEC_MIN || vector > UVEC_MAX) {
@@ -152,11 +152,11 @@ intr_establish(int vector, int type, int pri, hw_ifun_t ih_fun, void *ih_arg)
 	 * If the vec_list is empty, we insert ourselves at the head of the
 	 * list and we re-route the 'hard-vector' to the appropriate handler.
 	 */
-	if (vec_list->lh_first == NULL) {
+	if (LIST_EMPTY(vec_list)) {
 
 		s = splhigh();
 		LIST_INSERT_HEAD(vec_list, ih, ih_link);
-		if (type & FAST_VEC)
+		if ((type & FAST_VEC) != 0)
 			*hard_vec = (u_long)ih->ih_fun;
 		else if (*hard_vec != (u_long)intr_glue) {
 			/*
@@ -169,7 +169,7 @@ intr_establish(int vector, int type, int pri, hw_ifun_t ih_fun, void *ih_arg)
 			 */
 			*hard_vec = (u_long)intr_glue;
 		}
-			
+
 		splx(s);
 
 		return ih;
@@ -178,10 +178,10 @@ intr_establish(int vector, int type, int pri, hw_ifun_t ih_fun, void *ih_arg)
 	/*
 	 * Check for FAST_VEC botches
 	 */
-	cur_vec = vec_list->lh_first;
+	cur_vec = LIST_FIRST(vec_list);
 	if (cur_vec->ih_type & FAST_VEC) {
 		kmem_free(ih, sizeof(*ih));
-		printf("intr_establish: vector cannot be shared\n");
+		printf("%s: vector cannot be shared\n", __func__);
 		return NULL;
 	}
 
@@ -189,8 +189,9 @@ intr_establish(int vector, int type, int pri, hw_ifun_t ih_fun, void *ih_arg)
 	 * We traverse the list and place ourselves after any handlers with
 	 * our current (or higher) priority level.
 	 */
-	for (cur_vec = vec_list->lh_first; cur_vec->ih_link.le_next != NULL;
-	    cur_vec = cur_vec->ih_link.le_next) {
+	for (cur_vec = LIST_FIRST(vec_list);
+	    LIST_NEXT(cur_vec, ih_link) != NULL;
+	    cur_vec = LIST_NEXT(cur_vec, ih_link)) {
 		if (ih->ih_pri > cur_vec->ih_pri) {
 
 			s = splhigh();
@@ -225,8 +226,8 @@ intr_disestablish(struct intrhand *ih)
 	case AUTO_VEC:
 		if (vector < AVEC_MIN || vector > AVEC_MAX)
 			return 0;
-		vec_list = &autovec_list[vector-1];
-		hard_vec = &autovects[vector-1];
+		vec_list = &autovec_list[vector - 1];
+		hard_vec = &autovects[vector - 1];
 		break;
 	case USER_VEC:
 		if (vector < UVEC_MIN || vector > UVEC_MAX)
@@ -235,26 +236,27 @@ intr_disestablish(struct intrhand *ih)
 		hard_vec = &uservects[vector];
 		break;
 	default:
-		printf("intr_disestablish: bogus vector type\n");
+		printf("%s: bogus vector type\n", __func__);
 		return 0;
 	}
 
 	/*
 	 * Check if the vector is really in the list we think it's in....
 	 */
-	for (cur_vec = vec_list->lh_first; cur_vec->ih_link.le_next != NULL;
-	    cur_vec = cur_vec->ih_link.le_next) {
+	for (cur_vec = LIST_FIRST(vec_list);
+	    LIST_NEXT(cur_vec, ih_link) != NULL;
+	    cur_vec = LIST_NEXT(cur_vec, ih_link)) {
 		if (ih == cur_vec)
 			break;
 	}
 	if (ih != cur_vec) {
-		printf("intr_disestablish: 'ih' has inconsistent data\n");
+		printf("%s: 'ih' has inconsistent data\n", __func__);
 		return 0;
 	}
 
 	s = splhigh();
 	LIST_REMOVE(ih, ih_link);
-	if ((vec_list->lh_first == NULL) && (ih->ih_type & FAST_VEC))
+	if (LIST_EMPTY(vec_list) && (ih->ih_type & FAST_VEC) != 0)
 		*hard_vec = (u_long)intr_glue;
 	splx(s);
 
@@ -277,39 +279,39 @@ intr_dispatch(struct clockframe frame)
 
 	curcpu()->ci_data.cpu_nintr++;
 	vector = (frame.cf_vo & 0xfff) >> 2;
-	if (vector < (AVEC_LOC+AVEC_MAX) && vector >= AVEC_LOC)
+	if (vector < (AVEC_LOC + AVEC_MAX) && vector >= AVEC_LOC)
 		vec_list = &autovec_list[vector - AVEC_LOC];
-	else if (vector <= (UVEC_LOC+UVEC_MAX) && vector >= UVEC_LOC)
+	else if (vector <= (UVEC_LOC + UVEC_MAX) && vector >= UVEC_LOC)
 		vec_list = &uservec_list[vector - UVEC_LOC];
 	else
-		panic("intr_dispatch: Bogus vector %d", vector);
+		panic("%s: Bogus vector %d", __func__, vector);
 
-	if ((ih = vec_list->lh_first) == NULL) {
-		printf("intr_dispatch: vector %d unexpected\n", vector);
+	if ((ih = LIST_FIRST(vec_list)) == NULL) {
+		printf("%s: vector %d unexpected\n", __func__, vector);
 		if (++unexpected > 10)
-			panic("intr_dispatch: too many unexpected interrupts");
+			panic("%s: too many unexpected interrupts", __func__);
 		return;
 	}
 	ih->ih_intrcnt[0]++;
 
 	/* Give all the handlers a chance. */
-	for (; ih != NULL; ih = ih->ih_link.le_next)
+	for (; ih != NULL; ih = LIST_NEXT(ih, ih_link))
 		handled |= (*ih->ih_fun)((ih->ih_type & ARG_CLOCKFRAME) ?
 		    &frame : ih->ih_arg, frame.cf_sr);
 
 	if (handled)
 		straycount = 0;
 	else if (++straycount > 50)
-		panic("intr_dispatch: too many stray interrupts");
+		panic("%s: too many stray interrupts", __func__);
 	else
-		printf("intr_dispatch: stray level %d interrupt\n", vector);
+		printf("%s: stray level %d interrupt\n", __func__, vector);
 }
 
 bool
 cpu_intr_p(void)
 {
 
-	return idepth != 0;
+	return intr_depth != 0;
 }
 
 const uint16_t ipl2psl_table[NIPL] = {

@@ -1,4 +1,4 @@
-/*	$NetBSD: amdgpu_pci.c,v 1.5 2018/08/27 14:41:26 riastradh Exp $	*/
+/*	$NetBSD: amdgpu_pci.c,v 1.12 2023/08/07 16:34:47 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -30,34 +30,42 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: amdgpu_pci.c,v 1.5 2018/08/27 14:41:26 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: amdgpu_pci.c,v 1.12 2023/08/07 16:34:47 riastradh Exp $");
 
 #include <sys/types.h>
+#include <sys/atomic.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
 #include <sys/workqueue.h>
 
-#include <drm/drmP.h>
+#include <dev/pci/pcivar.h>
+
+#include <linux/pci.h>
+
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_ioctl.h>
+#include <drm/drm_pci.h>
 
 #include <amdgpu.h>
 #include "amdgpu_drv.h"
 #include "amdgpu_task.h"
+
+struct drm_device;
 
 SIMPLEQ_HEAD(amdgpu_task_head, amdgpu_task);
 
 struct amdgpu_softc {
 	device_t			sc_dev;
 	struct pci_attach_args		sc_pa;
-	enum {
-		AMDGPU_TASK_ATTACH,
-		AMDGPU_TASK_WORKQUEUE,
-	}				sc_task_state;
-	union {
-		struct workqueue		*workqueue;
-		struct amdgpu_task_head		attach;
-	}				sc_task_u;
+	struct lwp			*sc_task_thread;
+	struct amdgpu_task_head		sc_tasks;
+	struct workqueue		*sc_task_wq;
 	struct drm_device		*sc_drm_dev;
 	struct pci_dev			sc_pci_dev;
+	bool				sc_pci_attached;
+	bool				sc_dev_registered;
 };
 
 static bool	amdgpu_pci_lookup(const struct pci_attach_args *,
@@ -124,20 +132,30 @@ amdgpu_attach(device_t parent, device_t self, void *aux)
 {
 	struct amdgpu_softc *const sc = device_private(self);
 	const struct pci_attach_args *const pa = aux;
+	int error;
 
 	pci_aprint_devinfo(pa, NULL);
 
-	if (!pmf_device_register(self, &amdgpu_do_suspend, &amdgpu_do_resume))
-		aprint_error_dev(self, "unable to establish power handler\n");
+	/* Initialize the Linux PCI device descriptor.  */
+	linux_pci_dev_init(&sc->sc_pci_dev, self, device_parent(self), pa, 0);
+
+	sc->sc_dev = self;
+	sc->sc_pa = *pa;
+	sc->sc_task_thread = NULL;
+	SIMPLEQ_INIT(&sc->sc_tasks);
+	error = workqueue_create(&sc->sc_task_wq, "amdgpufb",
+	    &amdgpu_task_work, NULL, PRI_NONE, IPL_NONE, WQ_MPSAFE);
+	if (error) {
+		aprint_error_dev(self, "unable to create workqueue: %d\n",
+		    error);
+		sc->sc_task_wq = NULL;
+		return;
+	}
 
 	/*
-	 * Trivial initialization first; the rest will come after we
-	 * have mounted the root file system and can load firmware
-	 * images.
+	 * Defer the remainder of initialization until we have mounted
+	 * the root file system and can load firmware images.
 	 */
-	sc->sc_dev = NULL;
-	sc->sc_pa = *pa;
-
 	config_mountroot(self, &amdgpu_attach_real);
 }
 
@@ -153,39 +171,55 @@ amdgpu_attach_real(device_t self)
 	ok = amdgpu_pci_lookup(pa, &flags);
 	KASSERT(ok);
 
-	sc->sc_task_state = AMDGPU_TASK_ATTACH;
-	SIMPLEQ_INIT(&sc->sc_task_u.attach);
+	/*
+	 * Cause any tasks issued synchronously during attach to be
+	 * processed at the end of this function.
+	 */
+	sc->sc_task_thread = curlwp;
 
-	/* Initialize the Linux PCI device descriptor.  */
-	linux_pci_dev_init(&sc->sc_pci_dev, self, device_parent(self), pa, 0);
+	sc->sc_drm_dev = drm_dev_alloc(amdgpu_drm_driver, self);
+	if (IS_ERR(sc->sc_drm_dev)) {
+		aprint_error_dev(self, "unable to create drm device: %ld\n",
+		    PTR_ERR(sc->sc_drm_dev));
+		sc->sc_drm_dev = NULL;
+		goto out;
+	}
 
 	/* XXX errno Linux->NetBSD */
-	error = -drm_pci_attach(self, pa, &sc->sc_pci_dev, amdgpu_drm_driver,
-	    flags, &sc->sc_drm_dev);
+	error = -drm_pci_attach(sc->sc_drm_dev, &sc->sc_pci_dev);
 	if (error) {
 		aprint_error_dev(self, "unable to attach drm: %d\n", error);
 		goto out;
 	}
+	sc->sc_pci_attached = true;
 
-	while (!SIMPLEQ_EMPTY(&sc->sc_task_u.attach)) {
-		struct amdgpu_task *const task =
-		    SIMPLEQ_FIRST(&sc->sc_task_u.attach);
+	/* XXX errno Linux->NetBSD */
+	error = -drm_dev_register(sc->sc_drm_dev, flags);
+	if (error) {
+		aprint_error_dev(self, "unable to register drm: %d\n", error);
+		goto out;
+	}
+	sc->sc_dev_registered = true;
 
-		SIMPLEQ_REMOVE_HEAD(&sc->sc_task_u.attach, rt_u.queue);
+	if (!pmf_device_register(self, &amdgpu_do_suspend, &amdgpu_do_resume))
+		aprint_error_dev(self, "unable to establish power handler\n");
+
+	/*
+	 * Process asynchronous tasks queued synchronously during
+	 * attach.  This will be for display detection to attach a
+	 * framebuffer, so we have the opportunity for a console device
+	 * to attach before autoconf has completed, in time for init(8)
+	 * to find that console without panicking.
+	 */
+	while (!SIMPLEQ_EMPTY(&sc->sc_tasks)) {
+		struct amdgpu_task *const task = SIMPLEQ_FIRST(&sc->sc_tasks);
+
+		SIMPLEQ_REMOVE_HEAD(&sc->sc_tasks, rt_u.queue);
 		(*task->rt_fn)(task);
 	}
 
-	sc->sc_task_state = AMDGPU_TASK_WORKQUEUE;
-	error = workqueue_create(&sc->sc_task_u.workqueue, "amdgpufb",
-	    &amdgpu_task_work, NULL, PRI_NONE, IPL_NONE, WQ_MPSAFE);
-	if (error) {
-		aprint_error_dev(self, "unable to create workqueue: %d\n",
-		    error);
-		sc->sc_task_u.workqueue = NULL;
-		goto out;
-	}
-
-out:	sc->sc_dev = self;
+out:	/* Cause any subesquent tasks to be processed by the workqueue.  */
+	atomic_store_relaxed(&sc->sc_task_thread, NULL);
 }
 
 static int
@@ -194,33 +228,28 @@ amdgpu_detach(device_t self, int flags)
 	struct amdgpu_softc *const sc = device_private(self);
 	int error;
 
-	if (sc->sc_dev == NULL)
-		/* Not done attaching.  */
-		return EBUSY;
-
 	/* XXX Check for in-use before tearing it all down...  */
 	error = config_detach_children(self, flags);
 	if (error)
 		return error;
 
-	if (sc->sc_task_state == AMDGPU_TASK_ATTACH)
-		goto out;
-	if (sc->sc_task_u.workqueue != NULL) {
-		workqueue_destroy(sc->sc_task_u.workqueue);
-		sc->sc_task_u.workqueue = NULL;
-	}
+	KASSERT(sc->sc_task_thread == NULL);
+	KASSERT(SIMPLEQ_EMPTY(&sc->sc_tasks));
 
-	if (sc->sc_drm_dev == NULL)
-		goto out;
-	/* XXX errno Linux->NetBSD */
-	error = -drm_pci_detach(sc->sc_drm_dev, flags);
-	if (error)
-		/* XXX Kinda too late to fail now...  */
-		return error;
-	sc->sc_drm_dev = NULL;
-
-out:	linux_pci_dev_destroy(&sc->sc_pci_dev);
 	pmf_device_deregister(self);
+	if (sc->sc_dev_registered)
+		drm_dev_unregister(sc->sc_drm_dev);
+	if (sc->sc_pci_attached)
+		drm_pci_detach(sc->sc_drm_dev);
+	if (sc->sc_drm_dev) {
+		drm_dev_put(sc->sc_drm_dev);
+		sc->sc_drm_dev = NULL;
+	}
+	if (sc->sc_task_wq) {
+		workqueue_destroy(sc->sc_task_wq);
+		sc->sc_task_wq = NULL;
+	}
+	linux_pci_dev_destroy(&sc->sc_pci_dev);
 
 	return 0;
 }
@@ -231,12 +260,10 @@ amdgpu_do_suspend(device_t self, const pmf_qual_t *qual)
 	struct amdgpu_softc *const sc = device_private(self);
 	struct drm_device *const dev = sc->sc_drm_dev;
 	int ret;
-	bool is_console = true; /* XXX */
 
-	if (dev == NULL)
-		return true;
+	drm_suspend_ioctl(dev);
 
-	ret = amdgpu_suspend_kms(dev, true, is_console);
+	ret = amdgpu_device_suspend(dev, /*fbcon*/true);
 	if (ret)
 		return false;
 
@@ -249,16 +276,13 @@ amdgpu_do_resume(device_t self, const pmf_qual_t *qual)
 	struct amdgpu_softc *const sc = device_private(self);
 	struct drm_device *const dev = sc->sc_drm_dev;
 	int ret;
-	bool is_console = true; /* XXX */
 
-	if (dev == NULL)
-		return true;
-
-	ret = amdgpu_resume_kms(dev, true, is_console);
+	ret = amdgpu_device_resume(dev, /*fbcon*/true);
 	if (ret)
-		return false;
+		goto out;
 
-	return true;
+out:	drm_resume_ioctl(dev);
+	return ret == 0;
 }
 
 static void
@@ -270,25 +294,13 @@ amdgpu_task_work(struct work *work, void *cookie __unused)
 	(*task->rt_fn)(task);
 }
 
-int
+void
 amdgpu_task_schedule(device_t self, struct amdgpu_task *task)
 {
 	struct amdgpu_softc *const sc = device_private(self);
 
-	switch (sc->sc_task_state) {
-	case AMDGPU_TASK_ATTACH:
-		SIMPLEQ_INSERT_TAIL(&sc->sc_task_u.attach, task, rt_u.queue);
-		return 0;
-	case AMDGPU_TASK_WORKQUEUE:
-		if (sc->sc_task_u.workqueue == NULL) {
-			aprint_error_dev(self, "unable to schedule task\n");
-			return EIO;
-		}
-		workqueue_enqueue(sc->sc_task_u.workqueue, &task->rt_u.work,
-		    NULL);
-		return 0;
-	default:
-		panic("amdgpu in invalid task state: %d\n",
-		    (int)sc->sc_task_state);
-	}
+	if (atomic_load_relaxed(&sc->sc_task_thread) == curlwp)
+		SIMPLEQ_INSERT_TAIL(&sc->sc_tasks, task, rt_u.queue);
+	else
+		workqueue_enqueue(sc->sc_task_wq, &task->rt_u.work, NULL);
 }

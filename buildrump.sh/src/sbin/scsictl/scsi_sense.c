@@ -1,4 +1,4 @@
-/*	$NetBSD: scsi_sense.c,v 1.9 2011/06/22 05:18:03 mrg Exp $	*/
+/*	$NetBSD: scsi_sense.c,v 1.11 2023/12/28 19:58:11 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1998 The NetBSD Foundation, Inc.
@@ -39,7 +39,7 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: scsi_sense.c,v 1.9 2011/06/22 05:18:03 mrg Exp $");
+__RCSID("$NetBSD: scsi_sense.c,v 1.11 2023/12/28 19:58:11 andvar Exp $");
 #endif
 
 
@@ -212,7 +212,7 @@ static const struct {
 { 0x3B, 0x07, "Failed To Sense Bottom-Of-Form" },
 { 0x3B, 0x08, "Reposition Error" },
 { 0x3B, 0x09, "Read Past End Of Medium" },
-{ 0x3B, 0x0A, "Read Past Begining Of Medium" },
+{ 0x3B, 0x0A, "Read Past Beginning Of Medium" },
 { 0x3B, 0x0B, "Position Past End Of Medium" },
 { 0x3B, 0x0C, "Position Past Beginning Of Medium" },
 { 0x3B, 0x0D, "Medium Destination Element Full" },
@@ -371,7 +371,7 @@ scsi_print_sense_data(const unsigned char *s, int slen, int verbosity)
 	}
 
 	/*
-	 * Now figure whether we should print any additional informtion.
+	 * Now figure whether we should print any additional information.
 	 *
 	 * Where should we start from? If we had SKSV data,
 	 * start from offset 18, else from offset 15.

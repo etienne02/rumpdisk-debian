@@ -1,4 +1,4 @@
-/*	$NetBSD: pq3etsec.c,v 1.56 2021/08/07 16:19:02 thorpej Exp $	*/
+/*	$NetBSD: pq3etsec.c,v 1.60 2024/06/29 12:11:11 riastradh Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pq3etsec.c,v 1.56 2021/08/07 16:19:02 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pq3etsec.c,v 1.60 2024/06/29 12:11:11 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -251,8 +251,6 @@ struct pq3etsec_softc {
 struct pq3mdio_softc {
 	device_t mdio_dev;
 
-	kmutex_t *mdio_lock;
-
 	bus_space_tag_t mdio_bst;
 	bus_space_handle_t mdio_bsh;
 };
@@ -380,7 +378,6 @@ pq3mdio_attach(device_t parent, device_t self, void *aux)
 	struct cpunode_locators * const cnl = &cna->cna_locs;
 
 	mdio->mdio_dev = self;
-	mdio->mdio_lock = mutex_obj_alloc(MUTEX_DEFAULT, IPL_SOFTNET);
 
 	if (device_is_a(parent, "cpunode")) {
 		struct cpunode_softc * const psc = device_private(parent);
@@ -416,8 +413,6 @@ pq3mdio_mii_readreg(device_t self, int phy, int reg, uint16_t *val)
 	struct pq3mdio_softc * const mdio = device_private(self);
 	uint32_t miimcom = etsec_mdio_read(mdio, MIIMCOM);
 
-	mutex_enter(mdio->mdio_lock);
-
 	etsec_mdio_write(mdio, MIIMADD,
 	    __SHIFTIN(phy, MIIMADD_PHY) | __SHIFTIN(reg, MIIMADD_REG));
 
@@ -436,7 +431,6 @@ pq3mdio_mii_readreg(device_t self, int phy, int reg, uint16_t *val)
 	aprint_normal_dev(mdio->mdio_dev, "%s: phy %d reg %d: %#x\n",
 	    __func__, phy, reg, data);
 #endif
-	mutex_exit(mdio->mdio_lock);
 	return 0;
 }
 
@@ -451,8 +445,6 @@ pq3mdio_mii_writereg(device_t self, int phy, int reg, uint16_t data)
 	    __func__, phy, reg, data);
 #endif
 
-	mutex_enter(mdio->mdio_lock);
-
 	etsec_mdio_write(mdio, MIIMADD,
 	    __SHIFTIN(phy, MIIMADD_PHY) | __SHIFTIN(reg, MIIMADD_REG));
 	etsec_mdio_write(mdio, MIIMCOM, 0);	/* clear any past bits */
@@ -465,8 +457,6 @@ pq3mdio_mii_writereg(device_t self, int phy, int reg, uint16_t data)
 
 	if (miimcom == MIIMCOM_SCAN)
 		etsec_mdio_write(mdio, MIIMCOM, miimcom);
-
-	mutex_exit(mdio->mdio_lock);
 
 	return 0;
 }
@@ -735,7 +725,7 @@ pq3etsec_attach(device_t parent, device_t self, void *aux)
 	etsec_write(sc, ATTR, ATTR_DEFAULT);
 	etsec_write(sc, ATTRELI, ATTRELI_DEFAULT);
 
-	/* Enable interrupt coalesing */
+	/* Enable interrupt coalescing */
 	sc->sc_ic_rx_time = 768;
 	sc->sc_ic_rx_count = 16;
 	sc->sc_ic_tx_time = 768;
@@ -2227,12 +2217,12 @@ pq3etsec_txq_consume(
 				m_adj(m, sizeof(struct txfcb));
 			bpf_mtap(ifp, m, BPF_D_OUT);
 			net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
-			if_statinc_ref(nsr, if_opackets);
-			if_statadd_ref(nsr, if_obytes, m->m_pkthdr.len);
+			if_statinc_ref(ifp, nsr, if_opackets);
+			if_statadd_ref(ifp, nsr, if_obytes, m->m_pkthdr.len);
 			if (m->m_flags & M_MCAST)
-				if_statinc_ref(nsr, if_omcasts);
+				if_statinc_ref(ifp, nsr, if_omcasts);
 			if (txbd_flags & TXBD_ERRORS)
-				if_statinc_ref(nsr, if_oerrors);
+				if_statinc_ref(ifp, nsr, if_oerrors);
 			IF_STAT_PUTREF(ifp);
 			m_freem(m);
 #ifdef ETSEC_DEBUG
@@ -2341,7 +2331,7 @@ pq3etsec_ifstart(struct ifnet *ifp)
 {
 	struct pq3etsec_softc * const sc = ifp->if_softc;
 
-	if (__predict_false((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)) {
+	if (__predict_false((ifp->if_flags & IFF_RUNNING) == 0)) {
 		return;
 	}
 
@@ -2357,8 +2347,6 @@ pq3etsec_tx_error(
 
 	pq3etsec_txq_consume(sc, txq);
 
-	if (pq3etsec_txq_fillable_p(sc, txq))
-		sc->sc_if.if_flags &= ~IFF_OACTIVE;
 	if (sc->sc_txerrors
 	    & (IEVENT_LC | IEVENT_CRL | IEVENT_XFUN | IEVENT_BABT)) {
 	} else if (sc->sc_txerrors & IEVENT_EBERR) {
@@ -2368,7 +2356,6 @@ pq3etsec_tx_error(
 		etsec_write(sc, TSTAT, TSTAT_THLT & txq->txq_qmask);
 	if (!pq3etsec_txq_enqueue(sc, txq)) {
 		sc->sc_ev_tx_stall.ev_count++;
-		sc->sc_if.if_flags |= IFF_OACTIVE;
 	}
 
 	sc->sc_txerrors = 0;
@@ -2541,9 +2528,6 @@ pq3etsec_soft_intr(void *arg)
 		if (!pq3etsec_txq_consume(sc, &sc->sc_txq)
 		    || !pq3etsec_txq_enqueue(sc, &sc->sc_txq)) {
 			sc->sc_ev_tx_stall.ev_count++;
-			ifp->if_flags |= IFF_OACTIVE;
-		} else {
-			ifp->if_flags &= ~IFF_OACTIVE;
 		}
 		imask |= IEVENT_TXF;
 	}

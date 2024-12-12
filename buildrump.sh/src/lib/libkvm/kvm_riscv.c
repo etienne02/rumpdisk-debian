@@ -1,4 +1,4 @@
-/*	$NetBSD: kvm_riscv.c,v 1.1 2014/09/19 17:36:25 matt Exp $	*/
+/*	$NetBSD: kvm_riscv.c,v 1.4 2024/10/12 12:19:16 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -51,7 +51,7 @@
 #include <machine/kcore.h>
 #include <machine/vmparam.h>
 
-__RCSID("$NetBSD: kvm_riscv.c,v 1.1 2014/09/19 17:36:25 matt Exp $");
+__RCSID("$NetBSD: kvm_riscv.c,v 1.4 2024/10/12 12:19:16 skrll Exp $");
 
 void
 _kvm_freevtop(kvm_t *kd)
@@ -82,7 +82,7 @@ _kvm_kvatop(kvm_t *kd, vaddr_t va, paddr_t *pa)
 	}
 
 	/* No hit -- no translation */
-	*pa = (u_long)~0UL;
+	*pa = ~0UL;
 	return 0;
 }
 
@@ -96,7 +96,7 @@ _kvm_pa2off(kvm_t *kd, paddr_t pa)
 
 	cpu_kh = kd->cpu_data;
 	e = (char *) kd->cpu_data + kd->cpu_dsize;
-        ram = (void *)((char *)(void *)cpu_kh + ALIGN(sizeof *cpu_kh));
+	ram = (void *)((char *)(void *)cpu_kh + ALIGN(sizeof *cpu_kh));
 	off = kd->dump_off;
 	do {
 		if (pa >= ram->start && (pa - ram->start) < ram->size) {
@@ -118,7 +118,6 @@ _kvm_pa2off(kvm_t *kd, paddr_t pa)
 int
 _kvm_mdopen(kvm_t *kd)
 {
-	kd->usrstack = USRSTACK;
 	kd->min_uva = VM_MIN_ADDRESS;
 	kd->max_uva = VM_MAXUSER_ADDRESS;
 

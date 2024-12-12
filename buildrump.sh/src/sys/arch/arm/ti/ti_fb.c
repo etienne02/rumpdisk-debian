@@ -1,4 +1,4 @@
-/* $NetBSD: ti_fb.c,v 1.1 2019/11/03 22:59:06 jmcneill Exp $ */
+/* $NetBSD: ti_fb.c,v 1.4 2022/09/25 07:50:32 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2015-2019 Jared McNeill <jmcneill@invisible.ca>
@@ -29,7 +29,7 @@
 #include "opt_wsdisplay_compat.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ti_fb.c,v 1.1 2019/11/03 22:59:06 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ti_fb.c,v 1.4 2022/09/25 07:50:32 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -38,13 +38,15 @@ __KERNEL_RCSID(0, "$NetBSD: ti_fb.c,v 1.1 2019/11/03 22:59:06 jmcneill Exp $");
 #include <dev/fdt/fdtvar.h>
 #include <dev/fdt/fdt_port.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_drv.h>
 #include <drm/drmfb.h>
 
 #include <arm/ti/ti_lcdc.h>
 
 static int	ti_fb_match(device_t, cfdata_t, void *);
 static void	ti_fb_attach(device_t, device_t, void *);
+
+static void	tilcdc_fb_init(struct tilcdc_drm_task *);
 
 static bool	ti_fb_shutdown(device_t, int);
 
@@ -53,6 +55,7 @@ struct ti_fb_softc {
 	device_t		sc_dev;
 	struct tilcdc_framebuffer *sc_fb;
 	struct tilcdcfb_attach_args sc_tfa;
+	struct tilcdc_drm_task	sc_attach_task;
 };
 
 static paddr_t	ti_fb_mmapfb(struct drmfb_softc *, off_t, int);
@@ -62,7 +65,6 @@ static int	ti_fb_ioctl(struct drmfb_softc *, u_long, void *, int,
 static const struct drmfb_params tifb_drmfb_params = {
 	.dp_mmapfb = ti_fb_mmapfb,
 	.dp_ioctl = ti_fb_ioctl,
-	
 };
 
 CFATTACH_DECL_NEW(ti_fb, sizeof(struct ti_fb_softc),
@@ -79,7 +81,6 @@ ti_fb_attach(device_t parent, device_t self, void *aux)
 {
 	struct ti_fb_softc * const sc = device_private(self);
 	struct tilcdcfb_attach_args * const tfa = aux;
-	int error;
 
 	sc->sc_dev = self;
 	sc->sc_tfa = *tfa;
@@ -88,12 +89,17 @@ ti_fb_attach(device_t parent, device_t self, void *aux)
 	aprint_naive("\n");
 	aprint_normal("\n");
 
-#ifdef WSDISPLAY_MULTICONS
-	prop_dictionary_t dict = device_properties(self);
-	const bool is_console = true;
-	prop_dictionary_set_bool(dict, "is_console", is_console);
-#endif
+	tilcdc_task_init(&sc->sc_attach_task, &tilcdc_fb_init);
+	tilcdc_task_schedule(parent, &sc->sc_attach_task);
+}
 
+static void
+tilcdc_fb_init(struct tilcdc_drm_task *task)
+{
+	struct ti_fb_softc *sc = container_of(task, struct ti_fb_softc,
+	    sc_attach_task);
+	device_t self = sc->sc_dev;
+	struct tilcdcfb_attach_args * const tfa = &sc->sc_tfa;
 	const struct drmfb_attach_args da = {
 		.da_dev = self,
 		.da_fb_helper = tfa->tfa_fb_helper,
@@ -102,6 +108,7 @@ ti_fb_attach(device_t parent, device_t self, void *aux)
 		.da_fb_linebytes = tfa->tfa_fb_linebytes,
 		.da_params = &tifb_drmfb_params,
 	};
+	int error;
 
 	error = drmfb_attach(&sc->sc_drmfb, &da);
 	if (error) {

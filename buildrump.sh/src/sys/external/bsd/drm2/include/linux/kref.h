@@ -1,4 +1,4 @@
-/*	$NetBSD: kref.h,v 1.7 2018/08/27 13:44:41 riastradh Exp $	*/
+/*	$NetBSD: kref.h,v 1.14 2023/02/24 11:02:06 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -37,7 +37,9 @@
 #include <sys/systm.h>
 
 #include <linux/atomic.h>
+#include <linux/refcount.h>
 #include <linux/mutex.h>
+#include <linux/spinlock.h>
 
 struct kref {
 	unsigned int kr_count;
@@ -46,7 +48,7 @@ struct kref {
 static inline void
 kref_init(struct kref *kref)
 {
-	kref->kr_count = 1;
+	atomic_store_relaxed(&kref->kr_count, 1);
 }
 
 static inline void
@@ -56,10 +58,6 @@ kref_get(struct kref *kref)
 	    atomic_inc_uint_nv(&kref->kr_count);
 
 	KASSERTMSG((count > 1), "getting released kref");
-
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-	membar_enter();
-#endif
 }
 
 static inline bool
@@ -68,15 +66,11 @@ kref_get_unless_zero(struct kref *kref)
 	unsigned count;
 
 	do {
-		count = kref->kr_count;
+		count = atomic_load_relaxed(&kref->kr_count);
 		if ((count == 0) || (count == UINT_MAX))
 			return false;
 	} while (atomic_cas_uint(&kref->kr_count, count, (count + 1)) !=
 	    count);
-
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-	membar_enter();
-#endif
 
 	return true;
 }
@@ -86,21 +80,47 @@ kref_sub(struct kref *kref, unsigned int count, void (*release)(struct kref *))
 {
 	unsigned int old, new;
 
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-	membar_exit();
-#endif
+	membar_release();
 
 	do {
-		old = kref->kr_count;
+		old = atomic_load_relaxed(&kref->kr_count);
 		KASSERTMSG((count <= old), "overreleasing kref: %u - %u",
 		    old, count);
 		new = (old - count);
 	} while (atomic_cas_uint(&kref->kr_count, old, new) != old);
 
 	if (new == 0) {
+		membar_acquire();
 		(*release)(kref);
 		return 1;
 	}
+
+	return 0;
+}
+
+static inline int
+kref_put_lock(struct kref *kref, void (*release)(struct kref *),
+    spinlock_t *interlock)
+{
+	unsigned int old, new;
+
+	membar_release();
+
+	do {
+		old = atomic_load_relaxed(&kref->kr_count);
+		KASSERT(old > 0);
+		if (old == 1) {
+			spin_lock(interlock);
+			if (atomic_add_int_nv(&kref->kr_count, -1) == 0) {
+				membar_acquire();
+				(*release)(kref);
+				return 1;
+			}
+			spin_unlock(interlock);
+			return 0;
+		}
+		new = (old - 1);
+	} while (atomic_cas_uint(&kref->kr_count, old, new) != old);
 
 	return 0;
 }
@@ -118,16 +138,15 @@ kref_put_mutex(struct kref *kref, void (*release)(struct kref *),
 {
 	unsigned int old, new;
 
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-	membar_exit();
-#endif
+	membar_release();
 
 	do {
-		old = kref->kr_count;
+		old = atomic_load_relaxed(&kref->kr_count);
 		KASSERT(old > 0);
 		if (old == 1) {
 			mutex_lock(interlock);
 			if (atomic_add_int_nv(&kref->kr_count, -1) == 0) {
+				membar_acquire();
 				(*release)(kref);
 				return 1;
 			}
@@ -138,6 +157,13 @@ kref_put_mutex(struct kref *kref, void (*release)(struct kref *),
 	} while (atomic_cas_uint(&kref->kr_count, old, new) != old);
 
 	return 0;
+}
+
+static inline unsigned
+kref_read(const struct kref *kref)
+{
+
+	return atomic_load_relaxed(&kref->kr_count);
 }
 
 /*

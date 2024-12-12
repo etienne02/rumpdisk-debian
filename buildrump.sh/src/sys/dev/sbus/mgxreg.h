@@ -1,4 +1,4 @@
-/*	$NetBSD: mgxreg.h,v 1.5 2017/07/29 03:29:49 macallan Exp $ */
+/*	$NetBSD: mgxreg.h,v 1.7 2021/11/11 19:37:30 macallan Exp $ */
 
 /* register definitions based on OpenBSD's atxxreg.h: */
 
@@ -29,6 +29,10 @@
 
 #ifndef MGX_REG_H
 #define MGX_REG_H
+
+#define MGX_FBOFFSET 	0x00000000
+#define MGX_BLTOFFSET 	0x00800000
+#define MGX_FLIPOFFSET	0x01000000
 
 #define VGA_BASE 0x3c0
 #define CRTC_INDEX	0x3d4

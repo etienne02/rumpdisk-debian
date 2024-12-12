@@ -1,4 +1,4 @@
-/*	$NetBSD: if_iwmreg.h,v 1.9 2021/08/17 22:00:31 andvar Exp $	*/
+/*	$NetBSD: if_iwmreg.h,v 1.14 2023/09/01 11:23:39 andvar Exp $	*/
 /*	OpenBSD: if_iwmreg.h,v 1.19 2016/09/20 11:46:09 stsp Exp 	*/
 
 /*-
@@ -2590,7 +2590,7 @@ enum {
  * notification the status is always success. There is no start/end fragment
  * notification for monolithic events.
  *
- * @IWM_TE_V2_DEFAULT_POLICY: independent, social, present, unoticable
+ * @IWM_TE_V2_DEFAULT_POLICY: independent, social, present, unnoticeable
  * @IWM_TE_V2_NOTIF_HOST_EVENT_START: request/receive notification on event start
  * @IWM_TE_V2_NOTIF_HOST_EVENT_END:request/receive notification on event end
  * @IWM_TE_V2_NOTIF_INTERNAL_EVENT_START: internal FW use
@@ -3380,7 +3380,7 @@ enum iwm_sf_scenario {
 /**
  * Smart Fifo configuration command.
  * @state: smart fifo state, types listed in enum %iwm_sf_state.
- * @watermark: Minimum allowed availabe free space in RXF for transient state.
+ * @watermark: Minimum allowed available free space in RXF for transient state.
  * @long_delay_timeouts: aging and idle timer values for each scenario
  * in long delay state.
  * @full_on_timeouts: timer values for each scenario in full on state.
@@ -4782,7 +4782,7 @@ struct iwm_ba_notif {
 /*
  * struct iwm_mac_beacon_cmd - beacon template command
  * @tx: the tx commands associated with the beacon frame
- * @template_id: currently equal to the mac context id of the coresponding
+ * @template_id: currently equal to the mac context id of the corresponding
  *  mac.
  * @tim_idx: the offset of the tim IE in the beacon
  * @tim_size: the length of the tim IE
@@ -5372,12 +5372,12 @@ enum iwm_scan_offload_channel_flags {
  * @type:		bitmap - see enum iwm_scan_offload_channel_flags.
  *			0:	passive (0) or active (1) scan.
  *			1-20:	directed scan to i'th ssid.
- *			22:	channel width configuation - 1 for narrow.
+ *			22:	channel width configuration - 1 for narrow.
  *			24:	full scan.
  *			25:	partial scan.
  * @channel_number:	channel number 1-13 etc.
  * @iter_count:		repetition count for the channel.
- * @iter_interval:	interval between two innteration on one channel.
+ * @iter_interval:	interval between two iterations on one channel.
  * @dwell_time:	entry 0 - active scan, entry 1 - passive scan.
  */
 struct iwm_scan_channel_cfg {

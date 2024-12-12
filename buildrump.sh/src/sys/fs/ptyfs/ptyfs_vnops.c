@@ -1,4 +1,4 @@
-/*	$NetBSD: ptyfs_vnops.c,v 1.66 2021/07/18 23:57:34 dholland Exp $	*/
+/*	$NetBSD: ptyfs_vnops.c,v 1.69 2022/08/05 10:36:02 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1993, 1995
@@ -76,7 +76,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ptyfs_vnops.c,v 1.66 2021/07/18 23:57:34 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ptyfs_vnops.c,v 1.69 2022/08/05 10:36:02 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -477,7 +477,6 @@ ptyfs_setattr(void *v)
 		if (error)
 			return error;
 	}
-	VN_KNOTE(vp, NOTE_ATTRIB);
 	return 0;
 }
 
@@ -634,7 +633,7 @@ ptyfs_lookup(void *v)
  *
  * the strategy here with ptyfs is to generate a single
  * directory entry at a time (struct dirent) and then
- * copy that out to userland using uiomove.  a more efficent
+ * copy that out to userland using uiomove.  a more efficient
  * though more complex implementation, would try to minimize
  * the number of calls to uiomove().  for ptyfs, this is
  * hardly worth the added code complexity.
@@ -692,7 +691,7 @@ ptyfs_readdir(void *v)
 		*ap->a_cookies = cookies;
 	}
 
-	for (; i < 2; i++) {
+	for (; i < 2 && uio->uio_resid >= UIO_MX; i++) {
 		/* `.' and/or `..' */
 		dp->d_fileno = PTYFS_FILENO(PTYFSroot, 0);
 		dp->d_namlen = i + 1;

@@ -1,4 +1,4 @@
-/*	$NetBSD: ser.c,v 1.56 2014/11/15 19:20:01 christos Exp $	*/
+/*	$NetBSD: ser.c,v 1.59 2023/08/30 19:07:04 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -60,11 +60,11 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
- 
+
 /*
  * Copyright (c) 1991 The Regents of the University of California.
  * All rights reserved.
- *    
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -88,12 +88,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *    
+ *
  *      @(#)com.c       7.5 (Berkeley) 5/16/91
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ser.c,v 1.56 2014/11/15 19:20:01 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ser.c,v 1.59 2023/08/30 19:07:04 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_mbtype.h"
@@ -185,10 +185,10 @@ struct ser_softc {
 	uint8_t		 sc_mcr_dtr, sc_mcr_rts, sc_msr_cts, sc_msr_dcd;
 
 	int		 sc_r_hiwat;
- 	volatile u_int	 sc_rbget;
- 	volatile u_int	 sc_rbput;
+	volatile u_int	 sc_rbget;
+	volatile u_int	 sc_rbput;
 	volatile u_int	 sc_rbavail;
- 	uint8_t		 sc_rbuf[RXBUFSIZE];
+	uint8_t		 sc_rbuf[RXBUFSIZE];
 	uint8_t		 sc_lbuf[RXBUFSIZE];
 
 	volatile uint8_t sc_rx_blocked;
@@ -198,8 +198,8 @@ struct ser_softc {
 	volatile uint8_t sc_tx_stopped;
 	volatile uint8_t sc_st_check;
 
- 	uint8_t		*sc_tba;
- 	int		 sc_tbc;
+	uint8_t		*sc_tba;
+	int		 sc_tbc;
 	int		 sc_heldtbc;
 
 	volatile uint8_t sc_heldchange;
@@ -249,14 +249,14 @@ static void serattach(device_t, device_t, void *);
 CFATTACH_DECL_NEW(ser, sizeof(struct ser_softc),
     sermatch, serattach, NULL, NULL);
 
-dev_type_open(seropen);
-dev_type_close(serclose);
-dev_type_read(serread);
-dev_type_write(serwrite);
-dev_type_ioctl(serioctl);
-dev_type_stop(serstop);
-dev_type_tty(sertty);
-dev_type_poll(serpoll);
+static dev_type_open(seropen);
+static dev_type_close(serclose);
+static dev_type_read(serread);
+static dev_type_write(serwrite);
+static dev_type_ioctl(serioctl);
+static dev_type_stop(serstop);
+static dev_type_tty(sertty);
+static dev_type_poll(serpoll);
 
 const struct cdevsw ser_cdevsw = {
 	.d_open = seropen,
@@ -347,9 +347,9 @@ serattach(device_t parent, device_t self, void *aux)
 }
 
 #ifdef SER_DEBUG
-void serstatus(struct ser_softc *, char *);
+void serstatus(struct ser_softc *, const char *);
 void
-serstatus(struct ser_softc *sc, char *str)
+serstatus(struct ser_softc *sc, const char *str)
 {
 	struct tty *tp = sc->sc_tty;
 
@@ -371,7 +371,7 @@ serstatus(struct ser_softc *sc, char *str)
 }
 #endif /* SER_DEBUG */
 
-int
+static int
 seropen(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	int unit = SERUNIT(dev);
@@ -379,7 +379,7 @@ seropen(dev_t dev, int flag, int mode, struct lwp *l)
 	struct tty *tp;
 	int s, s2;
 	int error = 0;
- 
+
 	sc = device_lookup_private(&ser_cd, unit);
 	if (sc == NULL)
 		return ENXIO;
@@ -488,8 +488,8 @@ bad:
 
 	return error;
 }
- 
-int
+
+static int
 serclose(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	int unit = SERUNIT(dev);
@@ -515,34 +515,34 @@ serclose(dev_t dev, int flag, int mode, struct lwp *l)
 	return 0;
 }
 
-int
+static int
 serread(dev_t dev, struct uio *uio, int flag)
 {
 	struct ser_softc *sc = device_lookup_private(&ser_cd, SERUNIT(dev));
 	struct tty *tp = sc->sc_tty;
- 
+
 	return (*tp->t_linesw->l_read)(tp, uio, flag);
 }
- 
-int
+
+static int
 serwrite(dev_t dev, struct uio *uio, int flag)
 {
 	struct ser_softc *sc = device_lookup_private(&ser_cd, SERUNIT(dev));
 	struct tty *tp = sc->sc_tty;
- 
+
 	return (*tp->t_linesw->l_write)(tp, uio, flag);
 }
 
-int
+static int
 serpoll(dev_t dev, int events, struct lwp *l)
 {
 	struct ser_softc *sc = device_lookup_private(&ser_cd, SERUNIT(dev));
 	struct tty *tp = sc->sc_tty;
- 
+
 	return (*tp->t_linesw->l_poll)(tp, events, l);
 }
 
-struct tty *
+static struct tty *
 sertty(dev_t dev)
 {
 	struct ser_softc *sc = device_lookup_private(&ser_cd, SERUNIT(dev));
@@ -551,7 +551,7 @@ sertty(dev_t dev)
 	return tp;
 }
 
-int
+static int
 serioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 {
 	int unit = SERUNIT(dev);
@@ -590,9 +590,9 @@ serioctl(dev_t dev, u_long cmd, void *data, int flag, struct lwp *l)
 
 	case TIOCSFLAGS:
 		error = kauth_authorize_device_tty(l->l_cred,
-		    KAUTH_DEVICE_TTY_PRIVSET, tp); 
+		    KAUTH_DEVICE_TTY_PRIVSET, tp);
 		if (error)
-			return error; 
+			return error;
 		sc->sc_swflags = *(int *)data;
 		break;
 
@@ -765,7 +765,7 @@ serparam(struct tty *tp, struct termios *t)
 #endif
 
 	sc->sc_ospeed = ospeed;
-	
+
 	/* and copy to tty */
 	tp->t_ispeed = 0;
 	tp->t_ospeed = t->c_ospeed;
@@ -989,7 +989,7 @@ out:
 /*
  * Stop output on a line.
  */
-void
+static void
 serstop(struct tty *tp, int flag)
 {
 	struct ser_softc *sc =
@@ -1037,7 +1037,7 @@ ser_shutdown(struct ser_softc *sc)
 
 
 	s = splhigh();
-	
+
 	/* If we were asserting flow control, then deassert it. */
 	sc->sc_rx_blocked = 1;
 	ser_hwiflow(sc, 1);
@@ -1177,7 +1177,7 @@ sersoft(void *arg)
 
 	if (!ISSET(tp->t_state, TS_ISOPEN) && (tp->t_wopen == 0))
 		return;
-	
+
 	if (sc->sc_rx_ready) {
 		sc->sc_rx_ready = 0;
 		serrxint(sc, tp);

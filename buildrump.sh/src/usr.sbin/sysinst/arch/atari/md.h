@@ -1,4 +1,4 @@
-/*	$NetBSD: md.h,v 1.3 2019/10/02 11:16:01 maya Exp $	*/
+/*	$NetBSD: md.h,v 1.5 2022/06/17 16:06:19 tsutsui Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -48,12 +48,12 @@
 #define PART_USR	PART_D	/* Can be after PART_FIRST_FREE */
 #define PART_FIRST_FREE	PART_E
 
-#define DEFSWAPRAM	32	/* Assume at least this RAM for swap calc */
 #define DEFROOTSIZE	40	/* Default root size */
+#define DEFSWAPSIZE	32	/* Default swap size */
 #define DEFVARSIZE	32	/* Default /var size, if created */
-#define DEFUSRSIZE	650	/* Default /usr size, if /home */
+#define DEFUSRSIZE	700	/* Default /usr size, if /home */
 #define XNEEDMB		250	/* Extra megs for full X installation */
-#define DEBNEEDMB	900	/* Extra megs for debug sets */
+#define DEBNEEDMB	800	/* Extra megs for debug sets */
 
 /*
  *  Default filesets to fetch and install during installation

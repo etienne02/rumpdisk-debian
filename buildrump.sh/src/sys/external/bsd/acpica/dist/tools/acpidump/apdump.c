@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -126,7 +126,9 @@ ApIsValidChecksum (
     }
     else
     {
-        Status = AcpiTbVerifyChecksum (Table, Table->Length);
+        /* We don't have to check for a CDAT here, since CDAT is not in the RSDT/XSDT */
+
+        Status = AcpiUtVerifyChecksum (Table, Table->Length);
     }
 
     if (ACPI_FAILURE (Status))

@@ -1,4 +1,4 @@
-/*	$NetBSD: sys_socket.c,v 1.79 2020/11/17 03:22:33 chs Exp $	*/
+/*	$NetBSD: sys_socket.c,v 1.84 2024/12/06 18:44:00 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -61,24 +61,29 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sys_socket.c,v 1.79 2020/11/17 03:22:33 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sys_socket.c,v 1.84 2024/12/06 18:44:00 riastradh Exp $");
 
 #include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/systm.h>
+#include <sys/types.h>
+
 #include <sys/file.h>
-#include <sys/mbuf.h>
-#include <sys/protosw.h>
-#include <sys/socket.h>
-#include <sys/socketvar.h>
 #include <sys/ioctl.h>
-#include <sys/stat.h>
+#include <sys/kauth.h>
+#include <sys/mbuf.h>
 #include <sys/poll.h>
 #include <sys/proc.h>
-#include <sys/kauth.h>
+#include <sys/protosw.h>
+#include <sys/sdt.h>
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/stat.h>
+#include <sys/systm.h>
 
 #include <net/if.h>
 #include <net/route.h>
+
+static int soo_fpathconf(struct file *, int, register_t *);
+static int soo_posix_fadvise(struct file *, off_t, off_t, int);
 
 const struct fileops socketops = {
 	.fo_name = "socket",
@@ -91,6 +96,8 @@ const struct fileops socketops = {
 	.fo_close = soo_close,
 	.fo_kqfilter = soo_kqfilter,
 	.fo_restart = soo_restart,
+	.fo_fpathconf = soo_fpathconf,
+	.fo_posix_fadvise = soo_posix_fadvise,
 };
 
 int (*ifioctl)(struct socket *, u_long, void *, struct lwp *) = (void *)eopnotsupp;
@@ -133,7 +140,7 @@ soo_ioctl(file_t *fp, u_long cmd, void *data)
 		solock(so);
 		if (*(int *)data)
 			so->so_state |= SS_NBIO;
-		else 
+		else
 			so->so_state &= ~SS_NBIO;
 		sounlock(so);
 		break;
@@ -262,4 +269,24 @@ soo_restart(file_t *fp)
 {
 
 	sorestart(fp->f_socket);
+}
+
+static int
+soo_fpathconf(struct file *fp, int name, register_t *retval)
+{
+
+	switch (name) {
+	case _PC_PIPE_BUF:
+		*retval = PIPE_BUF;
+		return 0;
+	default:
+		return SET_ERROR(EINVAL);
+	}
+}
+
+static int
+soo_posix_fadvise(struct file *fp, off_t offset, off_t len, int advice)
+{
+
+	return SET_ERROR(ESPIPE);
 }

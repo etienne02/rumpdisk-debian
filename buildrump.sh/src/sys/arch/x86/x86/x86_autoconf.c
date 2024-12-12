@@ -1,4 +1,4 @@
-/*	$NetBSD: x86_autoconf.c,v 1.84 2020/07/09 22:45:54 jdolecek Exp $	*/
+/*	$NetBSD: x86_autoconf.c,v 1.89 2024/12/06 10:53:41 bouyer Exp $	*/
 
 /*-
  * Copyright (c) 1990 The Regents of the University of California.
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: x86_autoconf.c,v 1.84 2020/07/09 22:45:54 jdolecek Exp $");
+__KERNEL_RCSID(0, "$NetBSD: x86_autoconf.c,v 1.89 2024/12/06 10:53:41 bouyer Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -95,8 +95,8 @@ is_valid_disk(device_t dv)
 {
 
 	if (device_class(dv) != DV_DISK)
-		return (0);
-	
+		return 0;
+
 	return (device_is_a(dv, "dk") ||
 		device_is_a(dv, "sd") ||
 		device_is_a(dv, "wd") ||
@@ -178,7 +178,7 @@ matchbiosdisks(void)
 		}
 
 		error = vn_rdwr(UIO_READ, tv, mbr, DEV_BSIZE, 0, UIO_SYSSPACE,
-		    0, NOCRED, NULL, NULL);
+		    IO_NODELOCKED, NOCRED, NULL, NULL);
 		VOP_CLOSE(tv, FREAD, NOCRED);
 		vput(tv);
 		if (error) {
@@ -243,7 +243,7 @@ match_bootwedge(device_t dv, struct btinfo_bootwedge *biw)
 	     nblks != 0; nblks--, blk++) {
 		error = vn_rdwr(UIO_READ, tmpvn, (void *) bf,
 		    sizeof(bf), blk * DEV_BSIZE, UIO_SYSSPACE,
-		    0, NOCRED, NULL, NULL);
+		    IO_NODELOCKED, NOCRED, NULL, NULL);
 		if (error) {
 			if (error != EINVAL) {
 				aprint_error("%s: unable to read block %"
@@ -292,13 +292,15 @@ match_bootdisk(device_t dv, struct btinfo_bootdisk *bid)
 		DPRINTF(("%s: no label %s\n", __func__, device_xname(dv)));
 		return 0;
 	}
-	
+
 	if ((tmpvn = opendisk(dv)) == NULL) {
 		DPRINTF(("%s: can't open %s\n", __func__, device_xname(dv)));
 		return 0;
 	}
 
+	VOP_UNLOCK(tmpvn);
 	error = VOP_IOCTL(tmpvn, DIOCGDINFO, &label, FREAD, NOCRED);
+	vn_lock(tmpvn, LK_EXCLUSIVE | LK_RETRY);
 	if (error) {
 		/*
 		 * XXX Can't happen -- open() would have errored out
@@ -319,7 +321,7 @@ match_bootdisk(device_t dv, struct btinfo_bootdisk *bid)
  closeout:
 	VOP_CLOSE(tmpvn, FREAD, NOCRED);
 	vput(tmpvn);
-	return (found);
+	return found;
 }
 
 /*
@@ -340,7 +342,7 @@ findroot(void)
 
 	if (booted_device)
 		return;
-	
+
 	if (lookup_bootinfo(BTINFO_NETIF) != NULL) {
 		/*
 		 * We got netboot interface information, but device_register()
@@ -409,7 +411,7 @@ findroot(void)
 				 */
 				if ((biw->biosdev & 0x80) == 0 ||
 				    match_bootwedge(dv, biw) == 0)
-				    	continue;
+					continue;
 				goto bootwedge_found;
 			}
 
@@ -456,7 +458,7 @@ findroot(void)
 				/* XXX device_unit() abuse */
 				if ((bid->biosdev & 0x80) != 0 ||
 				    device_unit(dv) != bid->biosdev)
-				    	continue;
+					continue;
 				goto bootdisk_found;
 			}
 
@@ -468,7 +470,7 @@ findroot(void)
 				 */
 				if ((bid->biosdev & 0x80) == 0 ||
 				    match_bootdisk(dv, bid) == 0)
-				    	continue;
+					continue;
 				goto bootdisk_found;
 			}
 
@@ -538,7 +540,7 @@ void
 cpu_bootconf(void)
 {
 #ifdef XEN
-	if (vm_guest == VM_GUEST_XENPVH) {
+	if (vm_guest_is_pvh()) {
 		xen_bootconf();
 		return;
 	}
@@ -568,7 +570,7 @@ device_register(device_t dev, void *aux)
 	 * only for reading memory module EERPOMs and sensors.
 	 */
 	if (device_is_a(dev, "iic") &&
-	    device_is_a(dev->dv_parent, "imcsmb")) {
+	    device_is_a(device_parent(dev), "imcsmb")) {
 		static const char *imcsmb_device_permitlist[] = {
 			"spdmem",
 			"sdtemp",

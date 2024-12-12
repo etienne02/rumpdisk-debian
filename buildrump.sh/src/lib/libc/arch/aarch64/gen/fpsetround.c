@@ -29,7 +29,7 @@
 
 #include <sys/cdefs.h>
 
-__RCSID("$NetBSD: fpsetround.c,v 1.2 2016/12/24 15:23:06 maya Exp $");
+__RCSID("$NetBSD: fpsetround.c,v 1.4 2024/10/29 20:04:30 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bitops.h>
@@ -40,13 +40,13 @@ __RCSID("$NetBSD: fpsetround.c,v 1.2 2016/12/24 15:23:06 maya Exp $");
 
 #include <aarch64/armreg.h>
 
-__weak_alias(fpsetround,_fpsetround);
+__weak_alias(fpsetround,_fpsetround)
 
 fp_rnd_t
 fpsetround(fp_rnd_t rnd)
 {
 	const uint32_t old_fpcr = reg_fpcr_read();
-	const uint32_t new_fpcr = (~old_fpcr & ~FPCR_RMODE)
+	const uint32_t new_fpcr = (old_fpcr & ~FPCR_RMODE)
 	    | __SHIFTIN(rnd, FPCR_RMODE);
 	reg_fpcr_write(new_fpcr);
 	return __SHIFTOUT(old_fpcr, FPCR_RMODE);

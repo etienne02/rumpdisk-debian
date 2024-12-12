@@ -1,4 +1,4 @@
-/*	$NetBSD: s_fabsl.c,v 1.3 2013/11/29 22:16:10 joerg Exp $	*/
+/*	$NetBSD: s_fabsl.c,v 1.8 2024/04/02 18:40:50 christos Exp $	*/
 
 /*-
  * Copyright (c) 2010 The NetBSD Foundation, Inc.
@@ -26,14 +26,14 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: s_fabsl.c,v 1.3 2013/11/29 22:16:10 joerg Exp $");
+__RCSID("$NetBSD: s_fabsl.c,v 1.8 2024/04/02 18:40:50 christos Exp $");
 
 #include <math.h>
 #include <machine/ieee.h>
 
 /*
  * fabsl(long double x)
- * This function returns the absolute value of its argumetn x, |x|.
+ * This function returns the absolute value of its argument x, |x|.
  */
 #ifdef __HAVE_LONG_DOUBLE
 long double
@@ -46,4 +46,13 @@ fabsl(long double x)
 
 	return (ux.extu_ld);
 }
+#else
+#if 0
+/* defined in libc */
+long double
+fabsl(long double x)
+{
+	return fabs(x);
+}
+#endif
 #endif

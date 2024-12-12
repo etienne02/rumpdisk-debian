@@ -1,4 +1,4 @@
-/*	$NetBSD: ieee8023ad_lacp.c,v 1.11 2020/01/29 04:30:41 thorpej Exp $	*/
+/*	$NetBSD: ieee8023ad_lacp.c,v 1.13 2021/11/30 01:17:02 yamaguchi Exp $	*/
 
 /*-
  * Copyright (c)2005 YAMAMOTO Takashi,
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ieee8023ad_lacp.c,v 1.11 2020/01/29 04:30:41 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ieee8023ad_lacp.c,v 1.13 2021/11/30 01:17:02 yamaguchi Exp $");
 
 #include <sys/param.h>
 #include <sys/callout.h>
@@ -40,10 +40,10 @@ __KERNEL_RCSID(0, "$NetBSD: ieee8023ad_lacp.c,v 1.11 2020/01/29 04:30:41 thorpej
 #include <net/if_dl.h>
 #include <net/if_ether.h>
 #include <net/if_media.h>
+#include <net/ether_slowprotocols.h>
 
 #include <net/agr/if_agrvar_impl.h>
 #include <net/agr/if_agrsubr.h>
-#include <net/agr/ieee8023_slowprotocols.h>
 #include <net/agr/ieee8023_tlv.h>
 #include <net/agr/ieee8023ad.h>
 #include <net/agr/ieee8023ad_lacp.h>
@@ -97,7 +97,7 @@ ieee8023ad_lacp_input(struct ifnet *ifp, struct mbuf *m)
 	struct lacp_port *lp;
 	int error = 0;
 
-	port = ifp->if_agrprivate; /* XXX race with agr_remport. */
+	port = ifp->if_lagg; /* XXX race with agr_remport. */
 	if (__predict_false(port->port_flags & AGRPORT_DETACHING)) {
 		goto bad;
 	}

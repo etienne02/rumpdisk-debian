@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.17 2020/02/20 08:27:38 skrll Exp $
+#	$NetBSD: genassym.cf,v 1.23 2024/01/15 19:28:06 thorpej Exp $
 
 #
 # Copyright (c) 1982, 1990, 1993
@@ -38,10 +38,12 @@ include <sys/mbuf.h>
 include <sys/msgbuf.h>
 include <sys/syscall.h>
 include <sys/device.h>
+include <sys/intr.h>
 
 include <uvm/uvm_extern.h>
 
 include <machine/cpu.h>
+include <machine/fcode.h>
 include <machine/psl.h>
 include <machine/pcb.h>
 include <machine/pte.h>
@@ -53,12 +55,7 @@ define	MMU_HP			MMU_HP
 define	MMU_68851		MMU_68851
 
 # MMU configuration options
-ifdef M68K_MMU_HP
-define	M68K_MMU_HP		1
-endif
-ifdef M68K_MMU_MOTOROLA
 define	M68K_MMU_MOTOROLA	1
-endif
 
 # values for cputype
 define	CPU_68020		CPU_68020
@@ -93,6 +90,12 @@ define	PAGE_SIZE		PAGE_SIZE
 define	PGSHIFT			PGSHIFT
 define	USRSTACK		USRSTACK
 
+# MMU configuration constants (from pmap.h)
+export	MMU51_SRP_BITS
+export	MMU51_CRP_BITS
+export	MMU51_TCR_BITS
+export	MMU40_TCR_BITS
+
 # lwp & proc fields and values
 define	L_PCB			offsetof(struct lwp, l_addr)
 define	L_PROC			offsetof(struct lwp, l_proc)
@@ -102,8 +105,13 @@ define	P_FLAG			offsetof(struct proc, p_flag)
 define	P_RASLIST		offsetof(struct proc, p_raslist)
 define	P_VMSPACE		offsetof(struct proc, p_vmspace)
 
+# event counter
+define	EVCNT_COUNT		offsetof(struct evcnt, ev_count)
+
 # interrupt/fault metering
 define	CI_NINTR		offsetof(struct cpu_info, ci_data.cpu_nintr)
+define	CLOCK_INTRCNT		((sizeof(struct evcnt)*6) + offsetof(struct evcnt, ev_count32))
+define	NMI_INTRCNT		((sizeof(struct evcnt)*7) + offsetof(struct evcnt, ev_count32))
 
 # PSL values (should just include psl.h?)
 define	PSL_S			PSL_S
@@ -121,7 +129,6 @@ define	SPL6			PSL_S | PSL_IPL6
 
 # magic
 define	FC_USERD		FC_USERD
-define	FC_PURGE		FC_PURGE
 define	CACHE_ON		CACHE_ON
 define	CACHE_OFF		CACHE_OFF
 define	CACHE_CLR		CACHE_CLR
@@ -174,6 +181,3 @@ define	SYS_compat_13_sigreturn13 SYS_compat_13_sigreturn13
 # errno
 define	EFAULT			EFAULT
 define	ENAMETOOLONG		ENAMETOOLONG
-
-# event counter
-define	EVCNT_COUNT		offsetof(struct evcnt, ev_count)

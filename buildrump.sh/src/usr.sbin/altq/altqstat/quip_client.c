@@ -1,4 +1,4 @@
-/*	$NetBSD: quip_client.c,v 1.14 2020/02/07 21:53:20 fox Exp $	*/
+/*	$NetBSD: quip_client.c,v 1.16 2024/10/04 15:37:00 rillig Exp $	*/
 /*	$KAME: quip_client.c,v 1.9 2003/05/17 05:59:00 itojun Exp $	*/
 /*
  * Copyright (C) 1999-2000
@@ -144,7 +144,8 @@ quip_closeserver(void)
 void
 quip_sendrequest(FILE *fp, const char *request)
 {
-	char buf[QUIPMSG_MAXSIZE], *cp;
+	char buf[QUIPMSG_MAXSIZE];
+	const char *cp;
 	int n;
 
 	if ((cp = strstr(request, "QUIP")) == NULL) {
@@ -310,7 +311,7 @@ quip_selectinterface(char *ifname)
 	if (server == NULL)
 		return (ifname);
 
-	/* get an inferface list from the server */
+	/* get an interface list from the server */
 	quip_sendrequest(server, "GET list?*\n");
 
 	result_code = quip_recvresponse(server, NULL, buf, &len);
@@ -445,7 +446,7 @@ quip_printfilter(const char *ifname, const u_long handle)
 static char *
 extract_ifname(const char *name)
 {
-	char *cp;
+	const char *cp;
 	int len;
 	static char ifname[64];
 

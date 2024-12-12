@@ -1,4 +1,4 @@
-/*	$NetBSD: mips_machdep.c,v 1.303 2021/08/09 21:38:04 andvar Exp $	*/
+/*	$NetBSD: mips_machdep.c,v 1.306 2024/01/06 07:27:35 simonb Exp $	*/
 
 /*
  * Copyright 2002 Wasabi Systems, Inc.
@@ -111,7 +111,7 @@
  */
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
-__KERNEL_RCSID(0, "$NetBSD: mips_machdep.c,v 1.303 2021/08/09 21:38:04 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mips_machdep.c,v 1.306 2024/01/06 07:27:35 simonb Exp $");
 
 #define __INTR_PRIVATE
 #include "opt_cputype.h"
@@ -670,6 +670,14 @@ static const struct pridtab cputab[] = {
 	  MIPS_CP0FL_CONFIG1 | MIPS_CP0FL_CONFIG2 | MIPS_CP0FL_CONFIG3,
 	  0,
 	  "CN50xx"		},
+
+	{ MIPS_PRID_CID_CAVIUM, MIPS_CN68XX, -1, -1, -1, 0,
+	  MIPS64_FLAGS | CPU_MIPS_D_CACHE_COHERENT | CPU_MIPS_NO_LLADDR,
+	  MIPS_CP0FL_USE |
+	  MIPS_CP0FL_CONFIG  | MIPS_CP0FL_CONFIG1 | MIPS_CP0FL_CONFIG2 |
+	  MIPS_CP0FL_CONFIG3 | MIPS_CP0FL_CONFIG4,
+	  0,
+	  "CN68xx"		},
 
 	{ MIPS_PRID_CID_CAVIUM, MIPS_CN70XX, -1, -1, -1, 0,
 	  MIPS64_FLAGS | CPU_MIPS_D_CACHE_COHERENT | CPU_MIPS_NO_LLADDR,
@@ -2092,14 +2100,14 @@ mips_init_msgbuf(void)
 
 	paddr_t start = uvm_physseg_get_start(bank);
 	paddr_t end = uvm_physseg_get_end(bank);
-	
+
 	/* shrink so that it'll fit in the last segment */
 	if ((end - start) < atop(sz))
 		sz = ptoa(end - start);
 
 	end -= atop(sz);
 	uvm_physseg_unplug(end, atop(sz));
-	
+
 #ifdef _LP64
 	msgbufaddr = (void *) MIPS_PHYS_TO_XKPHYS_CACHED(ptoa(end));
 #else
@@ -2303,7 +2311,6 @@ mips_page_physload(vaddr_t vkernstart, vaddr_t vkernend,
 			 * Now we give this segment to uvm.
 			 */
 			printf("adding %#"PRIxPADDR" @ %#"PRIxPADDR" to freelist %d\n",
-
 			    segend - segstart, segstart, freelist);
 			paddr_t first = atop(segstart);
 			paddr_t last = atop(segend);

@@ -1,4 +1,4 @@
-/*	$NetBSD: ehcivar.h,v 1.48 2020/03/15 07:56:19 skrll Exp $ */
+/*	$NetBSD: ehcivar.h,v 1.53 2024/09/23 10:07:26 skrll Exp $ */
 
 /*
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -35,7 +35,7 @@
 #include <sys/pool.h>
 
 typedef struct ehci_soft_qtd {
-	ehci_qtd_t qtd;
+	ehci_qtd_t *qtd;
 	struct ehci_soft_qtd *nextqtd;	/* mirrors nextqtd in TD */
 	ehci_physaddr_t physaddr;	/* qTD's physical address */
 	usb_dma_t dma;			/* qTD's DMA infos */
@@ -43,12 +43,9 @@ typedef struct ehci_soft_qtd {
 	struct usbd_xfer *xfer;		/* xfer back pointer */
 	uint16_t len;
 } ehci_soft_qtd_t;
-#define EHCI_SQTD_ALIGN	MAX(EHCI_QTD_ALIGN, CACHE_LINE_SIZE)
-#define EHCI_SQTD_SIZE (roundup(sizeof(struct ehci_soft_qtd), EHCI_SQTD_ALIGN))
-#define EHCI_SQTD_CHUNK (EHCI_PAGE_SIZE / EHCI_SQTD_SIZE)
 
 typedef struct ehci_soft_qh {
-	ehci_qh_t qh;
+	ehci_qh_t *qh;
 	struct ehci_soft_qh *next;
 	struct ehci_soft_qtd *sqtd;
 	ehci_physaddr_t physaddr;
@@ -56,13 +53,11 @@ typedef struct ehci_soft_qh {
 	int offs;			/* QH's offset in usb_dma_t */
 	int islot;
 } ehci_soft_qh_t;
-#define EHCI_SQH_SIZE (roundup(sizeof(struct ehci_soft_qh), EHCI_QH_ALIGN))
-#define EHCI_SQH_CHUNK (EHCI_PAGE_SIZE / EHCI_SQH_SIZE)
 
 typedef struct ehci_soft_itd {
 	union {
-		ehci_itd_t itd;
-		ehci_sitd_t sitd;
+		ehci_itd_t *itd;
+		ehci_sitd_t *sitd;
 	};
 	union {
 		struct {
@@ -80,8 +75,6 @@ typedef struct ehci_soft_itd {
 	int slot;
 	struct timeval t; /* store free time */
 } ehci_soft_itd_t;
-#define EHCI_ITD_SIZE (roundup(sizeof(struct ehci_soft_itd), EHCI_ITD_ALIGN))
-#define EHCI_ITD_CHUNK (EHCI_PAGE_SIZE / EHCI_ITD_SIZE)
 
 #define ehci_soft_sitd_t ehci_soft_itd_t
 #define ehci_soft_sitd ehci_soft_itd
@@ -162,19 +155,23 @@ struct ehci_soft_islot {
 
 typedef struct ehci_softc {
 	device_t sc_dev;
+	kmutex_t sc_rhlock;
 	kmutex_t sc_lock;
 	kmutex_t sc_intr_lock;
 	kcondvar_t sc_doorbell;
 	void *sc_doorbell_si;
+	struct lwp *sc_doorbelllwp;
 	void *sc_pcd_si;
 	struct usbd_bus sc_bus;
 	bus_space_tag_t iot;
 	bus_space_handle_t ioh;
 	bus_size_t sc_size;
+	bus_dma_tag_t sc_dmatag;	/* for control data structures */
 	u_int sc_offs;			/* offset to operational regs */
 	int sc_flags;			/* misc flags */
 #define EHCIF_DROPPED_INTR_WORKAROUND	0x01
 #define EHCIF_ETTF			0x02 /* Emb. Transaction Translater func. */
+#define EHCIF_32BIT_ACCESS		0x04 /* 32-bit MMIO access req'd */
 
 	uint32_t sc_cmd;		/* shadow of cmd reg during suspend */
 
@@ -232,17 +229,75 @@ typedef struct ehci_softc {
 	int (*sc_vendor_port_status)(struct ehci_softc *, uint32_t, int);
 } ehci_softc_t;
 
-#define EREAD1(sc, a) bus_space_read_1((sc)->iot, (sc)->ioh, (a))
-#define EREAD2(sc, a) bus_space_read_2((sc)->iot, (sc)->ioh, (a))
+static inline uint8_t
+ehci_read_1(struct ehci_softc *sc, u_int offset)
+{
+	if (ISSET(sc->sc_flags, EHCIF_32BIT_ACCESS)) {
+		uint32_t val;
+
+		val = bus_space_read_4(sc->iot, sc->ioh, offset & ~3);
+		return (val >> ((offset & 3) * NBBY)) & 0xff;
+	} else {
+		return bus_space_read_1(sc->iot, sc->ioh, offset);
+	}
+}
+
+static inline uint16_t
+ehci_read_2(struct ehci_softc *sc, u_int offset)
+{
+	if (ISSET(sc->sc_flags, EHCIF_32BIT_ACCESS)) {
+		uint32_t val;
+
+		val = bus_space_read_4(sc->iot, sc->ioh, offset & ~3);
+		return (val >> ((offset & 3) * NBBY)) & 0xffff;
+	} else {
+		return bus_space_read_2(sc->iot, sc->ioh, offset);
+	}
+}
+
+static inline void
+ehci_write_1(struct ehci_softc *sc, u_int offset, uint8_t data)
+{
+	if (ISSET(sc->sc_flags, EHCIF_32BIT_ACCESS)) {
+		const uint32_t mask = 0xffU << ((offset & 3) * NBBY);
+		uint32_t val;
+
+		val = bus_space_read_4(sc->iot, sc->ioh, offset & ~3);
+		val &= ~mask;
+		val |= __SHIFTIN(data, mask);
+		bus_space_write_4(sc->iot, sc->ioh, offset & ~3, val);
+	} else {
+		bus_space_write_1(sc->iot, sc->ioh, offset, data);
+	}
+}
+
+static inline void
+ehci_write_2(struct ehci_softc *sc, u_int offset, uint16_t data)
+{
+	if (ISSET(sc->sc_flags, EHCIF_32BIT_ACCESS)) {
+		const uint32_t mask = 0xffffU << ((offset & 3) * NBBY);
+		uint32_t val;
+
+		val = bus_space_read_4(sc->iot, sc->ioh, offset & ~3);
+		val &= ~mask;
+		val |= __SHIFTIN(data, mask);
+		bus_space_write_4(sc->iot, sc->ioh, offset & ~3, val);
+	} else {
+		bus_space_write_2(sc->iot, sc->ioh, offset, data);
+	}
+}
+
+#define EREAD1(sc, a) ehci_read_1((sc), (a))
+#define EREAD2(sc, a) ehci_read_2((sc), (a))
 #define EREAD4(sc, a) bus_space_read_4((sc)->iot, (sc)->ioh, (a))
-#define EWRITE1(sc, a, x) bus_space_write_1((sc)->iot, (sc)->ioh, (a), (x))
-#define EWRITE2(sc, a, x) bus_space_write_2((sc)->iot, (sc)->ioh, (a), (x))
+#define EWRITE1(sc, a, x) ehci_write_1((sc), (a), (x))
+#define EWRITE2(sc, a, x) ehci_write_2((sc), (a), (x))
 #define EWRITE4(sc, a, x) bus_space_write_4((sc)->iot, (sc)->ioh, (a), (x))
-#define EOREAD1(sc, a) bus_space_read_1((sc)->iot, (sc)->ioh, (sc)->sc_offs+(a))
-#define EOREAD2(sc, a) bus_space_read_2((sc)->iot, (sc)->ioh, (sc)->sc_offs+(a))
+#define EOREAD1(sc, a) ehci_read_1((sc), (sc)->sc_offs+(a))
+#define EOREAD2(sc, a) ehci_read_2((sc), (sc)->sc_offs+(a))
 #define EOREAD4(sc, a) bus_space_read_4((sc)->iot, (sc)->ioh, (sc)->sc_offs+(a))
-#define EOWRITE1(sc, a, x) bus_space_write_1((sc)->iot, (sc)->ioh, (sc)->sc_offs+(a), (x))
-#define EOWRITE2(sc, a, x) bus_space_write_2((sc)->iot, (sc)->ioh, (sc)->sc_offs+(a), (x))
+#define EOWRITE1(sc, a, x) ehci_write_1((sc), (sc)->sc_offs+(a), (x))
+#define EOWRITE2(sc, a, x) ehci_write_2((sc), (sc)->sc_offs+(a), (x))
 #define EOWRITE4(sc, a, x) bus_space_write_4((sc)->iot, (sc)->ioh, (sc)->sc_offs+(a), (x))
 
 int		ehci_init(ehci_softc_t *);

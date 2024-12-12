@@ -1,5 +1,5 @@
 %{
-/*	$NetBSD: scan.l,v 1.33 2020/07/26 22:25:47 uwe Exp $	*/
+/*	$NetBSD: scan.l,v 1.36 2024/08/13 10:14:04 uwe Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: scan.l,v 1.33 2020/07/26 22:25:47 uwe Exp $");
+__RCSID("$NetBSD: scan.l,v 1.36 2024/08/13 10:14:04 uwe Exp $");
 
 #include <sys/param.h>
 #include <errno.h>
@@ -90,7 +90,7 @@ int	 ifdefshift = -1;
 		printf("%s%s [%d,%d,%d] %#" PRIx64 "\n", x, # s, \
 		    IDS_PARENT_DISABLED, IDS_ISMATCH(st), getcurifdef(), \
 		    ifdefstate); \
-	} while (/*CONSTCOND*/0)
+	} while (0)
 #else
 # define IDS_PRINT(s, st, x) ((void)0)
 #endif
@@ -164,6 +164,7 @@ linkzero	return LINKZERO;
 machine		return XMACHINE;
 major		return MAJOR;
 makeoptions	return MAKEOPTIONS;
+mkflagvar	return MKFLAGVAR;
 maxpartitions	return MAXPARTITIONS;
 maxusers	return MAXUSERS;
 minor		return MINOR;
@@ -574,9 +575,9 @@ getincludepath(void)
 	ptrdiff_t len;
 	const char *e;
 
-	while (*p && isascii((unsigned int)*p) && !isspace((unsigned int)*p))
+	while (*p && isascii((unsigned char)*p) && !isspace((unsigned char)*p))
 		p++;
-	while (*p && isascii((unsigned int)*p) && isspace((unsigned int)*p))
+	while (*p && isascii((unsigned char)*p) && isspace((unsigned char)*p))
 		p++;
 	if (!*p)
 		return 0;
@@ -586,8 +587,8 @@ getincludepath(void)
 		if (!e) return 0;
 	} else {
 		e = p;
-		while (*e && isascii((unsigned int)*e)
-		    && !isspace((unsigned int)*e))
+		while (*e && isascii((unsigned char)*e)
+		    && !isspace((unsigned char)*e))
 			e++;
 	}
 
@@ -648,12 +649,12 @@ getcurifdef(void)
 {
 	char *p = yytext, *q;
 
-	while (*p && isascii((unsigned int)*p) && !isspace((unsigned int)*p))
+	while (*p && isascii((unsigned char)*p) && !isspace((unsigned char)*p))
 		p++;
-	while (*p && isascii((unsigned int)*p) && isspace((unsigned int)*p))
+	while (*p && isascii((unsigned char)*p) && isspace((unsigned char)*p))
 		p++;
 	q = p;
-	while (*q && isascii((unsigned int)*q) && !isspace((unsigned int)*q))
+	while (*q && isascii((unsigned char)*q) && !isspace((unsigned char)*q))
 		q++;
 	*q = '\0';
 

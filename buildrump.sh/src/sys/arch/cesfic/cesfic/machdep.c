@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.71 2020/06/11 19:20:43 ad Exp $	*/
+/*	$NetBSD: machdep.c,v 1.74 2024/03/05 14:15:29 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.71 2020/06/11 19:20:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.74 2024/03/05 14:15:29 thorpej Exp $");
 
 #include "opt_bufcache.h"
 #include "opt_ddb.h"
@@ -59,7 +59,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.71 2020/06/11 19:20:43 ad Exp $");
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mount.h>
 #include <sys/msgbuf.h>
@@ -314,11 +313,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && waittime < 0) {
 		waittime = 0;
 		vfs_shutdown();
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	/* Disable interrupts. */
@@ -337,7 +331,9 @@ cpu_reboot(int howto, char *bootstr)
 #if defined(PANICWAIT) && !defined(DDB)
 	if ((howto & RB_HALT) == 0 && panicstr) {
 		printf("hit any key to reboot...\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 		printf("\n");
 	}
 #endif
@@ -345,7 +341,9 @@ cpu_reboot(int howto, char *bootstr)
 	/* Finally, halt/reboot the system. */
 	if (howto & RB_HALT) {
 		printf("System halted.  Hit any key to reboot.\n\n");
+		cnpollc(1);
 		(void)cngetc();
+		cnpollc(0);
 	}
 
 	printf("rebooting...\n");

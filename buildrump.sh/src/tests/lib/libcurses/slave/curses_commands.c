@@ -1,4 +1,4 @@
-/*	$NetBSD: curses_commands.c,v 1.29 2021/06/13 21:54:51 rillig Exp $	*/
+/*	$NetBSD: curses_commands.c,v 1.31 2021/12/07 06:55:44 rillig Exp $	*/
 
 /*-
  * Copyright 2009 Brett Lymn <blymn@NetBSD.org>
@@ -150,8 +150,8 @@ set_scrn(const char *arg, SCREEN **x)
 		return
 
 /*
- * Required by the API, intended for future extensions, but this
- * implementation does not support the extension.
+ * These NULL arguments are required by the API, intended for future
+ * extensions, but this implementation does not support any extensions.
  */
 #define ARG_NULL() \
 	args++

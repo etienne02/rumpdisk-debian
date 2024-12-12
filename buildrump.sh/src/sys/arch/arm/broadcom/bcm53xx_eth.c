@@ -35,7 +35,7 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: bcm53xx_eth.c,v 1.41 2021/06/16 00:21:17 riastradh Exp $");
+__KERNEL_RCSID(1, "$NetBSD: bcm53xx_eth.c,v 1.45 2024/12/04 21:18:34 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -252,9 +252,7 @@ bcmeth_ccb_match(device_t parent, cfdata_t cf, void *aux)
 	if (strcmp(cf->cf_name, loc->loc_name))
 		return 0;
 
-#ifdef DIAGNOSTIC
-	const int port = cf->cf_loc[BCMCCBCF_PORT];
-#endif
+	const int port __diagused = cf->cf_loc[BCMCCBCF_PORT];
 	KASSERT(port == BCMCCBCF_PORT_DEFAULT || port == loc->loc_port);
 
 	return 1;
@@ -346,16 +344,15 @@ bcmeth_ccb_attach(device_t parent, device_t self, void *aux)
 	    (PRI_USER + MAXPRI_USER) / 2, IPL_NET, WQ_MPSAFE|WQ_PERCPU);
 	if (error) {
 		aprint_error(": failed to create workqueue: %d\n", error);
-		goto fail_2;
+		goto fail_1;
 	}
 
 	sc->sc_soft_ih = softint_establish(SOFTINT_MPSAFE | SOFTINT_NET,
 	    bcmeth_soft_intr, sc);
 
-	if (sc->sc_ih == NULL) {
-		aprint_error_dev(self, "failed to establish interrupt %d\n",
-		     loc->loc_intrs[0]);
-		goto fail_3;
+	if (sc->sc_soft_ih == NULL) {
+		aprint_error_dev(self, "failed to establish soft interrupt\n");
+		goto fail_2;
 	}
 
 	sc->sc_ih = intr_establish(loc->loc_intrs[0], IPL_VM, IST_LEVEL,
@@ -364,7 +361,7 @@ bcmeth_ccb_attach(device_t parent, device_t self, void *aux)
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "failed to establish interrupt %d\n",
 		     loc->loc_intrs[0]);
-		goto fail_4;
+		goto fail_3;
 	} else {
 		aprint_normal_dev(self, "interrupting on irq %d\n",
 		     loc->loc_intrs[0]);
@@ -428,8 +425,6 @@ bcmeth_ccb_attach(device_t parent, device_t self, void *aux)
 
 	return;
 
-fail_4:
-	intr_disestablish(sc->sc_ih);
 fail_3:
 	softint_disestablish(sc->sc_soft_ih);
 fail_2:
@@ -1743,7 +1738,7 @@ bcmeth_txq_reset(
 	sc->sc_intmask |= XMTINT_0 | XMTUF;
 
 	/*
-	 * Restart the transmiter at the first descriptor
+	 * Restart the transmitter at the first descriptor
 	 */
 	bcmeth_write_4(sc, txq->txq_reg_xmtaddrlo,
 	    txq->txq_descmap->dm_segs->ds_addr);
@@ -1900,9 +1895,6 @@ bcmeth_soft_txintr(struct bcmeth_softc *sc)
 	if (!bcmeth_txq_consume(sc, &sc->sc_txq)
 	    || !bcmeth_txq_enqueue(sc, &sc->sc_txq)) {
 		BCMETH_EVCNT_INCR(sc->sc_ev_tx_stall);
-		sc->sc_if.if_flags |= IFF_OACTIVE;
-	} else {
-		sc->sc_if.if_flags &= ~IFF_OACTIVE;
 	}
 	if (sc->sc_if.if_flags & IFF_RUNNING) {
 		mutex_spin_enter(sc->sc_hwlock);
@@ -1936,9 +1928,6 @@ bcmeth_soft_intr(void *arg)
 		if (!bcmeth_txq_consume(sc, &sc->sc_txq)
 		    || !bcmeth_txq_enqueue(sc, &sc->sc_txq)) {
 			BCMETH_EVCNT_INCR(sc->sc_ev_tx_stall);
-			ifp->if_flags |= IFF_OACTIVE;
-		} else {
-			ifp->if_flags &= ~IFF_OACTIVE;
 		}
 		intmask |= XMTINT_0;
 	}

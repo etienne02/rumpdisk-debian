@@ -1,4 +1,4 @@
-/* $NetBSD: cxdtv.c,v 1.20 2021/08/07 16:19:14 thorpej Exp $ */
+/* $NetBSD: cxdtv.c,v 1.22 2024/02/09 17:39:33 andvar Exp $ */
 
 /*
  * Copyright (c) 2008, 2011 Jonathan A. Kollasch
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cxdtv.c,v 1.20 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cxdtv.c,v 1.22 2024/02/09 17:39:33 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -89,7 +89,7 @@ static int	cxdtv_risc_buffer(struct cxdtv_softc *, uint32_t, uint32_t);
 static int	cxdtv_risc_field(struct cxdtv_softc *, uint32_t *, uint32_t);
 
 static int     cxdtv_mpeg_attach(struct cxdtv_softc *);
-static int     cxdtv_mpeg_detach(struct cxdtv_softc *, int flags);
+static void    cxdtv_mpeg_detach(struct cxdtv_softc *, int flags);
 static int     cxdtv_mpeg_intr(struct cxdtv_softc *);
 static int     cxdtv_mpeg_reset(struct cxdtv_softc *);
 
@@ -139,7 +139,7 @@ static struct cxdtv_sram_ch cxdtv_sram_chs[] = {
 		.csc_iq = 0x180340, /* after last CMDS */
 		.csc_iqsz = 0x40, /* 16 dwords */
 		.csc_cdt = 0x180380, /* after iq */
-		.csc_cdtsz = 0x40, /* cluster discriptor space */
+		.csc_cdtsz = 0x40, /* cluster descriptor space */
 		.csc_fifo = 0x180400, /* after cdt */
 		.csc_fifosz = 0x001C00, /* let's just align this up */
 		.csc_risc = 0x182000, /* after fifo */
@@ -268,9 +268,11 @@ cxdtv_detach(device_t self, int flags)
 	struct cxdtv_softc *sc = device_private(self);
 	int error;
 
-	error = cxdtv_mpeg_detach(sc, flags);
+	error = config_detach_children(self, flags);
 	if (error)
 		return error;
+
+	cxdtv_mpeg_detach(sc, flags);
 
 	if (sc->sc_ih)
 		pci_intr_disestablish(sc->sc_pc, sc->sc_ih);
@@ -464,16 +466,9 @@ cxdtv_mpeg_attach(struct cxdtv_softc *sc)
 	return (sc->sc_dtvdev != NULL);
 }
 
-int
+void
 cxdtv_mpeg_detach(struct cxdtv_softc *sc, int flags)
 {
-	int error = 0;
-
-	if (sc->sc_dtvdev) {
-		error = config_detach(sc->sc_dtvdev, flags);
-		if (error)
-			return error;
-	}
 
 	if (sc->sc_demod) {
 		switch (sc->sc_board->cb_demod) {
@@ -504,8 +499,6 @@ cxdtv_mpeg_detach(struct cxdtv_softc *sc, int flags)
 		sc->sc_riscbuf = NULL;
 		sc->sc_riscbufsz = 0;
 	}
-
-	return error;
 }
 
 static void

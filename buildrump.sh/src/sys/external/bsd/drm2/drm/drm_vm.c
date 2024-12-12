@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_vm.c,v 1.11 2020/02/14 04:36:56 riastradh Exp $	*/
+/*	$NetBSD: drm_vm.c,v 1.13 2022/07/06 01:12:45 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_vm.c,v 1.11 2020/02/14 04:36:56 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_vm.c,v 1.13 2022/07/06 01:12:45 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/conf.h>
@@ -39,7 +39,10 @@ __KERNEL_RCSID(0, "$NetBSD: drm_vm.c,v 1.11 2020/02/14 04:36:56 riastradh Exp $"
 #include <uvm/uvm_extern.h>
 #include <uvm/uvm_device.h>
 
-#include <drm/drmP.h>
+#include <linux/capability.h>
+
+#include <drm/drm_device.h>
+#include <drm/drm_file.h>
 #include <drm/drm_legacy.h>
 
 static paddr_t	drm_legacy_mmap_paddr_locked(struct drm_device *, off_t, int);
@@ -57,6 +60,7 @@ drm_legacy_mmap_object(struct drm_device *dev, off_t offset, size_t size,
 	struct uvm_object *uobj;
 
 	KASSERT(offset == (offset & ~(PAGE_SIZE-1)));
+	KASSERT(size > 0);
 
 	/*
 	 * Attach the device.  The size and offset are used only for

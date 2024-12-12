@@ -1,4 +1,4 @@
-/*	$NetBSD: if_se.c,v 1.113 2021/06/16 00:21:19 riastradh Exp $	*/
+/*	$NetBSD: if_se.c,v 1.119 2023/12/20 18:09:19 skrll Exp $	*/
 
 /*
  * Copyright (c) 1997 Ian W. Dall <ian.dall@dsto.defence.gov.au>
@@ -37,7 +37,7 @@
  *
  * Acknowledgement: Thanks are due to Philip L. Budne <budd@cs.bu.edu>
  * who reverse engineered the EA41x. In developing this code,
- * Phil's userland daemon "etherd", was refered to extensively in lieu
+ * Phil's userland daemon "etherd", was referred to extensively in lieu
  * of accurate documentation for the device.
  *
  * This is a weird device! It doesn't conform to the scsi spec in much
@@ -49,7 +49,7 @@
  * This driver is also a bit unusual. It must look like a network
  * interface and it must also appear to be a scsi device to the scsi
  * system. Hence there are cases where there are two entry points. eg
- * sedone is to be called from the scsi subsytem and se_ifstart from
+ * sedone is to be called from the scsi subsystem and se_ifstart from
  * the network interface subsystem.  In addition, to facilitate scsi
  * commands issued by userland programs, there are open, close and
  * ioctl entry points. This allows a user program to, for example,
@@ -59,11 +59,10 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_se.c,v 1.113 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_se.c,v 1.119 2023/12/20 18:09:19 skrll Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
-#include "opt_net_mpsafe.h"
 #include "opt_atalk.h"
 #endif
 
@@ -207,7 +206,9 @@ static void	se_ifstart(struct ifnet *);
 
 static void	sedone(struct scsipi_xfer *, int);
 static int	se_ioctl(struct ifnet *, u_long, void *);
+#if 0
 static void	sewatchdog(struct ifnet *);
+#endif
 
 #if 0
 static inline uint16_t ether_cmp(void *, void *);
@@ -217,7 +218,9 @@ static void	se_recv_worker(struct work *wk, void *cookie);
 static void	se_recv(struct se_softc *);
 static struct mbuf *se_get(struct se_softc *, char *, int);
 static int	se_read(struct se_softc *, char *, int);
+#if 0
 static void	se_reset(struct se_softc *);
+#endif
 static int	se_add_proto(struct se_softc *, int);
 static int	se_get_addr(struct se_softc *, uint8_t *);
 static int	se_set_media(struct se_softc *, int);
@@ -359,7 +362,7 @@ seattach(device_t parent, device_t self, void *aux)
 	ifp->if_softc = sc;
 	ifp->if_start = se_ifstart;
 	ifp->if_ioctl = se_ioctl;
-	ifp->if_watchdog = sewatchdog;
+	ifp->if_watchdog = NULL;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
 	ifp->if_extflags = IFEF_MPSAFE;
 	IFQ_SET_READY(&ifp->if_snd);
@@ -465,7 +468,7 @@ se_ifstart(struct ifnet *ifp)
 	if (!sc->sc_send_work_pending)  {
 		sc->sc_send_work_pending = true;
 		workqueue_enqueue(sc->sc_send_wq, &sc->sc_send_work, NULL);
-	} 
+	}
 	/* else: nothing to do - work is already queued */
 	mutex_exit(&sc->sc_iflock);
 }
@@ -767,7 +770,7 @@ se_read(struct se_softc *sc, char *data, int datalen)
 	return (n);
 }
 
-
+#if 0
 static void
 sewatchdog(struct ifnet *ifp)
 {
@@ -793,6 +796,7 @@ se_reset(struct se_softc *sc)
 #endif
 	se_init(sc);
 }
+#endif
 
 static int
 se_add_proto(struct se_softc *sc, int proto)
@@ -915,7 +919,7 @@ se_init(struct se_softc *sc)
 			sc->sc_recv_work_pending = true;
 			workqueue_enqueue(sc->sc_recv_wq, &sc->sc_recv_work,
 			    NULL);
-		} 
+		}
 		mutex_exit(&sc->sc_iflock);
 		ifp->if_flags &= ~IFF_OACTIVE;
 		mutex_enter(&sc->sc_iflock);
@@ -923,7 +927,7 @@ se_init(struct se_softc *sc)
 			sc->sc_send_work_pending = true;
 			workqueue_enqueue(sc->sc_send_wq, &sc->sc_send_work,
 			    NULL);
-		} 
+		}
 		mutex_exit(&sc->sc_iflock);
 	}
 	return (error);

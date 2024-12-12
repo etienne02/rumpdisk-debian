@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.57 2021/02/25 03:42:14 rin Exp $
+#	$NetBSD: Makefile,v 1.63 2024/06/08 06:39:57 mlelstv Exp $
 
 .include <bsd.init.mk>
 .include <bsd.sys.mk>		# for HOST_SH
@@ -50,9 +50,10 @@ SOBJS += libstubs.o
 OBJS+=	$(SOBJS) $(COBJS)
 
 #XX#DEFS = -D_STANDALONE -DSA_EXEC_ANYOWNER -DDYNAMIC_CRC_TABLE -DNOBYFOUR -UBYFOUR 
-DEFS = -D_STANDALONE -DSA_EXEC_ANYOWNER 
+DEFS = -D_STANDALONE -DSA_EXEC_ANYOWNER -DSA_HARDCODED_SECSIZE
 DEFS += -D__INTERNAL_LIBSA_CREAD
 DEFS += -DSERCONSOLE
+DEFS += -DLIBSA_NO_RAW_ACCESS
 SOBJS += cread.o
 
 #XX#SOBJS += adler32.o crc32.o inflate.o trees.o \
@@ -84,17 +85,14 @@ INCPATH += -I${.CURDIR}
 INCPATH += -I${.CURDIR}/../../.. -I${.OBJDIR}
 INCPATH += -I${.CURDIR}/../elf2bb
 
-AFLAGS += -march=68030 -mcpu=68030 -l
-CAFLAGS += -Wa,-l -Wa,-march=68030 -Wa,-mcpu=68030 ${INCPATH}
+AFLAGS += -march=68030 -mcpu=68030
+CAFLAGS += -Wa,-march=68030 -Wa,-mcpu=68030 ${INCPATH}
 
 COPTIM= -Os -fomit-frame-pointer -fcse-follow-jumps -fcse-skip-blocks
-COPTIM+= -Wa,-l -m68060 -Wa,-march=68030 -Wa,-mcpu=68030 -fno-unwind-tables
+COPTIM+= -m68060 -Wa,-march=68030 -Wa,-mcpu=68030 -fno-unwind-tables
 CFLAGS= -ffreestanding ${COPTIM} ${INCPATH} ${DEFS}
 CFLAGS+= -Werror
 CFLAGS+= -Wall -Wmissing-prototypes -Wstrict-prototypes -Wpointer-arith
-
-# XXX work around a gcc 4.5 bug
-COPTS.cread.c = -O1
 
 .c.o:
 	${_MKTARGET_COMPILE}
@@ -112,7 +110,7 @@ COPTS.cread.c = -O1
 
 boot.amiga: x.out
 	${_MKTARGET_CREATE}
-	${RELOC2BB} -S x.out $@ || (${NM} -u x.out && false)
+	${RELOC2BB} -d -S x.out $@ || (${NM} -u x.out && false)
 
 x.out: xxstart.o libboot.a ${LIBZ}
 	${_MKTARGET_LINK}

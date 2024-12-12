@@ -1,4 +1,4 @@
-/* $NetBSD: signal.h,v 1.17 2019/03/25 19:24:30 maxv Exp $ */
+/* $NetBSD: signal.h,v 1.19 2021/10/29 01:49:26 thorpej Exp $ */
 
 /*
  * Copyright (c) 1994, 1995 Carnegie-Mellon University.
@@ -31,6 +31,8 @@
 #define	_ALPHA_SIGNAL_H_
 
 #include <sys/featuretest.h>
+
+#define	__HAVE_STRUCT_SIGCONTEXT
 
 typedef long	sig_atomic_t;
 

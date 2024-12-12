@@ -1,9 +1,9 @@
-/*	$NetBSD: msg_186.c,v 1.4 2021/02/22 15:09:50 rillig Exp $	*/
+/*	$NetBSD: msg_186.c,v 1.7 2024/03/29 07:35:45 rillig Exp $	*/
 # 3 "msg_186.c"
 
-/* Test for message: bit-field initialization is illegal in traditional C [186] */
+/* Test for message: bit-field initializer must be an integer in traditional C [186] */
 
-/* lint1-flags: -tw */
+/* lint1-flags: -tw -X 351 */
 
 struct bit_field {
 	unsigned one: 1;
@@ -13,7 +13,7 @@ struct bit_field {
 
 struct bit_field bit_field = {
 	1,
-	3.0,			/* expect: 186 */
+	/* expect+1: warning: bit-field initializer must be an integer in traditional C [186] */
+	3.0,
 	2
 };
-/* XXX: The message is misleading.  Initialization using integers is ok. */

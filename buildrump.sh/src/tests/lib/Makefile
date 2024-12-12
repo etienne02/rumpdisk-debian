@@ -1,11 +1,11 @@
-# $NetBSD: Makefile,v 1.34 2020/12/11 12:29:27 nia Exp $
+# $NetBSD: Makefile,v 1.36 2024/04/28 12:49:08 riastradh Exp $
 
 .include <bsd.own.mk>
 
 TESTS_SUBDIRS=	csu libarchive libbluetooth libc libcrypt libcurses \
 		libexecinfo libi386 libm libnvmm libobjc libposix libppath \
-		libprop libpthread librefuse librt libtre libusbhid libutil \
-		libossaudio semaphore
+		libprop libpthread librefuse librt libstdc++ libtre libusbhid \
+		libutil libossaudio lua semaphore
 
 TESTS_SUBDIR_INSTALL_ONLY=	libevent
 

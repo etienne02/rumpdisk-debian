@@ -1,4 +1,4 @@
-#	$NetBSD: DHT,v 1.2 2021/06/03 09:09:22 rin Exp $
+#	$NetBSD: DHT,v 1.6 2024/01/29 18:27:12 christos Exp $
 #
 #	DHT --- DHT Walnut 405GP Evaluation Board
 #		(Digital Home Technologies PCB 01070201 Rev. 1.1)
@@ -8,7 +8,7 @@ include 	"arch/evbppc/conf/std.dht"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident 		"DHT-$Revision: 1.2 $"
+#ident 		"DHT-$Revision: 1.6 $"
 
 maxusers	32
 
@@ -89,15 +89,17 @@ file-system	TMPFS		# Efficient memory file-system
 # File system options
 #
 
+options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-options 	FFS_EI			# FFS Endian Independent support
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
+options 	UFS_EXTATTR	# Extended attribute support for UFS1
 options 	WAPBL		# File system journaling support
-options 	NFSSERVER		# Network File System server
-#options 	FFS_NO_SNAPSHOT		# No FFS snapshot support
-options 	EXT2FS_SYSTEM_FLAGS	# makes ext2fs file flags (append and
-					# immutable) behave as system flags.
-options 	NFS_BOOT_DHCP		# Support DHCP NFS root
+options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
+options 	NFSSERVER	# Network File System server
+
+options 	NFS_BOOT_DHCP	# Support DHCP NFS root
 
 
 #
@@ -156,6 +158,7 @@ options 	PCI_NETBSD_CONFIGURE	# Do not rely on BIOS/whatever
 #options 	PCI_CONFIGURE_VERBOSE	# Show PCI config information
 
 pdcide* at pci? dev ? function ?	# Promise IDE controllers
+options 	DHT_FIXUP_PDCIDE	# Initialize pdcide to native-PCI mode
 
 # ATA (IDE) bus support
 atabus* at ata?
@@ -179,6 +182,8 @@ wm*	at pci? dev ? function ?	# Intel 82543/82544 gigabit
 igphy*	at mii? phy ?			# Intel IGP01E1000
 makphy* at mii? phy ?			# Marvell Semiconductor 88E1000 PHYs
 ukphy*	at mii? phy ?			# generic unknown PHYs
+
+igc*	at pci? dev ? function ?	# Intel 22x 2.5 gigabit
 
 xhci*	at pci?	dev ? function ?	# eXtensible Host Controller
 usb*	at xhci?

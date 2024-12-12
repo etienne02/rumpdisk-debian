@@ -1,4 +1,4 @@
-/* $NetBSD: mdreloc.c,v 1.14 2020/06/16 21:01:30 joerg Exp $ */
+/* $NetBSD: mdreloc.c,v 1.19 2024/07/22 23:10:35 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -60,8 +60,23 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: mdreloc.c,v 1.14 2020/06/16 21:01:30 joerg Exp $");
+__RCSID("$NetBSD: mdreloc.c,v 1.19 2024/07/22 23:10:35 riastradh Exp $");
 #endif /* not lint */
+
+/*
+ * AArch64 ELF relocations.
+ *
+ * References:
+ *
+ *	[AAELF64] ELF for the Arm 64-bit Architecture (AArch64),
+ *	2022Q3.  Arm Ltd.
+ *	https://github.com/ARM-software/abi-aa/blob/2982a9f3b512a5bfdc9e3fea5d3b298f9165c36b/aaelf64/aaelf64.rst
+ *
+ *	[TLSDESC] Glauber de Oliveira Costa and Alexandre Oliva,
+ *	`Thread-Local Storage Access in Dynamic Libraries in the ARM
+ *	Platform', 2006.
+ *	https://www.fsfla.org/~lxoliva/writeups/TLS/paper-lk2006.pdf
+ */
 
 #include <sys/types.h>
 #include <string.h>
@@ -157,8 +172,8 @@ _rtld_tlsdesc_fill(const Obj_Entry *obj, const Elf_Rela *rela, Elf_Addr *where, 
 	}
 	offs += rela->r_addend;
 
-	if (defobj->tls_done) {
-		/* Variable is in initialy allocated TLS segment */
+	if (defobj->tls_static) {
+		/* Variable is in initially allocated TLS segment */
 		where[0] = (Elf_Addr)_rtld_tlsdesc_static;
 		where[1] = defobj->tlsoffset + offs +
 		    sizeof(struct tls_tcb);
@@ -248,6 +263,14 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 			    obj->path, (void *)tmp, where, defobj->path));
 			break;
 
+		case R_TYPE(IRELATIVE):
+			/* IFUNC relocations are handled in _rtld_call_ifunc */
+			if (obj->ifunc_remaining_nonplt == 0)
+				obj->ifunc_remaining_nonplt = obj->relalim - rela;
+			rdbg(("IRELATIVE in %s, %zx", obj->path,
+			    obj->ifunc_remaining_nonplt));
+			/* FALLTHROUGH */
+
 		case R_TYPE(RELATIVE):	/* word B + A */
 			*where = (Elf_Addr)(obj->relocbase + rela->r_addend);
 			rdbg(("RELATIVE in %s --> %p", obj->path,
@@ -280,20 +303,19 @@ _rtld_relocate_nonplt_objects(Obj_Entry *obj)
 			rdbg(("TLS_DTPREL %s in %s --> %p",
 			    obj->strtab + obj->symtab[symnum].st_name,
 			    obj->path, (void *)*where));
-
 			break;
+
 		case R_TLS_TYPE(TLS_DTPMOD):
 			*where = (Elf_Addr)(defobj->tlsindex);
 
 			rdbg(("TLS_DTPMOD %s in %s --> %p",
 			    obj->strtab + obj->symtab[symnum].st_name,
 			    obj->path, (void *)*where));
-
 			break;
 
 		case R_TLS_TYPE(TLS_TPREL):
-			if (!defobj->tls_done &&
-			    _rtld_tls_offset_allocate(obj))
+			if (!defobj->tls_static &&
+			    _rtld_tls_offset_allocate(__UNCONST(defobj)))
 				return -1;
 
 			*where = (Elf_Addr)(def->st_value + defobj->tlsoffset +
@@ -330,8 +352,9 @@ _rtld_relocate_plt_lazy(Obj_Entry *obj)
 	for (const Elf_Rela *rela = obj->pltrela; rela < obj->pltrelalim; rela++) {
 		Elf_Addr *where = (Elf_Addr *)(obj->relocbase + rela->r_offset);
 
-		assert((ELF_R_TYPE(rela->r_info) == R_TYPE(JUMP_SLOT)) ||
-		    (ELF_R_TYPE(rela->r_info) == R_TYPE(TLSDESC)));
+		assert(ELF_R_TYPE(rela->r_info) == R_TYPE(JUMP_SLOT) ||
+		       ELF_R_TYPE(rela->r_info) == R_TYPE(TLSDESC) ||
+		       ELF_R_TYPE(rela->r_info) == R_TYPE(IRELATIVE));
 
 		switch (ELF_R_TYPE(rela->r_info)) {
 		case R_TYPE(JUMP_SLOT):
@@ -341,6 +364,9 @@ _rtld_relocate_plt_lazy(Obj_Entry *obj)
 			break;
 		case R_TYPE(TLSDESC):
 			_rtld_tlsdesc_fill(obj, rela, where, SYMLOOK_IN_PLT);
+			break;
+		case R_TYPE(IRELATIVE):
+			obj->ifunc_remaining = obj->pltrelalim - rela;
 			break;
 		}
 	}

@@ -1,4 +1,4 @@
-/*	$NetBSD: ualea.c,v 1.13 2021/05/29 08:45:19 riastradh Exp $	*/
+/*	$NetBSD: ualea.c,v 1.19 2022/03/20 13:18:30 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2017 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ualea.c,v 1.13 2021/05/29 08:45:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ualea.c,v 1.19 2022/03/20 13:18:30 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/atomic.h>
@@ -104,7 +104,7 @@ ualea_attach(device_t parent, device_t self, void *aux)
 
 	/* Initialize the softc.  */
 	sc->sc_dev = self;
-	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_SOFTUSB);
+	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_SOFTSERIAL);
 
 	/* Get endpoint descriptor 0.  Make sure it's bulk-in.  */
 	ed = usbd_interface2endpoint_descriptor(uiaa->uiaa_iface, 0);
@@ -159,16 +159,21 @@ ualea_detach(device_t self, int flags)
 	if (sc->sc_attached)
 		rnd_detach_source(&sc->sc_rnd);
 
+	/* Prevent xfer from rescheduling itself, if still pending.  */
+	mutex_enter(&sc->sc_lock);
+	sc->sc_needed = 0;
+	mutex_exit(&sc->sc_lock);
+
 	/* Cancel pending xfer.  */
 	if (sc->sc_pipe)
-		(void)usbd_abort_pipe(sc->sc_pipe);
+		usbd_abort_pipe(sc->sc_pipe);
 	KASSERT(!sc->sc_inflight);
 
 	/* All users have drained.  Tear it all down.  */
 	if (sc->sc_xfer)
 		usbd_destroy_xfer(sc->sc_xfer);
 	if (sc->sc_pipe)
-		(void)usbd_close_pipe(sc->sc_pipe);
+		usbd_close_pipe(sc->sc_pipe);
 	mutex_destroy(&sc->sc_lock);
 
 	return 0;
@@ -196,8 +201,8 @@ ualea_xfer(struct ualea_softc *sc)
 	status = usbd_transfer(sc->sc_xfer);
 	KASSERT(status != USBD_NORMAL_COMPLETION); /* asynchronous xfer */
 	if (status != USBD_IN_PROGRESS) {
-		aprint_error_dev(sc->sc_dev, "failed to issue xfer: %d\n",
-		    status);
+		device_printf(sc->sc_dev, "failed to issue xfer: %s\n",
+		    usbd_errstr(status));
 		/* We failed -- let someone else have a go.  */
 		return;
 	}
@@ -225,37 +230,41 @@ ualea_xfer_done(struct usbd_xfer *xfer, void *cookie, usbd_status status)
 	void *pkt;
 	uint32_t pktsize;
 
-	/* Check the transfer status.  */
+	/*
+	 * If the transfer failed, give up -- forget what we need and
+	 * don't reschedule ourselves.
+	 */
 	if (status) {
-		aprint_error_dev(sc->sc_dev, "xfer failed: %d\n", status);
+		device_printf(sc->sc_dev, "xfer failed: %s\n",
+		    usbd_errstr(status));
+		mutex_enter(&sc->sc_lock);
+		sc->sc_needed = 0;
+		sc->sc_inflight = false;
+		mutex_exit(&sc->sc_lock);
 		return;
 	}
 
-	/* Get and sanity-check the transferred size.  */
+	/* Get the transferred size.  */
 	usbd_get_xfer_status(xfer, NULL, &pkt, &pktsize, NULL);
-	if (pktsize > sc->sc_maxpktsize) {
-		aprint_error_dev(sc->sc_dev,
-		    "bogus packet size: %"PRIu32" > %"PRIu16" (max), ignoring"
-		    "\n",
-		    pktsize, sc->sc_maxpktsize);
-		goto out;
-	}
+	KASSERTMSG(pktsize <= sc->sc_maxpktsize,
+	    "pktsize %"PRIu32" > %"PRIu16" (max)",
+	    pktsize, sc->sc_maxpktsize);
 
-	/* Add the data to the pool.  */
-	rnd_add_data(&sc->sc_rnd, pkt, pktsize, NBBY*pktsize);
-
-out:
+	/*
+	 * Enter the data, debit what we contributed from what we need,
+	 * mark the xfer as done, and reschedule the xfer if we still
+	 * need more.
+	 *
+	 * Must enter the data under the lock so it happens atomically
+	 * with updating sc_needed -- otherwise we might hang needing
+	 * entropy and not scheduling xfer.  Must not touch pkt after
+	 * clearing sc_inflight and possibly rescheduling the xfer.
+	 */
 	mutex_enter(&sc->sc_lock);
-
-	/* Debit what we contributed from what we need.  */
+	rnd_add_data(&sc->sc_rnd, pkt, pktsize, NBBY*pktsize);
 	sc->sc_needed -= MIN(sc->sc_needed, pktsize);
-
-	/* Mark xfer done.  */
 	sc->sc_inflight = false;
-
-	/* Reissue xfer if we still need more.  */
 	ualea_xfer(sc);
-
 	mutex_exit(&sc->sc_lock);
 }
 

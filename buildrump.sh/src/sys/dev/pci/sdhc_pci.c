@@ -1,4 +1,4 @@
-/*	$NetBSD: sdhc_pci.c,v 1.17 2020/01/01 23:28:31 mlelstv Exp $	*/
+/*	$NetBSD: sdhc_pci.c,v 1.21 2023/01/05 14:50:14 msaitoh Exp $	*/
 /*	$OpenBSD: sdhc_pci.c,v 1.7 2007/10/30 18:13:45 chl Exp $	*/
 
 /*
@@ -18,7 +18,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sdhc_pci.c,v 1.17 2020/01/01 23:28:31 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sdhc_pci.c,v 1.21 2023/01/05 14:50:14 msaitoh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_sdmmc.h"
@@ -88,6 +88,7 @@ static const struct sdhc_pci_quirk {
 #define	SDHC_PCI_QUIRK_RICOH_SLOW_SDR50_HACK	__BIT(4)
 #define	SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET	__BIT(5)
 #define	SDHC_PCI_QUIRK_SINGLE_POWER_WRITE	__BIT(6)
+#define	SDHC_PCI_QUIRK_BROKEN_ADMA		__BIT(7)
 } sdhc_pci_quirk_table[] = {
 	{
 		PCI_VENDOR_TI,
@@ -123,6 +124,7 @@ static const struct sdhc_pci_quirk {
 		0,
 		SDHC_PCI_QUIRK_RICOH_SLOW_SDR50_HACK
 		| SDHC_PCI_QUIRK_SINGLE_POWER_WRITE
+		| SDHC_PCI_QUIRK_BROKEN_ADMA
 	},
 	{
 		PCI_VENDOR_RICOH,
@@ -131,6 +133,7 @@ static const struct sdhc_pci_quirk {
 		0xffff,
 		~0,
 		SDHC_PCI_QUIRK_FORCE_DMA
+		| SDHC_PCI_QUIRK_BROKEN_ADMA
 	},
 
 	{
@@ -140,6 +143,7 @@ static const struct sdhc_pci_quirk {
 		0xffff,
 		~0,
 		SDHC_PCI_QUIRK_FORCE_DMA
+		| SDHC_PCI_QUIRK_BROKEN_ADMA
 	},
 
 	{
@@ -153,11 +157,12 @@ static const struct sdhc_pci_quirk {
 
 	{
 		PCI_VENDOR_INTEL,
-		PCI_PRODUCT_INTEL_BSW_SSC_MMC,
+		PCI_PRODUCT_INTEL_BSW_SCC_MMC,
 		0xffff,
 		0xffff,
 		~0,
-		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
 	},
 
 	{
@@ -167,6 +172,97 @@ static const struct sdhc_pci_quirk {
 		0xffff,
 		~0,
 		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET
+	},
+
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_C3K_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_BAYTRAIL_SCC_MMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_BAYTRAIL_SCC_MMC2,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_APL_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_GLK_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_3HS_U_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_495_YU_PCIE_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_CMTLK_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_JSL_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
+	},
+	{
+		PCI_VENDOR_INTEL,
+		PCI_PRODUCT_INTEL_EHL_EMMC,
+		0xffff,
+		0xffff,
+		~0,
+		SDHC_PCI_QUIRK_INTEL_EMMC_HW_RESET |
+		SDHC_PCI_QUIRK_NO_PWR0
 	},
 };
 
@@ -252,6 +348,7 @@ sdhc_pci_attach(device_t parent, device_t self, void *aux)
 	bus_space_handle_t ioh;
 	bus_size_t size;
 	uint32_t flags;
+	int width;
 	char intrbuf[PCI_INTRSTR_LEN];
 
 	sc->sc.sc_dev = self;
@@ -272,6 +369,8 @@ sdhc_pci_attach(device_t parent, device_t self, void *aux)
 		SET(sc->sc.sc_flags, SDHC_FLAG_SINGLE_POWER_WRITE);
 	if (ISSET(flags, SDHC_PCI_QUIRK_NO_PWR0))
 		SET(sc->sc.sc_flags, SDHC_FLAG_NO_PWR0);
+	if (ISSET(flags, SDHC_PCI_QUIRK_BROKEN_ADMA))
+		SET(sc->sc.sc_flags, SDHC_FLAG_BROKEN_ADMA);
 	if (ISSET(flags, SDHC_PCI_QUIRK_RICOH_LOWER_FREQ_HACK))
 		sdhc_pci_quirk_ricoh_lower_freq_hack(pa);
 	if (ISSET(flags, SDHC_PCI_QUIRK_RICOH_SLOW_SDR50_HACK))
@@ -313,13 +412,23 @@ sdhc_pci_attach(device_t parent, device_t self, void *aux)
 	if ((PCI_INTERFACE(pa->pa_class) == SDHC_PCI_INTERFACE_DMA))
 		SET(sc->sc.sc_flags, SDHC_FLAG_USE_DMA);
 
-	/* XXX: handle 64-bit BARs */
 	cnt = 0;
 	for (reg = SDHC_PCI_BAR_START + SDHC_PCI_FIRST_BAR(slotinfo) *
 		 sizeof(uint32_t);
 	     reg < SDHC_PCI_BAR_END && nslots > 0;
-	     reg += sizeof(uint32_t), nslots--) {
-		if (pci_mapreg_map(pa, reg, PCI_MAPREG_TYPE_MEM, 0,
+	     reg += width, nslots--) {
+		pcireg_t type;
+
+		type = pci_mapreg_type(pa->pa_pc, pa->pa_tag, reg);
+		if (type == PCI_MAPREG_TYPE_IO)
+			break;
+		else if (PCI_MAPREG_MEM_TYPE(type)
+		    == PCI_MAPREG_MEM_TYPE_64BIT)
+			width = 8;
+		else
+			width = 4;
+
+		if (pci_mapreg_map(pa, reg, type, 0,
 		    &iot, &ioh, NULL, &size)) {
 			continue;
 		}

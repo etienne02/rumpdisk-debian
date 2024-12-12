@@ -1,4 +1,4 @@
-/*	$NetBSD: spl.S,v 1.55 2020/05/17 12:12:22 ad Exp $	*/
+/*	$NetBSD: spl.S,v 1.58 2023/03/01 08:38:50 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1998, 2007, 2008, 2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <machine/asm.h>
-__KERNEL_RCSID(0, "$NetBSD: spl.S,v 1.55 2020/05/17 12:12:22 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: spl.S,v 1.58 2023/03/01 08:38:50 riastradh Exp $");
 
 #include "opt_ddb.h"
 #include "opt_spldebug.h"
@@ -49,10 +49,10 @@ __KERNEL_RCSID(0, "$NetBSD: spl.S,v 1.55 2020/05/17 12:12:22 ad Exp $");
  */
 ENTRY(splraise)
 	movl	4(%esp),%edx
-	movl	CPUVAR(ILEVEL),%eax
+	movzbl	CPUVAR(ILEVEL),%eax
 	cmpl	%edx,%eax
 	ja	1f
-	movl	%edx,CPUVAR(ILEVEL)
+	movb	%dl,CPUVAR(ILEVEL)
 1:
 #ifdef SPLDEBUG
 	pushl	%ebp
@@ -72,11 +72,11 @@ END(splraise)
  * void spllower(int s);
  *
  * spllower() for i486 and Pentium. Must be the same size as cx8_spllower(),
- * that is, 64 bytes. This must use pushf/cli/popf as it is used early in boot
+ * that is, 96 bytes. This must use pushf/cli/popf as it is used early in boot
  * where interrupts are disabled via eflags/IE.
  */
 ENTRY(spllower)
-	HOTPATCH(HP_NAME_SPLLOWER, 64)
+	HOTPATCH(HP_NAME_SPLLOWER, 96)
 #ifdef SPLDEBUG
 	movl	4(%esp),%ecx
 	pushl	%ebp
@@ -87,14 +87,17 @@ ENTRY(spllower)
 	popl	%ebp
 #endif /* SPLDEBUG */
 	movl	4(%esp),%ecx
-	cmpl	CPUVAR(ILEVEL),%ecx
+	cmpb	CPUVAR(ILEVEL),%cl
 	jae	1f
-	movl	CPUVAR(IUNMASK)(,%ecx,4),%edx
+	movl	CPUVAR(IUNMASK)(,%ecx,8),%edx
+	movl	CPUVAR(IUNMASK)+4(,%ecx,8),%eax
 	PUSHF(%eax)
 	CLI(%eax)
 	testl	CPUVAR(IPENDING),%edx
 	jnz	2f
-	movl	%ecx,CPUVAR(ILEVEL)
+	testl	CPUVAR(IPENDING)+4,%eax
+	jnz	2f
+	movb	%cl,CPUVAR(ILEVEL)
 	POPF(%eax)
 1:
 	ret
@@ -112,31 +115,46 @@ STRONG_ALIAS(spllower, cx8_spllower)
  *
  * spllower() optimized for Pentium Pro and later, which have long pipelines
  * that will be stalled by pushf/cli/popf.  Must be the same size as
- * spllower(), ie 64 bytes.  Does not need to restore eflags/IE as is patched
+ * spllower(), ie 96 bytes.  Does not need to restore eflags/IE as is patched
  * in once autoconf is underway.
  *
  * For cmpxchg8b, edx/ecx are the high words and eax/ebx the low.
  *
- * edx : eax = old level / old ipending
- * ecx : ebx = new level / old ipending
+ * edx : eax = old level + high 24 bit old ipending / low 32 bit old ipending
+ * ecx : ebx = new level + high 24 bit old ipending / low 32 bit old ipending
  */
 ENTRY(cx8_spllower)
 	movl	4(%esp),%ecx
-	movl	CPUVAR(ILEVEL),%edx
+	movzbl	CPUVAR(ILEVEL),%edx
 	cmpl	%edx,%ecx			/* new level is lower? */
-	pushl	%ebx
 	jae	1f
+	pushl	%ebx
+	pushl	%esi
+	pushl	%edi
+	movl	%ecx,%esi
+	movl	%ecx,%edi
+	shll	$24,%edi
 0:
 	movl	CPUVAR(IPENDING),%eax
-	testl	%eax,CPUVAR(IUNMASK)(,%ecx,4)	/* deferred interrupts? */
-	movl	%eax,%ebx
+	testl	%eax,CPUVAR(IUNMASK)(,%esi,8)	/* deferred interrupts? */
 	jnz	2f
+	movl	CPUVAR(IPENDING)+4,%edx
+	testl	%edx,CPUVAR(IUNMASK)+4(,%esi,8)
+	jnz	2f
+	movl	%eax,%ebx
+	movl	%edx,%ecx
+	andl	$0x00ffffff,%ecx
+	orl	%edi,%ecx
 	cmpxchg8b CPUVAR(ISTATE)		/* swap in new ilevel */
 	jnz	0b
-1:
+	popl	%edi
+	popl	%esi
 	popl	%ebx
+1:
 	ret
 2:
+	popl	%edi
+	popl	%esi
 	popl	%ebx
 
 	/* The reference must be absolute, hence the indirect jump. */
@@ -203,7 +221,17 @@ IDTVEC(spllower)
 #endif /* XENPV */
 #endif /* defined(DEBUG) */
 	movl	%ebx,%eax			/* get cpl */
-	movl	CPUVAR(IUNMASK)(,%eax,4),%eax
+	movl	CPUVAR(IUNMASK)+4(,%eax,8),%eax
+	andl	CPUVAR(IPENDING)+4,%eax		/* any non-masked bits left? */
+	jz	10f
+	bsrl	%eax,%eax
+	btrl	%eax,CPUVAR(IPENDING)+4
+	addl	$32,%eax
+	movl	CPUVAR(ISOURCES)(,%eax,4),%eax
+	jmp	*IS_RECURSE(%eax)
+10:
+	movl	%ebx,%eax			/* get cpl */
+	movl	CPUVAR(IUNMASK)(,%eax,8),%eax
 	andl	CPUVAR(IPENDING),%eax		/* any non-masked bits left? */
 	jz	2f
 	bsrl	%eax,%eax
@@ -211,7 +239,7 @@ IDTVEC(spllower)
 	movl	CPUVAR(ISOURCES)(,%eax,4),%eax
 	jmp	*IS_RECURSE(%eax)
 2:
-	movl	%ebx,CPUVAR(ILEVEL)
+	movb	%bl,CPUVAR(ILEVEL)
 #ifdef XENPV
 	STIC(%eax)
 	jz 4f
@@ -267,7 +295,17 @@ IDTVEC(doreti)
 #endif /* defined(DEBUG) */
 
 	movl	%ebx,%eax
-	movl	CPUVAR(IUNMASK)(,%eax,4),%eax
+	movl	CPUVAR(IUNMASK)+4(,%eax,8),%eax
+	andl	CPUVAR(IPENDING)+4,%eax
+	jz	10f
+	bsrl	%eax,%eax		/* slow, but not worth optimizing */
+	btrl	%eax,CPUVAR(IPENDING)+4
+	addl	$32,%eax
+	movl	CPUVAR(ISOURCES)(,%eax, 4),%eax
+	jmp	*IS_RESUME(%eax)
+10:
+	movl	%ebx,%eax
+	movl	CPUVAR(IUNMASK)(,%eax,8),%eax
 	andl	CPUVAR(IPENDING),%eax
 	jz	2f
 	bsrl	%eax,%eax		/* slow, but not worth optimizing */
@@ -275,7 +313,7 @@ IDTVEC(doreti)
 	movl	CPUVAR(ISOURCES)(,%eax, 4),%eax
 	jmp	*IS_RESUME(%eax)
 2:	/* Check for ASTs on exit to user mode. */
-	movl	%ebx,CPUVAR(ILEVEL)
+	movb	%bl,CPUVAR(ILEVEL)
 5:
 	testb	$CHK_UPL,TF_CS(%esp)
 	jnz	doreti_checkast
@@ -342,10 +380,24 @@ IDTVEC(softintr)
 	pushl	%ebx
 	pushl	%esi
 	pushl	%edi
-	movl	$IPL_HIGH,CPUVAR(ILEVEL)
+	movb	$IPL_HIGH,CPUVAR(ILEVEL)
 	STI(%esi)
 	movl	CPUVAR(CURLWP),%esi
 	movl	IS_LWP(%eax),%edi	/* switch to handler LWP */
+	/*
+	 * Simple MOV to set curlwp to softlwp.  See below on ordering
+	 * required to restore softlwp like cpu_switchto.
+	 *
+	 * 1. Don't need store-before-store barrier because x86 is TSO.
+	 *
+	 * 2. Don't need store-before-load barrier because when we
+	 *    enter a softint lwp, it can't be holding any mutexes, so
+	 *    it can't release any until after it has acquired them, so
+	 *    we need not participate in the protocol with
+	 *    mutex_vector_enter barriers here.
+	 *
+	 * Hence no need for XCHG or barriers around MOV.
+	 */
 	movl	%edi,CPUVAR(CURLWP)
 	movl	L_PCB(%edi),%edx
 	movl	L_PCB(%esi),%ecx
@@ -361,9 +413,31 @@ IDTVEC(softintr)
 	movl	PCB_ESP(%ecx),%esp
 
 	/*
-	 * for non-interlocked mutex release to work safely the change
-	 * to ci_curlwp must not languish in the store buffer. therefore
-	 * we use XCHG and not MOV here.  see kern_mutex.c.
+	 * Use XCHG, not MOV, to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by the softint must be visible to
+	 *    other CPUs before we restore curlwp on this one,
+	 *    requiring store-before-store ordering.
+	 *
+	 *    (This is always guaranteed by the x86 memory model, TSO,
+	 *    but other architectures require a explicit barrier before
+	 *    the store to ci->ci_curlwp.)
+	 *
+	 * 2. Restoring curlwp must be visible on all other CPUs before
+	 *    any subsequent mutex_exit on this one can even test
+	 *    whether there might be waiters, requiring
+	 *    store-before-load ordering.
+	 *
+	 *    (This is the only ordering x86 TSO ever requires any kind
+	 *    of barrier for -- in this case, we take advantage of the
+	 *    sequential consistency implied by XCHG to obviate the
+	 *    need for MFENCE or something.)
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.  See also cpu_switchto.
 	 */
 	xchgl	%esi,CPUVAR(CURLWP)	/* restore ci_curlwp */
 	popl	%edi			/* unwind switchframe */
@@ -403,7 +477,7 @@ END(softint_trigger)
  * Handles preemption interrupts via Xspllower().
  */
 IDTVEC(recurse_preempt)
-	movl	$IPL_PREEMPT,CPUVAR(ILEVEL)
+	movb	$IPL_PREEMPT,CPUVAR(ILEVEL)
 	STI(%eax)
 	pushl	$0
 	call	_C_LABEL(kpreempt)
@@ -418,7 +492,7 @@ IDTVEC_END(recurse_preempt)
  * Handles preemption interrupts via Xdoreti().
  */
 IDTVEC(resume_preempt)
-	movl	$IPL_PREEMPT,CPUVAR(ILEVEL)
+	movb	$IPL_PREEMPT,CPUVAR(ILEVEL)
 	STI(%eax)
 	testb	$CHK_UPL,TF_CS(%esp)
 	jnz	1f

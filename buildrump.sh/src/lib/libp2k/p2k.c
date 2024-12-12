@@ -1,4 +1,4 @@
-/*	$NetBSD: p2k.c,v 1.73 2020/02/23 15:46:38 ad Exp $	*/
+/*	$NetBSD: p2k.c,v 1.75 2022/05/24 20:50:17 andvar Exp $	*/
 
 /*
  * Copyright (c) 2007, 2008, 2009  Antti Kantee.  All Rights Reserved.
@@ -361,7 +361,7 @@ p2k_init(uint32_t puffs_flags)
 	}
 
 	/*
-	 * Explicitely tell that our cookies can be treated as
+	 * Explicitly tell that our cookies can be treated as
 	 * puffs_node, since we never let libpuffs know by 
 	 * calling  call puffs_pn_new()
 	 */
@@ -769,13 +769,13 @@ do {									\
 	} else {							\
 		va_compat = __UNCONST(va);				\
 	}								\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define UNDOCOMPAT(va_compat)						\
 do {									\
 	if (needcompat())						\
 		rump_pub_vattr_free(va_compat);				\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 static int
 do_makenode(struct puffs_usermount *pu, struct p2k_node *p2n_dir,

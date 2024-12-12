@@ -1,4 +1,4 @@
-/*	$NetBSD: bus.h,v 1.23 2021/04/23 06:15:16 skrll Exp $	*/
+/*	$NetBSD: bus.h,v 1.26 2024/07/20 20:36:33 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997, 1998, 2001 The NetBSD Foundation, Inc.
@@ -115,7 +115,7 @@ typedef struct mipsco_bus_space *bus_space_tag_t;
 
 struct mipsco_bus_space {
 	const char	*bs_name;
-	struct extent	*bs_extent;
+	void		*bs_spare;	/* (was previously unused extent map) */
 	bus_addr_t	bs_start;
 	bus_size_t	bs_size;
 
@@ -175,18 +175,13 @@ struct mipsco_bus_space {
 #define MIPSCO_BUS_SPACE_UNMAPPED	((vaddr_t)0)
 
 /* machine dependent utility function for bus_space users */
-void	mipsco_bus_space_malloc_set_safe(void);
 void	mipsco_bus_space_init(bus_space_tag_t, const char *,
 	    paddr_t, vaddr_t, bus_addr_t, bus_size_t);
-void	mipsco_bus_space_init_extent(bus_space_tag_t, void *, size_t);
 void	mipsco_bus_space_set_aligned_stride(bus_space_tag_t, unsigned int);
 void	mipsco_sparse_bus_space_init(bus_space_tag_t, const char *,
 	    paddr_t, bus_addr_t, bus_size_t);
 void	mipsco_large_bus_space_init(bus_space_tag_t, const char *,
 	    paddr_t, bus_addr_t, bus_size_t);
-
-/* machine dependent utility function for bus_space implementations */
-int	mipsco_bus_space_extent_malloc_flag(void);
 
 /* these are provided for subclasses which override base bus_space. */
 
@@ -342,7 +337,7 @@ int	mipsco_bus_space_alloc(bus_space_tag_t, bus_addr_t, bus_addr_t,
 /*
  * Utility macros; do not use outside this file.
  */
-#define	__BS_TYPENAME(BITS)		__CONCAT3(u_int,BITS,_t)
+#define	__BS_TYPENAME(BITS)		__CONCAT3(uint,BITS,_t)
 #define __BS_OFFSET(t, o, BYTES)	((o) << (t)->bs_stride)
 #define __BS_FUNCTION(func,BYTES)	__CONCAT3(func,_,BYTES)
 
@@ -480,14 +475,14 @@ __bus_space_write(8,64)
 #define __bus_space_write_multi(BYTES,BITS)				\
 static __inline void __BS_FUNCTION(bus_space_write_multi,BYTES)       	\
 	(bus_space_tag_t, bus_space_handle_t, bus_size_t,		\
-	__BS_TYPENAME(BITS) *, size_t);					\
+	const __BS_TYPENAME(BITS) *, size_t);				\
 									\
 static __inline void							\
 __BS_FUNCTION(bus_space_write_multi,BYTES)(				\
 	bus_space_tag_t t,						\
 	bus_space_handle_t h,						\
 	bus_size_t o,							\
-	__BS_TYPENAME(BITS) *a,						\
+	const __BS_TYPENAME(BITS) *a,					\
 	size_t c)							\
 {									\
 									\
@@ -661,7 +656,7 @@ __bus_space_copy_region(8)
  * - When bus bridge performs automatic byte swap, these functions
  *   perform byte swap once more, to cancel the bridge's behavior.
  *
- * Mips Computer Systems platforms perform harware byte swapping -
+ * Mips Computer Systems platforms perform hardware byte swapping -
  * therefore the streaming methods can byte swap as determined from
  * the bus space tag settings
  *

@@ -1,4 +1,4 @@
-/*	$NetBSD: nextrom.h,v 1.11 2011/12/18 04:29:32 tsutsui Exp $	*/
+/*	$NetBSD: nextrom.h,v 1.13 2023/02/11 02:33:27 tsutsui Exp $	*/
 /*
  * Copyright (c) 1998 Darrin B. Jewell
  * All rights reserved.
@@ -135,7 +135,7 @@
 #define	NADDR		8
 
 struct mon_global {
-	char mg_simm[N_SIMM];	/* MUST BE FIRST (accesed early by locore) */
+	char mg_simm[N_SIMM];	/* MUST BE FIRST (accessed early by locore) */
 	char mg_flags;		/* MUST BE SECOND */
 #define	MGF_LOGINWINDOW		0x80
 #define	MGF_UART_SETUP		0x40
@@ -233,6 +233,7 @@ void *mon_alloc();
 #define	NeXT_WARP9C	3
 #define NeXT_TURBO_MONO	4
 #define NeXT_TURBO_COLOR 5			/* probed witnessed */
+#define NeXT_CUBE_TURBO	8
 
 #define	ROM_STACK_SIZE	(8192 - 2048)
 

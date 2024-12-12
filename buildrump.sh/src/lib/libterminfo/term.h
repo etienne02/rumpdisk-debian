@@ -1,4 +1,4 @@
-/* $NetBSD: term.h,v 1.24 2020/06/05 22:08:10 roy Exp $ */
+/* $NetBSD: term.h,v 1.26 2022/05/11 14:58:00 andvar Exp $ */
 
 /*
  * Copyright (c) 2009, 2010, 2011, 2013, 2020 The NetBSD Foundation, Inc.
@@ -319,7 +319,7 @@ enum TINUMS {
  * max_attributes: Maximum combined video attributes terminal can display
  * magic_cookie_glitch: Number of blank characters left by smso or rmso
  * max_colors: Maximum number of colours on the screen
- * max_micro_address: Maximum value in micro_..._addresss
+ * max_micro_address: Maximum value in micro_..._address
  * max_micro_jump: Maximum value in parm_..._micro
  * max_pairs: Maximum number of colour-pairs on the screen
  * maximum_windows: Maximum number of definable windows
@@ -1611,7 +1611,7 @@ enum TISTRS{
  * enter_top_hl_mode: Turn on top highlight mode
  * enter_underline_mode: Start underscore mode
  * enter_upward_mode: Enable upward carriage motion
- * enter_vertical_hl_mode: Turn on verticle highlight mode
+ * enter_vertical_hl_mode: Turn on vertical highlight mode
  * enter_xon_mode: Turn on xon/xoff handshaking
  * erase_chars: Erase #1 characters
  * exit_alt_charset_mode: End alternate character set
@@ -1749,7 +1749,7 @@ enum TISTRS{
  * key_ll: sent by home-down key
  * key_mark: sent by mark key
  * key_message: sent by message key
- * key_mouse: 0631, Mouse event has occured
+ * key_mouse: 0631, Mouse event has occurred
  * key_move: sent by move key
  * key_next: sent by next-object key
  * key_npage: sent by next-page key
@@ -1776,7 +1776,7 @@ enum TISTRS{
  * key_select: sent by select key
  * key_send: sent by shifted end key
  * key_seol: sent by shifted clear-line key
- * key_sexit: sent by shited exit key
+ * key_sexit: sent by shifted exit key
  * key_sf: sent by scroll-forward/down key
  * key_sfind: sent by shifted find key
  * key_shelp: sent by shifted help key

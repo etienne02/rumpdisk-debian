@@ -1,4 +1,4 @@
-/*	$NetBSD: conf.c,v 1.7 2005/12/11 12:18:29 christos Exp $	*/
+/*	$NetBSD: conf.c,v 1.8 2023/02/12 08:25:09 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1990, 1993
@@ -45,21 +45,15 @@
 #include <netif.h>
 #include <dev_net.h>
 
+#include "samachdep.h"
+
 /*
  * Device configuration
  */
 
-extern int	sdstrategy(void *, int, daddr_t, size_t, void *, size_t *);
-extern int	sdopen(struct open_file *, ...);
-extern int	sdclose(struct open_file *);
 #define	sdioctl	noioctl
 
-/* ### now from libsa
-extern int	enstrategy(void *, int, daddr_t, size_t, void *, size_t *);
-extern int	enopen(struct open_file *, ...);
-extern int	enclose(struct open_file *);
 #define	enioctl	noioctl
-*/
 
 struct devsw devsw[] = {
 	{ "sd",	sdstrategy,	sdopen,	sdclose,	sdioctl },

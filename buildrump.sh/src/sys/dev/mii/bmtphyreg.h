@@ -1,4 +1,4 @@
-/*	$NetBSD: bmtphyreg.h,v 1.2 2008/04/28 20:23:53 martin Exp $	*/
+/*	$NetBSD: bmtphyreg.h,v 1.4 2024/06/06 21:28:31 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -114,7 +114,7 @@
 #define	MII_BMTPHY_INTR		0x1a	/* interrupt register */
 #define	INTR_FDX_LED		0x8000	/* full-duplex led enable */
 #define	INTR_INTR_EN		0x4000	/* interrupt enable */
-#define	INTR_FDX_MASK		0x0800	/* full-dupled intr mask */
+#define	INTR_FDX_MASK		0x0800	/* full-duplex intr mask */
 #define	INTR_SPD_MASK		0x0400	/* speed intr mask */
 #define	INTR_LINK_MASK		0x0200	/* link intr mask */
 #define	INTR_INTR_MASK		0x0100	/* master interrupt mask */
@@ -124,7 +124,7 @@
 #define	INTR_INTR_STATUS	0x0001	/* interrupt status */
 
 
-#define	MII_BMTPHY_AUX2		0x1b	/* auliliary mode 2 */
+#define	MII_BMTPHY_AUX2		0x1b	/* auxiliary mode 2 */
 #define	AUX2_BLOCK_RXDV		0x0200	/* block RXDV mode enabled */
 #define	AUX2_ANPDQ		0x0100	/* auto-neg parallel detection Q mode */
 #define	AUX2_TRAFFIC_LED	0x0040	/* traffic meter led enable */

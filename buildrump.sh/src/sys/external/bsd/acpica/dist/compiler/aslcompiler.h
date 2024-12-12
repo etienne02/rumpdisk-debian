@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -1458,6 +1458,9 @@ ASL_RESOURCE_NODE *
 RsDoPinGroupConfigDescriptor (
     ASL_RESOURCE_INFO       *Info);
 
+ASL_RESOURCE_NODE *
+RsDoClockInputDescriptor (
+    ASL_RESOURCE_INFO       *Info);
 
 /*
  * aslrestype2d - DWord address descriptors
@@ -1471,9 +1474,12 @@ RsDoDwordMemoryDescriptor (
     ASL_RESOURCE_INFO       *Info);
 
 ASL_RESOURCE_NODE *
-RsDoDwordSpaceDescriptor (
+RsDoDwordPccDescriptor (
     ASL_RESOURCE_INFO       *Info);
 
+ASL_RESOURCE_NODE *
+RsDoDwordSpaceDescriptor (
+    ASL_RESOURCE_INFO       *Info);
 
 /*
  * aslrestype2e - Extended address descriptors
@@ -1503,6 +1509,10 @@ RsDoQwordMemoryDescriptor (
     ASL_RESOURCE_INFO       *Info);
 
 ASL_RESOURCE_NODE *
+RsDoQwordPccDescriptor (
+    ASL_RESOURCE_INFO       *Info);
+
+ASL_RESOURCE_NODE *
 RsDoQwordSpaceDescriptor (
     ASL_RESOURCE_INFO       *Info);
 
@@ -1512,6 +1522,10 @@ RsDoQwordSpaceDescriptor (
  */
 ASL_RESOURCE_NODE *
 RsDoWordIoDescriptor (
+    ASL_RESOURCE_INFO       *Info);
+
+ASL_RESOURCE_NODE *
+RsDoWordPccDescriptor (
     ASL_RESOURCE_INFO       *Info);
 
 ASL_RESOURCE_NODE *

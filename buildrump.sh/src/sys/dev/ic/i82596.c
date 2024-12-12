@@ -1,4 +1,4 @@
-/* $NetBSD: i82596.c,v 1.44 2020/02/04 05:25:39 thorpej Exp $ */
+/* $NetBSD: i82596.c,v 1.48 2024/07/05 04:31:51 rin Exp $ */
 
 /*
  * Copyright (c) 2003 Jochen Kunz.
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i82596.c,v 1.44 2020/02/04 05:25:39 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i82596.c,v 1.48 2024/07/05 04:31:51 rin Exp $");
 
 /* autoconfig and device stuff */
 #include <sys/param.h>
@@ -120,7 +120,7 @@ static void iee_cb_setup(struct iee_softc *, uint32_t);
  * the chip.
  * 
  * IEE_NEED_SWAP in sc->sc_flags has to be cleared on little endian hardware
- * and set on big endian hardware, when endianess conversion is not done
+ * and set on big endian hardware, when endianness conversion is not done
  * by the bus attachment but done by i82596 chip itself.
  * Usually you need to set IEE_NEED_SWAP on big endian machines
  * where the hardware (the LE/~BE pin) is configured as BE mode.
@@ -132,7 +132,7 @@ static void iee_cb_setup(struct iee_softc *, uint32_t);
  * Rev B and C chips support big endian byte ordering for 32 bit entities,
  * and this new feature is enabled by IEE_SYSBUS_BE in the sysbus byte.
  *
- * With the IEE_SYSBUS_BE feature, all 32 bit address ponters are
+ * With the IEE_SYSBUS_BE feature, all 32 bit address pointers are
  * treated as true 32 bit entities but the SCB absolute address and
  * statistical counters are still treated as two 16 bit big endian entities,
  * so we have to always swap high and low words for these entities.
@@ -330,10 +330,10 @@ iee_intr(void *intarg)
 			if (sc->sc_next_tbd != 0) {
 				/* A TX CMD list finished, cleanup */
 				for (n = 0 ; n < sc->sc_next_cb ; n++) {
-					m_freem(sc->sc_tx_mbuf[n]);
-					sc->sc_tx_mbuf[n] = NULL;
 					bus_dmamap_unload(sc->sc_dmat,
 					    sc->sc_tx_map[n]);
+					m_freem(sc->sc_tx_mbuf[n]);
+					sc->sc_tx_mbuf[n] = NULL;
 					IEE_CBSYNC(sc, n,
 					    BUS_DMASYNC_POSTREAD |
 					    BUS_DMASYNC_POSTWRITE);
@@ -968,11 +968,11 @@ iee_init(struct ifnet *ifp)
 	    IEE_SWAPA32(IEE_PHYS_SHMEM(sc->sc_rbd_off));
 	if (err != 0) {
 		for (n = 0 ; n < r; n++) {
-			m_freem(sc->sc_rx_mbuf[n]);
-			sc->sc_rx_mbuf[n] = NULL;
 			bus_dmamap_unload(sc->sc_dmat, sc->sc_rx_map[n]);
 			bus_dmamap_destroy(sc->sc_dmat, sc->sc_rx_map[n]);
 			sc->sc_rx_map[n] = NULL;
+			m_freem(sc->sc_rx_mbuf[n]);
+			sc->sc_rx_mbuf[n] = NULL;
 		}
 		for (n = 0 ; n < t ; n++) {
 			bus_dmamap_destroy(sc->sc_dmat, sc->sc_tx_map[n]);
@@ -1034,14 +1034,13 @@ iee_stop(struct ifnet *ifp, int disable)
 		sc->sc_tx_map[n] = NULL;
 	}
 	for (n = 0 ; n < IEE_NRFD ; n++) {
-		if (sc->sc_rx_mbuf[n] != NULL)
-			m_freem(sc->sc_rx_mbuf[n]);
-		sc->sc_rx_mbuf[n] = NULL;
 		if (sc->sc_rx_map[n] != NULL) {
 			bus_dmamap_unload(sc->sc_dmat, sc->sc_rx_map[n]);
 			bus_dmamap_destroy(sc->sc_dmat, sc->sc_rx_map[n]);
 		}
 		sc->sc_rx_map[n] = NULL;
+		m_freem(sc->sc_rx_mbuf[n]);
+		sc->sc_rx_mbuf[n] = NULL;
 	}
 }
 

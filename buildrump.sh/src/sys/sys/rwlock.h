@@ -1,4 +1,4 @@
-/*	$NetBSD: rwlock.h,v 1.16 2020/02/22 21:24:45 ad Exp $	*/
+/*	$NetBSD: rwlock.h,v 1.19 2023/09/07 20:05:41 ad Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2006, 2007, 2008, 2019, 2020 The NetBSD Foundation, Inc.
@@ -58,6 +58,7 @@ typedef enum krw_t {
 typedef struct krwlock krwlock_t;
 
 #ifdef __RWLOCK_PRIVATE
+#include <sys/stdbool.h>
 /*
  * Bits in the owner field of the lock that indicate lock state.  If the
  * WRITE_LOCKED bit is clear, then the owner field is actually a count of
@@ -83,8 +84,6 @@ typedef struct krwlock krwlock_t;
 void	rw_vector_enter(krwlock_t *, const krw_t);
 void	rw_vector_exit(krwlock_t *);
 int	rw_vector_tryenter(krwlock_t *, const krw_t);
-void	_rw_init(krwlock_t *, uintptr_t);
-bool	rw_owner_running(const krwlock_t *);
 #endif	/* __RWLOCK_PRIVATE */
 
 struct krwlock {
@@ -93,6 +92,7 @@ struct krwlock {
 
 #ifdef _KERNEL
 
+void	_rw_init(krwlock_t *, uintptr_t);
 void	rw_init(krwlock_t *);
 void	rw_destroy(krwlock_t *);
 

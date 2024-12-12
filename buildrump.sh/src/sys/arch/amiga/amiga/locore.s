@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.159 2020/07/21 06:39:31 rin Exp $	*/
+/*	$NetBSD: locore.s,v 1.172 2024/01/19 18:18:53 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -423,9 +423,6 @@ ENTRY_NOPROFILE(trace)
 	moveq	#T_TRACE,%d0
 	jra	_ASM_LABEL(fault)
 
-/* Use common m68k sigreturn */
-#include <m68k/m68k/sigreturn.s>
-
 /*
  * Interrupt handlers.
  *
@@ -443,16 +440,16 @@ ENTRY_NOPROFILE(trace)
  * and serial RBF (int5) specially, to improve performance
  */
 ENTRY_NOPROFILE(spurintr)
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	addql	#1,_C_LABEL(intrcnt)+0
 	INTERRUPT_SAVEREG
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)
 
 ENTRY_NOPROFILE(lev5intr)
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 #include "ser.h"
 #if NSER > 0
@@ -464,12 +461,12 @@ ENTRY_NOPROFILE(lev5intr)
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
 	addql	#1,_C_LABEL(intrcnt)+20
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)
 
 #ifdef DRACO
 ENTRY_NOPROFILE(DraCoLev2intr)
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 
 	CIAAADDR(%a0)
@@ -482,9 +479,7 @@ ENTRY_NOPROFILE(DraCoLev2intr)
 	btst	#0,%d0			| timerA interrupt?
 	jeq	Ldraciaend
 
-	lea	%sp@(16),%a1		| get pointer to PS
-	movl	%a1,%sp@-		| push pointer to PS, PC
-
+	movl	%sp,%sp@-		| push pointer to clockframe
 	movw	#PSL_HIGHIPL,%sr	| hardclock at high IPL
 	jbsr	_C_LABEL(hardclock)	| call generic clock int routine
 	addql	#4,%sp			| pop params
@@ -493,12 +488,12 @@ ENTRY_NOPROFILE(DraCoLev2intr)
 Ldraciaend:
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)
 
 /* XXX on the DraCo rev. 4 or later, lev 1 is vectored here. */
 ENTRY_NOPROFILE(DraCoLev1intr)
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 	movl	_C_LABEL(draco_ioct),%a0
 	btst	#5,%a0@(7)
@@ -507,10 +502,9 @@ ENTRY_NOPROFILE(DraCoLev1intr)
 	jeq	Ldrintrcommon	| so test last.
 	movw	#PSL_HIGHIPL,%sr	| run clock at high ipl
 Ldrclockretry:
-	lea	%sp@(16),%a1	| get pointer to PS
-	movl	%a1,%sp@-	| push pointer to PS, PC
+	movl	%sp,%sp@-		| push pointer to clockframe
 	jbsr	_C_LABEL(hardclock)
-	addql	#4,%sp		| pop params
+	addql	#4,%sp			| pop params
 	addql	#1,_C_LABEL(intrcnt)+32	| add another system clock interrupt
 
 	movl	_C_LABEL(draco_ioct),%a0
@@ -527,12 +521,12 @@ Ldrclockretry:
 
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)	| XXXX: shouldn't we call the normal lev1?
 
 /* XXX on the DraCo, lev 1, 3, 4, 5 and 6 are vectored here by initcpu() */
 ENTRY_NOPROFILE(DraCoIntr)
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 Ldrintrcommon:
 	lea	_ASM_LABEL(Drintrcnt)-4,%a0
@@ -545,7 +539,7 @@ Ldrintrcommon:
 	addql	#4,%sp			| pop SR
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)
 #endif
 
@@ -556,7 +550,7 @@ ENTRY_NOPROFILE(lev3intr)
 #ifndef LEV6_DEFER
 ENTRY_NOPROFILE(lev4intr)
 #endif
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 Lintrcommon:
 	lea	_C_LABEL(intrcnt),%a0
@@ -569,7 +563,7 @@ Lintrcommon:
 	addql	#4,%sp			| pop SR
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)
 
 /* XXX used to be ifndef DRACO; vector will be overwritten by initcpu() */
@@ -581,7 +575,7 @@ ENTRY_NOPROFILE(lev6intr)
 	 * as we return. Block generation of level 6 ints until
 	 * we have dealt with this one.
 	 */
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	moveml	%d0/%a0,%sp@-
 	INTREQRADDR(%a0)
 	movew	%a0@,%d0
@@ -593,18 +587,18 @@ ENTRY_NOPROFILE(lev6intr)
 	movew	#INTF_EXTER,%a0@
 	movew	#INTF_SETCLR+INTF_AUD3,%a0@	| make sure THIS one is ok...
 	moveml	%sp@+,%d0/%a0
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	rte
 Llev6spur:
 	addql	#1,_C_LABEL(intrcnt)+36	| count spurious level 6 interrupts
 	moveml	%sp@+,%d0/%a0
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	rte
 
 ENTRY_NOPROFILE(lev4intr)
 ENTRY_NOPROFILE(fake_lev6intr)
 #endif
-	addql	#1,_C_LABEL(interrupt_depth)
+	addql	#1,_C_LABEL(intr_depth)
 	INTERRUPT_SAVEREG
 #ifdef LEV6_DEFER
 	/*
@@ -630,8 +624,8 @@ ENTRY_NOPROFILE(fake_lev6intr)
 	btst	#0,%d0			| timerA interrupt?
 	jeq     Ltstciab4		| no
 	movl	%d0,%sp@-		| push CIAB interrupt flags
-	lea	%sp@(20),%a1		| get pointer to PS
-	movl	%a1,%sp@-		| push pointer to PS, PC
+	lea	%sp@(4),%a1		| get pointer to clockframe
+	movl	%a1,%sp@-		| push pointer to clockframe
 	jbsr	_C_LABEL(hardclock)	| call generic clock int routine
 	addql	#4,%sp			| pop params
 	addql	#1,_C_LABEL(intrcnt)+32	| add another system clock interrupt
@@ -648,7 +642,7 @@ Lskipciab:
 Llev6done:
 	CPUINFO_INCREMENT(CI_NINTR)
 	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(interrupt_depth)
+	subql	#1,_C_LABEL(intr_depth)
 	jra	_ASM_LABEL(rei)		| all done [can we do rte here?]
 Lchkexter:
 | check to see if EXTER request is really set?
@@ -695,7 +689,7 @@ ENTRY_NOPROFILE(lev7intr)
  * (profiling, scheduling) and software interrupts (network, softclock).
  * We check for ASTs first, just like the VAX.  To avoid excess overhead
  * the T_ASTFLT handling code will also check for software interrupts so we
- * do not have to do it here.  After identifing that we need an AST we
+ * do not have to do it here.  After identifying that we need an AST we
  * drop the IPL to allow device interrupts.
  *
  * This code is complicated by the fact that sendsig may have been called
@@ -705,7 +699,7 @@ ENTRY_NOPROFILE(lev7intr)
  */
 ASENTRY_NOPROFILE(rei)
 #ifdef DEBUG
-	tstl	_C_LABEL(panicstr)	| have we paniced?
+	tstl	_C_LABEL(panicstr)	| have we panicked?
 	jne	Ldorte			| yes, do not make matters worse
 #endif
 	tstl	_C_LABEL(astpending)	| AST pending?
@@ -933,7 +927,7 @@ Lstartnot040:
 	orl	#0x0000c044,%d0		| 16 MB, ro, cache inhibited
 	.word	0x4e7b,0x0004		| movc %d0,%itt0
 	.word	0xf518			| pflusha
-	movl	#0xc000,%d0		| enable MMU
+	movl	#MMU40_TCR_BITS,%d0	| enable MMU
 	.word	0x4e7b,0x0003		| movc %d0,%tc
 	jmp	Lcleanitt0:l
 Lcleanitt0:
@@ -963,7 +957,7 @@ LMMUenable_start:
 	cmpl	#MMU_68040,%a0@
 	jne	Lenable030
 	.word	0xf518			| pflusha
-	movl	#0xc000,%d0		| enable MMU
+	movl	#MMU40_TCR_BITS,%d0	| enable MMU
 	.word	0x4e7b,0x0003		| movc	%d0,%tc
 	jmp	LMMUenable_end:l
 #endif /* M68040 || M68060 */
@@ -973,8 +967,7 @@ Lenable030:
 	pmove	%a0@,%tc
 	jmp	LMMUenable_end:l
 
-/* ENABLE, SRP_ENABLE, 8K pages, 8bit A-level, 11bit B-level */
-Ltc:	.long	0x82d08b00
+Ltc:	.long	MMU51_TCR_BITS		| see pmap.h
 
 LMMUenable_end:
 
@@ -1052,21 +1045,8 @@ Lnoflush:
   	rte
 
 /*
- * Use common m68k sigcode.
- */
-#include <m68k/m68k/sigcode.s>
-#ifdef COMPAT_SUNOS
-#include <m68k/m68k/sunos_sigcode.s>
-#endif
-
-/*
  * Primitives
  */
-
-/*
- * Use common m68k support routines.
- */
-#include <m68k/m68k/support.s>
 
 /*
  * non-local gotos
@@ -1092,18 +1072,6 @@ ENTRY(ecacheoff)
 	rts
 
 /*
- * Get callers current SP value.
- * Note that simply taking the address of a local variable in a C function
- * doesn't work because callee saved registers may be outside the stack frame
- * defined by A6 (e.g. GCC generated code).
- */
-ENTRY(getsp)
-	movl	%sp,%d0				| get current SP
-	addql	#4,%d0				| compensate for return address
-	movl	%d0,%a0				| Comply with ELF ABI
-	rts
-
-/*
  * Check out a virtual address to see if it's okay to write to.
  *
  * probeva(va, fc)
@@ -1117,75 +1085,6 @@ ENTRY(probeva)
 	moveq	#FC_USERD,%d0			| restore DFC to user space
 	movc	%d0,%dfc
 	.word	0x4e7a,0x0805			| movec  MMUSR,d0
-	rts
-
-/*
- * Load a new user segment table pointer.
- */
-ENTRY(loadustp)
-	movl	%sp@(4),%d0			| new USTP
-	moveq	#PGSHIFT,%d1
-	lsll	%d1,%d0				| convert to addr
-#ifdef M68060
-	cmpl	#CPU_68060,_C_LABEL(cputype)	| 68060?
-	jeq	Lldustp060			|  yes, skip
-#endif
-	cmpl	#MMU_68040,_C_LABEL(mmutype)	| 68040?
-	jeq	Lldustp040			|  yes, skip
-	pflusha					| flush entire TLB
-	lea	_C_LABEL(protorp),%a0		| CRP prototype
-	movl	%d0,%a0@(4)			| stash USTP
-	pmove	%a0@,%crp			| load root pointer
-	movl	#CACHE_CLR,%d0
-	movc	%d0,%cacr			| invalidate cache(s)
-	rts
-#ifdef M68060
-Lldustp060:
-	movc	%cacr,%d1
-	orl	#IC60_CUBC,%d1			| clear user btc entries
-	movc	%d1,%cacr
-#endif
-Lldustp040:
-	.word	0xf518				| pflusha
-	.word	0x4e7b,0x0806			| movec d0,URP
-	rts
-
-/*
- * Flush any hardware context associated with given USTP.
- * Only does something for HP330 where we must flush RPT
- * and ATC entries in PMMU.
- */
-ENTRY(flushustp)
-#ifdef M68060
-	cmpl	#CPU_68060,_C_LABEL(cputype)
-	jeq	Lflustp060
-#endif
-	cmpl	#MMU_68040,_C_LABEL(mmutype)
-	jeq	Lnot68851
-	tstl	_C_LABEL(mmutype)		| 68851 PMMU?
-	jle	Lnot68851			| no, nothing to do
-	movl	%sp@(4),%d0			| get USTP to flush
-	moveq	#PGSHIFT,%d1
-	lsll	%d1,%d0				| convert to address
-	movl	%d0,_C_LABEL(protorp)+4		| stash USTP
-	pflushr	_C_LABEL(protorp)		| flush RPT/TLB entries
-Lnot68851:
-	rts
-#ifdef M68060
-Lflustp060:
-	movc	%cacr,%d1
-	orl	#IC60_CUBC,%d1			| clear user btc entries
-	movc	%d1,%cacr
-	rts
-#endif
-
-
-ENTRY(ploadw)
-	movl	%sp@(4),%a0			| address to load
-	cmpl	#MMU_68040,_C_LABEL(mmutype)
-	jeq	Lploadw040
-	ploadw	#1,%a0@				| pre-load translation
-Lploadw040:					| should 68040 do a ptest?
 	rts
 
 /*
@@ -1458,8 +1357,6 @@ GLOBAL(ectype)
 	.long	EC_NONE
 GLOBAL(fputype)
 	.long	FPU_NONE
-GLOBAL(protorp)
-	.long	0x80000002,0	| prototype root pointer
 GLOBAL(delaydivisor)
 	.long	12		| should be enough for 80 MHz 68060
 				| will be adapted to other CPUs in

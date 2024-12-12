@@ -1,4 +1,4 @@
-/*	$NetBSD: installboot.h,v 1.42 2020/06/21 17:17:02 thorpej Exp $	*/
+/*	$NetBSD: installboot.h,v 1.46 2024/05/22 15:42:42 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -94,6 +94,7 @@ typedef struct {
 	const char	*stage2;	/* name of stage2 bootstrap */
 	uint64_t	 s2start;	/*  start block of stage2 */
 	uint32_t	 sectorsize;	/* sector size of target fs */
+	const char	*uboot_paths;	/* u-boot paths */
 		/* parsed -o option=value data */
 	const char	*command;	/* name of command string */
 	const char	*console;	/* name of console */
@@ -170,21 +171,28 @@ int		shared_bbinfo_clearboot(ib_params *, struct bbinfo_params *,
 int		shared_bbinfo_setboot(ib_params *, struct bbinfo_params *,
 		    int (*)(ib_params *, struct bbinfo_params *, uint8_t *));
 
-	/* fstypes.c */
-int		hardcode_stage2(ib_params *, uint32_t *, ib_block *);
+	/* cd9660.c */
+int		cd9660_match(ib_params *);
+int		cd9660_findstage2(ib_params *, uint32_t *, ib_block *);
+
+	/* ext2fs.c */
+int		ext2fs_match(ib_params *);
+int		ext2fs_findstage2(ib_params *, uint32_t *, ib_block *);
+
+	/* ffs.c */
 int		ffs_match(ib_params *);
 int		ffs_findstage2(ib_params *, uint32_t *, ib_block *);
 int		raid_match(ib_params *);
+
+	/* fstypes.c */
+int		hardcode_stage2(ib_params *, uint32_t *, ib_block *);
 int		raw_match(ib_params *);
 int		raw_findstage2(ib_params *, uint32_t *, ib_block *);
-int		ext2fs_match(ib_params *);
-int		ext2fs_findstage2(ib_params *, uint32_t *, ib_block *);
 
 	/* machines.c */
 extern struct ib_mach ib_mach_alpha;
 extern struct ib_mach ib_mach_amd64;
 extern struct ib_mach ib_mach_amiga;
-extern struct ib_mach ib_mach_emips;
 extern struct ib_mach ib_mach_evbarm;
 extern struct ib_mach ib_mach_evbmips;
 extern struct ib_mach ib_mach_ews4800mips;

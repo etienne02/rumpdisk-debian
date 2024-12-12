@@ -1,4 +1,4 @@
-/*	$NetBSD: sleepq.c,v 1.21 2020/11/01 20:58:38 christos Exp $	*/
+/*	$NetBSD: sleepq.c,v 1.28 2023/10/13 18:23:54 ad Exp $	*/
 
 /*
  * Copyright (c) 2008 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sleepq.c,v 1.21 2020/11/01 20:58:38 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sleepq.c,v 1.28 2023/10/13 18:23:54 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/condvar.h>
@@ -56,6 +56,21 @@ sleepq_destroy(sleepq_t *sq)
 	cv_destroy(&sq->sq_cv);
 }
 
+int
+sleepq_enter(sleepq_t *sq, lwp_t *l, kmutex_t *mp)
+{
+	int nlocks;
+
+	lwp_lock(l);
+	if (mp != NULL) {
+		lwp_unlock_to(l, mp);
+	}
+	if ((nlocks = l->l_blcnt) != 0) {
+		KERNEL_UNLOCK_ALL(NULL, NULL);
+	}
+	return nlocks;
+}
+
 void
 sleepq_enqueue(sleepq_t *sq, wchan_t wc, const char *wmsg, syncobj_t *sob,
     bool catch_p)
@@ -69,12 +84,11 @@ sleepq_enqueue(sleepq_t *sq, wchan_t wc, const char *wmsg, syncobj_t *sob,
 }
 
 int
-sleepq_block(int timo, bool catch)
+sleepq_block(int timo, bool catch, syncobj_t *syncobj __unused, int nlocks)
 {
 	struct lwp *l = curlwp;
 	int error = 0;
 	kmutex_t *mp = l->l_mutex;
-	int biglocks = l->l_biglocks;
 
 	while (l->l_wchan) {
 		l->l_mutex = mp; /* keep sleepq lock until woken up */
@@ -89,8 +103,8 @@ sleepq_block(int timo, bool catch)
 	}
 	mutex_spin_exit(mp);
 
-	if (biglocks)
-		KERNEL_LOCK(biglocks, curlwp);
+	if (nlocks)
+		KERNEL_LOCK(nlocks, curlwp);
 
 	return error;
 }
@@ -132,6 +146,13 @@ sleepq_unsleep(struct lwp *l, bool cleanup)
 	}
 }
 
+void
+sleepq_remove(sleepq_t *sq, struct lwp *l, bool wakeup)
+{
+
+	sleepq_unsleep(l, false);
+}
+
 /*
  * Thread scheduler handles priorities.  Therefore no action here.
  * (maybe do something if we're deperate?)
@@ -163,7 +184,48 @@ lwp_unlock_to(struct lwp *l, kmutex_t *new)
 	KASSERT(mutex_owned(l->l_mutex));
 
 	old = l->l_mutex;
-	membar_exit();
-	l->l_mutex = new;
+	atomic_store_release(&l->l_mutex, new);
 	mutex_spin_exit(old);
+}
+
+void
+lwp_lock(lwp_t *l)
+{
+	kmutex_t *old = atomic_load_consume(&l->l_mutex);
+
+	mutex_spin_enter(old);
+	while (__predict_false(atomic_load_relaxed(&l->l_mutex) != old)) {
+		mutex_spin_exit(old);
+		old = atomic_load_consume(&l->l_mutex);
+		mutex_spin_enter(old);
+	}
+}
+
+void
+lwp_unlock(lwp_t *l)
+{
+
+	mutex_spin_exit(l->l_mutex);
+}
+
+void
+lwp_changepri(lwp_t *l, pri_t pri)
+{
+
+	/* fuck */
+}
+
+void
+lwp_lendpri(lwp_t *l, pri_t pri)
+{
+
+	/* you */
+}
+
+pri_t
+lwp_eprio(lwp_t *l)
+{
+
+	/* Antti */
+	return l->l_priority;
 }

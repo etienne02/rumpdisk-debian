@@ -1,4 +1,4 @@
-/* 	$NetBSD: dcr.h,v 1.1 2006/12/02 22:18:47 freza Exp $ */
+/* 	$NetBSD: dcr.h,v 1.3 2022/03/10 00:14:16 riastradh Exp $ */
 
 /*
  * Copyright (c) 2006 Jachym Holecek
@@ -30,7 +30,7 @@
  */
 
 /*
- * DCR is an user accesible bus on Xilinx PPC405D5Xn cores and may contain
+ * DCR is an user accessible bus on Xilinx PPC405D5Xn cores and may contain
  * arbitrary devices. Because we want to be able to share drivers with
  * OPB/PLB, we make it a bus space backend. Each platform ("design", "board")
  * has to provide the leaf _read_4/_write_4 routines specific to device
@@ -52,6 +52,8 @@ int 	dcr_subregion(bus_space_tag_t, bus_space_handle_t, bus_size_t,
 int 	dcr_map(bus_space_tag_t, bus_addr_t, bus_size_t, int,
 	    bus_space_handle_t *);
 void 	dcr_unmap(bus_space_tag_t, bus_space_handle_t, bus_size_t);
+void	dcr_barrier(bus_space_tag_t, bus_space_handle_t, bus_size_t,
+	    bus_size_t, int);
 
 /* Bus space tag contents, one tag per DCR device. */
 #define DCR_BST_BODY(base, read, write) \

@@ -1,4 +1,4 @@
-/*	$NetBSD: atari5380.c,v 1.64 2019/12/27 09:41:49 msaitoh Exp $	*/
+/*	$NetBSD: atari5380.c,v 1.66 2023/01/06 10:28:28 tsutsui Exp $	*/
 
 /*
  * Copyright (c) 1995 Leo Weppelman.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: atari5380.c,v 1.64 2019/12/27 09:41:49 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: atari5380.c,v 1.66 2023/01/06 10:28:28 tsutsui Exp $");
 
 #include "opt_atariscsi.h"
 
@@ -65,7 +65,7 @@ __KERNEL_RCSID(0, "$NetBSD: atari5380.c,v 1.64 2019/12/27 09:41:49 msaitoh Exp $
  * Set the various driver options
  */
 #define	NREQ		18	/* Size of issue queue			*/
-#define	AUTO_SENSE	1	/* Automatically issue a request-sense 	*/
+#define	AUTO_SENSE	1	/* Automatically issue a request-sense	*/
 
 #define	DRNAME		ncrscsi	/* used in various prints		*/
 #undef	DBG_SEL			/* Show the selection process		*/
@@ -214,7 +214,7 @@ static struct ncr_softc	*cur_softc;
 #if defined(TT_SCSI)
 
 /*
- * Prototype functions defined below 
+ * Prototype functions defined below
  */
 #ifdef NO_TTRAM_DMA
 static int tt_wrong_dma_range(SC_REQ *, struct dma_chain *);
@@ -637,7 +637,6 @@ ncr5380_drq_intr(int poll)
 	PID("end drq");
 	if (!poll)
 		single_inst_bset_b(MFP2->mf_imra, IA_SCSI);
-	
 }
 
 #endif /* defined(TT_SCSI) */
@@ -667,7 +666,7 @@ ncr5380_drq_intr(int poll)
 #if defined(FALCON_SCSI)
 
 /*
- * Prototype functions defined below 
+ * Prototype functions defined below
  */
 static void	scsi_falcon_init(struct ncr_softc *);
 static uint8_t	get_falcon_5380_reg(u_short);
@@ -900,7 +899,7 @@ falcon_get_dma_result(SC_REQ *reqp, u_long *bytes_left)
 		/*
 		 * Misc. DMA-error according to Atari...
 		 */
-		ncr_tprint(reqp, "Unknow ST-SCSI error near 0x%x\n",
+		ncr_tprint(reqp, "Unknown ST-SCSI error near 0x%x\n",
 		    st_dmaaddr_get());
 		reqp->xs->error = XS_DRIVER_STUFFUP;
 		rv = 1;
@@ -914,7 +913,7 @@ falcon_get_dma_result(SC_REQ *reqp, u_long *bytes_left)
 	 * should be handled by the mi-part of the driver.
 	 * NOTE: We formerly did this by using the 'byte-count-zero' bit
 	 *       of the DMA controller, but this didn't seem to work???
-         *       [lwp 29/06/96]
+	 *       [lwp 29/06/96]
 	 */
 	bytes_done = st_dmaaddr_get() - reqp->dm_cur->dm_addr;
 	if (bytes_done & 511) {

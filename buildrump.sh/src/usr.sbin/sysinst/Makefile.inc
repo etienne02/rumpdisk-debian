@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.41 2021/07/13 09:13:00 martin Exp $
+#	$NetBSD: Makefile.inc,v 1.50 2024/12/01 11:10:34 martin Exp $
 #
 # Makefile for sysinst
 
@@ -47,7 +47,7 @@ SRCS+=	mbr.c
 CPPFLAGS+=	-DNO_CLONES
 .endif
 
-.if ${CHECK_ENTROPY:Uno} != "no"
+.if ${CHECK_ENTROPY:Uyes} != "no"
 MENUS_MI+=	menus.entropy
 CPPFLAGS+=	-DCHECK_ENTROPY=1
 .endif
@@ -75,6 +75,24 @@ SETS_TAR_SUFF=${"${USE_XZ_SETS:Uno}"!="no":?"tar.xz":"tgz"}
 
 .if ${MKBSDTAR:Uno} == "no"
 CPPFLAGS+=	-DUSING_PAXASTAR
+.endif
+
+.if ${MKCOMPAT:Uno} != "no"
+CPPFLAGS+=	-DHAVE_BASE32
+.endif
+
+.if ${MKCOMPAT:Uno} != "no" && \
+    (${MACHINE_ARCH} == "mips64eb" || ${MACHINE_ARCH} == "mips64el")
+CPPFLAGS+=	-DHAVE_BASE64
+.endif
+
+.if ${MKCOMPAT:Uno} != "no" && ${MKDEBUG:Uno} != "no"
+CPPFLAGS+=	-DHAVE_DEBUG32
+.endif
+
+.if ${MKCOMPAT:Uno} != "no" && ${MKDEBUG:Uno} != "no" && \
+    (${MACHINE_ARCH} == "mips64eb" || ${MACHINE_ARCH} == "mips64el")
+CPPFLAGS+=	-DHAVE_DEBUG64
 .endif
 
 .if ${MKDTB:Uno} != "no"
@@ -106,6 +124,8 @@ CPPFLAGS+=	-DPKG_ARCH_SUBDIR="\"${MACHINE_ARCH}\""
 .if defined(NETBSD_OFFICIAL_RELEASE) && ${NETBSD_OFFICIAL_RELEASE} == "yes"
 CPPFLAGS+= -DSYSINST_FTP_HOST=\"ftp.NetBSD.org\" -DNETBSD_OFFICIAL_RELEASE
 CPPFLAGS+= -DSYSINST_HTTP_HOST=\"cdn.NetBSD.org\" -DNETBSD_OFFICIAL_RELEASE
+CPPFLAGS+= -DREL_PATH=\"netbsd-${DISTRIBVER:C/\.[0-9][_A-Z]*[0-9]*$//:S/./-/}\"
+CPPFLAGS+= -DPKG_SUBDIR="\"${DISTRIBVER:C/_.*$//}\""
 .else
 CPPFLAGS+= -DSYSINST_FTP_HOST=\"nyftp.NetBSD.org\"
 CPPFLAGS+= -DSYSINST_HTTP_HOST=\"nycdn.NetBSD.org\"
@@ -134,6 +154,7 @@ O0TRACKING=	-fvar-tracking-assignments -fvar-tracking
 .endif
 CPPFLAGS+=-DDEBUG
 DBG +=-g -O0 ${O0TRACKING}
+COPTS.net.c	+= -Wno-error=maybe-uninitialized
 .else
 .if defined(SMALLPROG)
 COPTS += -Os
@@ -144,8 +165,8 @@ COPTS += -Os
 CPPFLAGS+=-DINET6
 .endif
 
-COPTS+=	${GCC_NO_FORMAT_TRUNCATION}
-COPTS.disklabel.c+= ${GCC_NO_STRINGOP_TRUNCATION}
+COPTS+=	${CC_WNO_FORMAT_TRUNCATION}
+COPTS.disklabel.c+= ${CC_WNO_STRINGOP_TRUNCATION}
 
 # Host to ftp from.  Default:
 #	"ftp.NetBSD.org"
@@ -209,7 +230,7 @@ msgtouch: ${DISTRIBVERDEP}
 MSG_MD+=	msg.pm.${SYSINSTLANG}
 .endif
 
-.if ${CHECK_ENTROPY:Uno} != "no"
+.if ${CHECK_ENTROPY:Uyes} != "no"
 MSG_MD+=	msg.entropy.${SYSINSTLANG}
 .endif
 
@@ -242,8 +263,8 @@ sysinstmsgs.${LANG}: msg.mi.${LANG} ${MSG_MD:S/.${SYSINSTLANG}$/.${LANG}/} msgto
 	${HOST_SH} ${MSG_XLAT_SH} -f sysinstmsgs.fmtcnt > ${.TARGET}
 
 DPSRCS+=	sysinstmsgs.${LANG}
-# FILES+=		sysinstmsgs.${LANG}
-# FILESDIR_sysinstmsgs.${LANG}=	${CATALOGDIR}
+FILES+=		sysinstmsgs.${LANG}
+FILESDIR_sysinstmsgs.${LANG}=	${CATALOGDIR}
 .endfor
 
 .PHONY:	check-lang
@@ -256,7 +277,7 @@ check-lang:	msg.def msg_defs.h
 	${HOST_SH} ${MSG_CMP_SH} msg_defs.h /tmp/sysinst.en sysinstmsgs.${LANG}
 	@rm /tmp/sysinst.en
 
-COPTS.util.c+=	${GCC_NO_STRINGOP_TRUNCATION}
+COPTS.util.c+=	${CC_WNO_STRINGOP_TRUNCATION}
 COPTS+=		-fcommon
 
 .include <bsd.prog.mk>

@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_copy.c,v 1.14 2020/05/23 23:42:43 ad Exp $	*/
+/*	$NetBSD: subr_copy.c,v 1.19 2023/05/22 14:07:24 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999, 2002, 2007, 2008, 2019
@@ -80,7 +80,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_copy.c,v 1.14 2020/05/23 23:42:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_copy.c,v 1.19 2023/05/22 14:07:24 riastradh Exp $");
 
 #define	__UFETCHSTORE_PRIVATE
 #define	__UCAS_PRIVATE
@@ -112,10 +112,11 @@ uiomove(void *buf, size_t n, struct uio *uio)
 
 	KASSERT(uio->uio_rw == UIO_READ || uio->uio_rw == UIO_WRITE);
 	while (n > 0 && uio->uio_resid) {
+		KASSERT(uio->uio_iovcnt > 0);
 		iov = uio->uio_iov;
 		cnt = iov->iov_len;
 		if (cnt == 0) {
-			KASSERT(uio->uio_iovcnt > 0);
+			KASSERT(uio->uio_iovcnt > 1);
 			uio->uio_iov++;
 			uio->uio_iovcnt--;
 			continue;
@@ -163,6 +164,93 @@ uiomove_frombuf(void *buf, size_t buflen, struct uio *uio)
 	if (offset >= buflen)
 		return (0);
 	return (uiomove((char *)buf + offset, buflen - offset, uio));
+}
+
+int
+uiopeek(void *buf, size_t n, struct uio *uio)
+{
+	struct vmspace *vm = uio->uio_vmspace;
+	struct iovec *iov;
+	size_t cnt;
+	int error = 0;
+	char *cp = buf;
+	size_t resid = uio->uio_resid;
+	int iovcnt = uio->uio_iovcnt;
+	char *base;
+	size_t len;
+
+	KASSERT(uio->uio_rw == UIO_READ || uio->uio_rw == UIO_WRITE);
+
+	if (n == 0 || resid == 0)
+		return 0;
+	iov = uio->uio_iov;
+	base = iov->iov_base;
+	len = iov->iov_len;
+
+	while (n > 0 && resid > 0) {
+		KASSERT(iovcnt > 0);
+		cnt = len;
+		if (cnt == 0) {
+			KASSERT(iovcnt > 1);
+			iov++;
+			iovcnt--;
+			base = iov->iov_base;
+			len = iov->iov_len;
+			continue;
+		}
+		if (cnt > n)
+			cnt = n;
+		if (!VMSPACE_IS_KERNEL_P(vm)) {
+			preempt_point();
+		}
+
+		if (uio->uio_rw == UIO_READ) {
+			error = copyout_vmspace(vm, cp, base, cnt);
+		} else {
+			error = copyin_vmspace(vm, base, cp, cnt);
+		}
+		if (error) {
+			break;
+		}
+		base += cnt;
+		len -= cnt;
+		resid -= cnt;
+		cp += cnt;
+		KDASSERT(cnt <= n);
+		n -= cnt;
+	}
+
+	return error;
+}
+
+void
+uioskip(size_t n, struct uio *uio)
+{
+	struct iovec *iov;
+	size_t cnt;
+
+	KASSERTMSG(n <= uio->uio_resid, "n=%zu resid=%zu", n, uio->uio_resid);
+
+	KASSERT(uio->uio_rw == UIO_READ || uio->uio_rw == UIO_WRITE);
+	while (n > 0 && uio->uio_resid) {
+		KASSERT(uio->uio_iovcnt > 0);
+		iov = uio->uio_iov;
+		cnt = iov->iov_len;
+		if (cnt == 0) {
+			KASSERT(uio->uio_iovcnt > 1);
+			uio->uio_iov++;
+			uio->uio_iovcnt--;
+			continue;
+		}
+		if (cnt > n)
+			cnt = n;
+		iov->iov_base = (char *)iov->iov_base + cnt;
+		iov->iov_len -= cnt;
+		uio->uio_resid -= cnt;
+		uio->uio_offset += cnt;
+		KDASSERT(cnt <= n);
+		n -= cnt;
+	}
 }
 
 /*
@@ -400,9 +488,30 @@ ucas_critical_cpu_gate(void *arg __unused)
 {
 	int count = SPINLOCK_BACKOFF_MIN;
 
-	KASSERT(ucas_critical_pausing_cpus > 0);
+	KASSERT(atomic_load_relaxed(&ucas_critical_pausing_cpus) > 0);
+
+	/*
+	 * Notify ucas_critical_wait that we have stopped.  Using
+	 * store-release ensures all our memory operations up to the
+	 * IPI happen before the ucas -- no buffered stores on our end
+	 * can clobber it later on, for instance.
+	 *
+	 * Matches atomic_load_acquire in ucas_critical_wait -- turns
+	 * the following atomic_dec_uint into a store-release.
+	 */
+	membar_release();
 	atomic_dec_uint(&ucas_critical_pausing_cpus);
-	while (ucas_critical_pausing_cpus != (u_int)-1) {
+
+	/*
+	 * Wait for ucas_critical_exit to reopen the gate and let us
+	 * proceed.  Using a load-acquire ensures the ucas happens
+	 * before any of our memory operations when we return from the
+	 * IPI and proceed -- we won't observe any stale cached value
+	 * that the ucas overwrote, for instance.
+	 *
+	 * Matches atomic_store_release in ucas_critical_exit.
+	 */
+	while (atomic_load_acquire(&ucas_critical_pausing_cpus) != (u_int)-1) {
 		SPINLOCK_BACKOFF(count);
 	}
 }
@@ -410,6 +519,7 @@ ucas_critical_cpu_gate(void *arg __unused)
 static int
 ucas_critical_init(void)
 {
+
 	ucas_critical_ipi = ipi_register(ucas_critical_cpu_gate, NULL);
 	return 0;
 }
@@ -419,7 +529,16 @@ ucas_critical_wait(void)
 {
 	int count = SPINLOCK_BACKOFF_MIN;
 
-	while (ucas_critical_pausing_cpus > 0) {
+	/*
+	 * Wait for all CPUs to stop at the gate.  Using a load-acquire
+	 * ensures all memory operations before they stop at the gate
+	 * happen before the ucas -- no buffered stores in other CPUs
+	 * can clobber it later on, for instance.
+	 *
+	 * Matches membar_release/atomic_dec_uint (store-release) in
+	 * ucas_critical_cpu_gate.
+	 */
+	while (atomic_load_acquire(&ucas_critical_pausing_cpus) > 0) {
 		SPINLOCK_BACKOFF(count);
 	}
 }
@@ -444,8 +563,6 @@ ucas_critical_enter(lwp_t * const l)
 		mutex_enter(&cpu_lock);
 		ucas_critical_splcookie = splhigh();
 		ucas_critical_pausing_cpus = ncpu - 1;
-		membar_enter();
-
 		ipi_trigger_broadcast(ucas_critical_ipi, true);
 		ucas_critical_wait();
 		return;
@@ -461,8 +578,17 @@ ucas_critical_exit(lwp_t * const l)
 
 #if !defined(__HAVE_UCAS_MP) && defined(MULTIPROCESSOR)
 	if (ncpu > 1) {
-		membar_exit();
-		ucas_critical_pausing_cpus = (u_int)-1;
+		/*
+		 * Open the gate and notify all CPUs in
+		 * ucas_critical_cpu_gate that they can now proceed.
+		 * Using a store-release ensures the ucas happens
+		 * before any memory operations they issue after the
+		 * IPI -- they won't observe any stale cache of the
+		 * target word, for instance.
+		 *
+		 * Matches atomic_load_acquire in ucas_critical_cpu_gate.
+		 */
+		atomic_store_release(&ucas_critical_pausing_cpus, (u_int)-1);
 		splx(ucas_critical_splcookie);
 		mutex_exit(&cpu_lock);
 		return;

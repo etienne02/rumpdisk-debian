@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.333 2020/10/29 20:26:24 uwe Exp $
+#	$NetBSD: Makefile,v 1.338 2023/09/08 12:01:56 riastradh Exp $
 
 #
 # This is the top-level makefile for building NetBSD. For an outline of
@@ -88,8 +88,8 @@
 #   do-top-obj:      creates the top level object directory.
 #   do-tools-obj:    creates object directories for the host toolchain.
 #   do-tools:        builds host toolchain.
-#   params:          record the values of variables that might affect the
-#                    build.
+#   params:          create params file with various make(1) parameters.
+#   show-params:     show various make(1) parameters.
 #   obj:             creates object directories.
 #   do-distrib-dirs: creates the distribution directories.
 #   includes:        installs include files.
@@ -99,7 +99,6 @@
 #   do-x11:          builds and installs X11 tools and libraries
 #                    from src/external/mit/xorg if ${MKX11} != "no".
 #   do-build:        builds and installs the entire system.
-#   do-extsrc:       builds and installs extsrc if ${MKEXTSRC} != "no".
 #   do-obsolete:     installs the obsolete sets (for the postinstall-* targets).
 #
 
@@ -174,7 +173,7 @@ afterinstall: .PHONY .MAKE
 .endif
 
 _POSTINSTALL=	${:!cd ${.CURDIR}/usr.sbin/postinstall && \
-			${MAKE} print-objdir!}/postinstall  \
+			${MAKE} -v .OBJDIR!}/postinstall  \
 		-m ${MACHINE} -a ${MACHINE_ARCH}
 _POSTINSTALL_ENV= \
 	AWK=${TOOL_AWK:Q}		\
@@ -191,23 +190,23 @@ _POSTINSTALL_X11=-x ${X11SRCDIR:Q}
 
 postinstall-check: .PHONY
 	@echo "   === Post installation checks ==="
-	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR}/ check; if [ $$? -gt 1 ]; then exit 1; fi
+	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR:C/^\/$//}/ check; if [ $$? -gt 1 ]; then exit 1; fi
 	@echo "   ================================"
 
 postinstall-fix: .NOTMAIN .PHONY
 	@echo "   === Post installation fixes ==="
-	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR}/ fix
+	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR:C/^\/$//}/ fix
 	@echo "   ==============================="
 
 postinstall-fix-obsolete: .NOTMAIN .PHONY
 	@echo "   === Removing obsolete files ==="
-	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR}/ fix obsolete
+	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR:C/^\/$//}/ fix obsolete
 	@echo "   ==============================="
 
 postinstall-fix-obsolete_stand: .NOTMAIN .PHONY
 	@echo "   === Removing obsolete files ==="
-	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR}/ fix obsolete_stand
-	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR}/ fix obsolete_stand_debug
+	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR:C/^\/$//}/ fix obsolete_stand
+	${_POSTINSTALL_ENV} ${HOST_SH} ${_POSTINSTALL} -s ${.CURDIR} ${_POSTINSTALL_X11} -d ${DESTDIR:C/^\/$//}/ fix obsolete_stand_debug
 	@echo "   ==============================="
 
 
@@ -251,9 +250,6 @@ BUILDTARGETS+=	do-x11
 .endif
 .if !defined(NOBINARIES)
 BUILDTARGETS+=	do-build
-.if ${MKEXTSRC} != "no"
-BUILDTARGETS+=	do-extsrc
-.endif
 BUILDTARGETS+=	do-obsolete
 .endif
 
@@ -450,9 +446,6 @@ check-tools: .PHONY
 .elif defined(EXTERNAL_TOOLCHAIN)
 	@echo '*** Using external toolchain rooted at ${EXTERNAL_TOOLCHAIN}.'
 .endif
-.if defined(NBUILDJOBS)
-	@echo '*** WARNING: NBUILDJOBS is obsolete; use -j directly instead!'
-.endif
 
 # Delete or sanitise a leftover METALOG from a previous build.
 clean_METALOG: .PHONY .MAKE
@@ -511,14 +504,6 @@ do-x11: .PHONY .MAKE
 .endif
 .else
 	@echo "MKX11 is not enabled"
-	@false
-.endif
-
-do-extsrc: .PHONY .MAKE
-.if ${MKEXTSRC} != "no"
-	${MAKEDIRTARGET} extsrc build
-.else
-	@echo "MKEXTSRC is not enabled"
 	@false
 .endif
 

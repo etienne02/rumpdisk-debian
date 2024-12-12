@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_158.c,v 1.3 2021/03/16 23:39:41 rillig Exp $	*/
+/*	$NetBSD: msg_158.c,v 1.6 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_158.c"
 
-// Test for message: %s may be used before set [158]
+// Test for message: '%s' may be used before set [158]
+
+/* lint1-extra-flags: -X 351 */
 
 void sink_int(int);
 
@@ -10,7 +12,8 @@ example(int arg)
 {
 	int twice_arg;
 
-	sink_int(twice_arg);	/* expect: 158 */
+	/* expect+1: warning: 'twice_arg' may be used before set [158] */
+	sink_int(twice_arg);
 	twice_arg = 2 * arg;
 	sink_int(twice_arg);
 }

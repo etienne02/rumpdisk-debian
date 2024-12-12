@@ -28,7 +28,7 @@ POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cxgb_t3_hw.c,v 1.5 2021/08/02 12:56:24 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cxgb_t3_hw.c,v 1.9 2024/08/29 04:55:33 andvar Exp $");
 
 
 #ifdef CONFIG_DEFINED
@@ -785,7 +785,7 @@ static int flash_wait_op(adapter_t *adapter, int attempts, int delay)
  *  Read the specified number of 32-bit words from the serial flash.
  *  If @byte_oriented is set the read data is stored as a byte array
  *  (i.e., big-endian), otherwise as 32-bit words in the platform's
- *  natural endianess.
+ *  natural endianness.
  */
 int t3_read_flash(adapter_t *adapter, unsigned int addr, unsigned int nwords,
           u32 *data, int byte_oriented)
@@ -1218,7 +1218,7 @@ struct intr_info {
  *
  *  A table driven interrupt handler that applies a set of masks to an
  *  interrupt status word and performs the corresponding actions if the
- *  interrupts described by the mask have occured.  The actions include
+ *  interrupts described by the mask have occurred.  The actions include
  *  optionally printing a warning or alert message, and optionally
  *  incrementing a stat counter.  The table is terminated by an entry
  *  specifying mask 0.  Returns the number of fatal interrupt conditions.
@@ -3425,7 +3425,7 @@ static void config_pcie(adapter_t *adap)
  *
  *  Initialize and configure T3 HW modules.  This performs the
  *  initialization steps that need to be done once after a card is reset.
- *  MAC and PHY initialization is handled separarely whenever a port is
+ *  MAC and PHY initialization is handled separately whenever a port is
  *  enabled.
  *
  *  @fw_params are passed to FW and their value is platform dependent.
@@ -3618,7 +3618,7 @@ void mac_prep(struct cmac *mac, adapter_t *adapter, int index)
  *  @adapter: the adapter
  *  @ai: contains information about the adapter type and properties
  *
- *  Perfoms the part of HW initialization that is done early on when the
+ *  Performs the part of HW initialization that is done early on when the
  *  driver first detecs the card.  Most of the HW state is initialized
  *  lazily later on when a port or an offload function are first used.
  */

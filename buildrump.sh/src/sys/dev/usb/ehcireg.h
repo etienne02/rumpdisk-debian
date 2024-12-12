@@ -1,4 +1,4 @@
-/*	$NetBSD: ehcireg.h,v 1.37 2016/04/23 10:15:31 skrll Exp $	*/
+/*	$NetBSD: ehcireg.h,v 1.41 2024/09/23 10:07:26 skrll Exp $	*/
 
 /*
  * Copyright (c) 2001, 2004 The NetBSD Foundation, Inc.
@@ -203,9 +203,10 @@ typedef uint32_t ehci_isoc_trans_t;
 typedef uint32_t ehci_isoc_bufr_ptr_t;
 
 /* Isochronous Transfer Descriptor */
+#define EHCI_ITD_ALIGN 32
 #define EHCI_ITD_NUFRAMES USB_UFRAMES_PER_FRAME
 #define EHCI_ITD_NBUFFERS 7
-typedef struct {
+typedef struct ehci_itd_t {
 	volatile ehci_link_t		itd_next;
 	volatile ehci_isoc_trans_t	itd_ctl[EHCI_ITD_NUFRAMES];
 #define EHCI_ITD_STATUS_MASK	__BITS(31,28)
@@ -248,10 +249,13 @@ typedef struct {
 #define EHCI_ITD_SET_MULTI(x)	__SHIFTIN((x), EHCI_ITD_MULTI_MASK)
 	volatile ehci_isoc_bufr_ptr_t	itd_bufr_hi[EHCI_ITD_NBUFFERS];
 } ehci_itd_t;
-#define EHCI_ITD_ALIGN 32
+#define EHCI_ITD_ALLOC_ALIGN	MAX(EHCI_ITD_ALIGN, CACHE_LINE_SIZE)
+#define EHCI_ITD_SIZE		(roundup(sizeof(ehci_itd_t), EHCI_ITD_ALLOC_ALIGN))
+#define EHCI_ITD_CHUNK		(EHCI_PAGE_SIZE / EHCI_ITD_SIZE)
 
 /* Split Transaction Isochronous Transfer Descriptor */
-typedef struct {
+#define EHCI_SITD_ALIGN 32
+typedef struct ehci_sitd_t {
 	volatile ehci_link_t	sitd_next;
 	volatile uint32_t	sitd_endp;
 #define EHCI_SITD_DIR_MASK	__BIT(31)
@@ -295,12 +299,12 @@ typedef struct {
 	volatile ehci_link_t	sitd_back;
 	volatile uint32_t	sitd_buffer_hi[EHCI_SITD_BUFFERS];
 } ehci_sitd_t;
-#define EHCI_SITD_ALIGN 32
 
 /* Queue Element Transfer Descriptor */
 #define EHCI_QTD_NBUFFERS	5
 #define EHCI_QTD_MAXTRANSFER	(EHCI_QTD_NBUFFERS * EHCI_PAGE_SIZE)
-typedef struct {
+#define EHCI_QTD_ALIGN 32
+typedef struct ehci_qtd_t {
 	volatile ehci_link_t	qtd_next;
 	volatile ehci_link_t	qtd_altnext;
 	volatile uint32_t	qtd_status;
@@ -339,10 +343,13 @@ typedef struct {
 	volatile ehci_physaddr_t qtd_buffer[EHCI_QTD_NBUFFERS];
 	volatile ehci_physaddr_t qtd_buffer_hi[EHCI_QTD_NBUFFERS];
 } ehci_qtd_t;
-#define EHCI_QTD_ALIGN 32
+#define EHCI_QTD_ALLOC_ALIGN	MAX(EHCI_QTD_ALIGN, CACHE_LINE_SIZE)
+#define EHCI_QTD_SIZE		(roundup(sizeof(ehci_qtd_t), EHCI_QTD_ALLOC_ALIGN))
+#define EHCI_QTD_CHUNK		(EHCI_PAGE_SIZE / EHCI_QTD_SIZE)
 
 /* Queue Head */
-typedef struct {
+#define EHCI_QH_ALIGN 32
+typedef struct ehci_qh_t {
 	volatile ehci_link_t	qh_link;
 	volatile uint32_t	qh_endp;
 #define EHCI_QH_ADDR_MASK	__BITS(6,0)	/* endpoint addr */
@@ -390,14 +397,16 @@ typedef struct {
 	volatile ehci_link_t	qh_curqtd;
 	ehci_qtd_t		qh_qtd;
 } ehci_qh_t;
-#define EHCI_QH_ALIGN 32
+#define EHCI_QH_ALLOC_ALIGN	MAX(EHCI_QH_ALIGN, CACHE_LINE_SIZE)
+#define EHCI_QH_SIZE		(roundup(sizeof(ehci_qh_t), EHCI_QH_ALLOC_ALIGN))
+#define EHCI_QH_CHUNK		(EHCI_PAGE_SIZE / EHCI_QH_SIZE)
 
 /* Periodic Frame Span Traversal Node */
-typedef struct {
+#define EHCI_FSTN_ALIGN 32
+typedef struct ehci_fstn_t {
 	volatile ehci_link_t	fstn_link;
 	volatile ehci_link_t	fstn_back;
 } ehci_fstn_t;
-#define EHCI_FSTN_ALIGN 32
 
 /* Debug Port */
 #define PCI_CAP_DEBUGPORT_OFFSET __BITS(28,16)

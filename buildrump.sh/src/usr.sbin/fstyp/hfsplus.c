@@ -1,4 +1,4 @@
-/*	$NetBSD: hfsplus.c,v 1.1 2019/12/27 11:06:23 tkusumi Exp $	*/
+/*	$NetBSD: hfsplus.c,v 1.3 2021/09/17 21:06:35 christos Exp $	*/
 /*
  * Copyright (c) 2019 Conrad Meyer <cem@FreeBSD.org>.  All rights reserved.
  *
@@ -24,7 +24,7 @@
  * SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: hfsplus.c,v 1.1 2019/12/27 11:06:23 tkusumi Exp $");
+__RCSID("$NetBSD: hfsplus.c,v 1.3 2021/09/17 21:06:35 christos Exp $");
 
 #include <assert.h>
 #include <err.h>

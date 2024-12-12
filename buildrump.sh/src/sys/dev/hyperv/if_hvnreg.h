@@ -1,4 +1,4 @@
-/*	$NetBSD: if_hvnreg.h,v 1.1 2019/02/15 08:54:01 nonaka Exp $	*/
+/*	$NetBSD: if_hvnreg.h,v 1.4 2024/02/09 22:08:34 andvar Exp $	*/
 /*	$OpenBSD: if_hvnreg.h,v 1.3 2016/09/14 17:48:28 mikeb Exp $	*/
 
 /*-
@@ -44,7 +44,7 @@
 #define HVN_NVS_RNDIS_MTYPE_CTRL	1
 
 /*
- * NVS message transacion status codes.
+ * NVS message transaction status codes.
  */
 #define HVN_NVS_STATUS_OK		1
 #define HVN_NVS_STATUS_FAILED		2
@@ -96,7 +96,7 @@ struct hvn_nvs_init_resp {
 	uint32_t	nvs_status;	/* HVN_NVS_STATUS_ */
 } __packed;
 
-/* No reponse */
+/* No response */
 struct hvn_nvs_ndis_conf {
 	uint32_t	nvs_type;	/* HVN_NVS_TYPE_NDIS_CONF */
 	uint32_t	nvs_mtu;
@@ -200,5 +200,22 @@ struct hvn_nvs_rndis_ack {
 	uint32_t	nvs_status;	/* HVN_NVS_STATUS_ */
 	uint8_t		nvs_rsvd[24];
 } __packed;
+
+/*
+ * RNDIS extension
+ */
+
+/* Per-packet hash info */
+#define HVN_NDIS_HASH_INFO_SIZE		sizeof(uint32_t)
+#define HVN_NDIS_PKTINFO_TYPE_HASHINF	NDIS_PKTINFO_TYPE_ORIG_NBLIST
+/* NDIS_HASH_ */
+
+/* Per-packet hash value */
+#define HVN_NDIS_HASH_VALUE_SIZE		sizeof(uint32_t)
+#define HVN_NDIS_PKTINFO_TYPE_HASHVAL	NDIS_PKTINFO_TYPE_PKT_CANCELID
+
+/* Per-packet-info size */
+#define HVN_RNDIS_PKTINFO_SIZE(dlen) \
+	offsetof(struct rndis_pktinfo, rm_data[dlen])
 
 #endif	/* _IF_HVNREG_H_ */

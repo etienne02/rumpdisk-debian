@@ -1,4 +1,4 @@
-/*	$NetBSD: stdlib.h,v 1.123 2021/07/03 14:07:13 christos Exp $	*/
+/*	$NetBSD: stdlib.h,v 1.128 2024/11/02 10:49:10 nia Exp $	*/
 
 /*-
  * Copyright (c) 1990, 1993
@@ -63,9 +63,8 @@ typedef struct {
 	long rem;		/* remainder */
 } ldiv_t;
 
-#if !defined(_ANSI_SOURCE) && \
-    (defined(_ISOC99_SOURCE) || (__STDC_VERSION__ - 0) >= 199901L || \
-     (__cplusplus - 0) >= 201103L || defined(_NETBSD_SOURCE))
+#if defined(_ISOC99_SOURCE) || (__STDC_VERSION__ - 0) >= 199901L || \
+    defined(_NETBSD_SOURCE) || (__cplusplus - 0) >= 201103L
 typedef struct {
 	/* LONGLONG */
 	long long int quot;	/* quotient */
@@ -125,7 +124,6 @@ unsigned long
 	 strtoul(const char * __restrict, char ** __restrict, int);
 #ifdef _OPENBSD_SOURCE
 long long strtonum(const char *, long long, long long, const char **);
-void	*reallocarray(void *, size_t, size_t);
 #endif
 int	 system(const char *);
 
@@ -186,7 +184,6 @@ void	 srandom(unsigned int) __RENAME(__srandom60);
 #endif
 #ifdef _NETBSD_SOURCE
 #define	RANDOM_MAX	0x7fffffff	/* (((long)1 << 31) - 1) */
-int	 mkostemp(char *, int);
 int	 mkostemps(char *, int, int);
 #endif
 
@@ -269,10 +266,7 @@ int	 getsubopt(char **, char * const *, char **);
  * Implementation-defined extensions
  */
 #if defined(_NETBSD_SOURCE)
-#if defined(alloca) && (alloca == __builtin_alloca) && \
-	defined(__GNUC__) && (__GNUC__ < 2)
-void	*alloca(int);     /* built-in for gcc */
-#elif defined(__PCC__) && !defined(__GNUC__)
+#if defined(__PCC__) && !defined(__GNUC__)
 #define alloca(size) __builtin_alloca(size)
 #else
 void	*alloca(size_t);
@@ -398,6 +392,12 @@ size_t	 wcstombs_l(char * __restrict, const wchar_t * __restrict, size_t,
 
 #  endif /* _NETBSD_SOURCE */
 #endif /* _POSIX_C_SOURCE >= 200809 || _NETBSD_SOURCE */
+
+#if (_POSIX_C_SOURCE - 0) >= 202405L || \
+    defined(_NETBSD_SOURCE) || defined(_OPENBSD_SOURCE)
+void	*reallocarray(void *, size_t, size_t);
+int	 mkostemp(char *, int);
+#endif	/* _POSIX_C_SOURCE >= 202405L || _NETBSD_SOURCE || _OPENBSD_SOURCE */
 
 __END_DECLS
 

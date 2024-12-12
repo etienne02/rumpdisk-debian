@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_fcntl.h,v 1.18 2019/08/23 11:19:39 maxv Exp $	*/
+/*	$NetBSD: linux_fcntl.h,v 1.23 2024/09/28 19:35:56 christos Exp $	*/
 
 /*-
  * Copyright (c) 1995, 1998 The NetBSD Foundation, Inc.
@@ -32,6 +32,11 @@
 #ifndef _LINUX_FCNTL_H
 #define _LINUX_FCNTL_H
 
+#ifdef _KERNEL
+#include <compat/linux/common/linux_types.h> /* For linux_off_t */
+struct stat;
+#endif
+
 /*
  * The arguments in the flock structure have a different order from the
  * BSD structure.
@@ -50,8 +55,34 @@
 #define LINUX_AT_NO_AUTOMOUNT		0x0800
 #define LINUX_AT_EMPTY_PATH		0x1000
 
+
+/*
+ * sync_file_range flags
+ */
+#define	LINUX_SYNC_FILE_RANGE_WAIT_BEFORE	1
+#define	LINUX_SYNC_FILE_RANGE_WRITE		2
+#define	LINUX_SYNC_FILE_RANGE_WAIT_AFTER	4
+#define	LINUX_SYNC_FILE_RANGE_ALL	\
+    (LINUX_SYNC_FILE_RANGE_WAIT_BEFORE | \
+    LINUX_SYNC_FILE_RANGE_WRITE	| \
+    LINUX_SYNC_FILE_RANGE_WAIT_AFTER)
+
+/*
+ * renameat2 flags
+ */
+#define	LINUX_RENAME_NOREPLACE	1
+#define	LINUX_RENAME_EXCHANGE	2
+#define	LINUX_RENAME_WHITEOUT	4
+#define	LINUX_RENAME_ALL \
+    (LINUX_RENAME_NOREPLACE | \
+    LINUX_RENAME_EXCHANGE | \
+    LINUX_RENAME_WHITEOUT)
+
+#ifdef _KERNEL
 int linux_to_bsd_ioflags(int);
 int linux_to_bsd_atflags(int);
+int bsd_to_linux_statx(struct stat *, struct linux_statx *, unsigned int);
+int linux_statat(struct lwp *, int, const char *, int, struct stat *);
 
 struct linux_flock {
 	short       l_type;
@@ -68,6 +99,7 @@ struct linux_flock64 {
 	off_t	    l_len;
 	linux_pid_t l_pid;
 };
+#endif /* _KERNEL */
 
 #if defined(__i386__)
 #include <compat/linux/arch/i386/linux_fcntl.h>
@@ -79,6 +111,8 @@ struct linux_flock64 {
 #include <compat/linux/arch/powerpc/linux_fcntl.h>
 #elif defined(__mips__)
 #include <compat/linux/arch/mips/linux_fcntl.h>
+#elif defined(__aarch64__)
+#include <compat/linux/arch/aarch64/linux_fcntl.h>
 #elif defined(__arm__)
 #include <compat/linux/arch/arm/linux_fcntl.h>
 #elif defined(__amd64__)
@@ -96,7 +130,10 @@ struct linux_flock64 {
 #define	LINUX_F_DUPFD_CLOEXEC 	(LINUX_F_SPECIFIC_BASE + 6)
 #define	LINUX_F_SETPIPE_SZ 	(LINUX_F_SPECIFIC_BASE + 7)
 #define	LINUX_F_GETPIPE_SZ 	(LINUX_F_SPECIFIC_BASE + 8)
+#define	LINUX_F_ADD_SEALS	(LINUX_F_SPECIFIC_BASE + 9)
+#define	LINUX_F_GET_SEALS	(LINUX_F_SPECIFIC_BASE + 10)
 
+#ifdef _KERNEL
 /*
  * We have to have 4 copies of the code that converts linux fcntl() file
  * locking to native form because there are 4 layouts for the structures.
@@ -165,6 +202,6 @@ LINUX##_to_bsd_##FLOCK(struct flock *bfp, const struct LINUX##_##FLOCK *lfp) \
 	LINUX##_to_bsd_##FLOCK(&bfl, &lfl); \
 	return do_fcntl_lock(fd, cmd == setlk ? F_SETLK : F_SETLKW, &bfl); \
     } while (0)
-
+#endif /* _KERNEL */
 
 #endif /* !_LINUX_FCNTL_H */

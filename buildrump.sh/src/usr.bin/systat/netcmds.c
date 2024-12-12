@@ -1,4 +1,4 @@
-/*	$NetBSD: netcmds.c,v 1.21 2005/02/26 22:12:33 dsl Exp $	*/
+/*	$NetBSD: netcmds.c,v 1.24 2022/10/28 05:27:17 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1980, 1992, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)netcmds.c	8.1 (Berkeley) 6/6/93";
 #endif
-__RCSID("$NetBSD: netcmds.c,v 1.21 2005/02/26 22:12:33 dsl Exp $");
+__RCSID("$NetBSD: netcmds.c,v 1.24 2022/10/28 05:27:17 ozaki-r Exp $");
 #endif /* not lint */
 
 /*
@@ -223,12 +223,10 @@ selectport(long port, int onoff)
 			p->onoff = onoff;
 			return (0);
 		}
-	p = (struct pitem *)realloc(ports, (nports+1)*sizeof (*p));
-	if (p == NULL) {
+	if (reallocarr(&ports, nports + 1, sizeof(*p)) != 0) {
 		error("malloc failed");
 		die(0);
 	}
-	ports = p;
 	p = &ports[nports++];
 	p->port = port;
 	p->onoff = onoff;
@@ -246,20 +244,6 @@ checkport(struct inpcb *inp)
 			return (p->onoff);
 	return (1);
 }
-
-#ifdef INET6
-int
-checkport6(struct in6pcb *in6p)
-{
-	struct pitem *p;
-
-	if (ports)
-	for (p = ports; p < ports+nports; p++)
-		if (p->port == in6p->in6p_lport || p->port == in6p->in6p_fport)
-			return (p->onoff);
-	return (1);
-}
-#endif
 
 static void
 showports(void)
@@ -326,12 +310,10 @@ selecthost(struct sockaddr *sa, int onoff)
 		}
 	if (sa->sa_len > sizeof(struct sockaddr_storage))
 		return (-1);	/*XXX*/
-	p = (struct hitem *)realloc(hosts, (nhosts+1)*sizeof (*p));
-	if (p == NULL) {
+	if (reallocarr(&hosts, nhosts + 1, sizeof(*p)) != 0) {
 		error("malloc failed");
 		die(0);
 	}
-	hosts = p;
 	p = &hosts[nhosts++];
 	memcpy(&p->addr, sa, sa->sa_len);
 	p->onoff = onoff;
@@ -349,8 +331,8 @@ checkhost(struct inpcb *inp)
 			if (((struct sockaddr *)&p->addr)->sa_family != AF_INET)
 				continue;
 			s_in = (struct sockaddr_in *)&p->addr;
-			if (s_in->sin_addr.s_addr == inp->inp_laddr.s_addr ||
-			    s_in->sin_addr.s_addr == inp->inp_faddr.s_addr)
+			if (s_in->sin_addr.s_addr == in4p_laddr(inp).s_addr ||
+			    s_in->sin_addr.s_addr == in4p_faddr(inp).s_addr)
 				return (p->onoff);
 		}
 	return (1);
@@ -358,7 +340,7 @@ checkhost(struct inpcb *inp)
 
 #ifdef INET6
 int
-checkhost6(struct in6pcb *in6p)
+checkhost6(struct inpcb *inp)
 {
 	struct hitem *p;
 	struct sockaddr_in6 *sin6;
@@ -368,8 +350,8 @@ checkhost6(struct in6pcb *in6p)
 			if (((struct sockaddr *)&p->addr)->sa_family != AF_INET6)
 				continue;
 			sin6 = (struct sockaddr_in6 *)&p->addr;
-			if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, &in6p->in6p_laddr) ||
-			    IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, &in6p->in6p_faddr))
+			if (IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, &in6p_laddr(inp)) ||
+			    IN6_ARE_ADDR_EQUAL(&sin6->sin6_addr, &in6p_faddr(inp)))
 				return (p->onoff);
 		}
 	return (1);

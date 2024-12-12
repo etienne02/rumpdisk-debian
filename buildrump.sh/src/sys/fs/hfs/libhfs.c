@@ -1,4 +1,4 @@
-/*	$NetBSD: libhfs.c,v 1.15 2018/12/30 22:40:00 sevan Exp $	*/
+/*	$NetBSD: libhfs.c,v 1.19 2023/08/11 05:51:34 mrg Exp $	*/
 
 /*-
  * Copyright (c) 2005, 2007 The NetBSD Foundation, Inc.
@@ -47,7 +47,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: libhfs.c,v 1.15 2018/12/30 22:40:00 sevan Exp $");
+__KERNEL_RCSID(0, "$NetBSD: libhfs.c,v 1.19 2023/08/11 05:51:34 mrg Exp $");
 
 #include "libhfs.h"
 
@@ -545,7 +545,7 @@ hfslib_find_catalog_record_with_key(
 	hfs_catalog_keyed_record_t* out_rec,
 	hfs_callback_args* cbargs)
 {
-	hfs_node_descriptor_t			nd;
+	hfs_node_descriptor_t			nd = { .num_recs = 0 };
 	hfs_extent_descriptor_t*		extents;
 	hfs_catalog_keyed_record_t		lastrec;
 	hfs_catalog_key_t*	curkey;
@@ -585,7 +585,6 @@ hfslib_find_catalog_record_with_key(
 	if (numextents == 0)
 		HFS_LIBERR("could not locate fork extents");
 
-	nd.num_recs = 0;
 	curnode = in_vol->chr.root_node;
 
 #ifdef DLO_DEBUG
@@ -687,7 +686,7 @@ hfslib_find_extent_record_with_key(hfs_volume* in_vol,
 	hfs_extent_record_t* out_rec,
 	hfs_callback_args* cbargs)
 {
-	hfs_node_descriptor_t		nd;
+	hfs_node_descriptor_t		nd = { .num_recs = 0 };
 	hfs_extent_descriptor_t*	extents;
 	hfs_extent_record_t		lastrec;
 	hfs_extent_key_t	curkey;
@@ -759,7 +758,7 @@ hfslib_find_extent_record_with_key(hfs_volume* in_vol,
 		else if (nd.kind == HFS_LEAFNODE)
 			break;
 		else
-		    HFS_LIBERR("unknwon node type for extents overflow node #%i",curnode);
+		    HFS_LIBERR("unknown node type for extents overflow node #%i",curnode);
 	} while (nd.kind != HFS_LEAFNODE);
 
 	result = 0;
@@ -922,7 +921,7 @@ hfslib_get_directory_contents(
 	uint32_t* out_numchildren,
 	hfs_callback_args* cbargs)
 {
-	hfs_node_descriptor_t			nd;
+	hfs_node_descriptor_t			nd = { .num_recs = 0 };
 	hfs_extent_descriptor_t*		extents;
 	hfs_catalog_keyed_record_t		currec;
 	hfs_catalog_key_t	curkey;
@@ -1477,7 +1476,7 @@ hfslib_reada_node(void* in_bytes,
 		HFS_LIBERR("could not allocate node records");
 
 	last_bytes_read = hfslib_reada_node_offsets((uint8_t*)in_bytes + nodesize -
-			numrecords * sizeof(uint16_t), rec_offsets);
+			numrecords * sizeof(uint16_t), rec_offsets, numrecords);
 	if (last_bytes_read == 0)
 		HFS_LIBERR("could not read node record offsets");
 
@@ -1566,7 +1565,8 @@ exit:
  *	in reverse order. Does not read the free space offset.
  */
 size_t
-hfslib_reada_node_offsets(void* in_bytes, uint16_t* out_offset_array)
+hfslib_reada_node_offsets(void* in_bytes, uint16_t* out_offset_array,
+    uint16_t numrecords)
 {
 	void*		ptr;
 
@@ -1581,11 +1581,11 @@ hfslib_reada_node_offsets(void* in_bytes, uint16_t* out_offset_array)
 	 * offset=14, we know this is the last offset. In this way, we don't need
 	 * to know the number of records beforehand.
 	 */
-	out_offset_array--;
 	do {
-		out_offset_array++;
+		if (numrecords-- == 0)
+			return 0;
 		*out_offset_array = be16tohp(&ptr);
-	} while (*out_offset_array != (uint16_t)14);
+	} while (*out_offset_array++ != (uint16_t)14);
 
 	return ((uint8_t*)ptr - (uint8_t*)in_bytes);
 }

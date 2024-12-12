@@ -1,4 +1,4 @@
-/*	$NetBSD: mem1.c,v 1.52 2021/08/31 17:22:25 rillig Exp $	*/
+/*	$NetBSD: mem1.c,v 1.77 2023/12/03 18:17:41 rillig Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Jochen Pohl
@@ -14,7 +14,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -36,8 +36,8 @@
 #endif
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: mem1.c,v 1.52 2021/08/31 17:22:25 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: mem1.c,v 1.77 2023/12/03 18:17:41 rillig Exp $");
 #endif
 
 #include <sys/param.h>
@@ -54,10 +54,11 @@ struct filename {
 	const char *fn_name;
 	size_t	fn_len;
 	int	fn_id;
-	struct	filename *fn_next;
+	struct filename *fn_next;
 };
 
 static struct filename *filenames;	/* null-terminated array */
+static int next_filename_id;
 
 /* Find the given filename, or return NULL. */
 static const struct filename *
@@ -92,7 +93,7 @@ add_directory_replacement(char *arg)
 	*sep = '\0';
 
 	r->orig = arg;
-	r->orig_len = sep - arg;
+	r->orig_len = (size_t)(sep - arg);
 	r->repl = sep + 1;
 	r->next = filename_replacements;
 	filename_replacements = r;
@@ -114,14 +115,6 @@ transform_filename(const char *name, size_t len)
 	return buf;
 }
 
-static int
-next_filename_id(void)
-{
-	static int next_id = 0;
-
-	return next_id++;
-}
-
 /*
  * Return a copy of the filename s with unlimited lifetime.
  * If the filename is new, write it to the output file.
@@ -129,33 +122,26 @@ next_filename_id(void)
 const char *
 record_filename(const char *s, size_t slen)
 {
-	const struct filename *existing_fn;
-	struct filename *fn;
-	char *name;
 
-	if (s == NULL)
-		return NULL;
-
-	if ((existing_fn = search_filename(s, slen)) != NULL)
+	const struct filename *existing_fn = search_filename(s, slen);
+	if (existing_fn != NULL)
 		return existing_fn->fn_name;
 
-	/* Do not use strdup() because s is not NUL-terminated.*/
-	name = xmalloc(slen + 1);
+	char *name = xmalloc(slen + 1);
 	(void)memcpy(name, s, slen);
 	name[slen] = '\0';
 
-	fn = xmalloc(sizeof(*fn));
+	struct filename *fn = xmalloc(sizeof(*fn));
 	fn->fn_name = name;
 	fn->fn_len = slen;
-	fn->fn_id = next_filename_id();
+	fn->fn_id = next_filename_id++;
 	fn->fn_next = filenames;
 	filenames = fn;
 
-	/* Write the ID of this filename to the output file. */
-	outclr();
 	outint(fn->fn_id);
 	outchar('s');
 	outstrg(transform_filename(fn->fn_name, fn->fn_len));
+	outchar('\n');
 
 	return fn->fn_name;
 }
@@ -171,202 +157,200 @@ get_filename_id(const char *s)
 	return fn->fn_id;
 }
 
-/*
- * Memory for declarations and other things which must be available
- * until the end of a block (or the end of the translation unit)
- * is associated with the corresponding mem_block_level, which may be 0.
- * Because this memory is allocated in large blocks associated with
- * a given level it can be freed easily at the end of a block.
- */
-#define	ML_INC	((size_t)32)		/* Increment for length of *mblks */
+typedef struct memory_pools {
+	struct memory_pool *pools;
+	size_t	cap;
+} memory_pools;
 
-typedef struct memory_block {
-	void	*start;			/* beginning of memory block */
-	void	*first_free;		/* first free byte */
-	size_t	nfree;			/* # of free bytes */
-	size_t	size;			/* total size of memory block */
-	struct	memory_block *next;
-} memory_block;
+/* Array of memory pools, indexed by mem_block_level. */
+static memory_pools mpools;
 
-/*
- * Array of pointers to lists of memory blocks. mem_block_level is used as
- * index into this array.
- */
-static	memory_block	**mblks;
+/* The pool for the current expression is independent of any block level. */
+static memory_pool expr_pool;
 
-/* number of elements in *mblks */
-static	size_t	nmblks;
-
-/* free list for memory blocks */
-static	memory_block	*frmblks;
-
-/* length of new allocated memory blocks */
-static	size_t	mblklen;
-
-
-static memory_block *
-xnewblk(void)
-{
-	memory_block	*mb = xmalloc(sizeof(*mb));
-
-	mb->start = xmalloc(mblklen);
-	mb->size = mblklen;
-
-	return mb;
-}
-
-/* Allocate new memory, initialized with zero. */
-static void *
-xgetblk(memory_block **mbp, size_t s)
-{
-	memory_block	*mb;
-	void	*p;
-	size_t	t = 0;
-
-	/*
-	 * If the first block of the list has not enough free space,
-	 * or there is no first block, get a new block. The new block
-	 * is taken from the free list or, if there is no block on the
-	 * free list, is allocated using xnewblk().
-	 *
-	 * If a new block is allocated it is initialized with zero.
-	 * Blocks taken from the free list are zero'd in xfreeblk().
-	 */
-
-	s = WORST_ALIGN(s);
-	if ((mb = *mbp) == NULL || mb->nfree < s) {
-		if ((mb = frmblks) == NULL || mb->size < s) {
-			if (s > mblklen) {
-				t = mblklen;
-				mblklen = s;
-			}
-			mb = xnewblk();
-#ifndef BLKDEBUG
-			(void)memset(mb->start, 0, mb->size);
-#endif
-			if (t > 0)
-				mblklen = t;
-		} else {
-			frmblks = mb->next;
-		}
-		mb->first_free = mb->start;
-		mb->nfree = mb->size;
-		mb->next = *mbp;
-		*mbp = mb;
-	}
-	p = mb->first_free;
-	mb->first_free = (char *)mb->first_free + s;
-	mb->nfree -= s;
-#ifdef BLKDEBUG
-	(void)memset(p, 0, s);
-#endif
-	return p;
-}
-
-/*
- * Move all blocks from list *fmbp to free list. For each block, set all
- * used memory to zero.
- */
 static void
-xfreeblk(memory_block **fmbp)
+mpool_add(memory_pool *pool, struct memory_pool_item item)
 {
-	memory_block	*mb;
 
-	while ((mb = *fmbp) != NULL) {
-		*fmbp = mb->next;
-		mb->next = frmblks;
-		frmblks = mb;
-		(void)memset(mb->start, ZERO, mb->size - mb->nfree);
+	if (pool->len >= pool->cap) {
+		pool->cap = 2 * pool->len + 16;
+		pool->items = xrealloc(pool->items,
+		    sizeof(*pool->items) * pool->cap);
 	}
+	pool->items[pool->len++] = item;
 }
 
-void
-initmem(void)
+#ifdef DEBUG_MEM
+static void
+debug_memory_pool_item(const struct memory_pool_item *item)
 {
+	void *p = item->p;
+	size_t size = item->size;
+	const char *descr = item->descr;
 
-	mblklen = mem_block_size();
-	mblks = xcalloc(nmblks = ML_INC, sizeof(*mblks));
+	if (strcmp(descr, "string") == 0) {
+		const char *str = p;
+		debug_step("%s: freeing string '%s'", __func__, str);
+	} else if (strcmp(descr, "sym") == 0) {
+		const sym_t *sym = p;
+		debug_step("%s: freeing symbol '%s'", __func__, sym->s_name);
+	} else if (strcmp(descr, "type") == 0) {
+		const type_t *tp = p;
+		debug_step("%s: freeing type '%s'", __func__, type_name(tp));
+	} else if (strcmp(descr, "tnode") == 0) {
+		const tnode_t *tn = p;
+		debug_step("%s: freeing node '%s' with type '%s'",
+		    __func__, op_name(tn->tn_op), type_name(tn->tn_type));
+	} else
+		debug_step("%s: freeing '%s' with %zu bytes",
+		    __func__, descr, size);
 }
+#endif
 
-
-/* Allocate memory associated with level l, initialized with zero. */
-void *
-getlblk(size_t l, size_t s)
+static void
+mpool_free(memory_pool *pool)
 {
 
-	while (l >= nmblks) {
-		mblks = xrealloc(mblks, (nmblks + ML_INC) * sizeof(*mblks));
-		(void)memset(&mblks[nmblks], 0, ML_INC * sizeof(*mblks));
-		nmblks += ML_INC;
+#ifdef DEBUG_MEM
+	for (size_t i = pool->len; i-- > 0; )
+		debug_memory_pool_item(pool->items + i);
+#endif
+
+	for (size_t i = pool->len; i-- > 0;) {
+#ifdef DEBUG_MEM
+		static void *(*volatile set)(void *, int, size_t) = memset;
+		set(pool->items[i].p, 'Z', pool->items[i].size);
+#endif
+		free(pool->items[i].p);
 	}
-	return xgetblk(&mblks[l], s);
+	pool->len = 0;
 }
 
-/*
- * Return allocated memory for the current mem_block_level, initialized with
- * zero.
- */
+static void *
+#ifdef DEBUG_MEM
+mpool_zero_alloc(memory_pool *pool, size_t size, const char *descr)
+#else
+mpool_zero_alloc(memory_pool *pool, size_t size)
+#endif
+{
+
+	void *mem = xmalloc(size);
+	memset(mem, 0, size);
+#if DEBUG_MEM
+	mpool_add(pool, (struct memory_pool_item){ mem, size, descr });
+#else
+	mpool_add(pool, (struct memory_pool_item){ mem });
+#endif
+	return mem;
+}
+
+static memory_pool *
+mpool_at(size_t level)
+{
+
+	if (level >= mpools.cap) {
+		size_t prev_cap = mpools.cap;
+		mpools.cap = level + 16;
+		mpools.pools = xrealloc(mpools.pools,
+		    sizeof(*mpools.pools) * mpools.cap);
+		for (size_t i = prev_cap; i < mpools.cap; i++)
+			mpools.pools[i] = (memory_pool){ NULL, 0, 0 };
+	}
+	return mpools.pools + level;
+}
+
+
+/* Allocate memory associated with the level, initialized with zero. */
+#ifdef DEBUG_MEM
 void *
-getblk(size_t s)
+level_zero_alloc(size_t level, size_t size, const char *descr)
 {
 
-	return getlblk(mem_block_level, s);
+	debug_step("%s: %s at level %zu", __func__, descr, level);
+	return mpool_zero_alloc(mpool_at(level), size, descr);
 }
-
-/* Free all memory associated with level l. */
-void
-freelblk(int l)
-{
-
-	xfreeblk(&mblks[l]);
-}
-
-void
-freeblk(void)
-{
-
-	freelblk(mem_block_level);
-}
-
-static	memory_block	*tmblk;
-
-/*
- * Return zero-initialized memory that is freed at the end of the current
- * expression.
- */
+#else
 void *
-expr_zalloc(size_t s)
+(level_zero_alloc)(size_t level, size_t size)
 {
 
-	return xgetblk(&tmblk, s);
+	return mpool_zero_alloc(mpool_at(level), size);
 }
+#endif
+
+/* Allocate memory that is freed at the end of the current block. */
+#ifdef DEBUG_MEM
+void *
+block_zero_alloc(size_t size, const char *descr)
+{
+
+	return level_zero_alloc(mem_block_level, size, descr);
+}
+#else
+void *
+(block_zero_alloc)(size_t size)
+{
+
+	return (level_zero_alloc)(mem_block_level, size);
+}
+#endif
+
+void
+level_free_all(size_t level)
+{
+
+	debug_step("+ %s %zu", __func__, level);
+	debug_indent_inc();
+	mpool_free(mpool_at(level));
+	debug_leave();
+}
+
+/* Allocate memory that is freed at the end of the current expression. */
+#if DEBUG_MEM
+void *
+expr_zero_alloc(size_t s, const char *descr)
+{
+
+	return mpool_zero_alloc(&expr_pool, s, descr);
+}
+#else
+void *
+(expr_zero_alloc)(size_t size)
+{
+
+	return mpool_zero_alloc(&expr_pool, size);
+}
+#endif
 
 static bool
-str_endswith(const char *haystack, const char *needle)
+str_ends_with(const char *haystack, const char *needle)
 {
 	size_t hlen = strlen(haystack);
 	size_t nlen = strlen(needle);
 
 	return nlen <= hlen &&
-	       memcmp(haystack + hlen - nlen, needle, nlen) == 0;
+	    memcmp(haystack + hlen - nlen, needle, nlen) == 0;
 }
 
 /*
  * Return a freshly allocated tree node that is freed at the end of the
  * current expression.
+ *
+ * The node records whether it comes from a system file, which makes strict
+ * bool mode less restrictive.
  */
 tnode_t *
-expr_zalloc_tnode(void)
+expr_alloc_tnode(void)
 {
-	tnode_t *tn = expr_zalloc(sizeof(*tn));
+	tnode_t *tn = expr_zero_alloc(sizeof(*tn), "tnode");
 	/*
 	 * files named *.c that are different from the main translation unit
-	 * typically contain generated code that cannot be influenced, such
-	 * as a flex lexer or a yacc parser.
+	 * typically contain generated code that cannot be influenced, such as
+	 * a flex lexer or a yacc parser.
 	 */
-	tn->tn_relaxed = in_system_header ||
-			 (curr_pos.p_file != csrc_pos.p_file &&
-			  str_endswith(curr_pos.p_file, ".c"));
+	tn->tn_sys = in_system_header ||
+		     (curr_pos.p_file != csrc_pos.p_file &&
+		      str_ends_with(curr_pos.p_file, ".c"));
 	return tn;
 }
 
@@ -375,22 +359,22 @@ void
 expr_free_all(void)
 {
 
-	xfreeblk(&tmblk);
+	debug_step("%s", __func__);
+	mpool_free(&expr_pool);
 }
 
 /*
  * Save the memory which is used by the current expression. This memory
- * is not freed by the next expr_free_all() call. The pointer returned can be
+ * is not freed by the next expr_free_all() call. The returned value can be
  * used to restore the memory.
  */
-memory_block *
+memory_pool
 expr_save_memory(void)
 {
-	memory_block	*tmem;
 
-	tmem = tmblk;
-	tmblk = NULL;
-	return tmem;
+	memory_pool saved_pool = expr_pool;
+	expr_pool = (memory_pool){ NULL, 0, 0 };
+	return saved_pool;
 }
 
 /*
@@ -399,13 +383,10 @@ expr_save_memory(void)
  * expr_free_all() frees the restored memory.
  */
 void
-expr_restore_memory(memory_block *tmem)
+expr_restore_memory(memory_pool saved_pool)
 {
 
 	expr_free_all();
-	if (tmblk != NULL) {
-		free(tmblk->start);
-		free(tmblk);
-	}
-	tmblk = tmem;
+	free(expr_pool.items);
+	expr_pool = saved_pool;
 }

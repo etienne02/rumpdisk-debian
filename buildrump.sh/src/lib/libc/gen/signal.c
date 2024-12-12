@@ -1,4 +1,4 @@
-/*	$NetBSD: signal.c,v 1.14 2016/06/03 23:57:37 christos Exp $	*/
+/*	$NetBSD: signal.c,v 1.16 2024/01/03 18:41:53 christos Exp $	*/
 
 /*
  * Copyright (c) 1985, 1989, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)signal.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: signal.c,v 1.14 2016/06/03 23:57:37 christos Exp $");
+__RCSID("$NetBSD: signal.c,v 1.16 2024/01/03 18:41:53 christos Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -42,6 +42,7 @@ __RCSID("$NetBSD: signal.c,v 1.14 2016/06/03 23:57:37 christos Exp $");
  * Almost backwards compatible signal.
  */
 #include "namespace.h"
+#include "extern.h"
 #include <signal.h>
 
 #ifdef __weak_alias

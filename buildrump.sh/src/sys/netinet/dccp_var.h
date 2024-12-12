@@ -1,5 +1,5 @@
 /*	$KAME: dccp_var.h,v 1.29 2005/11/03 14:59:28 nishida Exp $	*/
-/*	$NetBSD: dccp_var.h,v 1.5 2018/09/14 05:09:51 maxv Exp $ */
+/*	$NetBSD: dccp_var.h,v 1.7 2022/10/28 05:20:08 ozaki-r Exp $ */
 
 /*
  * Copyright (c) 2003 Joacim Häggmark, Magnus Erixzon, Nils-Erik Mattsson 
@@ -88,7 +88,7 @@ struct dccpcb {
 	u_int8_t	ndp_rcv;	/* ndp value of received packet */
 
 	u_int8_t	cslen;		/* How much of outgoing packets are covered by the checksum */
-	u_int8_t	pref_cc;	/* Client prefered CC */
+	u_int8_t	pref_cc;	/* Client preferred CC */
 	u_int8_t	ndp;		/* Number of non data packets */
 	u_int32_t	loss_window;	/* Loss window (defaults to 1000)  */
 	u_int16_t	ack_ratio;	/* Ack Ratio Feature */
@@ -96,7 +96,6 @@ struct dccpcb {
 					   (in each direction) */
 	void		*cc_state[2];
 	struct inpcb	*d_inpcb;	/* Pointer back to Internet PCB	 */
-	struct in6pcb	*d_in6pcb;
 	u_int32_t	d_maxseg;	/* Maximum segment size */
 	char		options[DCCP_MAX_OPTIONS];
 	u_int8_t	optlen;
@@ -153,14 +152,7 @@ struct xdccpcb {
 #endif
 
 #define	intodccpcb(ip)	((struct dccpcb *)((ip)->inp_ppcb))
-#define	in6todccpcb(ip)	((struct dccpcb *)((ip)->in6p_ppcb))
-
-#ifdef __NetBSD__
-#define	dptosocket(dp)	(((dp)->d_inpcb) ? (dp)->d_inpcb->inp_socket : \
-			(((dp)->d_in6pcb) ? (dp)->d_in6pcb->in6p_socket : NULL))
-#else
 #define	dptosocket(dp)	((dp)->d_inpcb->inp_socket)
-#endif
 
 struct	dccpstat {
 	u_long	dccps_connattempt;	/* Initiated connections */

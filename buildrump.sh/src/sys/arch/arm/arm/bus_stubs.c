@@ -1,4 +1,4 @@
-/*	$NetBSD: bus_stubs.c,v 1.1 2020/04/13 07:09:51 maxv Exp $	*/
+/*	$NetBSD: bus_stubs.c,v 1.3 2021/09/18 09:49:57 jmcneill Exp $	*/
 
 /*
  * Copyright (c) 2020 The NetBSD Foundation, Inc.
@@ -30,13 +30,22 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bus_stubs.c,v 1.1 2020/04/13 07:09:51 maxv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus_stubs.c,v 1.3 2021/09/18 09:49:57 jmcneill Exp $");
 
 #include <sys/systm.h>
 #include <sys/asan.h>
+#include <sys/bus.h>
+#include <sys/bus_proto.h>
 
-#include <machine/bus_defs.h>
-#include <machine/bus_funcs.h>
+bool
+bus_space_is_equal(bus_space_tag_t t1, bus_space_tag_t t2)
+{
+	if (t1 == t2) {
+		return true;
+	}
+
+	return t1 != NULL && t2 != NULL && t1->bs_cookie == t2->bs_cookie;
+}
 
 int
 bus_dmamap_create(bus_dma_tag_t t, bus_size_t size, int nsegments,

@@ -1,4 +1,4 @@
-/*	$NetBSD: grf.c,v 1.45 2014/12/14 23:48:58 chs Exp $	*/
+/*	$NetBSD: grf.c,v 1.47 2023/12/20 00:40:44 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: grf.c,v 1.45 2014/12/14 23:48:58 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: grf.c,v 1.47 2023/12/20 00:40:44 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,7 +53,6 @@ __KERNEL_RCSID(0, "$NetBSD: grf.c,v 1.45 2014/12/14 23:48:58 chs Exp $");
 #include <sys/proc.h>
 #include <sys/resourcevar.h>
 #include <sys/ioctl.h>
-#include <sys/malloc.h>
 #include <sys/conf.h>
 
 #include <machine/cpu.h>
@@ -65,6 +64,8 @@ __KERNEL_RCSID(0, "$NetBSD: grf.c,v 1.45 2014/12/14 23:48:58 chs Exp $");
 #include <uvm/uvm_extern.h>
 
 #include <miscfs/specfs/specdev.h>
+
+#include "ioconf.h"
 
 #include "ite.h"
 #if NITE == 0
@@ -86,8 +87,6 @@ static int grfoff(struct grf_softc *);
 static off_t grfaddr(struct grf_softc *, off_t);
 static int grfmap(dev_t, void **, struct proc *);
 static int grfunmap(dev_t, void *, struct proc *);
-
-extern struct cfdriver grf_cd;
 
 dev_type_open(grfopen);
 dev_type_close(grfclose);

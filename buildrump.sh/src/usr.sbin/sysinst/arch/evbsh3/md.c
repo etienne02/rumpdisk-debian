@@ -1,4 +1,4 @@
-/*	$NetBSD: md.c,v 1.6 2020/10/12 16:14:34 martin Exp $	*/
+/*	$NetBSD: md.c,v 1.8 2023/03/26 19:10:34 andvar Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -132,7 +132,7 @@ md_make_bsd_partitions(struct install_partition_desc *install)
 }
 
 /*
- * any additional partition validataion
+ * any additional partition validation
  */
 bool
 md_check_partitions(struct install_partition_desc *install)
@@ -182,7 +182,7 @@ md_init_set_status(int flags)
 }
 
 int
-md_post_extract(struct install_partition_desc *install)
+md_post_extract(struct install_partition_desc *install, bool upgrade)
 {
 	return 0;
 }

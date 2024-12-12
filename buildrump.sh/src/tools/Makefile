@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.211 2021/05/27 08:41:35 cjep Exp $
+#	$NetBSD: Makefile,v 1.227 2024/10/23 00:45:58 kalvisd Exp $
 
 .include <bsd.own.mk>
 .include <bsd.endian.mk>
@@ -9,13 +9,11 @@
 
 # TOOLDIR must be valid, unless MKTOOLS=no
 .if ${MKTOOLS:Uyes} != "no"
-.if "${TOOLDIR}" == ""
-.error "TOOLDIR is undefined or empty"
-.elif "${TOOLDIR:tW:M/*}" == ""
-.error "TOOLDIR is not an absolute path: ${TOOLDIR}"
-#.elif !exists(TOOLDIR) # XXX .exists fails for directories
-#.error "TOOLDIR does not exist: ${TOOLDIR}"
-.endif
+.  if "${TOOLDIR}" == ""
+.    error TOOLDIR is undefined or empty
+.  elif ${TOOLDIR:tW:M/*} == ""
+.    error TOOLDIR '${TOOLDIR}' is not an absolute path
+.  endif
 .endif # MKTOOLS != no
 
 # TOOLS_BUILDRUMP == yes builds only the subset of the tools required
@@ -31,6 +29,9 @@ TOOLCHAIN_BITS+= gmake .WAIT
 TOOLCHAIN_BITS+= gmp .WAIT
 TOOLCHAIN_BITS+= mpfr .WAIT
 TOOLCHAIN_BITS+= mpc .WAIT
+.  if (defined(HAVE_GCC) && ${HAVE_GCC} >= 12 && !defined(NOGCCISL))
+TOOLCHAIN_BITS+= isl .WAIT
+.  endif
 . endif
 
 TOOLCHAIN_BITS+= binutils .WAIT
@@ -58,8 +59,9 @@ TOOLCHAIN_BITS+= dbsym mdsetimage
 
 DTRACE_BITS=
 .if ${MKDTRACE} != "no" || ${MKCTF} != "no"
-DTRACE_BITS+= .WAIT libelf
-DTRACE_BITS+= .WAIT libdwarf
+DTRACE_BITS+= .WAIT elftoolchain/common
+DTRACE_BITS+= .WAIT elftoolchain/libelf
+DTRACE_BITS+= .WAIT elftoolchain/libdwarf
 DTRACE_BITS+= .WAIT libctf
 .endif
 .if ${MKCTF} != "no"
@@ -103,7 +105,7 @@ SUBDIR+= cap_mkdb crunchgen ctags gencat hexdump \
 		makewhatis mtree nbperf .WAIT uudecode
 .endif
 
-SUBDIR+= cat rpcgen join lorder m4 mkdep tsort .WAIT yacc .WAIT awk .WAIT lex
+SUBDIR+= cat gzip rpcgen join lorder m4 mkdep tsort .WAIT yacc .WAIT awk .WAIT lex
 .if ${TOOLS_BUILDRUMP} == "no"
 SUBDIR+= xz-include .WAIT grep xz-lib pax .WAIT libprop
 
@@ -170,6 +172,8 @@ SUBDIR+=	ibmnws-ncdcs
 
 .if ${MACHINE} == "macppc"
 SUBDIR+=	macppc-fixcoff
+SUBDIR+=	macppc_installboot
+SUBDIR+=	macppc_mkboothfs
 .endif
 
 .if (${MACHINE} == "prep" || ${MACHINE} == "rs6000" || ${MACHINE} == "bebox")
@@ -209,6 +213,10 @@ SUBDIR+=	amiga-txlt
 SUBDIR+=	hp300-mkboot
 .endif
 
+.if ${MACHINE} == "vax"
+SUBDIR+=	libmopcopy vax-mopcopy
+.endif
+
 .if ${MACHINE} == "evbarm" \
     && ${MACHINE_CPU} == "arm" \
     && ${TARGET_ENDIANNESS} == "1234"
@@ -217,7 +225,8 @@ SUBDIR+=	elftosb
 
 .if ${MACHINE} == "evbarm" || ${MACHINE} == "evbmips" || \
     ${MACHINE} == "evbppc" || ${MACHINE} == "evbsh3" || \
-    ${MACHINE} == "sandpoint"
+    ${MACHINE} == "sandpoint" || \
+    ${MACHINE_CPU} == "riscv"
 SUBDIR+=	mkubootimage
 SUBDIR+=	libfdt .WAIT
 SUBDIR+=	dtc
@@ -227,6 +236,10 @@ SUBDIR+=	dtc
 SUBDIR+=	mvme68k-wrtvid
 .endif
 
+.if ${MACHINE} == "mac68k" || ${MACHINE} == "macppc"
+SUBDIR+=	mkhybrid
+.endif
+
 .if ${MKX11} != "no"
 SUBDIR+=	makestrs
 SUBDIR+=	makekeys
@@ -234,7 +247,7 @@ SUBDIR+=	makekeys
 
 SUBDIR+= cvslatest
 
-.endif # TOOLS_BUILDRUMP != no
+.endif # TOOLS_BUILDRUMP == no
 
 check_MKTOOLS: .PHONY .NOTMAIN
 .if ${MKTOOLS:Uyes} == "no"

@@ -1,4 +1,4 @@
-/* $NetBSD: kern_tc.c,v 1.62 2021/06/02 21:34:58 riastradh Exp $ */
+/* $NetBSD: kern_tc.c,v 1.77 2024/05/11 06:34:45 andvar Exp $ */
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -38,19 +38,25 @@
  * ---------------------------------------------------------------------------
  */
 
+/*
+ * https://papers.freebsd.org/2002/phk-timecounters.files/timecounter.pdf
+ */
+
 #include <sys/cdefs.h>
 /* __FBSDID("$FreeBSD: src/sys/kern/kern_tc.c,v 1.166 2005/09/19 22:16:31 andre Exp $"); */
-__KERNEL_RCSID(0, "$NetBSD: kern_tc.c,v 1.62 2021/06/02 21:34:58 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_tc.c,v 1.77 2024/05/11 06:34:45 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ntp.h"
 #endif
 
 #include <sys/param.h>
+
 #include <sys/atomic.h>
 #include <sys/evcnt.h>
 #include <sys/kauth.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/reboot.h>	/* XXX just to get AB_VERBOSE */
 #include <sys/sysctl.h>
@@ -131,10 +137,26 @@ static struct timehands *volatile timehands = &th0;
 struct timecounter *timecounter = &dummy_timecounter;
 static struct timecounter *timecounters = &dummy_timecounter;
 
-volatile time_t time_second __cacheline_aligned = 1;
-volatile time_t time_uptime __cacheline_aligned = 1;
+/* used by savecore(8) */
+time_t time_second_legacy asm("time_second");
 
-static struct bintime timebasebin;
+#ifdef __HAVE_ATOMIC64_LOADSTORE
+volatile time_t time__second __cacheline_aligned = 1;
+volatile time_t time__uptime __cacheline_aligned = 1;
+#else
+static volatile struct {
+	uint32_t lo, hi;
+} time__uptime32 __cacheline_aligned = {
+	.lo = 1,
+}, time__second32 __cacheline_aligned = {
+	.lo = 1,
+};
+#endif
+
+static struct {
+	struct bintime bin;
+	volatile unsigned gen;	/* even when stable, odd when changing */
+} timebase __cacheline_aligned;
 
 static int timestepwarnings;
 
@@ -142,6 +164,107 @@ kmutex_t timecounter_lock;
 static u_int timecounter_mods;
 static volatile int timecounter_removals = 1;
 static u_int timecounter_bad;
+
+#ifdef __HAVE_ATOMIC64_LOADSTORE
+
+static inline void
+setrealuptime(time_t second, time_t uptime)
+{
+
+	time_second_legacy = second;
+
+	atomic_store_relaxed(&time__second, second);
+	atomic_store_relaxed(&time__uptime, uptime);
+}
+
+#else
+
+static inline void
+setrealuptime(time_t second, time_t uptime)
+{
+	uint32_t seclo = second & 0xffffffff, sechi = second >> 32;
+	uint32_t uplo = uptime & 0xffffffff, uphi = uptime >> 32;
+
+	KDASSERT(mutex_owned(&timecounter_lock));
+
+	time_second_legacy = second;
+
+	/*
+	 * Fast path -- no wraparound, just updating the low bits, so
+	 * no need for seqlocked access.
+	 */
+	if (__predict_true(sechi == time__second32.hi) &&
+	    __predict_true(uphi == time__uptime32.hi)) {
+		atomic_store_relaxed(&time__second32.lo, seclo);
+		atomic_store_relaxed(&time__uptime32.lo, uplo);
+		return;
+	}
+
+	atomic_store_relaxed(&time__second32.hi, 0xffffffff);
+	atomic_store_relaxed(&time__uptime32.hi, 0xffffffff);
+	membar_producer();
+	atomic_store_relaxed(&time__second32.lo, seclo);
+	atomic_store_relaxed(&time__uptime32.lo, uplo);
+	membar_producer();
+	atomic_store_relaxed(&time__second32.hi, sechi);
+	atomic_store_relaxed(&time__uptime32.hi, uphi);
+}
+
+time_t
+getrealtime(void)
+{
+	uint32_t lo, hi;
+
+	do {
+		for (;;) {
+			hi = atomic_load_relaxed(&time__second32.hi);
+			if (__predict_true(hi != 0xffffffff))
+				break;
+			SPINLOCK_BACKOFF_HOOK;
+		}
+		membar_consumer();
+		lo = atomic_load_relaxed(&time__second32.lo);
+		membar_consumer();
+	} while (hi != atomic_load_relaxed(&time__second32.hi));
+
+	return ((time_t)hi << 32) | lo;
+}
+
+time_t
+getuptime(void)
+{
+	uint32_t lo, hi;
+
+	do {
+		for (;;) {
+			hi = atomic_load_relaxed(&time__uptime32.hi);
+			if (__predict_true(hi != 0xffffffff))
+				break;
+			SPINLOCK_BACKOFF_HOOK;
+		}
+		membar_consumer();
+		lo = atomic_load_relaxed(&time__uptime32.lo);
+		membar_consumer();
+	} while (hi != atomic_load_relaxed(&time__uptime32.hi));
+
+	return ((time_t)hi << 32) | lo;
+}
+
+time_t
+getboottime(void)
+{
+
+	return getrealtime() - getuptime();
+}
+
+uint32_t
+getuptime32(void)
+{
+
+	return atomic_load_relaxed(&time__uptime32.lo);
+}
+
+#endif	/* !defined(__HAVE_ATOMIC64_LOADSTORE) */
 
 /*
  * sysctl helper routine for kern.timercounter.hardware
@@ -169,7 +292,7 @@ sysctl_kern_timecounter_hardware(SYSCTLFN_ARGS)
 	    strncmp(newname, tc->tc_name, sizeof(newname)) == 0)
 		return error;
 
-	if (l != NULL && (error = kauth_authorize_system(l->l_cred, 
+	if (l != NULL && (error = kauth_authorize_system(l->l_cred,
 	    KAUTH_SYSTEM_TIME, KAUTH_REQ_SYSTEM_TIME_TIMECOUNTERS, newname,
 	    NULL, NULL)) != 0)
 		return error;
@@ -345,6 +468,10 @@ binuptime(struct bintime *bt)
 	 * updating timecounter_removals will issue a broadcast cross call
 	 * before inspecting our l_tcgen value (this elides memory ordering
 	 * issues).
+	 *
+	 * XXX If the author of the above comment knows how to make it
+	 * safe to avoid memory barriers around the access to
+	 * th->th_generation, I'm all ears.
 	 */
 	l = curlwp;
 	lgen = l->l_tcgen;
@@ -354,10 +481,12 @@ binuptime(struct bintime *bt)
 	__insn_barrier();
 
 	do {
-		th = timehands;
+		th = atomic_load_consume(&timehands);
 		gen = th->th_generation;
+		membar_consumer();
 		*bt = th->th_offset;
 		bintime_addx(bt, th->th_scale * tc_delta(th));
+		membar_consumer();
 	} while (gen == 0 || gen != th->th_generation);
 
 	__insn_barrier();
@@ -387,10 +516,12 @@ microuptime(struct timeval *tvp)
 void
 bintime(struct bintime *bt)
 {
+	struct bintime boottime;
 
 	TC_COUNT(nbintime);
 	binuptime(bt);
-	bintime_add(bt, &timebasebin);
+	getbinboottime(&boottime);
+	bintime_add(bt, &boottime);
 }
 
 void
@@ -421,9 +552,11 @@ getbinuptime(struct bintime *bt)
 
 	TC_COUNT(ngetbinuptime);
 	do {
-		th = timehands;
+		th = atomic_load_consume(&timehands);
 		gen = th->th_generation;
+		membar_consumer();
 		*bt = th->th_offset;
+		membar_consumer();
 	} while (gen == 0 || gen != th->th_generation);
 }
 
@@ -435,9 +568,11 @@ getnanouptime(struct timespec *tsp)
 
 	TC_COUNT(ngetnanouptime);
 	do {
-		th = timehands;
+		th = atomic_load_consume(&timehands);
 		gen = th->th_generation;
+		membar_consumer();
 		bintime2timespec(&th->th_offset, tsp);
+		membar_consumer();
 	} while (gen == 0 || gen != th->th_generation);
 }
 
@@ -449,9 +584,11 @@ getmicrouptime(struct timeval *tvp)
 
 	TC_COUNT(ngetmicrouptime);
 	do {
-		th = timehands;
+		th = atomic_load_consume(&timehands);
 		gen = th->th_generation;
+		membar_consumer();
 		bintime2timeval(&th->th_offset, tvp);
+		membar_consumer();
 	} while (gen == 0 || gen != th->th_generation);
 }
 
@@ -459,15 +596,19 @@ void
 getbintime(struct bintime *bt)
 {
 	struct timehands *th;
+	struct bintime boottime;
 	u_int gen;
 
 	TC_COUNT(ngetbintime);
 	do {
-		th = timehands;
+		th = atomic_load_consume(&timehands);
 		gen = th->th_generation;
+		membar_consumer();
 		*bt = th->th_offset;
+		membar_consumer();
 	} while (gen == 0 || gen != th->th_generation);
-	bintime_add(bt, &timebasebin);
+	getbinboottime(&boottime);
+	bintime_add(bt, &boottime);
 }
 
 static inline void
@@ -478,9 +619,11 @@ dogetnanotime(struct timespec *tsp)
 
 	TC_COUNT(ngetnanotime);
 	do {
-		th = timehands;
+		th = atomic_load_consume(&timehands);
 		gen = th->th_generation;
+		membar_consumer();
 		*tsp = th->th_nanotime;
+		membar_consumer();
 	} while (gen == 0 || gen != th->th_generation);
 }
 
@@ -508,9 +651,11 @@ getmicrotime(struct timeval *tvp)
 
 	TC_COUNT(ngetmicrotime);
 	do {
-		th = timehands;
+		th = atomic_load_consume(&timehands);
 		gen = th->th_generation;
+		membar_consumer();
 		*tvp = th->th_microtime;
+		membar_consumer();
 	} while (gen == 0 || gen != th->th_generation);
 }
 
@@ -533,14 +678,25 @@ getmicroboottime(struct timeval *tvp)
 }
 
 void
-getbinboottime(struct bintime *bt)
+getbinboottime(struct bintime *basep)
 {
+	struct bintime base;
+	unsigned gen;
 
-	/*
-	 * XXX Need lockless read synchronization around timebasebin
-	 * (and not just here).
-	 */
-	*bt = timebasebin;
+	do {
+		/* Spin until the timebase isn't changing.  */
+		while ((gen = atomic_load_relaxed(&timebase.gen)) & 1)
+			SPINLOCK_BACKOFF_HOOK;
+
+		/* Read out a snapshot of the timebase.  */
+		membar_consumer();
+		base = timebase.bin;
+		membar_consumer();
+
+		/* Restart if it changed while we were reading.  */
+	} while (gen != atomic_load_relaxed(&timebase.gen));
+
+	*basep = base;
 }
 
 /*
@@ -712,7 +868,7 @@ uint64_t
 tc_getfrequency(void)
 {
 
-	return timehands->th_counter->tc_frequency;
+	return atomic_load_consume(&timehands)->th_counter->tc_frequency;
 }
 
 /*
@@ -730,8 +886,12 @@ tc_setclock(const struct timespec *ts)
 	binuptime(&bt2);
 	timespec2bintime(ts, &bt);
 	bintime_sub(&bt, &bt2);
-	bintime_add(&bt2, &timebasebin);
-	timebasebin = bt;
+	bintime_add(&bt2, &timebase.bin);
+	timebase.gen |= 1;	/* change in progress */
+	membar_producer();
+	timebase.bin = bt;
+	membar_producer();
+	timebase.gen++;		/* commit change */
 	tc_windup();
 	mutex_spin_exit(&timecounter_lock);
 
@@ -812,7 +972,7 @@ tc_windup(void)
 	 * the adjustment resulting from adjtime() calls.
 	 */
 	bt = th->th_offset;
-	bintime_add(&bt, &timebasebin);
+	bintime_add(&bt, &timebase.bin);
 	i = bt.sec - tho->th_microtime.tv_sec;
 	if (i > LARGE_STEP)
 		i = 2;
@@ -820,8 +980,13 @@ tc_windup(void)
 		t = bt.sec;
 		ntp_update_second(&th->th_adjustment, &bt.sec);
 		s_update = 1;
-		if (bt.sec != t)
-			timebasebin.sec += bt.sec - t;
+		if (bt.sec != t) {
+			timebase.gen |= 1;	/* change in progress */
+			membar_producer();
+			timebase.bin.sec += bt.sec - t;
+			membar_producer();
+			timebase.gen++;		/* commit change */
+		}
 	}
 
 	/* Update the UTC timestamps used by the get*() functions. */
@@ -878,10 +1043,8 @@ tc_windup(void)
 	 * Go live with the new struct timehands.  Ensure changes are
 	 * globally visible before changing.
 	 */
-	time_second = th->th_microtime.tv_sec;
-	time_uptime = th->th_offset.sec;
-	membar_producer();
-	timehands = th;
+	setrealuptime(th->th_microtime.tv_sec, th->th_offset.sec);
+	atomic_store_release(&timehands, th);
 
 	/*
 	 * Force users of the old timehand to move on.  This is
@@ -965,7 +1128,7 @@ pps_init(struct pps_state *pps)
 }
 
 /*
- * capture a timetamp in the pps structure
+ * capture a timestamp in the pps structure
  */
 void
 pps_capture(struct pps_state *pps)
@@ -1008,7 +1171,7 @@ pps_event(struct pps_state *pps, int event)
  * a second but do not need to be exactly in phase
  * with the UTC second but should be close to it.
  * this relaxation of requirements allows callout
- * driven timestamping mechanisms to feed to pps 
+ * driven timestamping mechanisms to feed to pps
  * capture/kernel pll logic.
  *
  * calling pattern is:
@@ -1081,7 +1244,7 @@ pps_ref_event(struct pps_state *pps,
 #ifdef PPS_DEBUG
 	if (ppsdebug & 0x1) {
 		struct timespec tmsp;
-	
+
 		if (ref_ts == NULL) {
 			tmsp.tv_sec = 0;
 			tmsp.tv_nsec = 0;
@@ -1165,7 +1328,7 @@ pps_ref_event(struct pps_state *pps,
 	/* Convert the count to a bintime. */
 	bt = pps->capth->th_offset;
 	bintime_addx(&bt, pps->capth->th_scale * (acount - pps->capth->th_offset_count));
-	bintime_add(&bt, &timebasebin);
+	bintime_add(&bt, &timebase.bin);
 
 	if ((refmode & PPS_REFEVNT_PPS) == 0) {
 		/* determine difference to reference time stamp */
@@ -1174,7 +1337,7 @@ pps_ref_event(struct pps_state *pps,
 		btd = bt;
 		bintime_sub(&btd, &bt_ref);
 
-		/* 
+		/*
 		 * simulate a PPS timestamp by dropping the fraction
 		 * and applying the offset
 		 */
@@ -1184,7 +1347,7 @@ pps_ref_event(struct pps_state *pps,
 		bintime_add(&bt, &btd);
 	} else {
 		/*
-		 * create ref_ts from current time - 
+		 * create ref_ts from current time -
 		 * we are supposed to be called on
 		 * the second mark
 		 */
@@ -1259,7 +1422,7 @@ pps_ref_event(struct pps_state *pps,
 		tcount = pps->capcount - pps->ppscount[2];
 		pps->ppscount[2] = pps->capcount;
 		tcount &= pps->capth->th_counter->tc_counter_mask;
-		
+
 		/* calculate elapsed ref time */
 		btd = bt_ref;
 		bintime_sub(&btd, &pps->ref_time);
@@ -1278,7 +1441,7 @@ pps_ref_event(struct pps_state *pps,
 		 * the frequency with the elapsed period
 		 * we pick a fraction of 30 bits
 		 * ~1ns resolution for elapsed time
-		 */ 
+		 */
 		div   = (uint64_t)btd.sec << 30;
 		div  |= (btd.frac >> 34) & (((uint64_t)1 << 30) - 1);
 		div  *= pps->capth->th_counter->tc_frequency;

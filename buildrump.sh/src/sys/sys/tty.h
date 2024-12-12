@@ -1,4 +1,4 @@
-/*	$NetBSD: tty.h,v 1.95 2019/01/27 02:08:50 pgoyette Exp $	*/
+/*	$NetBSD: tty.h,v 1.104 2023/04/12 06:35:26 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -149,6 +149,7 @@ struct tty {
 	int	t_sigcount;		/* # pending signals */
 	TAILQ_ENTRY(tty) t_sigqueue;	/* entry on pending signal list */
 	void	*t_softc;		/* pointer to driver's softc. */
+	volatile unsigned t_refcnt;	/* reference count for constty */
 };
 
 #ifdef TTY_ALLOW_PRIVATE
@@ -207,6 +208,8 @@ struct tty {
 #define	TS_KERN_ONLY	0x10000		/* Device is accessible by kernel
 					 * only, deny all userland access */
 
+#define	TS_CANCEL	0x20000		/* I/O cancelled pending close. */
+
 /* Character type information. */
 #define	ORDINARY	0
 #define	CONTROL		1
@@ -250,6 +253,8 @@ TAILQ_HEAD(ttylist_head, tty);		/* the ttylist is a TAILQ */
 #ifdef _KERNEL
 
 extern kmutex_t	tty_lock;
+extern kmutex_t	constty_lock;
+extern struct tty *volatile constty;
 
 extern	int tty_count;			/* number of ttys in global ttylist */
 extern	struct ttychars ttydefaults;
@@ -280,7 +285,8 @@ int	 ttstart(struct tty *);
 void	 ttwakeup(struct tty *);
 int	 ttwrite(struct tty *, struct uio *, int);
 void	 ttychars(struct tty *);
-int	 ttycheckoutq(struct tty *, int);
+int	 ttycheckoutq(struct tty *);
+void	 ttycancel(struct tty *);
 int	 ttyclose(struct tty *);
 void	 ttyflush(struct tty *, int);
 void	 ttygetinfo(struct tty *, int, char *, size_t);
@@ -309,6 +315,13 @@ struct tty
 void	 tty_free(struct tty *);
 u_char	*firstc(struct clist *, int *);
 bool	 ttypull(struct tty *);
+int	 tty_unit(dev_t);
+void	 tty_acquire(struct tty *);
+void	 tty_release(struct tty *);
+
+void	 ttylock(struct tty *);
+void	 ttyunlock(struct tty *);
+bool	 ttylocked(struct tty *);
 
 int	clalloc(struct clist *, int, int);
 void	clfree(struct clist *);

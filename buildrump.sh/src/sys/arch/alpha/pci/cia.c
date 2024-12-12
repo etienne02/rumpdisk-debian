@@ -1,4 +1,4 @@
-/* $NetBSD: cia.c,v 1.79 2021/08/07 16:18:41 thorpej Exp $ */
+/* $NetBSD: cia.c,v 1.81 2023/12/04 00:32:10 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 2000 The NetBSD Foundation, Inc.
@@ -61,7 +61,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: cia.c,v 1.79 2021/08/07 16:18:41 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cia.c,v 1.81 2023/12/04 00:32:10 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -146,7 +146,7 @@ ciamatch(device_t parent, cfdata_t match, void *aux)
  * Set up the chipset's function pointers.
  */
 void
-cia_init(struct cia_config *ccp, int mallocsafe)
+cia_init(struct cia_config *ccp)
 {
 	int pci_use_bwx = cia_pci_use_bwx;
 	int bus_use_bwx = cia_bus_use_bwx;
@@ -179,7 +179,7 @@ cia_init(struct cia_config *ccp, int mallocsafe)
 	/*
 	 * Use BWX iff:
 	 *
-	 *	- It hasn't been disbled by the user,
+	 *	- It hasn't been disabled by the user,
 	 *	- it's enabled in CNFG,
 	 *	- we're implementation version ev5,
 	 *	- BWX is enabled in the CPU's capabilities mask
@@ -232,7 +232,6 @@ cia_init(struct cia_config *ccp, int mallocsafe)
 		}
 		alpha_bus_get_window = cia_bus_get_window;
 	}
-	ccp->cc_mallocsafe = mallocsafe;
 
 	cia_pci_init(&ccp->cc_pc, ccp);
 	alpha_pci_chipset = &ccp->cc_pc;
@@ -259,7 +258,7 @@ ciaattach(device_t parent, device_t self, void *aux)
 	 * that need to use memory allocation.
 	 */
 	ccp = sc->sc_ccp = &cia_configuration;
-	cia_init(ccp, 1);
+	cia_init(ccp);
 
 	if (ccp->cc_flags & CCF_ISPYXIS) {
 		name = "Pyxis";

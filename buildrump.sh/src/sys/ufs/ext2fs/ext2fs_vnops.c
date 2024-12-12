@@ -1,4 +1,4 @@
-/*	$NetBSD: ext2fs_vnops.c,v 1.135 2021/07/18 23:57:15 dholland Exp $	*/
+/*	$NetBSD: ext2fs_vnops.c,v 1.139 2024/01/29 18:27:09 christos Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ext2fs_vnops.c,v 1.135 2021/07/18 23:57:15 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ext2fs_vnops.c,v 1.139 2024/01/29 18:27:09 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -140,7 +140,6 @@ ext2fs_create(void *v)
 
 	if (error)
 		return error;
-	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
 	VOP_UNLOCK(*ap->a_vpp);
 	return 0;
 }
@@ -165,7 +164,6 @@ ext2fs_mknod(void *v)
 
 	if ((error = ext2fs_makeinode(vap, ap->a_dvp, vpp, ap->a_cnp, 1)) != 0)
 		return error;
-	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
 	ip = VTOI(*vpp);
 	ip->i_flag |= IN_ACCESS | IN_CHANGE | IN_UPDATE;
 	VOP_UNLOCK(*vpp);
@@ -292,13 +290,8 @@ ext2fs_getattr(void *v)
 
 	vap->va_flags = 0;
 	vap->va_flags |= (ip->i_e2fs_flags & EXT2_NODUMP) ? UF_NODUMP : 0;
-#ifdef EXT2FS_SYSTEM_FLAGS
 	vap->va_flags |= (ip->i_e2fs_flags & EXT2_IMMUTABLE) ? SF_IMMUTABLE : 0;
 	vap->va_flags |= (ip->i_e2fs_flags & EXT2_APPEND) ? SF_APPEND : 0;
-#else
-	vap->va_flags |= (ip->i_e2fs_flags & EXT2_IMMUTABLE) ? UF_IMMUTABLE : 0;
-	vap->va_flags |= (ip->i_e2fs_flags & EXT2_APPEND) ? UF_APPEND : 0;
-#endif
 
 	vap->va_gen = ip->i_e2fs_gen;
 	/* this doesn't belong here */
@@ -347,13 +340,6 @@ ext2fs_setattr(void *v)
 		if (vp->v_mount->mnt_flag & MNT_RDONLY)
 			return EROFS;
 
-		/*
-		 * Check if we're allowed to change the flags.
-		 * If EXT2FS_SYSTEM_FLAGS is set, then the flags are treated
-		 * as system flags, otherwise they're considered to be user
-		 * flags.
-		 */
-#ifdef EXT2FS_SYSTEM_FLAGS
 		/* Indicate we're changing system flags if we are. */
 		if ((vap->va_flags & SF_APPEND) ||
 		     (vap->va_flags & SF_IMMUTABLE)) {
@@ -365,7 +351,6 @@ ext2fs_setattr(void *v)
 		if (ip->i_e2fs_flags & (EXT2_APPEND | EXT2_IMMUTABLE)) {
 			action |= KAUTH_VNODE_HAS_SYSFLAGS;
 		}
-#endif /* EXT2FS_SYSTEM_FLAGS */
 
 		error = kauth_authorize_vnode(cred, action, vp, NULL,
 		    genfs_can_chflags(vp, cred, ip->i_uid, changing_sysflags));
@@ -373,17 +358,11 @@ ext2fs_setattr(void *v)
 			return error;
 
 		ip->i_e2fs_flags &= ~(EXT2_APPEND | EXT2_IMMUTABLE | EXT2_NODUMP);
-#ifdef EXT2FS_SYSTEM_FLAGS
 		ip->i_e2fs_flags |=
 		    (vap->va_flags & SF_APPEND) ?  EXT2_APPEND : 0 |
 		    (vap->va_flags & SF_IMMUTABLE) ? EXT2_IMMUTABLE : 0;
-#else
 		ip->i_e2fs_flags |=
-		    (vap->va_flags & UF_APPEND) ? EXT2_APPEND : 0 |
-		    (vap->va_flags & UF_IMMUTABLE) ? EXT2_IMMUTABLE : 0;
-#endif
-		ip->i_e2fs_flags |=
-		    (vap->va_flags & UF_NODUMP) ? EXT2_NODUMP : 0;   
+		    (vap->va_flags & UF_NODUMP) ? EXT2_NODUMP : 0;
 		ip->i_flag |= IN_CHANGE;
 		if (vap->va_flags & (IMMUTABLE | APPEND))
 			return 0;
@@ -453,7 +432,6 @@ ext2fs_setattr(void *v)
 			return EROFS;
 		error = ext2fs_chmod(vp, (int)vap->va_mode, cred, l);
 	}
-	VN_KNOTE(vp, NOTE_ATTRIB);
 	return error;
 }
 
@@ -531,10 +509,11 @@ ext2fs_chown(struct vnode *vp, uid_t uid, gid_t gid, kauth_cred_t cred,
 int
 ext2fs_remove(void *v)
 {
-	struct vop_remove_v2_args /* {
+	struct vop_remove_v3_args /* {
 		struct vnode *a_dvp;
 		struct vnode *a_vp;
 		struct componentname *a_cnp;
+		nlink_t ctx_vp_new_nlink;
 	} */ *ap = v;
 	struct inode *ip;
 	struct vnode *vp = ap->a_vp;
@@ -556,11 +535,10 @@ ext2fs_remove(void *v)
 		if (error == 0) {
 			ip->i_e2fs_nlink--;
 			ip->i_flag |= IN_CHANGE;
+			ap->ctx_vp_new_nlink = ip->i_e2fs_nlink;
 		}
 	}
 
-	VN_KNOTE(vp, NOTE_DELETE);
-	VN_KNOTE(dvp, NOTE_WRITE);
 	if (dvp == vp)
 		vrele(vp);
 	else
@@ -583,7 +561,7 @@ ext2fs_link(void *v)
 	struct vnode *vp = ap->a_vp;
 	struct componentname *cnp = ap->a_cnp;
 	struct inode *ip;
-	int error;
+	int error, abrt = 1;
 	struct ufs_lookup_results *ulr;
 
 	KASSERT(dvp != vp);
@@ -595,23 +573,24 @@ ext2fs_link(void *v)
 	UFS_CHECK_CRAPCOUNTER(VTOI(dvp));
 
 	error = vn_lock(vp, LK_EXCLUSIVE);
-	if (error) {
-		VOP_ABORTOP(dvp, cnp);
+	if (error)
 		goto out2;
-	}
+	error = kauth_authorize_vnode(cnp->cn_cred, KAUTH_VNODE_ADD_LINK, vp,
+	    dvp, 0);
+	if (error)
+		goto out1;
 	ip = VTOI(vp);
 	if ((nlink_t)ip->i_e2fs_nlink >= EXT2FS_LINK_MAX) {
-		VOP_ABORTOP(dvp, cnp);
 		error = EMLINK;
 		goto out1;
 	}
 	if (ip->i_e2fs_flags & (EXT2_IMMUTABLE | EXT2_APPEND)) {
-		VOP_ABORTOP(dvp, cnp);
 		error = EPERM;
 		goto out1;
 	}
 	ip->i_e2fs_nlink++;
 	ip->i_flag |= IN_CHANGE;
+	abrt = 0;
 	error = ext2fs_update(vp, NULL, NULL, UPDATE_WAIT);
 	if (!error)
 		error = ext2fs_direnter(ip, dvp, ulr, cnp);
@@ -622,8 +601,8 @@ ext2fs_link(void *v)
 out1:
 	VOP_UNLOCK(vp);
 out2:
-	VN_KNOTE(vp, NOTE_LINK);
-	VN_KNOTE(dvp, NOTE_WRITE);
+	if (abrt)
+		VOP_ABORTOP(dvp, cnp);
 	return error;
 }
 
@@ -748,7 +727,6 @@ bad:
 		ip->i_flag |= IN_CHANGE;
 		vput(tvp);
 	} else {
-		VN_KNOTE(dvp, NOTE_WRITE | NOTE_LINK);
 		VOP_UNLOCK(tvp);
 		*ap->a_vpp = tvp;
 	}
@@ -817,7 +795,6 @@ ext2fs_rmdir(void *v)
 	if (dp->i_e2fs_nlink != EXT2FS_LINK_INF)
 		dp->i_e2fs_nlink--;
 	dp->i_flag |= IN_CHANGE;
-	VN_KNOTE(dvp, NOTE_WRITE | NOTE_LINK);
 	cache_purge(dvp);
 	/*
 	 * Truncate inode.  The only stuff left
@@ -834,7 +811,6 @@ ext2fs_rmdir(void *v)
 	error = ext2fs_truncate(vp, (off_t)0, IO_SYNC, cnp->cn_cred);
 	cache_purge(ITOV(ip));
 out:
-	VN_KNOTE(vp, NOTE_DELETE);
 	vput(vp);
 	return error;
 }
@@ -861,7 +837,6 @@ ext2fs_symlink(void *v)
 	error = ext2fs_makeinode(ap->a_vap, ap->a_dvp, vpp, ap->a_cnp, 1);
 	if (error)
 		return error;
-	VN_KNOTE(ap->a_dvp, NOTE_WRITE);
 	vp = *vpp;
 	len = strlen(ap->a_target);
 	ip = VTOI(vp);

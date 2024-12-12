@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.20 2021/08/02 12:56:22 andvar Exp $	*/
+/*	$NetBSD: machdep.c,v 1.22 2024/03/05 14:15:31 thorpej Exp $	*/
 
 /*
  * Copyright 2001, 2002 Wasabi Systems, Inc.
@@ -74,7 +74,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.20 2021/08/02 12:56:22 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.22 2024/03/05 14:15:31 thorpej Exp $");
 
 #define __INTR_PRIVATE
 
@@ -100,7 +100,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.20 2021/08/02 12:56:22 andvar Exp $");
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/extent.h>
-#include <sys/malloc.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -1009,12 +1008,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && (waittime < 0)) {
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	splhigh();

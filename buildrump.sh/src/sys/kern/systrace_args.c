@@ -1,4 +1,4 @@
-/* $NetBSD: systrace_args.c,v 1.47 2021/04/14 02:45:58 christos Exp $ */
+/* $NetBSD: systrace_args.c,v 1.56 2024/10/09 16:29:11 christos Exp $ */
 
 /*
  * System call argument to DTrace register array conversion.
@@ -1311,6 +1311,32 @@ systrace_args(register_t sysnum, const void *params, uintptr_t *uarg, size_t *n_
 	}
 #else
 #endif
+	/* sys_timerfd_create */
+	case 177: {
+		const struct sys_timerfd_create_args *p = params;
+		iarg[0] = SCARG(p, clock_id); /* clockid_t */
+		iarg[1] = SCARG(p, flags); /* int */
+		*n_args = 2;
+		break;
+	}
+	/* sys_timerfd_settime */
+	case 178: {
+		const struct sys_timerfd_settime_args *p = params;
+		iarg[0] = SCARG(p, fd); /* int */
+		iarg[1] = SCARG(p, flags); /* int */
+		uarg[2] = (intptr_t) SCARG(p, new_value); /* const struct itimerspec * */
+		uarg[3] = (intptr_t) SCARG(p, old_value); /* struct itimerspec * */
+		*n_args = 4;
+		break;
+	}
+	/* sys_timerfd_gettime */
+	case 179: {
+		const struct sys_timerfd_gettime_args *p = params;
+		iarg[0] = SCARG(p, fd); /* int */
+		uarg[1] = (intptr_t) SCARG(p, curr_value); /* struct itimerspec * */
+		*n_args = 2;
+		break;
+	}
 	/* sys_setgid */
 	case 181: {
 		const struct sys_setgid_args *p = params;
@@ -1964,6 +1990,14 @@ systrace_args(register_t sysnum, const void *params, uintptr_t *uarg, size_t *n_
 		*n_args = 5;
 		break;
 	}
+	/* sys_eventfd */
+	case 267: {
+		const struct sys_eventfd_args *p = params;
+		uarg[0] = SCARG(p, val); /* unsigned int */
+		iarg[1] = SCARG(p, flags); /* int */
+		*n_args = 2;
+		break;
+	}
 	/* sys___posix_rename */
 	case 270: {
 		const struct sys___posix_rename_args *p = params;
@@ -2060,8 +2094,8 @@ systrace_args(register_t sysnum, const void *params, uintptr_t *uarg, size_t *n_
 	/* sys___sigaltstack14 */
 	case 281: {
 		const struct sys___sigaltstack14_args *p = params;
-		uarg[0] = (intptr_t) SCARG(p, nss); /* const struct sigaltstack * */
-		uarg[1] = (intptr_t) SCARG(p, oss); /* struct sigaltstack * */
+		uarg[0] = (intptr_t) SCARG(p, nss); /* const stack_t * */
+		uarg[1] = (intptr_t) SCARG(p, oss); /* stack_t * */
 		*n_args = 2;
 		break;
 	}
@@ -2484,9 +2518,9 @@ systrace_args(register_t sysnum, const void *params, uintptr_t *uarg, size_t *n_
 	case 345: {
 		const struct compat_50_sys_kevent_args *p = params;
 		iarg[0] = SCARG(p, fd); /* int */
-		uarg[1] = (intptr_t) SCARG(p, changelist); /* const struct kevent * */
+		uarg[1] = (intptr_t) SCARG(p, changelist); /* const struct kevent100 * */
 		uarg[2] = SCARG(p, nchanges); /* size_t */
-		uarg[3] = (intptr_t) SCARG(p, eventlist); /* struct kevent * */
+		uarg[3] = (intptr_t) SCARG(p, eventlist); /* struct kevent100 * */
 		uarg[4] = SCARG(p, nevents); /* size_t */
 		uarg[5] = (intptr_t) SCARG(p, timeout); /* const struct timespec50 * */
 		*n_args = 6;
@@ -3251,11 +3285,11 @@ systrace_args(register_t sysnum, const void *params, uintptr_t *uarg, size_t *n_
 	}
 	/* sys___kevent50 */
 	case 435: {
-		const struct sys___kevent50_args *p = params;
+		const struct compat_100_sys___kevent50_args *p = params;
 		iarg[0] = SCARG(p, fd); /* int */
-		uarg[1] = (intptr_t) SCARG(p, changelist); /* const struct kevent * */
+		uarg[1] = (intptr_t) SCARG(p, changelist); /* const struct kevent100 * */
 		uarg[2] = SCARG(p, nchanges); /* size_t */
-		uarg[3] = (intptr_t) SCARG(p, eventlist); /* struct kevent * */
+		uarg[3] = (intptr_t) SCARG(p, eventlist); /* struct kevent100 * */
 		uarg[4] = SCARG(p, nevents); /* size_t */
 		uarg[5] = (intptr_t) SCARG(p, timeout); /* const struct timespec * */
 		*n_args = 6;
@@ -3418,7 +3452,7 @@ systrace_args(register_t sysnum, const void *params, uintptr_t *uarg, size_t *n_
 	}
 	/* sys_dup3 */
 	case 454: {
-		const struct sys_dup3_args *p = params;
+		const struct compat_100_sys_dup3_args *p = params;
 		iarg[0] = SCARG(p, from); /* int */
 		iarg[1] = SCARG(p, to); /* int */
 		iarg[2] = SCARG(p, flags); /* int */
@@ -3851,6 +3885,73 @@ systrace_args(register_t sysnum, const void *params, uintptr_t *uarg, size_t *n_
 		uarg[0] = (intptr_t) SCARG(p, path); /* const char * */
 		iarg[1] = SCARG(p, name); /* int */
 		*n_args = 2;
+		break;
+	}
+	/* sys_memfd_create */
+	case 500: {
+		const struct sys_memfd_create_args *p = params;
+		uarg[0] = (intptr_t) SCARG(p, name); /* const char * */
+		uarg[1] = SCARG(p, flags); /* unsigned int */
+		*n_args = 2;
+		break;
+	}
+	/* sys___kevent100 */
+	case 501: {
+		const struct sys___kevent100_args *p = params;
+		iarg[0] = SCARG(p, fd); /* int */
+		uarg[1] = (intptr_t) SCARG(p, changelist); /* const struct kevent * */
+		uarg[2] = SCARG(p, nchanges); /* size_t */
+		uarg[3] = (intptr_t) SCARG(p, eventlist); /* struct kevent * */
+		uarg[4] = SCARG(p, nevents); /* size_t */
+		uarg[5] = (intptr_t) SCARG(p, timeout); /* const struct timespec * */
+		*n_args = 6;
+		break;
+	}
+	/* sys_epoll_create1 */
+	case 502: {
+		const struct sys_epoll_create1_args *p = params;
+		iarg[0] = SCARG(p, flags); /* int */
+		*n_args = 1;
+		break;
+	}
+	/* sys_epoll_ctl */
+	case 503: {
+		const struct sys_epoll_ctl_args *p = params;
+		iarg[0] = SCARG(p, epfd); /* int */
+		iarg[1] = SCARG(p, op); /* int */
+		iarg[2] = SCARG(p, fd); /* int */
+		uarg[3] = (intptr_t) SCARG(p, event); /* struct epoll_event * */
+		*n_args = 4;
+		break;
+	}
+	/* sys_epoll_pwait2 */
+	case 504: {
+		const struct sys_epoll_pwait2_args *p = params;
+		iarg[0] = SCARG(p, epfd); /* int */
+		uarg[1] = (intptr_t) SCARG(p, events); /* struct epoll_event * */
+		iarg[2] = SCARG(p, maxevents); /* int */
+		uarg[3] = (intptr_t) SCARG(p, timeout); /* const struct timespec * */
+		uarg[4] = (intptr_t) SCARG(p, sigmask); /* const sigset_t * */
+		*n_args = 5;
+		break;
+	}
+	/* sys___dup3100 */
+	case 505: {
+		const struct sys___dup3100_args *p = params;
+		iarg[0] = SCARG(p, from); /* int */
+		iarg[1] = SCARG(p, to); /* int */
+		iarg[2] = SCARG(p, flags); /* int */
+		*n_args = 3;
+		break;
+	}
+	/* sys_semtimedop */
+	case 506: {
+		const struct sys_semtimedop_args *p = params;
+		iarg[0] = SCARG(p, semid); /* int */
+		uarg[1] = (intptr_t) SCARG(p, sops); /* struct sembuf * */
+		uarg[2] = SCARG(p, nsops); /* size_t */
+		uarg[3] = (intptr_t) SCARG(p, timeout); /* struct timespec * */
+		*n_args = 4;
 		break;
 	}
 	default:
@@ -5980,6 +6081,51 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		break;
 #else
 #endif
+	/* sys_timerfd_create */
+	case 177:
+		switch(ndx) {
+		case 0:
+			p = "clockid_t";
+			break;
+		case 1:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys_timerfd_settime */
+	case 178:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "int";
+			break;
+		case 2:
+			p = "const struct itimerspec *";
+			break;
+		case 3:
+			p = "struct itimerspec *";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys_timerfd_gettime */
+	case 179:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "struct itimerspec *";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* sys_setgid */
 	case 181:
 		switch(ndx) {
@@ -7091,6 +7237,19 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* sys_eventfd */
+	case 267:
+		switch(ndx) {
+		case 0:
+			p = "unsigned int";
+			break;
+		case 1:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
 	/* sys___posix_rename */
 	case 270:
 		switch(ndx) {
@@ -7253,10 +7412,10 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 	case 281:
 		switch(ndx) {
 		case 0:
-			p = "const struct sigaltstack *";
+			p = "const stack_t *";
 			break;
 		case 1:
-			p = "struct sigaltstack *";
+			p = "stack_t *";
 			break;
 		default:
 			break;
@@ -7923,13 +8082,13 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			p = "int";
 			break;
 		case 1:
-			p = "const struct kevent *";
+			p = "const struct kevent100 *";
 			break;
 		case 2:
 			p = "size_t";
 			break;
 		case 3:
-			p = "struct kevent *";
+			p = "struct kevent100 *";
 			break;
 		case 4:
 			p = "size_t";
@@ -9305,13 +9464,13 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			p = "int";
 			break;
 		case 1:
-			p = "const struct kevent *";
+			p = "const struct kevent100 *";
 			break;
 		case 2:
 			p = "size_t";
 			break;
 		case 3:
-			p = "struct kevent *";
+			p = "struct kevent100 *";
 			break;
 		case 4:
 			p = "size_t";
@@ -10400,6 +10559,130 @@ systrace_entry_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 			break;
 		};
 		break;
+	/* sys_memfd_create */
+	case 500:
+		switch(ndx) {
+		case 0:
+			p = "const char *";
+			break;
+		case 1:
+			p = "unsigned int";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys___kevent100 */
+	case 501:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "const struct kevent *";
+			break;
+		case 2:
+			p = "size_t";
+			break;
+		case 3:
+			p = "struct kevent *";
+			break;
+		case 4:
+			p = "size_t";
+			break;
+		case 5:
+			p = "const struct timespec *";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys_epoll_create1 */
+	case 502:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys_epoll_ctl */
+	case 503:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "int";
+			break;
+		case 2:
+			p = "int";
+			break;
+		case 3:
+			p = "struct epoll_event *";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys_epoll_pwait2 */
+	case 504:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "struct epoll_event *";
+			break;
+		case 2:
+			p = "int";
+			break;
+		case 3:
+			p = "const struct timespec *";
+			break;
+		case 4:
+			p = "const sigset_t *";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys___dup3100 */
+	case 505:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "int";
+			break;
+		case 2:
+			p = "int";
+			break;
+		default:
+			break;
+		};
+		break;
+	/* sys_semtimedop */
+	case 506:
+		switch(ndx) {
+		case 0:
+			p = "int";
+			break;
+		case 1:
+			p = "struct sembuf *";
+			break;
+		case 2:
+			p = "size_t";
+			break;
+		case 3:
+			p = "struct timespec *";
+			break;
+		default:
+			break;
+		};
+		break;
 	default:
 		break;
 	};
@@ -11159,6 +11442,21 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 		break;
 #else
 #endif
+	/* sys_timerfd_create */
+	case 177:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys_timerfd_settime */
+	case 178:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys_timerfd_gettime */
+	case 179:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
 	/* sys_setgid */
 	case 181:
 		if (ndx == 0 || ndx == 1)
@@ -11540,6 +11838,11 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 	case 266:
 		if (ndx == 0 || ndx == 1)
 			p = "ssize_t";
+		break;
+	/* sys_eventfd */
+	case 267:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
 		break;
 	/* sys___posix_rename */
 	case 270:
@@ -12581,6 +12884,41 @@ systrace_return_setargdesc(int sysnum, int ndx, char *desc, size_t descsz)
 	case 499:
 		if (ndx == 0 || ndx == 1)
 			p = "long";
+		break;
+	/* sys_memfd_create */
+	case 500:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys___kevent100 */
+	case 501:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys_epoll_create1 */
+	case 502:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys_epoll_ctl */
+	case 503:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys_epoll_pwait2 */
+	case 504:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys___dup3100 */
+	case 505:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
+		break;
+	/* sys_semtimedop */
+	case 506:
+		if (ndx == 0 || ndx == 1)
+			p = "int";
 		break;
 	default:
 		break;

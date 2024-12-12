@@ -1,4 +1,4 @@
-/*	$NetBSD: atomic_store.c,v 1.3 2020/09/07 00:52:19 mrg Exp $	*/
+/*	$NetBSD: atomic_store.c,v 1.5 2024/02/04 16:19:12 christos Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: atomic_store.c,v 1.3 2020/09/07 00:52:19 mrg Exp $");
+__RCSID("$NetBSD: atomic_store.c,v 1.5 2024/02/04 16:19:12 christos Exp $");
 
 #include "atomic_op_namespace.h"
 
@@ -36,13 +36,13 @@ __RCSID("$NetBSD: atomic_store.c,v 1.3 2020/09/07 00:52:19 mrg Exp $");
 
 #define atomic_store_n(n,b) \
 void __atomic_store_ ## n(volatile void *, uint ## b ## _t, int); \
+/*ARGSUSED*/ \
 void \
 __atomic_store_ ## n(volatile void *ptr, uint ## b ## _t val, \
-                     int memmodel) \
+                     int memmodel __unused) \
 { \
-	membar_enter(); \
+	membar_release(); \
 	*(volatile uint ## b ## _t *)ptr = val; \
-	membar_exit(); \
 }
 
 atomic_store_n(1, 8)

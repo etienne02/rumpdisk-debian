@@ -1,9 +1,9 @@
-/*	$NetBSD: msg_243.c,v 1.2 2021/01/31 09:21:24 rillig Exp $	*/
+/*	$NetBSD: msg_243.c,v 1.6 2023/07/09 12:04:08 rillig Exp $	*/
 # 3 "msg_243.c"
 
-// Test for message: dubious comparison of enums, op %s [243]
+// Test for message: operator '%s' assumes that '%s' is ordered [243]
 
-/* lint1-extra-flags: -eP */
+/* lint1-extra-flags: -eP -X 351 */
 
 enum color {
 	RED, GREEN, BLUE
@@ -16,10 +16,14 @@ void eval(_Bool);
 void
 example(enum color a, enum color b)
 {
-	eval(a < b);		/* expect: 243 */
-	eval(a <= b);		/* expect: 243 */
-	eval(a > b);		/* expect: 243 */
-	eval(a >= b);		/* expect: 243 */
+	/* expect+1: warning: operator '<' assumes that 'enum color' is ordered [243] */
+	eval(a < b);
+	/* expect+1: warning: operator '<=' assumes that 'enum color' is ordered [243] */
+	eval(a <= b);
+	/* expect+1: warning: operator '>' assumes that 'enum color' is ordered [243] */
+	eval(a > b);
+	/* expect+1: warning: operator '>=' assumes that 'enum color' is ordered [243] */
+	eval(a >= b);
 	eval(a == b);
 	eval(a != b);
 }

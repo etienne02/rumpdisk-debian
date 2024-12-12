@@ -1,4 +1,4 @@
-/*	$NetBSD: randomid.c,v 1.14 2019/12/27 09:25:57 msaitoh Exp $	*/
+/*	$NetBSD: randomid.c,v 1.16 2022/05/15 20:37:50 andvar Exp $	*/
 /*	$KAME: ip6_id.c,v 1.8 2003/09/06 13:41:06 itojun Exp $	*/
 /*	$OpenBSD: ip_id.c,v 1.6 2002/03/15 18:19:52 millert Exp $	*/
 
@@ -76,14 +76,14 @@
  * The transaction id is determined by:
  * id[n] = seed xor (g^X[n] mod n)
  *
- * Effectivly the id is restricted to the lower (bits - 1) bits, thus
+ * Effectively the id is restricted to the lower (bits - 1) bits, thus
  * yielding two different cycles by toggling the msb on and off.
  * This avoids reuse issues caused by reseeding.
  */
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: randomid.c,v 1.14 2019/12/27 09:25:57 msaitoh Exp $");
+__RCSID("$NetBSD: randomid.c,v 1.16 2022/05/15 20:37:50 andvar Exp $");
 #endif
 
 #include "namespace.h"
@@ -122,7 +122,7 @@ struct randomid_ctx {
 #define ru_m		ru_conf->rc_m
 #define ru_pfacts	ru_conf->rc_pfacts
 #define ru_skip		ru_conf->rc_skip
-	long ru_out;		/* Time after wich will be reseeded */
+	long ru_out;		/* Time after which will be reseeded */
 	u_int32_t ru_counter;
 	u_int32_t ru_msb;
 

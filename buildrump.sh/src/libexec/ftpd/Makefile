@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.68 2020/06/15 01:57:31 christos Exp $
+#	$NetBSD: Makefile,v 1.70 2023/11/25 15:39:51 prlw1 Exp $
 #	@(#)Makefile	8.2 (Berkeley) 4/4/94
 
 .include <bsd.own.mk>
@@ -39,9 +39,6 @@ LDADD+= -lskey
 .endif
 .endif	# USE_PAM == no
 
-COPTS.ftpd.c += ${GCC_NO_STRINGOP_TRUNCATION}
-COPTS.logwtmp.c += ${GCC_NO_STRINGOP_TRUNCATION}
-
 ftpd.o ftpcmd.o: version.h
 
 #.if (${USE_KERBEROS} != "no")
@@ -55,7 +52,7 @@ ftpd.o ftpcmd.o: version.h
 #
 #.endif
 
-COPTS.ftpd.c+=		${GCC_NO_STRINGOP_TRUNCATION} ${GCC_NO_FORMAT_TRUNCATION}
-COPTS.logwtmp.c+=	${GCC_NO_STRINGOP_TRUNCATION}
+COPTS.ftpd.c+=		${CC_WNO_STRINGOP_TRUNCATION} ${CC_WNO_FORMAT_TRUNCATION}
+COPTS.logwtmp.c+=	${CC_WNO_STRINGOP_TRUNCATION}
 
 .include <bsd.prog.mk>

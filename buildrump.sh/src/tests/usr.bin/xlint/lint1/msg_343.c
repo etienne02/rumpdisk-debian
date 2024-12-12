@@ -1,14 +1,15 @@
-/*	$NetBSD: msg_343.c,v 1.5 2021/07/15 21:00:05 rillig Exp $	*/
+/*	$NetBSD: msg_343.c,v 1.11 2024/01/28 08:17:27 rillig Exp $	*/
 # 3 "msg_343.c"
 
-/* Test for message: static array size is a C11 extension [343] */
+/* Test for message: static array size requires C11 or later [343] */
 
-/* lint1-flags: -Sw */
+/* lint1-flags: -Sw -X 351 */
 
 void takes_int_pointer(int []);
 void takes_int_pointer_with_ignored_size(int [3]);
-void takes_int_array(int[static 3]);	/* expect: 343 */
-/* expect+1: syntax error '3' */
+/* expect+1: error: static array size requires C11 or later [343] */
+void takes_int_array(int[static 3]);
+/* expect+1: error: syntax error '3' [249] */
 void takes_volatile_int_array(int[volatile 3]);
 
 int
@@ -24,17 +25,18 @@ returns_int_pointer_with_ignored_size(int a[3])
 }
 
 int
-returns_int_array(int a[static 3])	/* expect: 343 */
+/* expect+1: error: static array size requires C11 or later [343] */
+returns_int_array(int a[static 3])
 {
 	return a[0];
 }
 
 int
-/* expect+1: syntax error '3' */
+/* expect+1: error: syntax error '3' [249] */
 returns_volatile_int_array(int a[volatile 3])
 {
-	/* expect+2: cannot dereference non-pointer type */
-	/* expect+1: expects to return value */
+	/* expect+2: error: cannot dereference non-pointer type 'int' [96] */
+	/* expect+1: error: function 'returns_volatile_int_array' expects to return value [214] */
 	return a[0];
 }
 
@@ -43,5 +45,5 @@ returns_volatile_int_array(int a[volatile 3])
  * message does not make it into the actual diagnostic.
  */
 /* expect+2: error: syntax error ']' [249] */
-/* expect+1: error: static array size is a C11 extension [343] */
+/* expect+1: error: static array size requires C11 or later [343] */
 void invalid_storage_class(int a[const typedef 3]);

@@ -1,7 +1,7 @@
-/* $NetBSD: db_interface.c,v 1.16 2021/05/19 12:16:01 skrll Exp $ */
+/* $NetBSD: db_interface.c,v 1.24 2024/02/07 04:20:26 msaitoh Exp $ */
 
 /*
- * Copyright (c) 2017 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2017 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.16 2021/05/19 12:16:01 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.24 2024/02/07 04:20:26 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -39,7 +39,9 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.16 2021/05/19 12:16:01 skrll Exp 
 #include <uvm/pmap/pmap_pvt.h>
 #endif
 
+#include <aarch64/armreg.h>
 #include <aarch64/db_machdep.h>
+#include <aarch64/locore.h>
 #include <aarch64/machdep.h>
 #include <aarch64/pmap.h>
 
@@ -57,19 +59,40 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.16 2021/05/19 12:16:01 skrll Exp 
 
 db_regs_t ddb_regs;
 
-static int
-db_validate_address(vaddr_t addr)
+static bool
+db_accessible_address(vaddr_t addr, bool readonly)
 {
-	struct proc *p = curproc;
-	struct pmap *pmap;
+	register_t s;
+	uint64_t par;
+	int space;
 
-	if (!p || !p->p_vmspace || !p->p_vmspace->vm_map.pmap ||
-	    addr >= VM_MAXUSER_ADDRESS)
-		pmap = pmap_kernel();
-	else
-		pmap = p->p_vmspace->vm_map.pmap;
+	space = aarch64_addressspace(addr);
+	if (space != AARCH64_ADDRSPACE_LOWER &&
+	    space != AARCH64_ADDRSPACE_UPPER)
+		return false;
 
-	return (pmap_extract(pmap, addr, NULL) == false);
+	s = daif_disable(DAIF_I|DAIF_F);
+
+	switch (aarch64_addressspace(addr)) {
+	case AARCH64_ADDRSPACE_LOWER:
+		if (readonly)
+			reg_s1e0r_write(addr);
+		else
+			reg_s1e0w_write(addr);
+		break;
+	case AARCH64_ADDRSPACE_UPPER:
+		if (readonly)
+			reg_s1e1r_write(addr);
+		else
+			reg_s1e1w_write(addr);
+		break;
+	}
+	isb();
+	par = reg_par_el1_read();
+
+	reg_daif_write(s);
+
+	return ((par & PAR_F) == 0);
 }
 
 void
@@ -82,7 +105,7 @@ db_read_bytes(vaddr_t addr, size_t size, char *data)
 		const vaddr_t va = (vaddr_t)src;
 		uintptr_t tmp;
 
-		if (lastpage != atop(va) && db_validate_address(va)) {
+		if (lastpage != atop(va) && !db_accessible_address(va, true)) {
 			db_printf("address %p is invalid\n", src);
 			memset(data, 0, size);	/* stubs are filled by zero */
 			return;
@@ -147,8 +170,9 @@ db_write_text(vaddr_t addr, size_t size, const char *data)
 		 * will stop...
 		 */
 		/* old pte is returned by pmap_kvattr */
-		pte = pmap_kvattr(ptep, VM_PROT_EXECUTE|VM_PROT_READ|VM_PROT_WRITE);
-		aarch64_tlbi_all();
+		pte = pmap_kvattr(ptep, VM_PROT_EXECUTE | VM_PROT_READ | VM_PROT_WRITE);
+		/* dsb(ishst) included in aarch64_tlbi_by_va */
+		aarch64_tlbi_by_va(addr);
 
 		s = size;
 		if (size > PAGE_SIZE)
@@ -159,7 +183,8 @@ db_write_text(vaddr_t addr, size_t size, const char *data)
 
 		/* restore pte */
 		*ptep = pte;
-		aarch64_tlbi_all();
+		/* dsb(ishst) included in aarch64_tlbi_by_va */
+		aarch64_tlbi_by_va(addr);
 
 		addr += s;
 		size -= s;
@@ -190,16 +215,18 @@ db_write_bytes(vaddr_t addr, size_t size, const char *data)
 		data += s;
 	}
 
-	/* XXX: need to check read only block/page */
 	for (dst = (char *)addr; size > 0;) {
 		const vaddr_t va = (vaddr_t)dst;
 		uintptr_t tmp;
 
-		if (lastpage != atop(va) && db_validate_address(va)) {
+		if (lastpage != atop(va) && !db_accessible_address(va, false)) {
 			db_printf("address %p is invalid\n", dst);
 			return;
 		}
 		lastpage = atop(va);
+
+		if (aarch64_pan_enabled)
+			reg_pan_write(0); /* disable PAN */
 
 		tmp = (uintptr_t)dst | (uintptr_t)data;
 		if (size >= 8 && (tmp & 7) == 0) {
@@ -221,6 +248,9 @@ db_write_bytes(vaddr_t addr, size_t size, const char *data)
 			*dst++ = *data++;
 			size--;
 		}
+
+		if (aarch64_pan_enabled)
+			reg_pan_write(1); /* enable PAN */
 	}
 }
 
@@ -403,8 +433,8 @@ db_pte_print(pt_entry_t pte, int level,
 		case LX_BLKPAG_ATTR_DEVICE_MEM:
 			pr(", DEV");
 			break;
-		case LX_BLKPAG_ATTR_DEVICE_MEM_SO:
-			pr(", DEV(SO)");
+		case LX_BLKPAG_ATTR_DEVICE_MEM_NP:
+			pr(", DEV(NP)");
 			break;
 		default:
 			pr(", ATTR(%lu)", __SHIFTOUT(pte, LX_BLKPAG_ATTR_INDX));
@@ -538,7 +568,7 @@ dump_ln_table(bool countmode, pd_entry_t *pdp, int level, int lnindex,
 	if (pg == NULL) {
 		pr("%sL%d: pa=%lx pg=NULL\n", spc, level, pa);
 	} else {
-		pr("%sL%d: pa=%lx pg=%p", spc, level, pa, pg);
+		pr("%sL%d: pa=%lx pg=%p\n", spc, level, pa, pg);
 	}
 
 	for (i = n = 0; i < Ln_ENTRIES; i++) {
@@ -610,4 +640,10 @@ db_ttbrdump(bool countmode, vaddr_t va,
 
 	db_dump_l0table(countmode, pmap_l0table(pm),
 	    (pm == pmap_kernel()) ? 0xffff000000000000UL : 0, pr);
+}
+
+void
+cpu_Debugger(void)
+{
+	__asm __volatile ("brk #0xffff");
 }

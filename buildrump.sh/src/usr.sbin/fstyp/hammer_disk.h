@@ -1,4 +1,4 @@
-/*        $NetBSD: hammer_disk.h,v 1.1 2020/01/01 08:56:41 tkusumi Exp $      */
+/*        $NetBSD: hammer_disk.h,v 1.6 2024/02/05 21:39:52 andvar Exp $      */
 
 /*
  * Copyright (c) 2007 The DragonFly Project.  All rights reserved.
@@ -36,7 +36,7 @@
  * $DragonFly: src/sys/vfs/hammer/hammer_disk.h,v 1.55 2008/11/13 02:18:43 dillon Exp $
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hammer_disk.h,v 1.1 2020/01/01 08:56:41 tkusumi Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hammer_disk.h,v 1.6 2024/02/05 21:39:52 andvar Exp $");
 
 #ifndef VFS_HAMMER_DISK_H_
 #define VFS_HAMMER_DISK_H_
@@ -768,7 +768,7 @@ typedef struct hammer_volume_ondisk {
 
 	/*
 	 * These fields are initialized and space is reserved in every
-	 * volume making up a HAMMER filesytem, but only the root volume
+	 * volume making up a HAMMER filesystem, but only the root volume
 	 * contains valid data.  Note that vol0_stat_bigblocks does not
 	 * include big-blocks for freemap and undomap initially allocated
 	 * by newfs_hammer(8).
@@ -913,7 +913,7 @@ typedef struct hammer_inode_data {
 } *hammer_inode_data_t;
 
 /*
- * Neither mtime nor atime upates are CRCd by the B-Tree element.
+ * Neither mtime nor atime updates are CRCd by the B-Tree element.
  * mtime updates have UNDO, atime updates do not.
  */
 #define HAMMER_INODE_CRCSIZE	\
@@ -948,7 +948,7 @@ typedef struct hammer_inode_data {
  * localization field.  The low 16 bits must be 0 and are reserved for
  * future use.
  *
- * Directory entries are indexed with a 128 bit namekey rather then an
+ * Directory entries are indexed with a 128 bit namekey rather than an
  * offset.  A portion of the namekey is an iterator/randomizer to deal
  * with collisions.
  *
@@ -1004,7 +1004,7 @@ typedef struct hammer_symlink_data {
 struct hammer_pseudofs_data {
 	hammer_tid_t	sync_low_tid;	/* full history beyond this point */
 	hammer_tid_t	sync_beg_tid;	/* earliest tid w/ full history avail */
-	hammer_tid_t	sync_end_tid;	/* current synchronizatoin point */
+	hammer_tid_t	sync_end_tid;	/* current synchronization point */
 	uint64_t	sync_beg_ts;	/* real-time of last completed sync */
 	uint64_t	sync_end_ts;	/* initiation of current sync cycle */
 	hammer_uuid_t	shared_uuid;	/* shared uuid (match required) */
@@ -1041,7 +1041,7 @@ typedef struct hammer_pseudofs_data *hammer_pseudofs_data_t;
  * Snapshot meta-data { Objid = HAMMER_OBJID_ROOT, Key = tid, rectype = SNAPSHOT }.
  *
  * Snapshot records replace the old <fs>/snapshots/<softlink> methodology.  Snapshot
- * records are mirrored but may be independantly managed once they are laid down on
+ * records are mirrored but may be independently managed once they are laid down on
  * a slave.
  *
  * NOTE: The b-tree key is signed, the tid is not, so callers must still sort the

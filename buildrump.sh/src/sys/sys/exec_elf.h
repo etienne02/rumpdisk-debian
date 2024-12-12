@@ -1,4 +1,4 @@
-/*	$NetBSD: exec_elf.h,v 1.168 2020/10/19 19:33:02 christos Exp $	*/
+/*	$NetBSD: exec_elf.h,v 1.171 2023/01/08 17:03:42 christos Exp $	*/
 
 /*-
  * Copyright (c) 1994 The NetBSD Foundation, Inc.
@@ -216,7 +216,7 @@ typedef struct {
 #define EM_68K		4	/* Motorola 68000 */
 #define EM_88K		5	/* Motorola 88000 */
 #define EM_486		6	/* Intel 80486 [old] */
-#define EM_IAMCU	6	/* Intel MCU. */
+#define EM_IAMCU	EM_486	/* Intel MCU. */
 #define EM_860		7	/* Intel 80860 */
 #define EM_MIPS		8	/* MIPS I Architecture */
 #define EM_S370		9	/* Amdahl UTS on System/370 */
@@ -292,6 +292,7 @@ typedef struct {
 #define EM_OR1K		92	/* OpenRISC 32-bit embedded processor */
 #define EM_OPENRISC	EM_OR1K
 #define EM_ARC_A5	93	/* ARC Cores Tangent-A5 */
+#define EM_ARC_COMPACT	EM_ARC_A5 /* ARC International ARCompact processor (old spelling/synonym: EM_ARC_A5) */
 #define EM_XTENSA	94	/* Tensilica Xtensa Architecture */
 #define EM_VIDEOCORE	95	/* Alphamosaic VideoCore processor */
 #define EM_TMM_GPP	96	/* Thompson Multimedia General Purpose Processor */
@@ -362,6 +363,7 @@ typedef struct {
 #define EM_AARCH64	183	/* AArch64 64-bit ARM microprocessor */
 			/* 184 - Reserved */
 #define EM_AVR32	185	/* Atmel Corporation 32-bit microprocessor family*/
+#define EM_STM8		186	/* STMicroeletronics STM8 8-bit microcontroller */
 #define EM_TILE64	187	/* Tilera TILE64 multicore architecture family */
 #define EM_TILEPRO	188	/* Tilera TILEPro multicore architecture family */
 #define EM_MICROBLAZE	189	/* Xilinx MicroBlaze 32-bit RISC soft processor core */
@@ -1027,6 +1029,19 @@ typedef struct {
 #define ELF_NOTE_GO_BUILDID_DESCSZ	40
 #define ELF_NOTE_GO_BUILDID_NAME	"Go\0\0"
 
+/*
+ * FDO-specific note type: packaging metadata
+ * name: FDO\0
+ * namesz: 4
+ * desc:
+ *	a single JSON object encoded as a zero-terminated UTF-8 string
+ *	(see https://systemd.io/COREDUMP_PACKAGE_METADATA/)
+ * descsz: variable
+ */
+#define	ELF_NOTE_TYPE_FDO_PACKAGING_METADATA	0xcafe1a7e
+#define	ELF_NOTE_FDO_PACKAGING_METADATA_NAMESZ	4
+#define	ELF_NOTE_FDO_PACKAGING_METADATA_NAME	"FDO\0"
+
 /* NetBSD-specific note type: NetBSD ABI version.
  * name: NetBSD\0\0
  * namesz: 8
@@ -1326,7 +1341,7 @@ typedef struct {
 #define VER_NDX(x)		((x) & ~VER_NDX_HIDDEN)
 
 /*
- * GNU Extension hidding symbol
+ * GNU Extension hiding symbol
  */
 #define VERSYM_HIDDEN		0x8000
 #define VERSYM_VERSION		0x7fff

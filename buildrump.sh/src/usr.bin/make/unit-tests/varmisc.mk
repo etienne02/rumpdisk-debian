@@ -1,13 +1,13 @@
-# $NetBSD: varmisc.mk,v 1.30 2021/02/04 21:42:47 rillig Exp $
+# $NetBSD: varmisc.mk,v 1.37 2024/08/29 20:20:36 rillig Exp $
 #
 # Miscellaneous variable tests.
 
 all: unmatched_var_paren D_true U_true D_false U_false Q_lhs Q_rhs NQ_none \
-	strftime cmpv manok
+	cmpv
 all: save-dollars
 all: export-appended
 all: parse-dynamic
-all: varerror-unclosed
+all: varerror-unclosed-{1,2,3,4,5,6,7,8}
 
 unmatched_var_paren:
 	@echo ${foo::=foo-text}
@@ -46,13 +46,6 @@ NQ_none:
 	@echo do not evaluate or expand :? if discarding
 	@echo ${VSET:U${1:L:?${True}:${False}}}
 
-April1=	1459494000
-
-# slightly contorted syntax to use utc via variable
-strftime:
-	@echo ${year=%Y month=%m day=%d:L:gmtime=1459494000}
-	@echo date=${%Y%m%d:L:${gmtime=${April1}:L}}
-
 # big jumps to handle 3 digits per step
 M_cmpv.units=	1 1000 1000000
 M_cmpv=		S,., ,g:_:range:@i@+ $${_:[-$$i]} \* $${M_cmpv.units:[$$i]}@:S,^,expr 0 ,1:sh
@@ -65,24 +58,16 @@ cmpv:
 	@echo Literal=3.4.5 == ${3.4.5:L:${M_cmpv}}
 	@echo We have ${${.TARGET:T}.only}
 
-# catch misshandling of nested vars in .for loop
-MAN=
-MAN1=	make.1
-.for s in 1 2
-.  if defined(MAN$s) && !empty(MAN$s)
-MAN+=	${MAN$s}
-.  endif
-.endfor
 
-manok:
-	@echo MAN=${MAN}
-
+# Test parsing of boolean values.
 # begin .MAKE.SAVE_DOLLARS; see Var_SetWithFlags and ParseBoolean.
 SD_VALUES=	0 1 2 False True false true Yes No yes no On Off ON OFF on off
 SD_4_DOLLARS=	$$$$
 
 .for val in ${SD_VALUES}
-.MAKE.SAVE_DOLLARS:=	${val}	# Must be := since a simple = has no effect.
+# The assignment must be done using ':=' since a simple '=' would be
+# interpreted as 'yes', due to the leading '$'; see ParseBoolean.
+.MAKE.SAVE_DOLLARS:=	${val}
 SD.${val}:=		${SD_4_DOLLARS}
 .endfor
 .MAKE.SAVE_DOLLARS:=	yes
@@ -91,6 +76,7 @@ save-dollars:
 .for val in ${SD_VALUES}
 	@printf '%s: %-8s = %s\n' $@ ${val} ${SD.${val}:Q}
 .endfor
+# end .MAKE.SAVE_DOLLARS
 
 # Appending to an undefined variable does not add a space in front.
 .undef APPENDED
@@ -126,10 +112,10 @@ VAR.${PARAM}+=	2
 .if ${VAR.+} != "1 2"
 .  error "${VAR.+}"
 .endif
-.for param in + ! ?
+.for param in : + ! ?
 VAR.${param}=	${param}
 .endfor
-.if ${VAR.+} != "+" || ${VAR.!} != "!" || ${VAR.?} != "?"
+.if ${VAR.${:U\:}} != ":" || ${VAR.+} != "+" || ${VAR.!} != "!" || ${VAR.?} != "?"
 .  error "${VAR.+}" "${VAR.!}" "${VAR.?}"
 .endif
 
@@ -202,16 +188,30 @@ target1-flags: target1.c
 target2-flags: target2.c
 	@echo $@: we have: ${FLAGS}
 
-varerror-unclosed:
+varerror-unclosed-1:
 	@echo $@:begin
+varerror-unclosed-2:
+# expect: make: Unclosed variable ""
 	@echo $(
+varerror-unclosed-3:
+# expect: make: Unclosed variable "UNCLOSED"
 	@echo $(UNCLOSED
+varerror-unclosed-4:
+# expect: make: Unclosed variable "UNCLOSED"
 	@echo ${UNCLOSED
+varerror-unclosed-5:
+# expect: make: Unclosed expression, expecting '}' for modifier "M${PATTERN"
 	@echo ${UNCLOSED:M${PATTERN
+varerror-unclosed-6:
+# expect: make: Unclosed variable "param"
+# expect: make: Unclosed variable "UNCLOSED."
 	@echo ${UNCLOSED.${param
+varerror-unclosed-7:
 	@echo $
 .for i in 1 2 3
+# expect: make: Unclosed variable "UNCLOSED.1"
 	@echo ${UNCLOSED.${i}
 .endfor
+varerror-unclosed-8:
 	@echo ${UNCLOSED_INDIR_2}
 	@echo $@:end

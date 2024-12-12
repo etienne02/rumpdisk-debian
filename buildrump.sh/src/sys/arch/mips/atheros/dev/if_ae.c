@@ -1,4 +1,4 @@
-/* $NetBSD: if_ae.c,v 1.40 2020/09/02 08:26:05 msaitoh Exp $ */
+/* $NetBSD: if_ae.c,v 1.45 2024/07/05 04:31:49 rin Exp $ */
 /*-
  * Copyright (c) 2006 Urbana-Champaign Independent Media Center.
  * Copyright (c) 2006 Garrett D'Amore.
@@ -98,7 +98,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ae.c,v 1.40 2020/09/02 08:26:05 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ae.c,v 1.45 2024/07/05 04:31:49 rin Exp $");
 
 
 #include <sys/param.h>
@@ -110,7 +110,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_ae.c,v 1.40 2020/09/02 08:26:05 msaitoh Exp $");
 #include <sys/intr.h>
 #include <sys/ioctl.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 
@@ -556,7 +555,7 @@ ae_start(struct ifnet *ifp)
 	    device_xname(sc->sc_dev), sc->sc_flags, ifp->if_flags));
 
 
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	/*
@@ -588,7 +587,7 @@ ae_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we were
+		 * didn't fit in the allotted number of segments, or we were
 		 * short on resources.  In this case, we'll copy and try
 		 * again.
 		 */
@@ -638,10 +637,8 @@ ae_start(struct ifnet *ifp)
 			 * XXX We could allocate an mbuf and copy, but
 			 * XXX it is worth it?
 			 */
-			ifp->if_flags |= IFF_OACTIVE;
 			bus_dmamap_unload(sc->sc_dmat, dmamap);
-			if (m != NULL)
-				m_freem(m);
+			m_freem(m);
 			break;
 		}
 
@@ -733,11 +730,6 @@ ae_start(struct ifnet *ifp)
 		 * Pass the packet to any BPF listeners.
 		 */
 		bpf_mtap(ifp, m0, BPF_D_OUT);
-	}
-
-	if (txs == NULL || sc->sc_txfree == 0) {
-		/* No more slots left; notify upper layer. */
-		ifp->if_flags |= IFF_OACTIVE;
 	}
 
 	if (sc->sc_txfree != ofree) {
@@ -1154,8 +1146,6 @@ ae_txintr(struct ae_softc *sc)
 	DPRINTF(sc, ("%s: ae_txintr: sc_flags 0x%08x\n",
 	    device_xname(sc->sc_dev), sc->sc_flags));
 
-	ifp->if_flags &= ~IFF_OACTIVE;
-
 	/*
 	 * Go through our Tx list and free mbufs for those
 	 * frames that have been transmitted.
@@ -1218,17 +1208,17 @@ ae_txintr(struct ae_softc *sc)
 
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (txstat & (ADSTAT_Tx_UF | ADSTAT_Tx_TO))
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 
 		if (txstat & ADSTAT_Tx_EC)
-			if_statadd_ref(nsr, if_collisions, 16);
+			if_statadd_ref(ifp, nsr, if_collisions, 16);
 		else if (ADSTAT_Tx_COLLISIONS(txstat))
-			if_statadd_ref(nsr, if_collisions,
+			if_statadd_ref(ifp, nsr, if_collisions,
 			    ADSTAT_Tx_COLLISIONS(txstat));
 		if (txstat & ADSTAT_Tx_LC)
-			if_statinc_ref(nsr, if_collisions);
+			if_statinc_ref(ifp, nsr, if_collisions);
 
-		if_statinc_ref(nsr, if_opackets);
+		if_statinc_ref(ifp, nsr, if_opackets);
 		IF_STAT_PUTREF(ifp);
 	}
 
@@ -1447,12 +1437,11 @@ ae_init(struct ifnet *ifp)
 	 * Note that the interface is now running.
 	 */
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 	sc->sc_if_flags = ifp->if_flags;
 
  out:
 	if (error) {
-		ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+		ifp->if_flags &= ~IFF_RUNNING;
 		ifp->if_timer = 0;
 		printf("%s: interface not running\n", device_xname(sc->sc_dev));
 	}
@@ -1598,7 +1587,7 @@ ae_stop(struct ifnet *ifp, int disable)
 	/*
 	 * Mark the interface down and cancel the watchdog timer.
 	 */
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	sc->sc_if_flags = ifp->if_flags;
 	ifp->if_timer = 0;
 

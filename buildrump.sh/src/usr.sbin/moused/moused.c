@@ -1,4 +1,4 @@
-/* $NetBSD: moused.c,v 1.26 2021/04/12 09:30:32 mrg Exp $ */
+/* $NetBSD: moused.c,v 1.32 2024/07/05 20:19:43 andvar Exp $ */
 /**
  ** Copyright (c) 1995 Michael Smith, All rights reserved.
  **
@@ -48,7 +48,7 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: moused.c,v 1.26 2021/04/12 09:30:32 mrg Exp $");
+__RCSID("$NetBSD: moused.c,v 1.32 2024/07/05 20:19:43 andvar Exp $");
 #endif /* not lint */
 
 #include <ctype.h>
@@ -261,19 +261,19 @@ static symtab_t pnpprod[] = {
     { "PNP0F0A",	MOUSE_PROTO_MS,		MOUSE_MODEL_GENERIC },     
     /* MS PnP BallPoint serial */
     { "PNP0F0B",	MOUSE_PROTO_MS,		MOUSE_MODEL_GENERIC },     
-    /* MS serial comatible */
+    /* MS serial compatible */
     { "PNP0F0C",	MOUSE_PROTO_MS,		MOUSE_MODEL_GENERIC },     
-    /* MS InPort comatible */
+    /* MS InPort compatible */
     { "PNP0F0D",	MOUSE_PROTO_INPORT,	MOUSE_MODEL_GENERIC }, 
-    /* MS PS/2 comatible */
+    /* MS PS/2 compatible */
     { "PNP0F0E",	MOUSE_PROTO_PS2,	MOUSE_MODEL_GENERIC },    
-    /* MS BallPoint comatible */
+    /* MS BallPoint compatible */
     { "PNP0F0F",	MOUSE_PROTO_MS,		MOUSE_MODEL_GENERIC },     
 #if notyet
     /* TI QuickPort */
     { "PNP0F10",	MOUSE_PROTO_???,	MOUSE_MODEL_GENERIC },     
 #endif
-    /* MS bus comatible */
+    /* MS bus compatible */
     { "PNP0F11",	MOUSE_PROTO_BUS,	MOUSE_MODEL_GENERIC },    
     /* Logitech PS/2 */
     { "PNP0F12",	MOUSE_PROTO_PS2,	MOUSE_MODEL_GENERIC },
@@ -682,15 +682,6 @@ main(int argc, char *argv[])
 		}
 		if ((rodent.zmap[2] != 0) && (rodent.zmap[3] == 0))
 		    rodent.zmap[3] = rodent.zmap[2] + 1;
-	    }
-	    break;
-
-	case 'C':
-	    rodent.clickthreshold = atoi(optarg);
-	    if ((rodent.clickthreshold < 0) || 
-	        (rodent.clickthreshold > MAX_CLICKTHRESHOLD)) {
-	        warnx("invalid argument `%s'", optarg);
-	        usage();
 	    }
 	    break;
 
@@ -1522,7 +1513,7 @@ r_protocol(u_char rBuf, mousestatus_t *act)
      *  b) invalid (0x80 == -128 and that might be wrong for MouseSystems)
      *  c) bad header-package
      *
-     * NOTE: b) is a voilation of the MouseSystems-Protocol, since values of
+     * NOTE: b) is a violation of the MouseSystems-Protocol, since values of
      *       -128 are allowed, but since they are very seldom we can easily
      *       use them as package-header with no button pressed.
      * NOTE/2: On a PS/2 mouse any byte is valid as a data byte. Furthermore,
@@ -1764,7 +1755,7 @@ r_protocol(u_char rBuf, mousestatus_t *act)
 	 * Moused usually operates the psm driver at the operation level 1
 	 * which sends mouse data in MOUSE_PROTO_SYSMOUSE protocol.
 	 * The following code takes effect only when the user explicitly 
-	 * requets the level 2 at which wheel movement and additional button 
+	 * requests the level 2 at which wheel movement and additional button 
 	 * actions are encoded in model-dependent formats. At the level 0
 	 * the following code is no-op because the psm driver says the model
 	 * is MOUSE_MODEL_GENERIC.
@@ -2589,7 +2580,7 @@ pnpparse(pnpid_t *id, char *buf, int len)
     id->revision = ((buf[1] & 0x3f) << 6) | (buf[2] & 0x3f);
     debug("PnP rev %d.%02d", id->revision / 100, id->revision % 100);
 
-    /* EISA vender and product ID */
+    /* EISA vendor and product ID */
     id->eisaid = &buf[3];
     id->neisaid = 7;
 
@@ -2629,7 +2620,7 @@ pnpparse(pnpid_t *id, char *buf, int len)
         }
 	/*
 	 * PnP COM spec prior to v0.96 allowed '*' in this field, 
-	 * it's not allowed now; just igore it.
+	 * it's not allowed now; just ignore it.
 	 */
 	if (buf[j] == '*')
 	    ++j;

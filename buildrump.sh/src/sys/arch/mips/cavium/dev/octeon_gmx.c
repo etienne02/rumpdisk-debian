@@ -1,4 +1,4 @@
-/*	$NetBSD: octeon_gmx.c,v 1.20 2021/08/07 16:18:59 thorpej Exp $	*/
+/*	$NetBSD: octeon_gmx.c,v 1.24 2024/06/29 12:11:11 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2007 Internet Initiative Japan, Inc.
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: octeon_gmx.c,v 1.20 2021/08/07 16:18:59 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: octeon_gmx.c,v 1.24 2024/06/29 12:11:11 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -337,7 +337,7 @@ octgmx_init(struct octgmx_softc *sc)
 			sc->sc_port_types[2] = GMX_RGMII_PORT;
 		} else {
 			/* port 1: GMII/MII, port 2: disabled */
-			/* GMII or MII port is slected by GMX_PRT1_CFG[SPEED] */
+			/* GMII or MII port is selected by GMX_PRT1_CFG[SPEED] */
 			sc->sc_nports = 2;
 			sc->sc_port_types[1] = GMX_GMII_PORT;
 		}
@@ -585,15 +585,15 @@ octgmx_set_filter(struct octgmx_port_softc *sc)
 		SET(ctl, RXN_ADR_CTL_BCST);
 	}
 	if (ISSET(ifp->if_flags, IFF_PROMISC)) {
-		dprintf("promiscas(reject cam)\n");
+		dprintf("promiscuous (reject cam)\n");
 		CLR(ctl, RXN_ADR_CTL_CAM_MODE);
 	} else {
-		dprintf("not promiscas(accept cam)\n");
+		dprintf("not promiscuous (accept cam)\n");
 		SET(ctl, RXN_ADR_CTL_CAM_MODE);
 	}
 
 	/*
-	 * Note first entry is self MAC address; other 7 entires are available
+	 * Note first entry is self MAC address; other 7 entries are available
 	 * for multicast addresses.
 	 */
 
@@ -1160,7 +1160,7 @@ octgmx_stats(struct octgmx_port_softc *sc)
 
 	/*
 	 *  GMX0_RX0_STATS_PKTS is not count.
-         *  input packet is counted when recepted packet in if_cnmac.
+         *  input packet is counted when received packet in if_cnmac.
          */
 	/*
          *  GMX0_RX0_STATS_PKTS_BAD count is included
@@ -1168,21 +1168,21 @@ octgmx_stats(struct octgmx_port_softc *sc)
          *  this is not add to input packet errors of interface.
          */
 	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
-	if_statadd_ref(nsr, if_iqdrops,
+	if_statadd_ref(ifp, nsr, if_iqdrops,
 	    (uint32_t)_GMX_PORT_RD8(sc, GMX0_RX0_STATS_PKTS_DRP));
-	if_statadd_ref(nsr, if_opackets,
+	if_statadd_ref(ifp, nsr, if_opackets,
 	    (uint32_t)_GMX_PORT_RD8(sc, GMX0_TX0_STAT3));
 
 	tmp = _GMX_PORT_RD8(sc, GMX0_TX0_STAT0);
-	if_statadd_ref(nsr, if_oerrors,
+	if_statadd_ref(ifp, nsr, if_oerrors,
 	    (uint32_t)tmp + ((uint32_t)(tmp >> 32) * 16));
-	if_statadd_ref(nsr, if_collisions, (uint32_t)tmp);
+	if_statadd_ref(ifp, nsr, if_collisions, (uint32_t)tmp);
 
 	tmp = _GMX_PORT_RD8(sc, GMX0_TX0_STAT1);
-	if_statadd_ref(nsr, if_collisions,
+	if_statadd_ref(ifp, nsr, if_collisions,
 	    (uint32_t)tmp + (uint32_t)(tmp >> 32));
 
 	tmp = _GMX_PORT_RD8(sc, GMX0_TX0_STAT9);
-	if_statadd_ref(nsr, if_oerrors, (uint32_t)(tmp >> 32));
+	if_statadd_ref(ifp, nsr, if_oerrors, (uint32_t)(tmp >> 32));
 	IF_STAT_PUTREF(ifp);
 }

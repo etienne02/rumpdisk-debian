@@ -1,4 +1,4 @@
-/*	$NetBSD: altq_red.c,v 1.32 2019/12/26 04:53:11 msaitoh Exp $	*/
+/*	$NetBSD: altq_red.c,v 1.35 2021/12/05 04:43:57 msaitoh Exp $	*/
 /*	$KAME: altq_red.c,v 1.20 2005/04/13 03:44:25 suz Exp $	*/
 
 /*
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: altq_red.c,v 1.32 2019/12/26 04:53:11 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: altq_red.c,v 1.35 2021/12/05 04:43:57 msaitoh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altq.h"
@@ -178,7 +178,7 @@ __KERNEL_RCSID(0, "$NetBSD: altq_red.c,v 1.32 2019/12/26 04:53:11 msaitoh Exp $"
 #ifdef ALTQ3_COMPAT
 #ifdef ALTQ_FLOWVALVE
 /*
- * flow-valve is an extention to protect red from unresponsive flows
+ * flow-valve is an extension to protect red from unresponsive flows
  * and to promote end-to-end congestion control.
  * flow-valve observes the average drop rates of the flows that have
  * experienced packet drops in the recent past.
@@ -313,7 +313,7 @@ red_alloc(int weight, int inv_pmax, int th_min, int th_max, int flags,
 #ifdef ALTQ_FLOWVALVE
 	if (flags & REDF_FLOWVALVE)
 		rp->red_flowvalve = fv_alloc(rp);
-	/* if fv_alloc failes, flowvalve is just disabled */
+	/* if fv_alloc fails, flowvalve is just disabled */
 #endif
 #endif /* ALTQ3_COMPAT */
 	return (rp);
@@ -759,7 +759,6 @@ redioctl(dev_t dev, ioctlcmd_t cmd, void *addr, int flag,
 	red_queue_t *rqp;
 	struct red_interface *ifacep;
 	struct ifnet *ifp;
-	struct proc *p = l->l_proc;
 	int	error = 0;
 
 	/* check super-user privilege */
@@ -767,13 +766,9 @@ redioctl(dev_t dev, ioctlcmd_t cmd, void *addr, int flag,
 	case RED_GETSTATS:
 		break;
 	default:
-#if (__FreeBSD_version > 400000)
-		if ((error = suser(p)) != 0)
-#else
-		if ((error = kauth_authorize_network(p->p_cred,
+		if ((error = kauth_authorize_network(l->l_cred,
 		    KAUTH_NETWORK_ALTQ, KAUTH_REQ_NETWORK_ALTQ_RED, NULL,
 		    NULL, NULL)) != 0)
-#endif
 			return (error);
 		break;
 	}

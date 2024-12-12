@@ -1,4 +1,4 @@
-#	$NetBSD: files,v 1.1287 2021/07/21 23:16:09 jmcneill Exp $
+#	$NetBSD: files,v 1.1313 2024/05/19 22:25:48 christos Exp $
 #	@(#)files.newconf	7.5 (Berkeley) 5/10/93
 
 version 	20171118
@@ -26,6 +26,7 @@ defflag	opt_ptrace.h		PTRACE PTRACE_HOOKS
 defflag				COREDUMP
 defflag	opt_modular.h		MODULAR
 defflag	opt_modular.h		MODULAR_DEFAULT_AUTOLOAD
+defflag	opt_modular.h		MODULAR_DEFAULT_VERBOSE
 defflag				KEYLOCK
 defparam opt_syslimits.h	CHILD_MAX OPEN_MAX
 defflag				GPROF
@@ -85,7 +86,8 @@ defparam opt_sysvparam.h	SEMMAP SEMMNI SEMMNS SEMMNU SEMMSL SEMOPM
 defparam opt_sysvparam.h	SEMUME SEMUSZ SEMVMX SEMAEM
 defparam opt_sysvparam.h	SHMMAX SHMMIN SHMMNI SHMSEG SHMMAXPGS
 
-defflag	opt_ntp.h		PPS_SYNC PPS_DEBUG NTP
+defflag	opt_ntp.h		PPS_DEBUG NTP
+defflag	opt_ntp.h		PPS_SYNC: NTP
 
 defflag	opt_ptm.h		NO_DEV_PTM COMPAT_BSDPTY
 
@@ -103,6 +105,7 @@ defflag	opt_dkwedge.h		DKWEDGE_AUTODISCOVER
 				DKWEDGE_METHOD_MBR
 				DKWEDGE_METHOD_APPLE
 				DKWEDGE_METHOD_RDB
+				DKWEDGE_METHOD_TOS
 
 defflag	opt_veriexec.h		VERIFIED_EXEC_FP_SHA256
 				VERIFIED_EXEC_FP_SHA384
@@ -141,10 +144,16 @@ defflag opt_rnd_printf.h	RND_PRINTF
 
 defflag opt_todr.h		TODR_DEBUG
 
+defparam opt_maxlwp.h		MAXLWP
+
+defflag opt_efi.h		EFI_RUNTIME
+
 # compatibility options
 #
 defflag opt_compat_netbsd.h	COMPAT_NETBSD
-defflag	opt_compat_netbsd.h	COMPAT_90: COMPAT_NETBSD
+defflag	opt_compat_netbsd.h	COMPAT_110: COMPAT_NETBSD
+defflag	opt_compat_netbsd.h	COMPAT_100: COMPAT_110, COMPAT_NETBSD
+defflag	opt_compat_netbsd.h	COMPAT_90: COMPAT_100, COMPAT_NETBSD
 defflag	opt_compat_netbsd.h	COMPAT_80: COMPAT_90, COMPAT_NETBSD
 defflag	opt_compat_netbsd.h	COMPAT_70: COMPAT_80, COMPAT_NETBSD
 defflag	opt_compat_netbsd.h	COMPAT_60: COMPAT_70, COMPAT_NETBSD
@@ -301,6 +310,7 @@ defparam opt_sppp.h		SPPP_KEEPALIVE_INTERVAL
 #
 defflag				GATEWAY
 defparam opt_nmbclusters.h	NMBCLUSTERS
+	 			NMBCLUSTERS_MAX
 defparam			SB_MAX
 
 # file system options
@@ -356,7 +366,7 @@ defflag opt_tftproot.h		TFTPROOT TFTPROOT_DEBUG
 
 defflag	opt_wlan.h		WLAN
 
-# Machine-independent device majors assignements
+# Machine-independent device majors assignments
 include "conf/majors"
 
 # generic attributes
@@ -419,9 +429,21 @@ file	dev/ic/nslm7x.c			lm			needs-flag
 device	spdmem
 file	dev/ic/spdmem.c			spdmem
 
+# Microchip MCP23x08 / MCP23x17 general purpose input/output
+device	mcpgpio: gpiobus
+file	dev/ic/mcp23xxxgpio.c		mcpgpio
+
 # SSD1306 or SH1106 OLED/PLED display (attaches via I2C or SPI)
 device	ssdfb:	wsemuldisplaydev
 file	dev/ic/ssdfb.c	ssdfb
+
+# Sparkfun Serial motor controller (attaches via I2C or SPI)
+device  scmd
+file	dev/ic/scmd.c	scmd
+
+# Bosch BMP280 / BME280 sensor (attaches via I2C or SPI)
+device  bmx280thp
+file	dev/ic/bmx280.c	bmx280thp
 
 # Generic HID support (used by USB, bluetooth and i2c)
 include "dev/hid/files.hid"
@@ -771,10 +793,18 @@ file	dev/ic/hme.c			hme
 device	gem: arp, ether, ifnet, mii
 file	dev/ic/gem.c			gem
 
-# Synopsis Designware GMAC core, as found on allwinner a20
+# Synopsys DesignWare GMAC core, as found on allwinner a20
 # and other SoCs
 device	awge: arp, ether, ifnet, mii
 file	dev/ic/dwc_gmac.c		awge
+
+# Synopsys DesignWare Ethernet Quality-of-Service controller
+device	eqos: arp, ether, ifnet, mii
+file	dev/ic/dwc_eqos.c		eqos
+
+# Synopsys DesignWare Watchdog
+device	dwcwdt: sysmon_wdog
+file	dev/ic/dwc_wdt.c		dwcwdt
 
 # 8390-family Ethernet controllers
 #
@@ -1034,6 +1064,8 @@ device	njata: ata, ata_piobm, wdc_common
 file	dev/ic/ninjaata32.c		njata
 
 # AHCI-compatible SATA controllers
+defflag	opt_ahcisata.h	AHCISATA_REMOVE_EXTRA_DELAY
+defparam opt_ahcisata.h	AHCISATA_EXTRA_DELAY_MS
 define ahcisata_core
 file dev/ic/ahcisata_core.c ahcisata_core
 device ahcisata: ata, ata_dma, ata_udma, sata, sata_fis, sata_pmp, ahcisata_core
@@ -1138,6 +1170,11 @@ file	dev/ic/pca9564.c		pca9564
 define	dwiic
 device dwiic: dwiic, i2cbus
 file	dev/ic/dwiic.c			dwiic
+
+# Cadence I2C controller
+define	cdnsiic
+device	cdnsiic: i2cbus
+file	dev/ic/cdnsiic.c		cdnsiic
 
 # ACPI power management timer (hardware access, independent of ACPI)
 #
@@ -1342,6 +1379,10 @@ file	dev/ic/pl061.c			plgpio
 device	plmmc: sdmmcbus
 file	dev/ic/pl181.c			plmmc
 
+# Intel GPIO
+device	igpio: gpiobus
+file	dev/ic/igpio.c			igpio
+
 # Myson MTD803 3-in-1 Fast Ethernet Controller
 device	mtd: arp, ether, ifnet, mii
 file	dev/ic/mtd803.c			mtd
@@ -1394,7 +1435,7 @@ attach	ld at nvme with ld_nvme
 file	dev/ic/ld_nvme.c		ld_nvme
 
 # Broadcom FullMAC 802.11 driver
-device	bwfm: arp, ifnet, wlan
+device	bwfm: arp, ifnet, wlan, firmload
 file	dev/ic/bwfm.c			bwfm
 
 # QEMU Firmware Configuration (fw_cfg) device
@@ -1430,7 +1471,6 @@ defpseudo vlan:		ifnet, ether
 defpseudo bridge:	ifnet, ether
 defpseudo vether:	ifnet, ether
 defpseudo bpfilter:	ifnet, bpf_filter
-defpseudo strip:	ifnet
 defpseudo gre:		ifnet
 defpseudo gif:		ifnet
 defpseudo faith:	ifnet
@@ -1494,10 +1534,12 @@ attach	ipmi at ipmibus
 device	dwhdmi: edid, videomode, drmkms, drmkms_i2c, ddc_read_edid
 file	dev/ic/dw_hdmi.c		dwhdmi
 file	dev/ic/dw_hdmi_phy.c		dwhdmi
+makeoptions	dwhdmi	"CPPFLAGS.dwhdmi"+="${CPPFLAGS.drmkms}"
 
 # Analogix DisplayPort
 device	anxdp: edid, videomode, drmkms, drmkms_i2c
 file	dev/ic/anx_dp.c			anxdp
+makeoptions	anxdp	"CPPFLAGS.anxdp"+="${CPPFLAGS.drmkms}"
 
 # Broadcom GENET v5 ethernet
 device	genet: arp, ether, ifnet, mii
@@ -1595,12 +1637,12 @@ include "dev/altmem/files.altmem"
 include "dev/flash/files.flash"
 
 #
-# NAND subsytem
+# NAND subsystem
 #
 include "dev/nand/files.nand"
 
 #
-# NOR subsytem
+# NOR subsystem
 #
 include "dev/nor/files.nor"
 
@@ -1620,10 +1662,22 @@ include "dev/ic/files.athn"
 include "dev/clk/files.clk"
 
 #
+# Goldfish virtual devices
+#
+include "dev/goldfish/files.goldfish"
+
+#
 # Flattened Device Tree (FDT) support
 #
 include "dev/ofw/files.ofw"
 include "dev/fdt/files.fdt"
+
+
+## ACPI -- this should be dev/acpi/files.acpi, but that currently has
+# some MD parts.  Having this here allows conditionals on NACPICA in
+# acpica.h, at least.
+#
+include "dev/acpi/acpica/files.acpica"
 
 #
 # Name value library

@@ -1,4 +1,4 @@
-/*	$NetBSD: pktqueue.h,v 1.4 2014/06/16 00:40:10 ozaki-r Exp $	*/
+/*	$NetBSD: pktqueue.h,v 1.8 2022/09/02 05:50:36 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -44,19 +44,26 @@ typedef struct pktqueue pktqueue_t;
 
 typedef enum { PKTQ_MAXLEN, PKTQ_NITEMS, PKTQ_DROPS } pktq_count_t;
 
+typedef uint32_t (*pktq_rps_hash_func_t)(const struct mbuf *);
+#define PKTQ_RPS_HASH_NAME_LEN 32
+
 pktqueue_t *	pktq_create(size_t, void (*)(void *), void *);
 void		pktq_destroy(pktqueue_t *);
 
 bool		pktq_enqueue(pktqueue_t *, struct mbuf *, const u_int);
 struct mbuf *	pktq_dequeue(pktqueue_t *);
 void		pktq_barrier(pktqueue_t *);
+void		pktq_ifdetach(void);
 void		pktq_flush(pktqueue_t *);
 int		pktq_set_maxlen(pktqueue_t *, size_t);
 
-uint32_t	pktq_rps_hash(const struct mbuf *);
-uint64_t	pktq_get_count(pktqueue_t *, pktq_count_t);
+uint32_t	pktq_rps_hash(const pktq_rps_hash_func_t *,
+		    const struct mbuf *);
+extern const pktq_rps_hash_func_t	pktq_rps_hash_default;
 
-int		sysctl_pktq_maxlen(SYSCTLFN_PROTO, pktqueue_t *);
-int		sysctl_pktq_count(SYSCTLFN_PROTO, pktqueue_t *, u_int);
+void		pktq_sysctl_setup(pktqueue_t *, struct sysctllog **,
+		    const struct sysctlnode *, const int);
+
+int		sysctl_pktq_rps_hash_handler(SYSCTLFN_PROTO);
 
 #endif

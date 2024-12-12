@@ -1,4 +1,4 @@
-/*  $NetBSD: ops.c,v 1.88 2019/09/23 12:00:57 christos Exp $ */
+/*  $NetBSD: ops.c,v 1.92 2023/06/24 05:18:13 msaitoh Exp $ */
 
 /*-
  *  Copyright (c) 2010-2011 Emmanuel Dreyfus. All rights reserved.
@@ -616,7 +616,7 @@ fuse_to_dirent(struct puffs_usermount *pu, puffs_cookie_t opc,
 		 * struct fuse_dirent is bigger than struct dirent,
 		 * so we should always use fd_len and never reallocate
 		 * later. 
-		 * If we have to reallocate,try to double the buffer
+		 * If we have to reallocate, try to double the buffer
 		 * each time so that we do not have to do it too often.
 		 */
 		if (written + reclen > dents_len) {
@@ -697,7 +697,7 @@ fuse_to_dirent(struct puffs_usermount *pu, puffs_cookie_t opc,
 		 * fd->off is not the offset, it is an opaque cookie
 		 * given by the filesystem to keep state across multiple
 		 * readdir() operation.
-		 * Use record alignement instead.
+		 * Use record alignment instead.
 		 */
 		len = FUSE_DIRENT_ALIGN(sizeof(*fd) + fd->namelen);
 #ifdef PERFUSE_DEBUG
@@ -1230,7 +1230,7 @@ perfuse_node_create(struct puffs_usermount *pu, puffs_cookie_t opc,
 	len = sizeof(*feo) + sizeof(*foo);
 	if ((error = xchg_msg(pu, opc, pm, len, wait_reply)) != 0) {
 		/*
-		 * create is unimplmented, remember it for later,
+		 * create is unimplemented, remember it for later,
 		 * and start over using mknod and open instead.
 		 */
 		if (error == ENOSYS) {
@@ -1857,7 +1857,7 @@ perfuse_node_setattr_ttl(struct puffs_usermount *pu, puffs_cookie_t opc,
 	/*
 	 * If only atime is changed, discard the operation: it
 	 * happens after read, and in that case the filesystem 
-	 * already updaed atime. NB: utimes() also change mtime.
+	 * already updated atime. NB: utimes() also change mtime.
 	 */
 	if (fsi->valid == FUSE_FATTR_ATIME)
 		fsi->valid &= ~FUSE_FATTR_ATIME;
@@ -2367,7 +2367,7 @@ perfuse_node_rmdir(struct puffs_usermount *pu, puffs_cookie_t opc,
 		return ENOENT;
 
 	/*
-	 * Attempt to rmdir dir/.. shoud raise ENOTEMPTY
+	 * Attempt to rmdir dir/.. should raise ENOTEMPTY
 	 */
 	if (PERFUSE_NODE_DATA(targ)->pnd_nodeid == pnd->pnd_parent_nodeid)
 		return ENOTEMPTY;
@@ -2503,7 +2503,7 @@ perfuse_node_readdir(struct puffs_usermount *pu, puffs_cookie_t opc,
 		pnd->pnd_fd_cookie = 0;
 
 	/*
-	 * Do we already have the data bufered?
+	 * Do we already have the data buffered?
 	 */
 	if (pnd->pnd_dirent != NULL)
 		goto out;
@@ -2717,7 +2717,7 @@ perfuse_node_reclaim2(struct puffs_usermount *pu,
 	/*
 	 * The kernel tells us how many lookups it made, which allows
 	 * us to detect that we have an uncompleted lookup and that the
-	 * node should not dispear.
+	 * node should not disappear.
 	 */
 	pnd->pnd_puffs_nlookup -= nlookup;
 	if (pnd->pnd_puffs_nlookup > 0)

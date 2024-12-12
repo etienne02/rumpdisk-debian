@@ -1,12 +1,12 @@
-/*	$NetBSD: fpsetmask.c,v 1.1 2014/09/19 17:36:25 matt Exp $	*/
+/*	$NetBSD: fpsetmask.c,v 1.4 2024/05/11 07:40:18 skrll Exp $	*/
 
 /*
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
  * All rights reserved.
- * 
+ *
  * This code is derived from software contributed to The NetBSD Foundation
  * by Dan Winship.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: fpsetmask.c,v 1.1 2014/09/19 17:36:25 matt Exp $");
+__RCSID("$NetBSD: fpsetmask.c,v 1.4 2024/05/11 07:40:18 skrll Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #include "namespace.h"
@@ -47,9 +47,9 @@ __weak_alias(fpsetmask,_fpsetmask)
 fp_except
 fpsetmask(fp_except mask)
 {
-#if 0
-	return __SHIFTOUT(riscvreg_fcsr_write_fmask(__SHIFTIN(mask, FCSR_MASK)), FCSR_FMASK);
-#else
+#if FCSR_FMASK == 0
 	return 0;
+#else
+	return __SHIFTOUT(fcsr_fmask_write(__SHIFTIN(mask, FCSR_MASK)), FCSR_FMASK);
 #endif
 }

@@ -1,4 +1,4 @@
-/* $NetBSD: ofw_autoconf.c,v 1.24 2019/11/27 21:07:32 joerg Exp $ */
+/* $NetBSD: ofw_autoconf.c,v 1.26 2023/09/23 21:26:16 andvar Exp $ */
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
  * Copyright (C) 1995, 1996 TooLs GmbH.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ofw_autoconf.c,v 1.24 2019/11/27 21:07:32 joerg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ofw_autoconf.c,v 1.26 2023/09/23 21:26:16 andvar Exp $");
 
 #ifdef ofppc
 #include "gtpci.h"
@@ -61,6 +61,11 @@ __KERNEL_RCSID(0, "$NetBSD: ofw_autoconf.c,v 1.24 2019/11/27 21:07:32 joerg Exp 
 #include <dev/ata/atavar.h>
 #include <dev/ic/wdcvar.h>
 
+#include <dev/wscons/wsconsio.h>
+#include <dev/wscons/wsdisplayvar.h>
+#include <dev/rasops/rasops.h>
+#include <powerpc/oea/ofw_rasconsvar.h>
+
 #include <machine/pci_machdep.h>
 
 #include <prop/proplib.h>
@@ -77,6 +82,9 @@ static void canonicalize_bootpath(void);
 void
 cpu_configure(void)
 {
+#if NWSDISPLAY > 0
+	rascons_add_rom_font();
+#endif
 	init_interrupt();
 	canonicalize_bootpath();
 

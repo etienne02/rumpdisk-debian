@@ -1,12 +1,15 @@
-/*	$NetBSD: msg_093.c,v 1.3 2021/01/31 11:12:07 rillig Exp $	*/
+/*	$NetBSD: msg_093.c,v 1.6 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_093.c"
 
-// Test for message: dubious static function at block level: %s [93]
+// Test for message: dubious static function '%s' at block level [93]
+
+/* lint1-extra-flags: -X 351 */
 
 void
 example(void)
 {
-	static void nested(void);	/* expect: 93 */
+	/* expect+1: warning: dubious static function 'nested' at block level [93] */
+	static void nested(void);
 
 	nested();
 }

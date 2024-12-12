@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ipw.c,v 1.74 2021/06/16 00:21:18 riastradh Exp $	*/
+/*	$NetBSD: if_ipw.c,v 1.77 2023/12/20 05:08:34 thorpej Exp $	*/
 /*	FreeBSD: src/sys/dev/ipw/if_ipw.c,v 1.15 2005/11/13 17:17:40 damien Exp 	*/
 
 /*-
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ipw.c,v 1.74 2021/06/16 00:21:18 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ipw.c,v 1.77 2023/12/20 05:08:34 thorpej Exp $");
 
 /*-
  * Intel(R) PRO/Wireless 2100 MiniPCI driver
@@ -44,7 +44,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_ipw.c,v 1.74 2021/06/16 00:21:18 riastradh Exp $"
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
-#include <sys/malloc.h>
 #include <sys/conf.h>
 #include <sys/proc.h>
 
@@ -1520,19 +1519,17 @@ ipw_start(struct ifnet *ifp)
 		return;
 
 	for (;;) {
-		IF_DEQUEUE(&ifp->if_snd, m0);
+		IF_POLL(&ifp->if_snd, m0);
 		if (m0 == NULL)
 			break;
 
 		if (sc->txfree < 1 + IPW_MAX_NSEG) {
-			IF_PREPEND(&ifp->if_snd, m0);
 			ifp->if_flags |= IFF_OACTIVE;
 			break;
 		}
+		IF_DEQUEUE(&ifp->if_snd, m0);
 
-		if (m0->m_len < sizeof (struct ether_header) &&
-		    (m0 = m_pullup(m0, sizeof (struct ether_header))) == NULL)
-			continue;
+		KASSERT(m0->m_len >= sizeof(struct ether_header));
 
 		eh = mtod(m0, struct ether_header *);
 		ni = ieee80211_find_txnode(ic, eh->ether_dhost);

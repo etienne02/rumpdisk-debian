@@ -1,4 +1,4 @@
-/*	$NetBSD: pci_machdep.c,v 1.78 2018/09/03 16:29:27 riastradh Exp $	*/
+/*	$NetBSD: pci_machdep.c,v 1.83 2024/06/23 00:53:34 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1999, 2000 Matthew R. Green
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pci_machdep.c,v 1.78 2018/09/03 16:29:27 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pci_machdep.c,v 1.83 2024/06/23 00:53:34 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -39,7 +39,6 @@ __KERNEL_RCSID(0, "$NetBSD: pci_machdep.c,v 1.78 2018/09/03 16:29:27 riastradh E
 #include <sys/systm.h>
 #include <sys/errno.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 
 #define _SPARC_BUS_DMA_PRIVATE
 #include <sys/bus.h>
@@ -116,7 +115,7 @@ pci_make_tag(pci_chipset_tag_t pc, int b, int d, int f)
 	struct ofw_pci_register reg;
 	pcitag_t tag;
 	int (*valid)(void *);
-	int node, len;
+	int node, new_node, len;
 #ifdef DEBUG
 	char name[80];
 	memset(name, 0, sizeof(name));
@@ -193,8 +192,11 @@ pci_make_tag(pci_chipset_tag_t pc, int b, int d, int f)
 				break;
 			if (len != 2 || b < busrange[0] || b > busrange[1])
 				break;
-			/* Go down 1 level */
-			node = prom_firstchild(node);
+			/* Go down 1 level, as long as we're able */
+			new_node = prom_firstchild(node);
+			if (new_node == 0)
+				break;
+			node = new_node;
 			DPRINTF(SPDB_PROBE, ("going down to node %x %s\n", node,
 			    prom_getpropstringA(node, "name", name,
 				sizeof(name))));
@@ -242,8 +244,9 @@ pci_decompose_tag(pci_chipset_tag_t pc, pcitag_t tag, int *bp, int *dp, int *fp)
 }
 
 int
-sparc64_pci_enumerate_bus(struct pci_softc *sc, const int *locators,
-    int (*match)(const struct pci_attach_args *), struct pci_attach_args *pap)
+sparc64_pci_enumerate_bus1(struct pci_softc *sc, const int *locators,
+    int (*match)(void *, const struct pci_attach_args *), void *cookie,
+    struct pci_attach_args *pap)
 {
 	struct ofw_pci_register reg;
 	pci_chipset_tag_t pc = sc->sc_pc;
@@ -305,8 +308,10 @@ sparc64_pci_enumerate_bus(struct pci_softc *sc, const int *locators,
 		if (OF_getprop(node, "class-code", &class, sizeof(class)) != 
 		    sizeof(class))
 			continue;
-		if (OF_getprop(node, "reg", &reg, sizeof(reg)) < sizeof(reg))
-			panic("pci_enumerate_bus: \"%s\" regs too small", name);
+		if (OF_getprop(node, "reg", &reg, sizeof(reg)) < sizeof(reg)) {
+			panic("pci_enumerate_bus1: \"%s\" regs too small",
+			    name);
+		}
 
 		b = OFW_PCI_PHYS_HI_BUS(reg.phys_hi);
 		d = OFW_PCI_PHYS_HI_DEVICE(reg.phys_hi);
@@ -359,7 +364,7 @@ sparc64_pci_enumerate_bus(struct pci_softc *sc, const int *locators,
 			(cl << PCI_CACHELINE_SHIFT);
 		pci_conf_write(pc, tag, PCI_BHLC_REG, bhlc);
 
-		ret = pci_probe_device(sc, tag, match, pap);
+		ret = pci_probe_device1(sc, tag, match, cookie, pap);
 		if (match != NULL && ret != 0)
 			return (ret);
 	}

@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.40 2020/07/06 08:17:01 rin Exp $	*/
+/*	$NetBSD: pmap.h,v 1.43 2023/12/15 09:43:59 rin Exp $	*/
 
 #ifndef _POWERPC_PMAP_H_
 #define _POWERPC_PMAP_H_
@@ -20,6 +20,10 @@
 #error unknown PPC variant
 #endif
 
+#ifndef PMAP_DIRECT_MAPPED_LEN
+#define	PMAP_DIRECT_MAPPED_LEN	(~0UL)
+#endif
+
 #endif /* !_MODULE */
 
 #if !defined(_LOCORE) && (defined(MODULAR) || defined(_MODULE))
@@ -38,6 +42,15 @@ struct vm_page_md {
 #endif /* !__HAVE_VM_PAGE_MD */
 
 __CTASSERT(sizeof(struct vm_page_md) == sizeof(uintptr_t)*5);
+
+#ifndef __HAVE_PMAP_PV_TRACK
+/*
+ * We need empty stubs for modules shared with all sub-archs.
+ */
+#define	__HAVE_PMAP_PV_TRACK
+#define	PMAP_PV_TRACK_ONLY_STUBS
+#include <uvm/pmap/pmap_pvt.h>
+#endif /* !__HAVE_PMAP_PV_TRACK */
 
 #endif /* !LOCORE && (MODULAR || _MODULE) */
 

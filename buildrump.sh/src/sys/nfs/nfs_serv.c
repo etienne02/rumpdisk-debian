@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_serv.c,v 1.181 2020/09/05 16:30:12 riastradh Exp $	*/
+/*	$NetBSD: nfs_serv.c,v 1.184 2023/03/23 19:53:01 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -55,7 +55,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_serv.c,v 1.181 2020/09/05 16:30:12 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_serv.c,v 1.184 2023/03/23 19:53:01 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -353,7 +353,7 @@ nfsrv_setattr(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *
 	}
 
 	/*
-	 * If the size is being changed write acces is required, otherwise
+	 * If the size is being changed write access is required, otherwise
 	 * just check for a read only file system.
 	 */
 	if (va.va_size == ((u_quad_t)((quad_t) -1))) {
@@ -422,7 +422,8 @@ nfsrv_lookup(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *l
 	nd.ni_cnd.cn_nameiop = LOOKUP;
 	nd.ni_cnd.cn_flags = LOCKLEAF;
 	error = nfs_namei(&nd, &nsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), pubflag);
+		&dirp, NULL, NULL,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), pubflag);
 
 	if (!error && pubflag) {
 		if (nd.ni_vp->v_type == VDIR && nfs_pub.np_index != NULL &&
@@ -1447,10 +1448,8 @@ nfsrv_create(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *l
 	nd.ni_cnd.cn_nameiop = CREATE;
 	nd.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfs_namei(&nd, &nsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (dirp && v3) {
-		dirfor_ret = VOP_GETATTR(dirp, &dirfor, cred);
-	}
+		&dirp, (v3 ? &dirfor_ret : NULL), &dirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error) {
 		nfsm_reply(NFSX_WCCDATA(v3));
 		nfsm_srvwcc_data(dirfor_ret, &dirfor, diraft_ret, &diraft);
@@ -1649,10 +1648,10 @@ nfsmout:
 			vput(nd.ni_dvp);
 		if (nd.ni_vp)
 			vput(nd.ni_vp);
-	}
-	if (nd.ni_pathbuf != NULL) {
-		pathbuf_destroy(nd.ni_pathbuf);
-		nd.ni_pathbuf = NULL;
+		if (nd.ni_pathbuf != NULL) {
+			pathbuf_destroy(nd.ni_pathbuf);
+			nd.ni_pathbuf = NULL;
+		}
 	}
 	return (error);
 }
@@ -1689,9 +1688,8 @@ nfsrv_mknod(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *lw
 	nd.ni_cnd.cn_nameiop = CREATE;
 	nd.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfs_namei(&nd, &nsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (dirp)
-		dirfor_ret = VOP_GETATTR(dirp, &dirfor, cred);
+		&dirp, &dirfor_ret, &dirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error) {
 		nfsm_reply(NFSX_WCCDATA(1));
 		nfsm_srvwcc_data(dirfor_ret, &dirfor, diraft_ret, &diraft);
@@ -1803,10 +1801,10 @@ nfsmout:
 			vput(nd.ni_dvp);
 		if (nd.ni_vp)
 			vput(nd.ni_vp);
-	}
-	if (nd.ni_pathbuf != NULL) {
-		pathbuf_destroy(nd.ni_pathbuf);
-		nd.ni_pathbuf = NULL;
+		if (nd.ni_pathbuf != NULL) {
+			pathbuf_destroy(nd.ni_pathbuf);
+			nd.ni_pathbuf = NULL;
+		}
 	}
 	if (dirp)
 		vrele(dirp);
@@ -1845,14 +1843,8 @@ nfsrv_remove(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *l
 	nd.ni_cnd.cn_nameiop = DELETE;
 	nd.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfs_namei(&nd, &nsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (error == 0 && dirp && v3) {
-		if (nd.ni_dvp == nd.ni_vp)
-			vn_lock(dirp, LK_SHARED | LK_RETRY);
-		dirfor_ret = VOP_GETATTR(dirp, &dirfor, cred);
-		if (nd.ni_dvp == nd.ni_vp)
-			VOP_UNLOCK(dirp);
-	}
+		&dirp, (v3 ? &dirfor_ret : NULL), &dirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (!error) {
 		vp = nd.ni_vp;
 		if (vp->v_type == VDIR) {
@@ -1944,14 +1936,8 @@ nfsrv_rename(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *l
 	fromnd.ni_cnd.cn_nameiop = DELETE;
 	fromnd.ni_cnd.cn_flags = LOCKPARENT;
 	error = nfs_namei(&fromnd, &fnsfh, len, slp, nam, &md,
-		&dpos, &fdirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (error == 0 && fdirp && v3) {
-		if (fromnd.ni_dvp == fromnd.ni_vp)
-			vn_lock(fdirp, LK_SHARED | LK_RETRY);
-		fdirfor_ret = VOP_GETATTR(fdirp, &fdirfor, cred);
-		if (fromnd.ni_dvp == fromnd.ni_vp)
-			VOP_UNLOCK(fdirp);
-	}
+		&dpos, &fdirp, (v3 ? &fdirfor_ret : NULL), &fdirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error) {
 		fromnd.ni_cnd.cn_nameiop = 0;
 		nfsm_reply(2 * NFSX_WCCDATA(v3));
@@ -2021,10 +2007,8 @@ nfsrv_rename(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *l
 	tond.ni_cnd.cn_nameiop = RENAME;
 	tond.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF | NOCACHE;
 	error = nfs_namei(&tond, &tnsfh, len2, slp, nam, &md,
-		&dpos, &tdirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (tdirp && v3) {
-		tdirfor_ret = VOP_GETATTR(tdirp, &tdirfor, cred);
-	}
+		&dpos, &tdirp, (v3 ? &tdirfor_ret : NULL), &tdirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error) {
 		VFS_RENAMELOCK_EXIT(localfs);
 		VOP_ABORTOP(fromnd.ni_dvp, &fromnd.ni_cnd);
@@ -2218,10 +2202,8 @@ nfsrv_link(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *lwp
 	nd.ni_cnd.cn_nameiop = CREATE;
 	nd.ni_cnd.cn_flags = LOCKPARENT;
 	error = nfs_namei(&nd, &dnsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (dirp && v3) {
-		dirfor_ret = VOP_GETATTR(dirp, &dirfor, cred);
-	}
+		&dirp, (v3 ? &dirfor_ret : NULL), &dirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error)
 		goto out1;
 	xp = nd.ni_vp;
@@ -2310,10 +2292,8 @@ nfsrv_symlink(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *
 	nd.ni_cnd.cn_nameiop = CREATE;
 	nd.ni_cnd.cn_flags = LOCKPARENT;
 	error = nfs_namei(&nd, &nsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (dirp && v3) {
-		dirfor_ret = VOP_GETATTR(dirp, &dirfor, cred);
-	}
+		&dirp, (v3 ? &dirfor_ret : NULL), &dirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error)
 		goto out;
 	abort = 1;
@@ -2455,10 +2435,8 @@ nfsrv_mkdir(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *lw
 	nd.ni_cnd.cn_nameiop = CREATE;
 	nd.ni_cnd.cn_flags = LOCKPARENT;
 	error = nfs_namei(&nd, &nsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (dirp && v3) {
-		dirfor_ret = VOP_GETATTR(dirp, &dirfor, cred);
-	}
+		&dirp, (v3 ? &dirfor_ret : NULL), &dirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error) {
 		if (nd.ni_pathbuf != NULL) {
 			pathbuf_destroy(nd.ni_pathbuf);
@@ -2579,10 +2557,8 @@ nfsrv_rmdir(struct nfsrv_descript *nfsd, struct nfssvc_sock *slp, struct lwp *lw
 	nd.ni_cnd.cn_nameiop = DELETE;
 	nd.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
 	error = nfs_namei(&nd, &nsfh, len, slp, nam, &md, &dpos,
-		&dirp, lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
-	if (dirp && v3) {
-		dirfor_ret = VOP_GETATTR(dirp, &dirfor, cred);
-	}
+		&dirp, (v3 ? &dirfor_ret : NULL), &dirfor,
+		lwp, (nfsd->nd_flag & ND_KERBAUTH), false);
 	if (error) {
 		if (nd.ni_pathbuf != NULL) {
 			pathbuf_destroy(nd.ni_pathbuf);

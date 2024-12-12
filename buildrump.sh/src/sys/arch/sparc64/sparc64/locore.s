@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.427 2021/04/03 17:01:24 palle Exp $	*/
+/*	$NetBSD: locore.s,v 1.434 2024/02/17 19:36:07 palle Exp $	*/
 
 /*
  * Copyright (c) 2006-2010 Matthew R. Green
@@ -1207,7 +1207,7 @@ _C_LABEL(trapbase_sun4v):
 		
 #if 0
 /*
- * If the cleanwin trap handler detects an overfow we come here.
+ * If the cleanwin trap handler detects an overflow we come here.
  * We need to fix up the window registers, switch to the interrupt
  * stack, and then trap to the debugger.
  */
@@ -2013,7 +2013,7 @@ winfixfill:
 	and	%g4, CWP, %g5		! %g4 = %cwp of trap
 	wrpr	%g7, 0, %tt
 	bz,a,pt	%icc, datafault		! We were in user mode -- normal fault
-	 wrpr	%g5, %cwp		! Restore cwp from before fill trap -- regs should now be consisent
+	 wrpr	%g5, %cwp		! Restore cwp from before fill trap -- regs should now be consistent
 
 	/*
 	 * We're in a pickle here.  We were trying to return to user mode
@@ -2037,7 +2037,7 @@ winfixfill:
 	stw	%g7, [%g4]
 #endif
 #if 0 /* Need to switch over to new stuff to fix WDR bug */
-	wrpr	%g5, %cwp				! Restore cwp from before fill trap -- regs should now be consisent
+	wrpr	%g5, %cwp				! Restore cwp from before fill trap -- regs should now be consistent
 	wrpr	%g2, %g0, %tl				! Restore trap level -- we need to reuse it
 	set	return_from_trap, %g4			! XXX - need to set %g1 to tstate
 	set	CTX_PRIMARY, %g7
@@ -4193,7 +4193,7 @@ syscall_setup:
 
 	/* see `lwp_trampoline' for the reason for this label */
 return_from_syscall:
-	wrpr	%g0, PSTATE_KERN, %pstate	! Disable intterrupts
+	wrpr	%g0, PSTATE_KERN, %pstate	! Disable interrupts
 	wrpr	%g0, 0, %tl			! Return to tl==0
 	b	return_from_trap
 	 nop
@@ -4424,9 +4424,9 @@ sun4v_dev_mondo:
 	mov	0x3d8, %g1			! Dev Mondo Queue Tail
 	ldxa	[%g1] ASI_QUEUE, %g4		! fetch index value
 	cmp	%g2, %g4			! head = queue? 
-	bne,pt 	%xcc, 2f			! unsually not the case
+	bne,pt 	%xcc, 2f			! unusually not the case
 	 nop
-	retry					! unlikely, ingnore interrupt
+	retry					! unlikely, ignore interrupt
 2:	
 	set	CPUINFO_VA, %g3			 ! fetch cpuinfo pa
 	ldx	[%g3 + CI_PADDR], %g3		 ! fetch intstack pa
@@ -4438,7 +4438,7 @@ sun4v_dev_mondo:
 	add	%g2, 64, %g2			 ! each element is 64 bytes 		
 	and	%g2, 0x7ff, %g2			 ! assume 32 elements
 	mov	0x3d0, %g1			 ! Dev Mondo Queue Head
-	stxa	%g2, [%g1] ASI_QUEUE		 ! ajust head index value
+	stxa	%g2, [%g1] ASI_QUEUE		 ! adjust head index value
 	membar	#Sync
 
 	cmp	%g5, MAXINTNUM			! Handle both sun4v legacy (sysino) and cookies.
@@ -5211,7 +5211,7 @@ rft_user:
 
 	/*
 	 * The restore instruction further down may cause the trap level
-	 * to exceede the maximum trap level on sun4v, so a manual fill
+	 * to exceed the maximum trap level on sun4v, so a manual fill
 	 * may be necessary.
 	*/
 
@@ -5471,7 +5471,7 @@ ENTRY_NOPROFILE(cpu_initialize)	/* for cosmetic reasons - nicer backtrace */
 	!! and already accessible here)
 	flushw
 	LDPTR	[%l7 + CI_CPCB], %l0		! load PCB/uarea pointer
-	set	USPACE - TF_SIZE - CC64FSZ, %l1
+	set	2*USPACE - TF_SIZE - CC64FSZ, %l1
  	add	%l1, %l0, %l0
 #ifdef _LP64
 	andn	%l0, 0x0f, %l0			! Needs to be 16-byte aligned
@@ -6193,8 +6193,10 @@ ENTRY(sp_tlb_flush_all_usiii)
 
 /*
  * sp_blast_dcache(int dcache_size, int dcache_line_size)
+ * sp_blast_dcache_disabled(int dcache_size, int dcache_line_size)
  *
- * Clear out all of D$ regardless of contents
+ * Clear out all of D$ regardless of contents.  The latter one also
+ * disables the D$ while doing so.
  */
 	.align 8
 ENTRY(sp_blast_dcache)
@@ -6218,6 +6220,46 @@ ENTRY(sp_blast_dcache)
 	sethi	%hi(KERNBASE), %o2
 	flush	%o2
 	membar	#Sync
+#ifdef PROF
+	wrpr	%o3, %pstate
+	ret
+	 restore
+#else
+	retl
+	 wrpr	%o3, %pstate
+#endif
+
+	.align 8
+ENTRY(sp_blast_dcache_disabled)
+/*
+ * We turn off interrupts for the duration to prevent RED exceptions.
+ */
+#ifdef PROF
+	save	%sp, -CC64FSZ, %sp
+#endif
+
+	rdpr	%pstate, %o3
+	sub	%o0, %o1, %o0
+	andn	%o3, PSTATE_IE, %o4			! Turn off PSTATE_IE bit
+	wrpr	%o4, 0, %pstate
+
+	ldxa    [%g0] ASI_MCCR, %o5
+	andn	%o5, MCCR_DCACHE_EN, %o4		! Turn off the D$
+	stxa	%o4, [%g0] ASI_MCCR
+	flush 	%g0
+
+1:
+	stxa	%g0, [%o0] ASI_DCACHE_TAG
+	membar	#Sync
+	brnz,pt	%o0, 1b
+	 sub	%o0, %o1, %o0
+
+	sethi	%hi(KERNBASE), %o2
+	flush	%o2
+	membar	#Sync
+
+	stxa	%o5, [%g0] ASI_MCCR			! Restore the D$
+	flush 	%g0
 #ifdef PROF
 	wrpr	%o3, %pstate
 	ret
@@ -6637,7 +6679,7 @@ ENTRY(cpu_idle)
  * cpu_switchto() switches to an lwp to run and runs it, saving the
  * current one away.
  *
- * stuct lwp * cpu_switchto(struct lwp *current, struct lwp *next)
+ * struct lwp * cpu_switchto(struct lwp *current, struct lwp *next)
  * Switch to the specified next LWP
  * Arguments:
  *	i0	'struct lwp *' of the current LWP
@@ -6689,9 +6731,28 @@ ENTRY(cpu_switchto)
 	 * Load the new lwp.  To load, we must change stacks and
 	 * alter cpcb and the window control registers, hence we must
 	 * keep interrupts disabled.
+	 *
+	 * Issue barriers to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
 	 */
 
+	membar	#StoreStore
 	STPTR	%i1, [%l7 + %lo(CURLWP)]	! curlwp = l;
+	membar	#StoreLoad
 	STPTR	%l1, [%l6 + %lo(CPCB)]		! cpcb = newpcb;
 
 	ldx	[%l1 + PCB_SP], %i6
@@ -6784,7 +6845,15 @@ ENTRY(softint_fastintr)
 	sethi	%hi(USPACE - TF_SIZE - CC64FSZ - STKB), %o3
 	LDPTR	[%i0 + L_PCB], %l1		! l1 = softint pcb
 	or	%o3, %lo(USPACE - TF_SIZE - CC64FSZ - STKB), %o3
+	membar	#StoreStore		/* for mutex_enter; see cpu_switchto */
 	STPTR	%i0, [%l7 + %lo(CURLWP)]
+	/*
+	 * No need for barrier after ci->ci_curlwp = softlwp -- when we
+	 * enter a softint lwp, it can't be holding any mutexes, so it
+	 * can't release any until after it has acquired them, so we
+	 * need not participate in the protocol with mutex_vector_enter
+	 * barriers here.
+	 */
 	add	%l1, %o3, %i6
 	STPTR	%l1, [%l6 + %lo(CPCB)]
 	stx	%i6, [%l1 + PCB_SP]
@@ -6797,7 +6866,9 @@ ENTRY(softint_fastintr)
 
 	/* switch back to interrupted lwp */
 	ldx	[%l5 + PCB_SP], %i6
+	membar	#StoreStore		/* for mutex_enter; see cpu_switchto */
 	STPTR	%l0, [%l7 + %lo(CURLWP)]
+	membar	#StoreLoad		/* for mutex_enter; see cpu_switchto */
 	STPTR	%l5, [%l6 + %lo(CPCB)]
 
 	restore					! rewind register window
@@ -7713,7 +7784,7 @@ ENTRY(savetstate)
 	 nop
 
 	/*
-	 * Debug stuff.  Resore trap registers from buffer.
+	 * Debug stuff.  Restore trap registers from buffer.
 	 *
 	 *  %o0 = %tl
 	 *  %o1 = *ts

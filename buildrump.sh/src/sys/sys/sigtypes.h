@@ -1,4 +1,4 @@
-/*	$NetBSD: sigtypes.h,v 1.11 2017/01/12 18:29:14 christos Exp $	*/
+/*	$NetBSD: sigtypes.h,v 1.13 2024/05/12 10:34:56 rillig Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1989, 1991, 1993
@@ -87,24 +87,25 @@ typedef struct {
 		(t)->__bits[1] |= (s)->__bits[1];	\
 		(t)->__bits[2] |= (s)->__bits[2];	\
 		(t)->__bits[3] |= (s)->__bits[3];	\
-	} while (/* CONSTCOND */ 0)
+	} while (0)
 #define	__sigminusset(s, t) \
 	do {						\
 		(t)->__bits[0] &= ~(s)->__bits[0];	\
 		(t)->__bits[1] &= ~(s)->__bits[1];	\
 		(t)->__bits[2] &= ~(s)->__bits[2];	\
 		(t)->__bits[3] &= ~(s)->__bits[3];	\
-	} while (/* CONSTCOND */ 0)
+	} while (0)
 #define	__sigandset(s, t) \
 	do {						\
 		(t)->__bits[0] &= (s)->__bits[0];	\
 		(t)->__bits[1] &= (s)->__bits[1];	\
 		(t)->__bits[2] &= (s)->__bits[2];	\
 		(t)->__bits[3] &= (s)->__bits[3];	\
-	} while (/* CONSTCOND */ 0)
+	} while (0)
 
 #if (defined(_XOPEN_SOURCE) && defined(_XOPEN_SOURCE_EXTENDED)) || \
-    (_XOPEN_SOURCE - 0) >= 500 || defined(_NETBSD_SOURCE)
+    (_XOPEN_SOURCE - 0) >= 500 || (_POSIX_C_SOURCE - 0) >= 200809L || \
+    defined(_NETBSD_SOURCE)
 typedef struct
 #if defined(_NETBSD_SOURCE)
                sigaltstack
@@ -115,7 +116,9 @@ typedef struct
 	int	ss_flags;		/* SS_DISABLE and/or SS_ONSTACK */
 } stack_t;
 
-#endif /* _XOPEN_SOURCE_EXTENDED || XOPEN_SOURCE >= 500 || _NETBSD_SOURCE */
+#endif /* _XOPEN_SOURCE_EXTENDED || _XOPEN_SOURCE >= 500
+	* || _POSIX_C_SOURCE >= 200809L || _NETBSD_SOURCE
+	*/
 
 #endif	/* _POSIX_C_SOURCE || _XOPEN_SOURCE || ... */
 

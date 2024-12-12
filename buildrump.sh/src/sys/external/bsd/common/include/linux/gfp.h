@@ -1,4 +1,4 @@
-/*	$NetBSD: gfp.h,v 1.1 2018/08/27 15:45:06 riastradh Exp $	*/
+/*	$NetBSD: gfp.h,v 1.3 2021/12/19 11:03:32 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -69,6 +69,19 @@ typedef int gfp_t;
  */
 #define	__GFP_NOFAIL		0
 
+/*
+ * Pretend these are the same.  __GFP_RETRY_MAYFAIL is supposed to do
+ * more than just __GFP_NORETRY, but should not hang forever like
+ * __GFP_WAIT.
+ */
+#define	__GFP_RETRY_MAYFAIL	__GFP_NORETRY
+
 struct page;
+
+static inline bool
+gfpflags_allow_blocking(gfp_t gfp)
+{
+	return (gfp & (__GFP_WAIT|__GFP_NORETRY)) == __GFP_WAIT;
+}
 
 #endif	/* _LINUX_GFP_H_ */

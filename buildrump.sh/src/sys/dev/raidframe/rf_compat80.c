@@ -1,4 +1,4 @@
-/*	$NetBSD: rf_compat80.c,v 1.15 2021/05/26 06:11:50 mrg Exp $	*/
+/*	$NetBSD: rf_compat80.c,v 1.17 2022/06/28 03:13:27 oster Exp $	*/
 
 /*
  * Copyright (c) 2017 Matthew R. Green
@@ -12,8 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
@@ -317,11 +315,11 @@ raidframe_ioctl_80(struct raid_softc *rs, u_long cmd, void *data)
 	case RAIDFRAME_CHECK_COPYBACK_STATUS_EXT80:
 	case RAIDFRAME_GET_INFO80:
 	case RAIDFRAME_GET_COMPONENT_LABEL80:
+	case RAIDFRAME_FAIL_DISK80:
 		if (!rf_inited(rs))
 			return ENXIO;
 		break;
 	case RAIDFRAME_CONFIGURE80:
-	case RAIDFRAME_FAIL_DISK80:
 		break;
 	default:
 		return EPASSTHROUGH;

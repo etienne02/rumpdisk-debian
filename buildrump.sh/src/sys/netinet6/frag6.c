@@ -1,4 +1,4 @@
-/*	$NetBSD: frag6.c,v 1.75 2019/11/13 02:51:22 ozaki-r Exp $	*/
+/*	$NetBSD: frag6.c,v 1.78 2024/04/19 05:04:06 ozaki-r Exp $	*/
 /*	$KAME: frag6.c,v 1.40 2002/05/27 21:40:31 itojun Exp $	*/
 
 /*
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: frag6.c,v 1.75 2019/11/13 02:51:22 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: frag6.c,v 1.78 2024/04/19 05:04:06 ozaki-r Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_net_mpsafe.h"
@@ -117,7 +117,16 @@ frag6_init(void)
 {
 
 	ip6q.ip6q_next = ip6q.ip6q_prev = &ip6q;
-	mutex_init(&frag6_lock, MUTEX_DEFAULT, IPL_NET);
+	mutex_init(&frag6_lock, MUTEX_DEFAULT, IPL_NONE);
+}
+
+static void
+frag6_dropfrag(struct ip6q *q6)
+{
+	frag6_remque(q6);
+	frag6_nfrags -= q6->ip6q_nfrag;
+	kmem_intr_free(q6, sizeof(*q6));
+	frag6_nfragpackets--;
 }
 
 /*
@@ -197,9 +206,10 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 * sizeof(struct ip6_frag) == 8
 	 * sizeof(struct ip6_hdr) = 40
 	 */
-	if ((ip6f->ip6f_offlg & IP6F_MORE_FRAG) &&
-	    (((ntohs(ip6->ip6_plen) - offset) == 0) ||
-	     ((ntohs(ip6->ip6_plen) - offset) & 0x7) != 0)) {
+	frgpartlen = sizeof(struct ip6_hdr) + ntohs(ip6->ip6_plen) - offset
+	    - sizeof(struct ip6_frag);
+	if ((frgpartlen == 0) ||
+	    ((ip6f->ip6f_offlg & IP6F_MORE_FRAG) && (frgpartlen & 0x7) != 0)) {
 		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
 		    offsetof(struct ip6_hdr, ip6_plen));
 		in6_ifstat_inc(dstifp, ifs6_reass_fail);
@@ -307,7 +317,6 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 * in size. If it would exceed, discard the fragment and return an
 	 * ICMP error.
 	 */
-	frgpartlen = sizeof(struct ip6_hdr) + ntohs(ip6->ip6_plen) - offset;
 	if (q6->ip6q_unfrglen >= 0) {
 		/* The 1st fragment has already arrived. */
 		if (q6->ip6q_unfrglen + fragoff + frgpartlen > IPV6_MAXPACKET) {
@@ -456,8 +465,13 @@ insert:
 	/* adjust offset to point where the original next header starts */
 	offset = ip6af->ip6af_offset - sizeof(struct ip6_frag);
 	kmem_intr_free(ip6af, sizeof(struct ip6asfrag));
+	next += offset - sizeof(struct ip6_hdr);
+	if ((u_int)next > IPV6_MAXPACKET) {
+		frag6_dropfrag(q6);
+		goto dropfrag;
+	}
 	ip6 = mtod(m, struct ip6_hdr *);
-	ip6->ip6_plen = htons(next + offset - sizeof(struct ip6_hdr));
+	ip6->ip6_plen = htons(next);
 	ip6->ip6_src = q6->ip6q_src;
 	ip6->ip6_dst = q6->ip6q_dst;
 	nxt = q6->ip6q_nxt;
@@ -472,20 +486,14 @@ insert:
 	} else {
 		/* this comes with no copy if the boundary is on cluster */
 		if ((t = m_split(m, offset, M_DONTWAIT)) == NULL) {
-			frag6_remque(q6);
-			frag6_nfrags -= q6->ip6q_nfrag;
-			kmem_intr_free(q6, sizeof(struct ip6q));
-			frag6_nfragpackets--;
+			frag6_dropfrag(q6);
 			goto dropfrag;
 		}
 		m_adj(t, sizeof(struct ip6_frag));
 		m_cat(m, t);
 	}
 
-	frag6_remque(q6);
-	frag6_nfrags -= q6->ip6q_nfrag;
-	kmem_intr_free(q6, sizeof(struct ip6q));
-	frag6_nfragpackets--;
+	frag6_dropfrag(q6);
 
 	{
 		KASSERT(m->m_flags & M_PKTHDR);
@@ -585,10 +593,7 @@ frag6_freef(struct ip6q *q6)
 		kmem_intr_free(af6, sizeof(struct ip6asfrag));
 	}
 
-	frag6_remque(q6);
-	frag6_nfrags -= q6->ip6q_nfrag;
-	kmem_intr_free(q6, sizeof(struct ip6q));
-	frag6_nfragpackets--;
+	frag6_dropfrag(q6);
 }
 
 /*

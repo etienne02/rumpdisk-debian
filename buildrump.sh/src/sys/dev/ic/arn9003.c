@@ -1,4 +1,4 @@
-/*	$NetBSD: arn9003.c,v 1.15 2020/01/29 14:09:58 thorpej Exp $	*/
+/*	$NetBSD: arn9003.c,v 1.17 2024/07/05 04:31:50 rin Exp $	*/
 /*	$OpenBSD: ar9003.c,v 1.25 2012/10/20 09:53:32 stsp Exp $	*/
 
 /*-
@@ -24,7 +24,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arn9003.c,v 1.15 2020/01/29 14:09:58 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arn9003.c,v 1.17 2024/07/05 04:31:50 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/sockio.h>
@@ -82,7 +82,7 @@ Static void	ar9003_enable_predistorter(struct athn_softc *, int);
 Static int	ar9003_find_rom(struct athn_softc *);
 Static void	ar9003_force_txgain(struct athn_softc *, uint32_t);
 Static int	ar9003_get_desired_txgain(struct athn_softc *, int, int);
-Static int	ar9003_get_iq_corr(struct athn_softc *, int32_t[], int32_t[]);
+Static int	ar9003_get_iq_corr(struct athn_softc *, int32_t[6], int32_t[2]);
 Static void	ar9003_gpio_config_input(struct athn_softc *, int);
 Static void	ar9003_gpio_config_output(struct athn_softc *, int, int);
 Static int	ar9003_gpio_read(struct athn_softc *, int);
@@ -813,8 +813,7 @@ ar9003_rx_free(struct athn_softc *sc, int qid)
 
 		if (bf->bf_map != NULL)
 			bus_dmamap_destroy(sc->sc_dmat, bf->bf_map);
-		if (bf->bf_m != NULL)
-			m_freem(bf->bf_m);
+		m_freem(bf->bf_m);
 	}
 	free(rxq->bf, M_DEVBUF);
 }

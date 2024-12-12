@@ -1,4 +1,4 @@
-/*	$NetBSD: rmixl_intr.c,v 1.12 2016/08/26 15:45:48 skrll Exp $	*/
+/*	$NetBSD: rmixl_intr.c,v 1.15 2022/09/29 07:00:47 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2007 Ruslan Ermilov and Vsevolod Lobko.
@@ -64,7 +64,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rmixl_intr.c,v 1.12 2016/08/26 15:45:48 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rmixl_intr.c,v 1.15 2022/09/29 07:00:47 skrll Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -77,7 +77,6 @@ __KERNEL_RCSID(0, "$NetBSD: rmixl_intr.c,v 1.12 2016/08/26 15:45:48 skrll Exp $"
 #include <sys/device.h>
 #include <sys/intr.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/systm.h>
 
@@ -391,7 +390,7 @@ dclz(uint64_t val)
 
 	asm volatile("dclz %0, %1;"
 		: "=r"(nlz) : "r"(val));
-	
+
 	return nlz;
 }
 
@@ -590,7 +589,7 @@ rmixl_irt_thread_mask(int cpumask)
 	 * discount cpus not present
 	 */
 	cpumask &= cpu_present_mask;
-	
+
 	switch (MIPS_PRID_IMPL(mips_options.mips_cpu_id)) {
 	case MIPS_XLS104:
 	case MIPS_XLS204:
@@ -967,6 +966,7 @@ rmixl_send_ipi(struct cpu_info *ci, int tag)
 	  | (RMIXL_INTRVEC_IPI + tag);
 
 	mutex_enter(&rmixl_ipi_lock);
+	membar_release();
 	atomic_or_64(&ci->ci_request_ipis, req);
 	RMIXL_PICREG_WRITE(RMIXL_PIC_IPIBASE, r);
 	mutex_exit(&rmixl_ipi_lock);
@@ -984,8 +984,9 @@ rmixl_ipi_intr(void *arg)
 	KASSERT((uintptr_t)arg < NIPIS);
 
 	/* if the request is clear, it was previously processed */
-	if ((ci->ci_request_ipis & ipi_mask) == 0)
+	if ((atomic_load_relaxed(&ci->ci_request_ipis) & ipi_mask) == 0)
 		return 0;
+	membar_acquire();
 
 	atomic_or_64(&ci->ci_active_ipis, ipi_mask);
 	atomic_and_64(&ci->ci_request_ipis, ~ipi_mask);

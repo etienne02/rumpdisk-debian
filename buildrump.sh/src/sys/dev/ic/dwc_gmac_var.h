@@ -1,4 +1,4 @@
-/* $NetBSD: dwc_gmac_var.h,v 1.16 2019/09/13 07:55:06 msaitoh Exp $ */
+/* $NetBSD: dwc_gmac_var.h,v 1.22 2024/08/11 12:48:09 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2013, 2014 The NetBSD Foundation, Inc.
@@ -29,28 +29,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifdef _KERNEL_OPT
-#include "opt_net_mpsafe.h"
-#endif
-
-/* Use DWCGMAC_MPSAFE inside the front-ends for interrupt handlers.  */
-#ifdef NET_MPSAFE
-#define DWCGMAC_MPSAFE	1
-#endif
-
-#ifdef DWCGMAC_MPSAFE
-#define DWCGMAC_FDT_INTR_MPSAFE FDT_INTR_MPSAFE
-#else
-#define DWCGMAC_FDT_INTR_MPSAFE 0
-#endif
-
 /*
- * We could use 1024 DMA descriptors to fill up an 8k page (each is 16 byte).
- * However, on TX we probably will not need that many, and on RX we allocate
- * a full mbuf cluster for each, so secondary memory consumption will grow
- * rapidly.
- * So currently we waste half a page of dma memory and consume 512k Byte of
- * RAM for mbuf clusters.
+ * Rx and Tx Ring counts that map into single 4K page with 16byte descriptor
+ * size. For Rx a full mbuf cluster is allocated for each which consumes
+ * around 512k Byte of RAM for mbuf clusters.
  * XXX Maybe fine-tune later, or reconsider unsharing of RX/TX dmamap.
  */
 #define		AWGE_RX_RING_COUNT	256
@@ -111,7 +93,7 @@ struct dwc_gmac_softc {
 	bus_space_handle_t sc_bsh;
 	bus_dma_tag_t sc_dmat;
 	uint32_t sc_flags;
-#define	DWC_GMAC_FORCE_THRESH_DMA_MODE	0x01	/* force DMA to use threshold mode */
+#define	DWC_GMAC_FORCE_THRESH_DMA_MODE	__BIT(0)/* force DMA to use threshold mode */
 	struct ethercom sc_ec;
 	struct mii_data sc_mii;
 	kmutex_t sc_mdio_lock;
@@ -120,17 +102,19 @@ struct dwc_gmac_softc {
 	struct dwc_gmac_rx_ring sc_rxq;
 	struct dwc_gmac_tx_ring sc_txq;
 	const struct dwc_gmac_desc_methods *sc_descm;
-	u_short sc_if_flags;			/* shadow of ether flags */
+	u_short sc_if_flags;	/* (sc_mcastlock) if_flags cache */
 	uint16_t sc_mii_clk;
-	bool sc_stopping;
+	bool sc_txbusy;		/* (sc_txq.t_mtx) no Tx because down or busy */
+	bool sc_stopping;	/* (sc_intr_lock) ignore intr because down */
 	krndsource_t rnd_source;
-	kmutex_t *sc_lock;			/* lock for softc operations */
+	kmutex_t *sc_mcast_lock;	/* lock for SIOCADD/DELMULTI */
+	kmutex_t *sc_intr_lock;		/* lock for interrupt operations */
 
-	struct if_percpuq *sc_ipq;		/* softint-based input queues */
+	struct if_percpuq *sc_ipq;	/* softint-based input queues */
 
 	void (*sc_set_speed)(struct dwc_gmac_softc *, int);
 };
 
-int dwc_gmac_attach(struct dwc_gmac_softc*, int /*phy_id*/,
+int dwc_gmac_attach(struct dwc_gmac_softc *, int /*phy_id*/,
     uint32_t /*mii_clk*/);
-int dwc_gmac_intr(struct dwc_gmac_softc*);
+int dwc_gmac_intr(struct dwc_gmac_softc *);

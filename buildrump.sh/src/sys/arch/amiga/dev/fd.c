@@ -1,4 +1,4 @@
-/*	$NetBSD: fd.c,v 1.100 2021/08/17 22:00:27 andvar Exp $ */
+/*	$NetBSD: fd.c,v 1.104 2023/10/14 08:05:26 andvar Exp $ */
 
 /*
  * Copyright (c) 1994 Christian E. Hopps
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.100 2021/08/17 22:00:27 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fd.c,v 1.104 2023/10/14 08:05:26 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -84,7 +84,7 @@ bunghole :-) */
 #define FDSECLWORDS	(128)
 
 #define FDSETTLEDELAY	(18000)	/* usec delay after seeking after switch dir */
-#define FDSTEPDELAY	(3500)	/* usec delay after steping */
+#define FDSTEPDELAY	(3500)	/* usec delay after stepping */
 #define FDPRESIDEDELAY	(1000)	/* usec delay before writing can occur */
 #define FDWRITEDELAY	(1300)	/* usec delay after write */
 
@@ -159,7 +159,7 @@ struct fd_softc {
 	int curcyl;		/* current curcyl head positioned on */
 	int flags;		/* misc flags */
 	int wlabel;
-	int stepdelay;		/* useq to delay after seek user setable */
+	int stepdelay;		/* useq to delay after seek user settable */
 	int nsectors;		/* number of sectors per track */
 	int openpart;		/* which partition [ab] == [12] is open */
 	short retries;		/* number of times to retry failed io */
@@ -230,7 +230,7 @@ u_short	*msblkencode(u_short *, u_char *, int, u_short *);
  * read size is (nsectors + 1) * mfm secsize + gap bytes + 2 shorts
  * write size is nsectors * mfm secsize + gap bytes + 3 shorts
  * the extra shorts are to deal with a DMA hw bug in the controller
- * they are probably too much (I belive the bug is 1 short on write and
+ * they are probably too much (I believe the bug is 1 short on write and
  * 3 bits on read) but there is no need to be cheap here.
  */
 #define MAXTRKSZ (22 * FDSECSIZE)
@@ -877,7 +877,7 @@ fdsetdisklabel(struct fd_softc *sc, struct disklabel *lp)
 	/*
 	 * make sure selected partition is within bounds
 	 * XXX on the second check, its to handle a bug in
-	 * XXX the cluster routines as they require mutliples
+	 * XXX the cluster routines as they require multiples
 	 * XXX of PAGE_SIZE currently
 	 */
 	if ((pp->p_offset + pp->p_size >= lp->d_secperunit) ||
@@ -1162,7 +1162,7 @@ fdselunit(struct fd_softc *sc)
 
 /*
  * process next buf on device queue.
- * normall sequence of events:
+ * normal sequence of events:
  * fdstart() -> fddmastart();
  * fdidxintr();
  * fdintr() -> fddmadone() -> fddone();
@@ -1182,7 +1182,7 @@ fdstart(struct fd_softc *sc)
 #endif
 
 	/*
-	 * if DMA'ing just return. we must have been called from fdstartegy.
+	 * if DMA'ing just return. we must have been called from fdstrategy.
 	 */
 	if (fdc_indma)
 		return;
@@ -1675,11 +1675,11 @@ fdminphys(struct buf *bp)
 	toff = sec * FDSECSIZE;
 	tsz = sc->nsectors * FDSECSIZE;
 #ifdef FDDEBUG
-	printf("fdminphys: before %ld", bp->b_bcount);
+	printf("fdminphys: before %d", bp->b_bcount);
 #endif
 	bp->b_bcount = uimin(bp->b_bcount, tsz - toff);
 #ifdef FDDEBUG
-	printf(" after %ld\n", bp->b_bcount);
+	printf(" after %d\n", bp->b_bcount);
 #endif
 	minphys(bp);
 }
@@ -2142,7 +2142,7 @@ msblkencode(u_short *rp, u_char *cp, int len, u_short *crc)
 		td = (msencode[*cp >> 4] << 8) | msencode[*cp & 0x0f];
 
 		/* Check for zeros in top bit of encode and bottom
-		 * bit of previous encode.  if so, slap a one in betweem
+		 * bit of previous encode.  if so, slap a one in between
 		 * them.
 		 */
 		if ((td & 0x140) == 0)

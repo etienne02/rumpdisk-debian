@@ -1,4 +1,4 @@
-/*	$NetBSD: cpuctl.c,v 1.31 2020/04/21 02:56:37 msaitoh Exp $	*/
+/*	$NetBSD: cpuctl.c,v 1.35 2023/09/13 06:53:23 wiz Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008, 2009, 2012, 2015 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #ifndef lint
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: cpuctl.c,v 1.31 2020/04/21 02:56:37 msaitoh Exp $");
+__RCSID("$NetBSD: cpuctl.c,v 1.35 2023/09/13 06:53:23 wiz Exp $");
 #endif /* not lint */
 
 #include <sys/param.h>
@@ -132,12 +132,12 @@ usage(void)
 {
 	const char *progname = getprogname();
 
-	fprintf(stderr, "usage: %s identify cpuno\n", progname);
+	fprintf(stderr, "usage: %s identify cpuno [cpuno ..]\n", progname);
 	fprintf(stderr, "       %s list\n", progname);
-	fprintf(stderr, "       %s offline cpuno\n", progname);
-	fprintf(stderr, "       %s online cpuno\n", progname);
-	fprintf(stderr, "       %s intr cpuno\n", progname);
-	fprintf(stderr, "       %s nointr cpuno\n", progname);
+	fprintf(stderr, "       %s offline cpuno [cpuno ..]\n", progname);
+	fprintf(stderr, "       %s online cpuno [cpuno ..]\n", progname);
+	fprintf(stderr, "       %s intr cpuno [cpuno ..]\n", progname);
+	fprintf(stderr, "       %s nointr cpuno [cpuno ..]\n", progname);
 	fprintf(stderr, "       %s ucode [cpuno] [file]\n", progname);
 	exit(EXIT_FAILURE);
 	/* NOTREACHED */
@@ -247,7 +247,8 @@ cpu_ucode(char **argv)
 		cpuset_destroy(cpuset);
 	}
 	error = ioctl(fd, IOC_CPU_UCODE_APPLY, &uc);
-	if (error < 0) {
+	if (error < 0 && (verbose || errno != EEXIST)) {
+		warnx("please also check dmesg(8) output for additional error information");
 		if (uc.fwname[0])
 			err(EXIT_FAILURE, "%s", uc.fwname);
 		else
@@ -295,6 +296,9 @@ getcpuid(char *arg)
 	char *argp;
 	u_int id;
 	long np;
+
+	if (strncmp(arg, "cpu", 3) == 0)
+		arg += 3;
 
 	id = (u_int)strtoul(arg, &argp, 0);
 	if (*argp != '\0')

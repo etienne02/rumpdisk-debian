@@ -1,11 +1,11 @@
-/*	$NetBSD: mainbus.c,v 1.4 2021/08/07 16:19:03 thorpej Exp $	*/
+/*	$NetBSD: mainbus.c,v 1.7 2024/08/04 08:16:25 skrll Exp $	*/
 
 /*-
- * Copyright (c) 2014 The NetBSD Foundation, Inc.
+ * Copyright (c) 2022 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
- * by Matt Thomas of 3am Software Foundry.
+ * by Nick Hudson
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,48 +29,99 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "locators.h"
+#include "opt_console.h"
+#include "opt_efi.h"
+#include "opt_modular.h"
 
 #include <sys/cdefs.h>
 
-__RCSID("$NetBSD: mainbus.c,v 1.4 2021/08/07 16:19:03 thorpej Exp $");
+__RCSID("$NetBSD: mainbus.c,v 1.7 2024/08/04 08:16:25 skrll Exp $");
 
 #include <sys/param.h>
-#include <sys/systm.h>
+#include <sys/types.h>
+
+#include <sys/bus.h>
 #include <sys/device.h>
+#include <sys/systm.h>
 
-#include <riscv/locore.h>
+#include <uvm/uvm_extern.h>
 
-static int mainbus_match(device_t, cfdata_t, void *);
-static void mainbus_attach(device_t, device_t, void *);
+#include <dev/fdt/fdtvar.h>
 
-CFATTACH_DECL_NEW(mainbus, 0,
-    mainbus_match, mainbus_attach, NULL, NULL);
+#ifdef CONSADDR
+#include <dev/ic/comreg.h>
+#include <dev/ic/comvar.h>
+#endif
 
-static int
-mainbus_print(void *aux, const char *name)
+#include <machine/sysreg.h>
+
+extern struct bus_space riscv_generic_bs_tag;
+
+bus_space_tag_t
+fdtbus_bus_tag_create(int phandle, uint32_t flags)
 {
-	struct mainbus_attach_args * const maa = aux;
-
-	if (maa->maa_instance != MAINBUSCF_INSTANCE_DEFAULT)
-		printf(" instance %d", maa->maa_instance);
-
-	return QUIET;
+	return &riscv_generic_bs_tag;
 }
 
-int
+static inline bool
+cpu_earlydevice_va_p(void)
+{
+
+	return __SHIFTOUT(csr_satp_read(), SATP_MODE);
+}
+
+void com_platform_early_putchar(char);
+
+void __noasan
+com_platform_early_putchar(char c)
+{
+#ifdef CONSADDR
+#define CONSADDR_VA	(VM_KERNEL_IO_BASE + (CONSADDR & SEGOFSET))
+
+	volatile uint8_t *uartaddr = cpu_earlydevice_va_p() ?
+	    (volatile uint8_t *)CONSADDR_VA :
+	    (volatile uint8_t *)CONSADDR;
+
+	while ((uartaddr[com_lsr] & LSR_TXRDY) == 0)
+		;
+
+	uartaddr[com_data] = c;
+#endif
+}
+
+static int
 mainbus_match(device_t parent, cfdata_t cf, void *aux)
 {
+	static int once = 0;
+
+	if (once != 0)
+		return 0;
+	once = 1;
+
 	return 1;
 }
 
-void
+
+static void
+mainbus_attach_devicetree(device_t self)
+{
+	struct fdt_attach_args faa = {
+		.faa_name = "",
+		.faa_phandle = OF_peer(0),
+		.faa_bst = &riscv_generic_bs_tag,
+	};
+
+	aprint_normal("\n");
+
+	config_found(self, &faa, NULL, CFARGS(.iattr = "fdt"));
+}
+
+static void
 mainbus_attach(device_t parent, device_t self, void *aux)
 {
-	struct mainbus_attach_args maa;
-
-	maa.maa_name = "cpu";
-	maa.maa_instance = 0;
-
-	config_found(self, &maa, mainbus_print, CFARGS_NONE);
+	if (fdtbus_get_data() != NULL) {
+		mainbus_attach_devicetree(self);
+	}
 }
+
+CFATTACH_DECL_NEW(mainbus, 0, mainbus_match, mainbus_attach, NULL, NULL);

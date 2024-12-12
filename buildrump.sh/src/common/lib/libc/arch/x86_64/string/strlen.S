@@ -1,4 +1,4 @@
-/*	$NetBSD: strlen.S,v 1.6 2014/03/22 19:16:34 jakllsch Exp $	*/
+/*	$NetBSD: strlen.S,v 1.8 2024/03/30 22:03:39 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -37,13 +37,13 @@
 #include <machine/asm.h>
 
 #if defined(LIBC_SCCS)
-	RCSID("$NetBSD: strlen.S,v 1.6 2014/03/22 19:16:34 jakllsch Exp $")
+	RCSID("$NetBSD: strlen.S,v 1.8 2024/03/30 22:03:39 andvar Exp $")
 #endif
 
 /*
  * There are many well known branch-free sequences which are used
  * for determining whether a zero-byte is contained within a word.
- * These sequences are generally much more efficent than loading
+ * These sequences are generally much more efficient than loading
  * and comparing each byte individually.
  *
  * The expression [1,2]:
@@ -108,7 +108,7 @@
  * to load constants.
  *
  *
- * [1] Henry S. Warren Jr., "Hacker's Delight", Addison-Westley 2003
+ * [1] Henry S. Warren Jr., "Hacker's Delight", Addison-Wesley 2003
  *
  * [2] International Business Machines, "The PowerPC Compiler Writer's
  *     Guide", Warthman Associates, 1996

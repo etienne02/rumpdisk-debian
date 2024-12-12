@@ -1,4 +1,4 @@
-/*	$NetBSD: nouveau_nvkm_subdev_instmem_nv40.c,v 1.8 2020/02/14 04:30:05 riastradh Exp $	*/
+/*	$NetBSD: nouveau_nvkm_subdev_instmem_nv40.c,v 1.11 2021/12/19 12:31:19 riastradh Exp $	*/
 
 /*
  * Copyright 2012 Red Hat Inc.
@@ -24,12 +24,11 @@
  * Authors: Ben Skeggs
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nouveau_nvkm_subdev_instmem_nv40.c,v 1.8 2020/02/14 04:30:05 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nouveau_nvkm_subdev_instmem_nv40.c,v 1.11 2021/12/19 12:31:19 riastradh Exp $");
 
 #define nv40_instmem(p) container_of((p), struct nv40_instmem, base)
 #include "priv.h"
 
-#include <core/memory.h>
 #include <core/ramht.h>
 #include <engine/gr/nv40.h>
 
@@ -51,30 +50,48 @@ struct nv40_instmem {
 /******************************************************************************
  * instmem object implementation
  *****************************************************************************/
-#define nv40_instobj(p) container_of((p), struct nv40_instobj, memory)
+#define nv40_instobj(p) container_of((p), struct nv40_instobj, base.memory)
 
 struct nv40_instobj {
-	struct nvkm_memory memory;
+	struct nvkm_instobj base;
 	struct nv40_instmem *imem;
 	struct nvkm_mm_node *node;
 };
 
-static enum nvkm_memory_target
-nv40_instobj_target(struct nvkm_memory *memory)
+static void
+nv40_instobj_wr32(struct nvkm_memory *memory, u64 offset, u32 data)
 {
-	return NVKM_MEM_TARGET_INST;
+	struct nv40_instobj *iobj = nv40_instobj(memory);
+#ifdef __NetBSD__
+	bus_space_write_stream_4(iobj->imem->iomemt, iobj->imem->iomemh,
+	    iobj->node->offset + offset, data);
+#else
+	iowrite32_native(data, iobj->imem->iomem + iobj->node->offset + offset);
+#endif
 }
 
-static u64
-nv40_instobj_addr(struct nvkm_memory *memory)
+static u32
+nv40_instobj_rd32(struct nvkm_memory *memory, u64 offset)
 {
-	return nv40_instobj(memory)->node->offset;
+	struct nv40_instobj *iobj = nv40_instobj(memory);
+#ifdef __NetBSD__
+	return bus_space_read_stream_4(iobj->imem->iomemt, iobj->imem->iomemh,
+	    iobj->node->offset + offset);
+#else
+	return ioread32_native(iobj->imem->iomem + iobj->node->offset + offset);
+#endif
 }
 
-static u64
-nv40_instobj_size(struct nvkm_memory *memory)
+static const struct nvkm_memory_ptrs
+nv40_instobj_ptrs = {
+	.rd32 = nv40_instobj_rd32,
+	.wr32 = nv40_instobj_wr32,
+};
+
+static void
+nv40_instobj_release(struct nvkm_memory *memory)
 {
-	return nv40_instobj(memory)->node->length;
+	wmb();
 }
 
 static void __iomem *
@@ -84,35 +101,22 @@ nv40_instobj_acquire(struct nvkm_memory *memory)
 	return iobj->imem->iomem + iobj->node->offset;
 }
 
-static void
-nv40_instobj_release(struct nvkm_memory *memory)
+static u64
+nv40_instobj_size(struct nvkm_memory *memory)
 {
+	return nv40_instobj(memory)->node->length;
 }
 
-static u32
-nv40_instobj_rd32(struct nvkm_memory *memory, u64 offset)
+static u64
+nv40_instobj_addr(struct nvkm_memory *memory)
 {
-	struct nv40_instobj *iobj = nv40_instobj(memory);
-#ifdef __NetBSD__
-	offset += iobj->node->offset;
-	return bus_space_read_stream_4(iobj->imem->iomemt, iobj->imem->iomemh,
-	    offset);
-#else
-	return ioread32_native(iobj->imem->iomem + iobj->node->offset + offset);
-#endif
+	return nv40_instobj(memory)->node->offset;
 }
 
-static void
-nv40_instobj_wr32(struct nvkm_memory *memory, u64 offset, u32 data)
+static enum nvkm_memory_target
+nv40_instobj_target(struct nvkm_memory *memory)
 {
-	struct nv40_instobj *iobj = nv40_instobj(memory);
-#ifdef __NetBSD__
-	offset += iobj->node->offset;
-	bus_space_write_stream_4(iobj->imem->iomemt, iobj->imem->iomemh,
-	    offset, data);
-#else
-	iowrite32_native(data, iobj->imem->iomem + iobj->node->offset + offset);
-#endif
+	return NVKM_MEM_TARGET_INST;
 }
 
 static void *
@@ -122,6 +126,7 @@ nv40_instobj_dtor(struct nvkm_memory *memory)
 	mutex_lock(&iobj->imem->base.subdev.mutex);
 	nvkm_mm_free(&iobj->imem->heap, &iobj->node);
 	mutex_unlock(&iobj->imem->base.subdev.mutex);
+	nvkm_instobj_dtor(&iobj->imem->base, &iobj->base);
 	return iobj;
 }
 
@@ -133,8 +138,6 @@ nv40_instobj_func = {
 	.addr = nv40_instobj_addr,
 	.acquire = nv40_instobj_acquire,
 	.release = nv40_instobj_release,
-	.rd32 = nv40_instobj_rd32,
-	.wr32 = nv40_instobj_wr32,
 };
 
 static int
@@ -147,9 +150,10 @@ nv40_instobj_new(struct nvkm_instmem *base, u32 size, u32 align, bool zero,
 
 	if (!(iobj = kzalloc(sizeof(*iobj), GFP_KERNEL)))
 		return -ENOMEM;
-	*pmemory = &iobj->memory;
+	*pmemory = &iobj->base.memory;
 
-	nvkm_memory_ctor(&nv40_instobj_func, &iobj->memory);
+	nvkm_instobj_ctor(&nv40_instobj_func, &imem->base, &iobj->base);
+	iobj->base.memory.ptrs = &nv40_instobj_ptrs;
 	iobj->imem = imem;
 
 	mutex_lock(&imem->base.subdev.mutex);
@@ -207,7 +211,7 @@ nv40_instmem_oneinit(struct nvkm_instmem *base)
 	imem->base.reserved += 512 * 1024;	/* object storage */
 	imem->base.reserved = round_up(imem->base.reserved, 4096);
 
-	ret = nvkm_mm_init(&imem->heap, 0, imem->base.reserved, 1);
+	ret = nvkm_mm_init(&imem->heap, 0, 0, imem->base.reserved, 1);
 	if (ret)
 		return ret;
 
@@ -245,10 +249,10 @@ static void *
 nv40_instmem_dtor(struct nvkm_instmem *base)
 {
 	struct nv40_instmem *imem = nv40_instmem(base);
-	nvkm_memory_del(&imem->base.ramfc);
-	nvkm_memory_del(&imem->base.ramro);
+	nvkm_memory_unref(&imem->base.ramfc);
+	nvkm_memory_unref(&imem->base.ramro);
 	nvkm_ramht_del(&imem->base.ramht);
-	nvkm_memory_del(&imem->base.vbios);
+	nvkm_memory_unref(&imem->base.vbios);
 	nvkm_mm_fini(&imem->heap);
 	if (imem->iomem)
 #ifdef __NetBSD__
@@ -266,7 +270,6 @@ nv40_instmem = {
 	.rd32 = nv40_instmem_rd32,
 	.wr32 = nv40_instmem_wr32,
 	.memory_new = nv40_instobj_new,
-	.persistent = false,
 	.zero = false,
 };
 
@@ -299,7 +302,7 @@ nv40_instmem_new(struct nvkm_device *device, int index,
 	iomemsz = device->func->resource_size(device, bar);
 	/* XXX errno NetBSD->Linux */
 	ret = -bus_space_map(imem->iomemt, iomembase, iomemsz,
-	    BUS_SPACE_MAP_LINEAR, &imem->iomemh);
+	    BUS_SPACE_MAP_LINEAR|BUS_SPACE_MAP_PREFETCHABLE, &imem->iomemh);
 	if (ret) {
 		nvkm_error(&imem->base.subdev, "unable to map PRAMIN BAR %d"
 		    ": %d\n", bar, ret);
@@ -309,8 +312,8 @@ nv40_instmem_new(struct nvkm_device *device, int index,
 	imem->iomem = bus_space_vaddr(imem->iomemt, imem->iomemh);
     }
 #else
-	imem->iomem = ioremap(device->func->resource_addr(device, bar),
-			      device->func->resource_size(device, bar));
+	imem->iomem = ioremap_wc(device->func->resource_addr(device, bar),
+				 device->func->resource_size(device, bar));
 	if (!imem->iomem) {
 		nvkm_error(&imem->base.subdev, "unable to map PRAMIN BAR\n");
 		return -EFAULT;

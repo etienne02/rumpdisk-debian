@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.130 2016/12/22 14:47:54 cherry Exp $	*/
+/*	$NetBSD: machdep.c,v 1.134 2024/03/05 14:15:28 thorpej Exp $	*/
 /*	$OpenBSD: machdep.c,v 1.36 1999/05/22 21:22:19 weingart Exp $	*/
 
 /*
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.130 2016/12/22 14:47:54 cherry Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.134 2024/03/05 14:15:28 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_ddbparam.h"
@@ -55,7 +55,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.130 2016/12/22 14:47:54 cherry Exp $")
 #include <sys/reboot.h>
 #include <sys/conf.h>
 #include <sys/file.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <sys/ioctl.h>
@@ -200,7 +199,7 @@ mach_init(int argc, char *argv[], u_int bim, void *bip)
 		bootinfo_msg = "no bootinfo found. (old bootblocks?)\n";
 
 	/* clear the BSS segment in kernel code */
-#if NKSYM > 0 || defined(DDB) || defined(MODULAR)
+#if NKSYMS > 0 || defined(DDB) || defined(MODULAR)
 	bi_syms = lookup_bootinfo(BTINFO_SYMTAB);
 
 	/* check whether there is valid bootinfo symtab info */
@@ -492,8 +491,6 @@ cpu_startup(void)
 #endif
 
 	cpu_startup_common();
-
-	arc_bus_space_malloc_set_safe();
 }
 
 void *
@@ -543,12 +540,6 @@ cpu_reboot(int howto, char *bootstr)
 		 */
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 	(void)splhigh();		/* extreme priority */
 

@@ -38,7 +38,7 @@
 # Configuration
 
 ZIP_UTILITY="/cygdrive/c/windows/pkzip25.exe"
-ACPISRC="libraries/acpisrc.exe"
+ACPISRC="libraries/acpisrc_dbg.exe"
 DOS2UNIX="dos2unix"
 UNIX2DOS="unix2dos"
 
@@ -407,7 +407,6 @@ generate_binary_package()
 	#
 	mkdir $TEMP_DIR
 	cp -r documents/changes.txt     $TEMP_DIR/changes.txt
-	cp documents/aslcompiler.pdf    $TEMP_DIR
 	cp libraries/acpibin.exe        $TEMP_DIR
 	cp libraries/acpidump.exe       $TEMP_DIR
 	cp libraries/acpiexec.exe       $TEMP_DIR

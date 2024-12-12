@@ -1,4 +1,4 @@
-/* $NetBSD: sha2.c,v 1.24 2013/06/09 19:46:56 christos Exp $ */
+/* $NetBSD: sha2.c,v 1.26 2024/01/20 14:55:02 christos Exp $ */
 /*	$KAME: sha2.c,v 1.9 2003/07/20 00:28:38 itojun Exp $	*/
 
 /*
@@ -43,7 +43,7 @@
 #include <sys/cdefs.h>
 
 #if defined(_KERNEL) || defined(_STANDALONE)
-__KERNEL_RCSID(0, "$NetBSD: sha2.c,v 1.24 2013/06/09 19:46:56 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sha2.c,v 1.26 2024/01/20 14:55:02 christos Exp $");
 
 #include <sys/param.h>	/* XXX: to pull <machine/macros.h> for vax memset(9) */
 #include <lib/libkern/libkern.h>
@@ -51,12 +51,16 @@ __KERNEL_RCSID(0, "$NetBSD: sha2.c,v 1.24 2013/06/09 19:46:56 christos Exp $");
 #else
 
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: sha2.c,v 1.24 2013/06/09 19:46:56 christos Exp $");
+__RCSID("$NetBSD: sha2.c,v 1.26 2024/01/20 14:55:02 christos Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #include "namespace.h"
 #include <string.h>
 
+#endif
+
+#ifndef _LIBC_INTERNAL
+#define _LIBC_INTERNAL
 #endif
 
 #include <sys/types.h>
@@ -122,10 +126,6 @@ __RCSID("$NetBSD: sha2.c,v 1.24 2013/06/09 19:46:56 christos Exp $");
  * only.
  */
 static void SHA512_Last(SHA512_CTX *);
-void SHA224_Transform(SHA224_CTX *, const uint32_t*);
-void SHA256_Transform(SHA256_CTX *, const uint32_t*);
-void SHA384_Transform(SHA384_CTX *, const uint64_t*);
-void SHA512_Transform(SHA512_CTX *, const uint64_t*);
 
 
 /*** SHA-XYZ INITIAL HASH VALUES AND CONSTANTS ************************/
@@ -572,7 +572,7 @@ SHA224_256_Final(uint8_t digest[], SHA256_CTX *context, size_t len)
 }
 
 int
-SHA256_Final(uint8_t digest[], SHA256_CTX *context)
+SHA256_Final(uint8_t digest[SHA256_DIGEST_LENGTH], SHA256_CTX *context)
 {
 	return SHA224_256_Final(digest, context, SHA256_DIGEST_LENGTH);
 }
@@ -606,7 +606,7 @@ SHA224_Transform(SHA224_CTX *context, const uint32_t *data)
 }
 
 int
-SHA224_Final(uint8_t digest[], SHA224_CTX *context)
+SHA224_Final(uint8_t digest[SHA224_DIGEST_LENGTH], SHA224_CTX *context)
 {
 	return SHA224_256_Final(digest, (SHA256_CTX *)context,
 	    SHA224_DIGEST_LENGTH);
@@ -899,7 +899,7 @@ SHA512_Last(SHA512_CTX *context)
 }
 
 int
-SHA512_Final(uint8_t digest[], SHA512_CTX *context)
+SHA512_Final(uint8_t digest[SHA512_DIGEST_LENGTH], SHA512_CTX *context)
 {
 	size_t i;
 
@@ -946,7 +946,7 @@ SHA384_Transform(SHA512_CTX *context, const uint64_t *data)
 }
 
 int
-SHA384_Final(uint8_t digest[], SHA384_CTX *context)
+SHA384_Final(uint8_t digest[SHA384_DIGEST_LENGTH], SHA384_CTX *context)
 {
 	size_t i;
 

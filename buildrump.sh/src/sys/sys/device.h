@@ -1,4 +1,4 @@
-/* $NetBSD: device.h,v 1.174 2021/08/15 22:08:01 thorpej Exp $ */
+/* $NetBSD: device.h,v 1.189 2024/08/27 13:44:55 thorpej Exp $ */
 
 /*
  * Copyright (c) 2021 The NetBSD Foundation, Inc.
@@ -168,7 +168,7 @@ struct devhandle {
 		void *			pointer;
 		const void *		const_pointer;
 		uintptr_t		uintptr;
-		int			integer;
+		intptr_t		integer;
 	};
 };
 typedef struct devhandle devhandle_t;
@@ -188,20 +188,10 @@ struct device_compatible_entry {
 
 #define	DEVICE_COMPAT_EOL	{ .compat = NULL }
 
-struct device_lock {
-	int		dvl_nwait;
-	int		dvl_nlock;
-	lwp_t		*dvl_holder;
-	kmutex_t	dvl_mtx;
-	kcondvar_t	dvl_cv;
-};
-
 struct device_suspensor {
 	const device_suspensor_t	*ds_delegator;
 	char				ds_name[32];
 };
-
-#define	DEVICE_SUSPENSORS_MAX	16
 
 struct device_garbage {
 	device_t	*dg_devs;
@@ -255,69 +245,13 @@ struct devhandle_impl {
 /* Max size of a device external name (including terminating NUL) */
 #define	DEVICE_XNAME_SIZE	16
 
-struct device {
-	devhandle_t	dv_handle;	/* this device's handle;
-					   new device_t's get INVALID */
-	devclass_t	dv_class;	/* this device's classification */
-	TAILQ_ENTRY(device) dv_list;	/* entry on list of all devices */
-	cfdata_t	dv_cfdata;	/* config data that found us
-					   (NULL if pseudo-device) */
-	cfdriver_t	dv_cfdriver;	/* our cfdriver */
-	cfattach_t	dv_cfattach;	/* our cfattach */
-	int		dv_unit;	/* device unit number */
-					/* external name (name + unit) */
-	char		dv_xname[DEVICE_XNAME_SIZE];
-	device_t	dv_parent;	/* pointer to parent device
-					   (NULL if pseudo- or root node) */
-	int		dv_depth;	/* number of parents until root */
-	int		dv_flags;	/* misc. flags; see below */
-	void		*dv_private;	/* this device's private storage */
-	int		*dv_locators;	/* our actual locators (optional) */
-	prop_dictionary_t dv_properties;/* properties dictionary */
+struct device;
 
-	int		dv_pending;	/* config_pending count */
-	TAILQ_ENTRY(device) dv_pending_list;
-
-	struct lwp	*dv_detaching;	/* detach lock (config_misc_lock/cv) */
-
-	size_t		dv_activity_count;
-	void		(**dv_activity_handlers)(device_t, devactive_t);
-
-	bool		(*dv_driver_suspend)(device_t, const pmf_qual_t *);
-	bool		(*dv_driver_resume)(device_t, const pmf_qual_t *);
-	bool		(*dv_driver_shutdown)(device_t, int);
-	bool		(*dv_driver_child_register)(device_t);
-
-	void		*dv_bus_private;
-	bool		(*dv_bus_suspend)(device_t, const pmf_qual_t *);
-	bool		(*dv_bus_resume)(device_t, const pmf_qual_t *);
-	bool		(*dv_bus_shutdown)(device_t, int);
-	void		(*dv_bus_deregister)(device_t);
-
-	void		*dv_class_private;
-	bool		(*dv_class_suspend)(device_t, const pmf_qual_t *);
-	bool		(*dv_class_resume)(device_t, const pmf_qual_t *);
-	void		(*dv_class_deregister)(device_t);
-
-	devgen_t		dv_add_gen,
-				dv_del_gen;
-
-	struct device_lock	dv_lock;
-	const device_suspensor_t
-	    *dv_bus_suspensors[DEVICE_SUSPENSORS_MAX],
-	    *dv_driver_suspensors[DEVICE_SUSPENSORS_MAX],
-	    *dv_class_suspensors[DEVICE_SUSPENSORS_MAX];
-	struct device_garbage dv_garbage;
-};
-
-/* dv_flags */
-#define	DVF_ACTIVE		0x0001	/* device is activated */
+/*
+ * struct cfattach::ca_flags (must not overlap with device_impl.h
+ * struct device::dv_flags for now)
+ */
 #define	DVF_PRIV_ALLOC		0x0002	/* device private storage != device */
-#define	DVF_POWER_HANDLERS	0x0004	/* device has suspend/resume support */
-#define	DVF_CLASS_SUSPENDED	0x0008	/* device class suspend was called */
-#define	DVF_DRIVER_SUSPENDED	0x0010	/* device driver suspend was called */
-#define	DVF_BUS_SUSPENDED	0x0020	/* device bus suspend was called */
-#define	DVF_ATTACH_INPROGRESS	0x0040	/* device attach is in progress */
 #define	DVF_DETACH_SHUTDOWN	0x0080	/* device detaches safely at shutdown */
 
 #ifdef _KERNEL
@@ -620,15 +554,22 @@ device_t config_found(device_t, void *, cfprint_t, const struct cfargs *);
 device_t config_rootfound(const char *, void *);
 device_t config_attach(device_t, cfdata_t, void *, cfprint_t,
 	    const struct cfargs *);
+device_t config_found_acquire(device_t, void *, cfprint_t,
+	    const struct cfargs *);
+device_t config_attach_acquire(device_t, cfdata_t, void *, cfprint_t,
+	    const struct cfargs *);
 int	config_match(device_t, cfdata_t, void *);
 int	config_probe(device_t, cfdata_t, void *);
 
 bool	ifattr_match(const char *, const char *);
 
 device_t config_attach_pseudo(cfdata_t);
+device_t config_attach_pseudo_acquire(cfdata_t, void *);
 
 int	config_detach(device_t, int);
+int	config_detach_release(device_t, int);
 int	config_detach_children(device_t, int flags);
+void	config_detach_commit(device_t);
 bool	config_detach_all(int);
 int	config_deactivate(device_t);
 void	config_defer(device_t, void (*)(device_t));
@@ -651,6 +592,11 @@ void	null_childdetached(device_t, device_t);
 
 device_t	device_lookup(cfdriver_t, int);
 void		*device_lookup_private(cfdriver_t, int);
+
+device_t	device_lookup_acquire(cfdriver_t, int);
+void		device_acquire(device_t);
+void		device_release(device_t);
+
 void		device_register(device_t, void *);
 void		device_register_post_config(device_t, void *);
 
@@ -667,18 +613,25 @@ bool		device_is_enabled(device_t);
 bool		device_has_power(device_t);
 int		device_locator(device_t, u_int);
 void		*device_private(device_t);
+void		device_set_private(device_t, void *);
 prop_dictionary_t device_properties(device_t);
 void		device_set_handle(device_t, devhandle_t);
 devhandle_t	device_handle(device_t);
 
 bool		devhandle_is_valid(devhandle_t);
-void		devhandle_invalidate(devhandle_t *);
+devhandle_t	devhandle_invalid(void);
 devhandle_type_t devhandle_type(devhandle_t);
+int		devhandle_compare(devhandle_t, devhandle_t);
+devhandle_t	devhandle_subclass(devhandle_t, struct devhandle_impl *,
+		    device_call_t (*)(devhandle_t, const char *,
+				      devhandle_t *));
 
 device_call_t	devhandle_lookup_device_call(devhandle_t, const char *,
 		    devhandle_t *);
-void		devhandle_impl_inherit(struct devhandle_impl *,
-		    const struct devhandle_impl *);
+void		devhandle_impl_subclass(struct devhandle_impl *,
+		    const struct devhandle_impl *,
+		    device_call_t (*)(devhandle_t, const char *,
+				      devhandle_t *));
 
 device_t	deviter_first(deviter_t *, deviter_flags_t);
 void		deviter_init(deviter_t *, deviter_flags_t);
@@ -728,36 +681,14 @@ const struct device_compatible_entry *
 		device_compatible_lookup_id(uintptr_t const, uintptr_t const,
 				const struct device_compatible_entry *);
 
-bool		device_pmf_is_registered(device_t);
-bool		device_pmf_is_registered(device_t);
-
-bool		device_pmf_driver_suspend(device_t, const pmf_qual_t *);
-bool		device_pmf_driver_resume(device_t, const pmf_qual_t *);
-bool		device_pmf_driver_shutdown(device_t, int);
-
-bool		device_pmf_driver_register(device_t,
-		    bool (*)(device_t, const pmf_qual_t *),
-		    bool (*)(device_t, const pmf_qual_t *),
-		    bool (*)(device_t, int));
-void		device_pmf_driver_deregister(device_t);
-
-bool		device_pmf_driver_child_register(device_t);
+void		device_pmf_driver_child_register(device_t);
 void		device_pmf_driver_set_child_register(device_t,
-		    bool (*)(device_t));
+		    void (*)(device_t));
 
 void		*device_pmf_bus_private(device_t);
 bool		device_pmf_bus_suspend(device_t, const pmf_qual_t *);
 bool		device_pmf_bus_resume(device_t, const pmf_qual_t *);
 bool		device_pmf_bus_shutdown(device_t, int);
-
-device_lock_t	device_getlock(device_t);
-void		device_pmf_unlock(device_t);
-bool		device_pmf_lock(device_t);
-
-bool		device_is_self_suspended(device_t);
-void		device_pmf_self_suspend(device_t, const pmf_qual_t *);
-void		device_pmf_self_resume(device_t, const pmf_qual_t *);
-bool		device_pmf_self_wait(device_t, const pmf_qual_t *);
 
 void		device_pmf_bus_register(device_t, void *,
 		    bool (*)(device_t, const pmf_qual_t *),
@@ -765,16 +696,6 @@ void		device_pmf_bus_register(device_t, void *,
 		    bool (*)(device_t, int),
 		    void (*)(device_t));
 void		device_pmf_bus_deregister(device_t);
-
-void		*device_pmf_class_private(device_t);
-bool		device_pmf_class_suspend(device_t, const pmf_qual_t *);
-bool		device_pmf_class_resume(device_t, const pmf_qual_t *);
-
-void		device_pmf_class_register(device_t, void *,
-		    bool (*)(device_t, const pmf_qual_t *),
-		    bool (*)(device_t, const pmf_qual_t *),
-		    void (*)(device_t));
-void		device_pmf_class_deregister(device_t);
 
 device_t	shutdown_first(struct shutdown_state *);
 device_t	shutdown_next(struct shutdown_state *);
@@ -791,21 +712,23 @@ device_t	shutdown_next(struct shutdown_state *);
  * the device autoconfiguration subsystem.  It is the responsibility
  * of each device tree back end to implement these calls.
  *
- * device-enumerate-children
- *
- *	Enumerates the direct children of a device, invoking the
- *	callback for each one.  The callback is passed the devhandle_t
- *	corresponding to the child device, as well as a user-supplied
- *	argument.  If the callback returns true, then enumeration
- *	continues.  If the callback returns false, enumeration is stopped.
+ * We define a generic interface; individual device calls feature
+ * type checking of the argument structure.  The argument structures
+ * and the call binding data are automatically generated from device
+ * call interface descriptions by gendevcalls.awk.
  */
-
-struct device_enumerate_children_args {
-	bool	(*callback)(device_t, devhandle_t, void *);
-	void *	callback_arg;
+struct device_call_generic {
+	const char *name;
+	void *args;
 };
 
-int		device_call(device_t, const char *, void *);
+int		device_call_generic(device_t, devhandle_t,
+		    const struct device_call_generic *);
+
+#define	device_call(dev, call)						\
+	device_call_generic((dev), device_handle(dev), &(call)->generic)
+#define	devhandle_call(handle, call)					\
+	device_call_generic(NULL, (handle), &(call)->generic)
 
 #endif /* _KERNEL */
 

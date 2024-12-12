@@ -1,4 +1,4 @@
-/*	$NetBSD: kbdmap.c.ascii,v 1.4 2007/10/17 19:58:02 garbled Exp $	*/
+/*	$NetBSD: kbdmap.c.ascii,v 1.6 2024/01/07 07:58:33 isaki Exp $	*/
 /* from: arch/amiga/dev/kbdmap.c */
 /* modified for X680x0 by Masaru Oki */
 
@@ -18,7 +18,7 @@
 #define K KBD_MODE_KPAD
 
 struct kbdmap kbdmap;
-struct kbdmap ascii_kbdmap = {
+const struct kbdmap ascii_kbdmap = {
 	/* normal map */
 	{
 	   0, 0,	/* 0x00 */
@@ -176,7 +176,7 @@ struct kbdmap ascii_kbdmap = {
 	   0, ':',
 	   0, '\"',	/* 0x28 */
 	   0, '~',
-	   C, 'Z',	
+	   C, 'Z',
 	   C, 'X',
 	   C, 'C',
 	   C, 'V',
@@ -300,5 +300,3 @@ struct kbdmap ascii_kbdmap = {
 
 unsigned char acctable[KBD_NUM_ACC][64] = {
 };
-
-	

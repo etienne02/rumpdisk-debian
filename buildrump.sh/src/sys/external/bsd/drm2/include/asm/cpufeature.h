@@ -1,4 +1,4 @@
-/*	$NetBSD: cpufeature.h,v 1.5 2020/09/05 07:45:44 maxv Exp $	*/
+/*	$NetBSD: cpufeature.h,v 1.9 2021/12/19 11:52:47 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -32,17 +32,43 @@
 #ifndef	_LINUX_ASM_CPUFEATURE_H_
 #define	_LINUX_ASM_CPUFEATURE_H_
 
-#include <machine/cpu.h>
+#include <sys/cpu.h>
 
 #if defined(__i386__) || defined(__x86_64__)
 
+#include <x86/specialreg.h>
+
 #define	cpu_has_clflush	((cpu_info_primary.ci_feat_val[0] & CPUID_CLFSH) != 0)
 #define	cpu_has_pat	((cpu_info_primary.ci_feat_val[0] & CPUID_PAT) != 0)
+
+#define	X86_FEATURE_CLFLUSH	0
+#define	X86_FEATURE_PAT		1
+
+static inline bool
+static_cpu_has(int feature)
+{
+	switch (feature) {
+	case X86_FEATURE_CLFLUSH:
+		return cpu_has_clflush;
+	case X86_FEATURE_PAT:
+		return cpu_has_pat;
+	default:
+		return false;
+	}
+}
+
+#define	boot_cpu_has	static_cpu_has
 
 static inline size_t
 cache_line_size(void)
 {
 	return cpu_info_primary.ci_cflush_lsize;
+}
+
+static inline void
+clflush(const void *p)
+{
+	asm volatile ("clflush %0" : : "m" (*(const char *)p));
 }
 
 #endif	/* x86 */

@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_309.c,v 1.4 2021/05/16 10:18:25 rillig Exp $	*/
+/*	$NetBSD: msg_309.c,v 1.7 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_309.c"
 
 // Test for message: extra bits set to 0 in conversion of '%s' to '%s', op '%s' [309]
+
+/* lint1-extra-flags: -X 351 */
 
 int
 scale(unsigned long long x) {
@@ -20,7 +22,35 @@ scale(unsigned long long x) {
 	 * bit mask here.  This situation may occur during migration from a
 	 * 32-bit to a 64-bit platform.
 	 */
-	if ((x & 0xffff0000) != 0)	/* expect: 309 */
+	/* expect+1: warning: extra bits set to 0 in conversion of 'unsigned int' to 'unsigned long long', op '&' [309] */
+	if ((x & 0xffff0000) != 0)
+		return 16;
+
+	/*
+	 * The integer constant is explicitly unsigned.  Even in this case,
+	 * the code may have originated on a platform where 'x' had 32 bits
+	 * originally, and the intention may have been to clear the lower 16
+	 * bits.
+	 */
+	/* expect+1: warning: extra bits set to 0 in conversion of 'unsigned int' to 'unsigned long long', op '&' [309] */
+	if ((x & 0xffff0000U) != 0)
+		return 16;
+
+	/*
+	 * Even if the expression is written as '& ~', which makes the
+	 * intention of clearing the lower 16 bits clear, on a 32-bit
+	 * platform the integer constant stays at 32 bits, and when porting
+	 * the code to a 64-bit platform, the upper 32 bits are preserved.
+	 */
+	/* expect+1: warning: extra bits set to 0 in conversion of 'unsigned int' to 'unsigned long long', op '&' [309] */
+	if ((x & ~0xffffU) != 0)
+		return 16;
+
+	/*
+	 * Casting the integer constant to the proper type removes all
+	 * ambiguities about the programmer's intention.
+	 */
+	if ((x & (unsigned long long)~0xffffU) != 0)
 		return 16;
 
 	/*

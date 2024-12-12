@@ -1,4 +1,4 @@
-/*	$NetBSD: nouveau_pci.c,v 1.26 2020/02/03 16:52:13 jmcneill Exp $	*/
+/*	$NetBSD: nouveau_pci.c,v 1.38 2023/08/07 16:34:57 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2015 The NetBSD Foundation, Inc.
@@ -30,31 +30,41 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nouveau_pci.c,v 1.26 2020/02/03 16:52:13 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nouveau_pci.c,v 1.38 2023/08/07 16:34:57 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
+#include "genfb.h"
 #if defined(__arm__) || defined(__aarch64__)
 #include "opt_fdt.h"
 #endif
 #endif
 
 #include <sys/types.h>
+#include <sys/atomic.h>
 #include <sys/device.h>
 #include <sys/queue.h>
 #include <sys/workqueue.h>
 #include <sys/module.h>
 
-#include <drm/drmP.h>
-
-#include <core/device.h>
-#include <core/pci.h>
-
 #ifdef FDT
 #include <dev/fdt/fdtvar.h>
 #endif
 
-#include "nouveau_drm.h"
+#if NGENFB > 0
+#include <dev/wscons/wsdisplayvar.h>
+#include <dev/wsfb/genfbvar.h>
+#endif
+
+#include <drm/drm_ioctl.h>
+#include <drm/drm_pci.h>
+
+#include <core/device.h>
+#include <core/pci.h>
+
+#include "nouveau_drv.h"
 #include "nouveau_pci.h"
+
+struct drm_device;
 
 MODULE(MODULE_CLASS_DRIVER, nouveau_pci, "nouveau,drmkms_pci");
 
@@ -63,17 +73,15 @@ SIMPLEQ_HEAD(nouveau_pci_task_head, nouveau_pci_task);
 struct nouveau_pci_softc {
 	device_t		sc_dev;
 	struct pci_attach_args	sc_pa;
-	enum {
-		NOUVEAU_TASK_ATTACH,
-		NOUVEAU_TASK_WORKQUEUE,
-	}			sc_task_state;
-	union {
-		struct workqueue		*workqueue;
-		struct nouveau_pci_task_head	attach;
-	}			sc_task_u;
+	struct lwp		*sc_task_thread;
+	struct nouveau_pci_task_head sc_tasks;
+	struct workqueue	*sc_task_wq;
 	struct drm_device	*sc_drm_dev;
 	struct pci_dev		sc_pci_dev;
 	struct nvkm_device	*sc_nv_dev;
+	bool			sc_pci_attached;
+	bool			sc_nvdev_inited;
+	bool			sc_dev_registered;
 };
 
 static int	nouveau_pci_match(device_t, cfdata_t, void *);
@@ -108,26 +116,19 @@ nouveau_pci_match(device_t parent, cfdata_t match, void *aux)
 		return 0;
 
 	/*
-	 * NetBSD drm2 doesn't support Pascal, Volta or Turing based cards:
-	 *   0x1580-0x15ff 	GP100
-	 *   0x1b00-0x1b7f 	GP102
-	 *   0x1b80-0x1bff 	GP104
-	 *   0x1c00-0x1c7f 	GP106
-	 *   0x1c80-0x1cff 	GP107
-	 *   0x1d00-0x1d7f 	GP108
-	 *   0x1d80-0x1dff 	GV100
-	 *   0x1e00-0x1e7f 	TU102
-	 *   0x1e80-0x1eff 	TU104
-	 *   0x1f00-0x1f7f 	TU106
-	 *   0x1f80-0x1fff 	TU117
-	 *   0x2180-0x21ff 	TU116
+	 * NetBSD drm2/5.6 doesn't support Ampere (GTX 30 series) based cards:
+	 *   0x2080-0x20ff 	GA100
+	 *   0x2200-0x227f 	GA102
+	 *   0x2300-0x237f 	GA103
+	 *   0x2480-0x24ff 	GA104
+	 *   0x2500-0x257f 	GA106
+	 *   0x2580-0x25ff 	GA107
 	 *
-	 * reduce this to >= 1580, so that new chipsets not explictly
-	 * listed above will be picked up.
-	 *
-	 * XXX perhaps switch this to explicitly match known list.
+	 * TU116 (GTX 16xx) occupies the space from 0x2180-0x21ff.
 	 */
-	if (PCI_PRODUCT(pa->pa_id) >= 0x1580)
+	if (PCI_PRODUCT(pa->pa_id) >= 0x1fff && PCI_PRODUCT(pa->pa_id) < 0x2180)
+		return 0;
+	if (PCI_PRODUCT(pa->pa_id) >= 0x21ff)
 		return 0;
 
 	linux_pci_dev_init(&pdev, parent /* XXX bogus */, parent, pa, 0);
@@ -150,19 +151,25 @@ nouveau_pci_attach(device_t parent, device_t self, void *aux)
 {
 	struct nouveau_pci_softc *const sc = device_private(self);
 	const struct pci_attach_args *const pa = aux;
+	int error;
 
 	pci_aprint_devinfo(pa, NULL);
 
-	if (!pmf_device_register(self, &nouveau_pci_suspend, &nouveau_pci_resume))
-		aprint_error_dev(self, "unable to establish power handler\n");
+	/* Initialize the Linux PCI device descriptor.  */
+	linux_pci_dev_init(&sc->sc_pci_dev, self, device_parent(self), pa, 0);
 
-	/*
-	 * Trivial initialization first; the rest will come after we
-	 * have mounted the root file system and can load firmware
-	 * images.
-	 */
-	sc->sc_dev = NULL;
+	sc->sc_dev = self;
 	sc->sc_pa = *pa;
+	sc->sc_task_thread = NULL;
+	SIMPLEQ_INIT(&sc->sc_tasks);
+	error = workqueue_create(&sc->sc_task_wq, "nouveau_pci",
+	    &nouveau_pci_task_work, NULL, PRI_NONE, IPL_NONE, WQ_MPSAFE);
+	if (error) {
+		aprint_error_dev(self, "unable to create workqueue: %d\n",
+		    error);
+		sc->sc_task_wq = NULL;
+		return;
+	}
 
 #ifdef FDT
 	/*
@@ -173,6 +180,10 @@ nouveau_pci_attach(device_t parent, device_t self, void *aux)
 	fdt_remove_bycompat(fb_compatible);
 #endif
 
+	/*
+	 * Defer the remainder of initialization until we have mounted
+	 * the root file system and can load firmware images.
+	 */
 	config_mountroot(self, &nouveau_pci_attach_real);
 }
 
@@ -180,15 +191,13 @@ static void
 nouveau_pci_attach_real(device_t self)
 {
 	struct nouveau_pci_softc *const sc = device_private(self);
-	const struct pci_attach_args *const pa = &sc->sc_pa;
 	int error;
 
-	sc->sc_dev = self;
-	sc->sc_task_state = NOUVEAU_TASK_ATTACH;
-	SIMPLEQ_INIT(&sc->sc_task_u.attach);
-
-	/* Initialize the Linux PCI device descriptor.  */
-	linux_pci_dev_init(&sc->sc_pci_dev, self, device_parent(self), pa, 0);
+	/*
+	 * Cause any tasks issued synchronously during attach to be
+	 * processed at the end of this function.
+	 */
+	sc->sc_task_thread = curlwp;
 
 	/* XXX errno Linux->NetBSD */
 	error = -nvkm_device_pci_new(&sc->sc_pci_dev,
@@ -198,34 +207,74 @@ nouveau_pci_attach_real(device_t self)
 	if (error) {
 		aprint_error_dev(self, "unable to create nouveau device: %d\n",
 		    error);
-		return;
+		sc->sc_nv_dev = NULL;
+		goto out;
+	}
+
+	sc->sc_drm_dev = drm_dev_alloc(nouveau_drm_driver_pci, self);
+	if (IS_ERR(sc->sc_drm_dev)) {
+		aprint_error_dev(self, "unable to create drm device: %ld\n",
+		    PTR_ERR(sc->sc_drm_dev));
+		sc->sc_drm_dev = NULL;
+		goto out;
 	}
 
 	/* XXX errno Linux->NetBSD */
-	error = -drm_pci_attach(self, pa, &sc->sc_pci_dev,
-	    nouveau_drm_driver_pci, 0, &sc->sc_drm_dev);
+	error = -drm_pci_attach(sc->sc_drm_dev, &sc->sc_pci_dev);
 	if (error) {
 		aprint_error_dev(self, "unable to attach drm: %d\n", error);
-		return;
+		goto out;
 	}
+	sc->sc_pci_attached = true;
 
-	while (!SIMPLEQ_EMPTY(&sc->sc_task_u.attach)) {
+#if NGENFB > 0
+	/*
+	 * If MD initialization has selected this as the console device
+	 * with a firmware-provided framebuffer address, we may have to
+	 * turn it off early, before we are ready to switch the console
+	 * over -- something goes wrong if we're still writing to the
+	 * firmware-provided framebuffer during nouveau initialization.
+	 */
+    {
+	bool is_console;
+	if (prop_dictionary_get_bool(device_properties(self), "is_console",
+		&is_console) &&
+	    is_console &&
+	    genfb_is_console())
+		wsdisplay_predetach();
+    }
+#endif
+
+	/* XXX errno Linux->NetBSD */
+	error = -nouveau_drm_device_init(sc->sc_drm_dev);
+	if (error) {
+		aprint_error_dev(self, "unable to init nouveau: %d\n", error);
+		goto out;
+	}
+	sc->sc_nvdev_inited = true;
+
+	/* XXX errno Linux->NetBSD */
+	error = -drm_dev_register(sc->sc_drm_dev, 0);
+	if (error) {
+		aprint_error_dev(self, "unable to register drm: %d\n", error);
+		goto out;
+	}
+	sc->sc_dev_registered = true;
+
+	if (!pmf_device_register(self, &nouveau_pci_suspend,
+		&nouveau_pci_resume))
+		aprint_error_dev(self, "unable to establish power handler\n");
+
+	while (!SIMPLEQ_EMPTY(&sc->sc_tasks)) {
 		struct nouveau_pci_task *const task =
-		    SIMPLEQ_FIRST(&sc->sc_task_u.attach);
+		    SIMPLEQ_FIRST(&sc->sc_tasks);
 
-		SIMPLEQ_REMOVE_HEAD(&sc->sc_task_u.attach, nt_u.queue);
+		SIMPLEQ_REMOVE_HEAD(&sc->sc_tasks, nt_u.queue);
 		(*task->nt_fn)(task);
 	}
 
-	sc->sc_task_state = NOUVEAU_TASK_WORKQUEUE;
-	error = workqueue_create(&sc->sc_task_u.workqueue, "nouveau_pci",
-	    &nouveau_pci_task_work, NULL, PRI_NONE, IPL_NONE, WQ_MPSAFE);
-	if (error) {
-		aprint_error_dev(self, "unable to create workqueue: %d\n",
-		    error);
-		sc->sc_task_u.workqueue = NULL;
-		return;
-	}
+out:	/* Cause any subesquent tasks to be processed by the workqueue.  */
+	atomic_store_relaxed(&sc->sc_task_thread, NULL);
 }
 
 static int
@@ -234,37 +283,30 @@ nouveau_pci_detach(device_t self, int flags)
 	struct nouveau_pci_softc *const sc = device_private(self);
 	int error;
 
-	if (sc->sc_dev == NULL)
-		/* Not done attaching.  */
-		return EBUSY;
-
 	/* XXX Check for in-use before tearing it all down...  */
 	error = config_detach_children(self, flags);
 	if (error)
 		return error;
 
-	if (sc->sc_task_state == NOUVEAU_TASK_ATTACH)
-		goto out0;
-	if (sc->sc_task_u.workqueue != NULL) {
-		workqueue_destroy(sc->sc_task_u.workqueue);
-		sc->sc_task_u.workqueue = NULL;
-	}
-
-	if (sc->sc_nv_dev == NULL)
-		goto out0;
-
-	if (sc->sc_drm_dev == NULL)
-		goto out1;
-	/* XXX errno Linux->NetBSD */
-	error = -drm_pci_detach(sc->sc_drm_dev, flags);
-	if (error)
-		/* XXX Kinda too late to fail now...  */
-		return error;
-	sc->sc_drm_dev = NULL;
-
-out1:	nvkm_device_del(&sc->sc_nv_dev);
-out0:	linux_pci_dev_destroy(&sc->sc_pci_dev);
 	pmf_device_deregister(self);
+	if (sc->sc_dev_registered)
+		drm_dev_unregister(sc->sc_drm_dev);
+	if (sc->sc_nvdev_inited)
+		nouveau_drm_device_fini(sc->sc_drm_dev);
+	if (sc->sc_pci_attached)
+		drm_pci_detach(sc->sc_drm_dev);
+	if (sc->sc_drm_dev) {
+		drm_dev_put(sc->sc_drm_dev);
+		sc->sc_drm_dev = NULL;
+	}
+	if (sc->sc_nv_dev)
+		nvkm_device_del(&sc->sc_nv_dev);
+	if (sc->sc_task_wq) {
+		workqueue_destroy(sc->sc_task_wq);
+		sc->sc_task_wq = NULL;
+	}
+	linux_pci_dev_destroy(&sc->sc_pci_dev);
+
 	return 0;
 }
 
@@ -275,16 +317,31 @@ static bool
 nouveau_pci_suspend(device_t self, const pmf_qual_t *qual __unused)
 {
 	struct nouveau_pci_softc *const sc = device_private(self);
+	struct drm_device *const dev = sc->sc_drm_dev;
+	int ret;
 
-	return nouveau_pmops_suspend(sc->sc_drm_dev) == 0;
+	drm_suspend_ioctl(dev);
+
+	ret = nouveau_pmops_suspend(dev);
+	if (ret)
+		return false;
+
+	return true;
 }
 
 static bool
 nouveau_pci_resume(device_t self, const pmf_qual_t *qual)
 {
 	struct nouveau_pci_softc *const sc = device_private(self);
+	struct drm_device *const dev = sc->sc_drm_dev;
+	int ret;
 
-	return nouveau_pmops_resume(sc->sc_drm_dev) == 0;
+	ret = nouveau_pmops_resume(sc->sc_drm_dev);
+	if (ret)
+		goto out;
+
+out:	drm_resume_ioctl(dev);
+	return ret == 0;
 }
 
 static void
@@ -296,27 +353,15 @@ nouveau_pci_task_work(struct work *work, void *cookie __unused)
 	(*task->nt_fn)(task);
 }
 
-int
+void
 nouveau_pci_task_schedule(device_t self, struct nouveau_pci_task *task)
 {
 	struct nouveau_pci_softc *const sc = device_private(self);
 
-	switch (sc->sc_task_state) {
-	case NOUVEAU_TASK_ATTACH:
-		SIMPLEQ_INSERT_TAIL(&sc->sc_task_u.attach, task, nt_u.queue);
-		return 0;
-	case NOUVEAU_TASK_WORKQUEUE:
-		if (sc->sc_task_u.workqueue == NULL) {
-			aprint_error_dev(self, "unable to schedule task\n");
-			return EIO;
-		}
-		workqueue_enqueue(sc->sc_task_u.workqueue, &task->nt_u.work,
-		    NULL);
-		return 0;
-	default:
-		panic("nouveau in invalid task state: %d\n",
-		    (int)sc->sc_task_state);
-	}
+	if (atomic_load_relaxed(&sc->sc_task_thread) == curlwp)
+		SIMPLEQ_INSERT_TAIL(&sc->sc_tasks, task, nt_u.queue);
+	else
+		workqueue_enqueue(sc->sc_task_wq, &task->nt_u.work, NULL);
 }
 
 extern struct drm_driver *const nouveau_drm_driver_stub; /* XXX */
@@ -329,7 +374,6 @@ nouveau_pci_modcmd(modcmd_t cmd, void *arg __unused)
 	switch (cmd) {
 	case MODULE_CMD_INIT:
 		*nouveau_drm_driver_pci = *nouveau_drm_driver_stub;
-		nouveau_drm_driver_pci->set_busid = drm_pci_set_busid;
 		nouveau_drm_driver_pci->request_irq = drm_pci_request_irq;
 		nouveau_drm_driver_pci->free_irq = drm_pci_free_irq;
 #if 0		/* XXX nouveau acpi */

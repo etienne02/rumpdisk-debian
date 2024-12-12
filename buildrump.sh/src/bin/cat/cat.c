@@ -1,4 +1,4 @@
-/* $NetBSD: cat.c,v 1.57 2016/06/16 00:52:37 sevan Exp $	*/
+/* $NetBSD: cat.c,v 1.60 2023/12/10 15:31:53 rillig Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -44,7 +44,7 @@ __COPYRIGHT(
 #if 0
 static char sccsid[] = "@(#)cat.c	8.2 (Berkeley) 4/27/95";
 #else
-__RCSID("$NetBSD: cat.c,v 1.57 2016/06/16 00:52:37 sevan Exp $");
+__RCSID("$NetBSD: cat.c,v 1.60 2023/12/10 15:31:53 rillig Exp $");
 #endif
 #endif /* not lint */
 
@@ -66,10 +66,10 @@ static size_t bsize;
 static int rval;
 static const char *filename;
 
-void cook_args(char *argv[]);
-void cook_buf(FILE *);
-void raw_args(char *argv[]);
-void raw_cat(int);
+static void cook_args(char *argv[]);
+static void cook_buf(FILE *);
+static void raw_args(char *argv[]);
+static void raw_cat(int);
 
 int
 main(int argc, char *argv[])
@@ -139,7 +139,7 @@ main(int argc, char *argv[])
 	return rval;
 }
 
-void
+static void
 cook_args(char **argv)
 {
 	FILE *fp;
@@ -167,7 +167,7 @@ cook_args(char **argv)
 	} while (*argv);
 }
 
-void
+static void
 cook_buf(FILE *fp)
 {
 	int ch, gobble, line, prev;
@@ -182,21 +182,19 @@ cook_buf(FILE *fp)
 					gobble = 1;
 				} else
 					gobble = 0;
-				}
-				if (nflag) {
-					if (!bflag || ch != '\n') {
-						(void)fprintf(stdout,
-						    "%6d\t", ++line);
-						if (ferror(stdout))
-							break;
-					} else if (eflag) {
-						(void)fprintf(stdout,
-						    "%6s\t", "");
-						if (ferror(stdout))
-							break;
-					}
+			}
+			if (nflag) {
+				if (!bflag || ch != '\n') {
+					(void)fprintf(stdout, "%6d\t", ++line);
+					if (ferror(stdout))
+						break;
+				} else if (eflag) {
+					(void)fprintf(stdout, "%6s\t", "");
+					if (ferror(stdout))
+						break;
 				}
 			}
+		}
 		if (ch == '\n') {
 			if (eflag)
 				if (putchar('$') == EOF)
@@ -233,7 +231,7 @@ cook_buf(FILE *fp)
 		err(EXIT_FAILURE, "stdout");
 }
 
-void
+static void
 raw_args(char **argv)
 {
 	int fd;
@@ -280,7 +278,7 @@ skipnomsg:
 	} while (*argv);
 }
 
-void
+static void
 raw_cat(int rfd)
 {
 	static char *buf;

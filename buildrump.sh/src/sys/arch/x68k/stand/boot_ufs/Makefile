@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.36 2020/01/18 07:25:11 isaki Exp $
+#	$NetBSD: Makefile,v 1.39 2023/01/11 09:35:06 isaki Exp $
 
 NOMAN=		# defined
 
@@ -30,11 +30,17 @@ LIBIOCS=	$M/stand/libiocs
 SRCS=	boot.S bootmain.c readufs.c readufs_ffs.c readufs_lfs.c
 SRCS+=	exec_image.S memset.S strcmp.S
 
+.PATH:	${S}/../common/lib/libc/quad
+SRCS+=	udivdi3.c umoddi3.c qdivrem.c
+
+.PATH:	${.CURDIR}/../xxboot
+SRCS+=	ashldi3.S
+
 .include "${S}/conf/newvers_stand.mk"
 
 CFLAGS=	-Os -fomit-frame-pointer -fno-unwind-tables
 CFLAGS+= -m68020-60
-CFLAGS+= -W -Wall -Wstrict-prototypes -Wmissing-prototypes
+CFLAGS+= -Wextra -Wall -Wstrict-prototypes -Wmissing-prototypes
 CPPFLAGS+= -DTEXTADDR="$(TEXT)" -DBOOT_TEXTADDR="$(BOOT_TEXT)"
 CPPFLAGS+= -DBOOT=\"$(BOOT)\" -DBOOT_VERS=\"$(VERSION)\"
 CPPFLAGS+= -DSCSI_ADHOC_BOOTPART

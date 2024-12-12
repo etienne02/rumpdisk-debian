@@ -1,4 +1,4 @@
-/*	$NetBSD: pass2.c,v 1.51 2017/02/08 16:11:40 rin Exp $	*/
+/*	$NetBSD: pass2.c,v 1.53 2023/07/04 20:40:53 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)pass2.c	8.9 (Berkeley) 4/28/95";
 #else
-__RCSID("$NetBSD: pass2.c,v 1.51 2017/02/08 16:11:40 rin Exp $");
+__RCSID("$NetBSD: pass2.c,v 1.53 2023/07/04 20:40:53 riastradh Exp $");
 #endif
 #endif /* not lint */
 
@@ -150,7 +150,7 @@ pass2(void)
 		if (got_siginfo) {
 			fprintf(stderr,
 			    "%s: phase 2: dir %ld of %d (%d%%)\n", cdevname(),
-			    (long)(inpp - inpsort), (int)inplast, 
+			    (long)(inpp - inpsort), (int)inplast,
 			    (int)((inpp - inpsort) * 100 / inplast));
 			got_siginfo = 0;
 		}
@@ -230,7 +230,7 @@ pass2(void)
 	 * Byte swapping in directory entries, if needed, has been done.
 	 * Now rescan dirs for pass2check()
 	 */
-	if (do_dirswap) { 
+	if (do_dirswap) {
 		do_dirswap = 0;
 		for (inpp = inpsort; inpp < inpend; inpp++) {
 			inp = *inpp;
@@ -271,11 +271,9 @@ pass2(void)
 		info = inoinfo(inp->i_parent);
 		if (inp->i_dotdot == 0) {
 			inp->i_dotdot = inp->i_parent;
-			fileerror(inp->i_parent, inp->i_number, "MISSING '..'");
-			if (reply("FIX") == 0) {
-				markclean = 0;
-				continue;
-			}
+			if (debug)
+				fileerror(inp->i_parent, inp->i_number,
+				    "DEFERRED MISSING '..' FIX");
 			(void)makeentry(inp->i_number, inp->i_parent, "..");
 			info->ino_linkcnt--;
 			continue;
@@ -331,7 +329,7 @@ pass2check(struct inodesc *idesc)
 	int n, entrysize, ret = 0;
 	union dinode *dp;
 	const char *errmsg;
-	struct direct proto;
+	struct direct proto, *newdirp;
 	char namebuf[MAXPATHLEN + 1];
 	char pathbuf[MAXPATHLEN + 1];
 
@@ -343,7 +341,7 @@ pass2check(struct inodesc *idesc)
 		dirp->d_type = inoinfo(iswap32(dirp->d_ino))->ino_type;
 		ret |= ALTERED;
 	}
-	/* 
+	/*
 	 * check for "."
 	 */
 	if (idesc->id_entryno != 0)
@@ -351,23 +349,22 @@ pass2check(struct inodesc *idesc)
 	if (dirp->d_ino != 0 && strcmp(dirp->d_name, ".") == 0) {
 		if (iswap32(dirp->d_ino) != idesc->id_number) {
 			direrror(idesc->id_number, "BAD INODE NUMBER FOR '.'");
-			dirp->d_ino = iswap32(idesc->id_number);
-			if (reply("FIX") == 1)
+			if (reply("FIX") == 1) {
+				dirp->d_ino = iswap32(idesc->id_number);
 				ret |= ALTERED;
-			else
+			} else
 				markclean = 0;
 		}
 		if (newinofmt && dirp->d_type != DT_DIR) {
 			direrror(idesc->id_number, "BAD TYPE VALUE FOR '.'");
-			dirp->d_type = DT_DIR;
-			if (reply("FIX") == 1)
+			if (reply("FIX") == 1) {
+				dirp->d_type = DT_DIR;
 				ret |= ALTERED;
-			else
+			} else
 				markclean = 0;
 		}
 		goto chk1;
 	}
-	direrror(idesc->id_number, "MISSING '.'");
 	proto.d_ino = iswap32(idesc->id_number);
 	if (newinofmt)
 		proto.d_type = DT_DIR;
@@ -387,33 +384,33 @@ pass2check(struct inodesc *idesc)
 			proto.d_namlen = tmp;
 		}
 	entrysize = UFS_DIRSIZ(0, &proto, 0);
-	if (dirp->d_ino != 0 && strcmp(dirp->d_name, "..") != 0) {
-		pfatal("CANNOT FIX, FIRST ENTRY IN DIRECTORY CONTAINS %s\n",
-			dirp->d_name);
-		markclean = 0;
-	} else if (iswap16(dirp->d_reclen) < entrysize) {
-		pfatal("CANNOT FIX, INSUFFICIENT SPACE TO ADD '.'\n");
-		markclean = 0;
-	} else if (iswap16(dirp->d_reclen) < 2 * entrysize) {
+	direrror(idesc->id_number, "MISSING '.'");
+	errmsg = "ADD '.' ENTRY";
+	if (iswap16(dirp->d_reclen) < entrysize + UFS_DIRSIZ(0, dirp, 0)) {
+		/* Not enough space to add '.', replace first entry with '.' */
+		if (dirp->d_ino != 0) {
+			pwarn("\nFIRST ENTRY IN DIRECTORY CONTAINS %s\n",
+			     dirp->d_name);
+			errmsg = "REPLACE WITH '.'";
+		}
+		if (reply(errmsg) == 0)
+			goto chk1;
 		proto.d_reclen = dirp->d_reclen;
 		memmove(dirp, &proto, (size_t)entrysize);
-		if (reply("FIX") == 1)
-			ret |= ALTERED;
-		else
-			markclean = 0;
+		ret |= ALTERED;
 	} else {
-		n = iswap16(dirp->d_reclen) - entrysize;
+		/* Move over first entry and add '.' entry */
+		if (reply(errmsg) == 0)
+			goto chk1;
+		newdirp = (struct direct *)((char *)(dirp) + entrysize);
+		dirp->d_reclen = iswap16(iswap16(dirp->d_reclen) - entrysize);
+		memmove(newdirp, dirp, iswap16(dirp->d_reclen));
 		proto.d_reclen = iswap16(entrysize);
 		memmove(dirp, &proto, (size_t)entrysize);
 		idesc->id_entryno++;
-		inoinfo(iswap32(dirp->d_ino))->ino_linkcnt--;
-		dirp = (struct direct *)((char *)(dirp) + entrysize);
-		memset(dirp, 0, (size_t)n);
-		dirp->d_reclen = iswap16(n);
-		if (reply("FIX") == 1)
-			ret |= ALTERED;
-		else
-			markclean = 0;
+		inoinfo(idesc->id_number)->ino_linkcnt--;
+		dirp = newdirp;
+		ret |= ALTERED;
 	}
 chk1:
 	if (idesc->id_entryno > 1)
@@ -462,34 +459,60 @@ chk1:
 		}
 		goto chk2;
 	}
-	if (iswap32(dirp->d_ino) != 0 && strcmp(dirp->d_name, ".") != 0) {
-		fileerror(inp->i_parent, idesc->id_number, "MISSING '..'");
-		pfatal("CANNOT FIX, SECOND ENTRY IN DIRECTORY CONTAINS %s\n",
-			dirp->d_name);
-		inp->i_dotdot = (ino_t)-1;
-		markclean = 0;
-	} else if (iswap16(dirp->d_reclen) < entrysize) {
-		fileerror(inp->i_parent, idesc->id_number, "MISSING '..'");
-		pfatal("CANNOT FIX, INSUFFICIENT SPACE TO ADD '..'\n");
-		inp->i_dotdot = (ino_t)-1;
-		markclean = 0;
-	} else if (inp->i_parent != 0) {
-		/*
-		 * We know the parent, so fix now.
-		 */
-		inp->i_dotdot = inp->i_parent;
-		fileerror(inp->i_parent, idesc->id_number, "MISSING '..'");
+	fileerror(inp->i_parent != 0 ? inp->i_parent : idesc->id_number,
+	    idesc->id_number, "MISSING '..'");
+	errmsg = "ADD '..' ENTRY";
+	if (dirp->d_reclen < entrysize + UFS_DIRSIZ(0, dirp, 0)) {
+		/* No space to add '..', replace second entry with '..' */
+		if (dirp->d_ino != 0) {
+			pfatal("SECOND ENTRY IN DIRECTORY CONTAINS %s\n",
+			    dirp->d_name);
+			errmsg = "REPLACE WITH '..'";
+		}
+		if (reply(errmsg) == 0) {
+			inp->i_dotdot = (ino_t)-1;
+			goto chk2;
+		}
+		if (proto.d_ino == 0) {
+			/* Defer processing until parent known */
+			idesc->id_entryno++;
+			if (debug)
+				printf("(FIX DEFERRED)\n");
+		}
+		inp->i_dotdot = proto.d_ino;
 		proto.d_reclen = dirp->d_reclen;
 		memmove(dirp, &proto, (size_t)entrysize);
-		if (reply("FIX") == 1)
-			ret |= ALTERED;
-		else
-			markclean = 0;
+		ret |= ALTERED;
+	} else {
+		/* Move over second entry and add '..' entry */
+		if (reply(errmsg) == 0) {
+			inp->i_dotdot = (ino_t)-1;
+			goto chk2;
+		}
+		if (proto.d_ino == 0) {
+			/* Defer processing until parent known */
+			idesc->id_entryno++;
+			if (debug)
+				printf("(FIX DEFERRED)\n");
+		}
+		inp->i_dotdot = proto.d_ino;
+		if (dirp->d_ino == 0) {
+			proto.d_reclen = dirp->d_reclen;
+			memmove(dirp, &proto, (size_t)entrysize);
+		} else {
+			newdirp = (struct direct *)((char *)(dirp) + entrysize);
+			dirp->d_reclen -= entrysize;
+			memmove(newdirp, dirp, dirp->d_reclen);
+			proto.d_reclen = entrysize;
+			memmove(dirp, &proto, (size_t)entrysize);
+			if (dirp->d_ino != 0) {
+				idesc->id_entryno++;
+				inoinfo(dirp->d_ino)->ino_linkcnt--;
+			}
+			dirp = newdirp;
+		}
+		ret |= ALTERED;
 	}
-	idesc->id_entryno++;
-	if (dirp->d_ino != 0)
-		inoinfo(iswap32(dirp->d_ino))->ino_linkcnt--;
-	return (ret|KEEPON);
 chk2:
 	if (dirp->d_ino == 0)
 		return (ret|KEEPON);

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_cpsw.c,v 1.14 2021/01/27 03:10:20 thorpej Exp $	*/
+/*	$NetBSD: if_cpsw.c,v 1.17 2023/02/27 21:15:09 sekiya Exp $	*/
 
 /*
  * Copyright (c) 2013 Jonathan A. Kollasch
@@ -53,7 +53,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: if_cpsw.c,v 1.14 2021/01/27 03:10:20 thorpej Exp $");
+__KERNEL_RCSID(1, "$NetBSD: if_cpsw.c,v 1.17 2023/02/27 21:15:09 sekiya Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -95,6 +95,8 @@ __KERNEL_RCSID(1, "$NetBSD: if_cpsw.c,v 1.14 2021/01/27 03:10:20 thorpej Exp $")
 CTASSERT(powerof2(CPSW_NTXDESCS));
 CTASSERT(powerof2(CPSW_NRXDESCS));
 
+#undef CPSW_DEBUG_DMA	/* define this for DMA debugging */
+
 #define CPSW_PAD_LEN (ETHER_MIN_LEN - ETHER_CRC_LEN)
 
 #define TXDESC_NEXT(x) cpsw_txdesc_adjust((x), 1)
@@ -130,6 +132,7 @@ struct cpsw_softc {
 	volatile u_int sc_txnext;
 	volatile u_int sc_txhead;
 	volatile u_int sc_rxhead;
+	bool sc_txbusy;
 	void *sc_rxthih;
 	void *sc_rxih;
 	void *sc_txih;
@@ -310,6 +313,7 @@ cpsw_rxdesc_paddr(struct cpsw_softc * const sc, u_int x)
 }
 
 static const struct device_compatible_entry compat_data[] = {
+	{ .compat = "ti,am335x-cpsw-switch" },
 	{ .compat = "ti,am335x-cpsw" },
 	{ .compat = "ti,cpsw" },
 	DEVICE_COMPAT_EOL
@@ -417,7 +421,13 @@ cpsw_attach(device_t parent, device_t self, void *aux)
 
 	macaddr = NULL;
 	slave = of_find_firstchild_byname(phandle, "slave");
-	if (slave > 0) {
+	if (slave == -1) {
+		slave = of_find_firstchild_byname(phandle, "ethernet-ports");
+		if (slave != -1) {
+			slave = of_find_firstchild_byname(slave, "port");
+		}
+	}
+	if (slave != -1) {
 		macaddr = fdtbus_get_prop(slave, "mac-address", &len);
 		if (len != ETHER_ADDR_LEN)
 			macaddr = NULL;
@@ -615,8 +625,10 @@ cpsw_start(struct ifnet *ifp)
 	KERNHIST_FUNC(__func__);
 	CPSWHIST_CALLARGS(sc, 0, 0, 0);
 
-	if (__predict_false((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) !=
-	    IFF_RUNNING)) {
+	if (__predict_false((ifp->if_flags & IFF_RUNNING) == 0)) {
+		return;
+	}
+	if (__predict_false(sc->sc_txbusy)) {
 		return;
 	}
 
@@ -648,7 +660,7 @@ cpsw_start(struct ifnet *ifp)
 		}
 
 		if (dm->dm_nsegs + 1 >= txfree) {
-			ifp->if_flags |= IFF_OACTIVE;
+			sc->sc_txbusy = true;
 			bus_dmamap_unload(sc->sc_bdt, dm);
 			break;
 		}
@@ -1026,7 +1038,7 @@ cpsw_init(struct ifnet *ifp)
 	sc->sc_txeoq = true;
 	callout_schedule(&sc->sc_tick_ch, hz);
 	ifp->if_flags |= IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 
 	return 0;
 }
@@ -1094,8 +1106,9 @@ cpsw_stop(struct ifnet *ifp, int disable)
 		rdp->tx_mb[i] = NULL;
 	}
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 	ifp->if_timer = 0;
+	sc->sc_txbusy = false;
 
 	if (!disable)
 		return;
@@ -1170,10 +1183,12 @@ cpsw_rxintr(void *arg)
 			return 1;
 		}
 
+#if defined(CPSW_DEBUG_DMA)
 		if ((dw[3] & (CPDMA_BD_SOP | CPDMA_BD_EOP)) !=
 		    (CPDMA_BD_SOP | CPDMA_BD_EOP)) {
-			//Debugger();
+			Debugger();
 		}
+#endif
 
 		bus_dmamap_sync(sc->sc_bdt, dm, 0, dm->dm_mapsize,
 		    BUS_DMASYNC_POSTREAD);
@@ -1208,10 +1223,12 @@ next:
 		    cpsw_rxdesc_paddr(sc, i));
 	}
 
+#if defined(CPSW_DEBUG_DMA)
 	if (sc->sc_rxeoq) {
 		device_printf(sc->sc_dev, "rxeoq\n");
-		//Debugger();
+		Debugger();
 	}
+#endif
 
 	cpsw_write_4(sc, CPSW_CPDMA_CPDMA_EOI_VECTOR, CPSW_INTROFF_RX);
 
@@ -1258,9 +1275,11 @@ cpsw_txintr(void *arg)
 
 		cpsw_get_txdesc(sc, sc->sc_txhead, &bd);
 
+#if defined(CPSW_DEBUG_DMA)
 		if (dw[2] == 0) {
 			//Debugger();
 		}
+#endif
 
 		if (ISSET(dw[3], CPDMA_BD_SOP) == 0)
 			goto next;
@@ -1288,7 +1307,7 @@ cpsw_txintr(void *arg)
 
 		handled = true;
 
-		ifp->if_flags &= ~IFF_OACTIVE;
+		sc->sc_txbusy = false;
 
 next:
 		if (ISSET(dw[3], CPDMA_BD_EOP) && ISSET(dw[3], CPDMA_BD_EOQ)) {

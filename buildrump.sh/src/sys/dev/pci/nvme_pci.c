@@ -1,4 +1,4 @@
-/*	$NetBSD: nvme_pci.c,v 1.30 2021/05/29 08:46:38 riastradh Exp $	*/
+/*	$NetBSD: nvme_pci.c,v 1.37 2022/08/15 18:06:04 pgoyette Exp $	*/
 /*	$OpenBSD: nvme_pci.c,v 1.3 2016/04/14 11:18:32 dlg Exp $ */
 
 /*
@@ -43,7 +43,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nvme_pci.c,v 1.30 2021/05/29 08:46:38 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nvme_pci.c,v 1.37 2022/08/15 18:06:04 pgoyette Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -137,7 +137,7 @@ nvme_pci_match(device_t parent, cfdata_t match, void *aux)
 
 	if (PCI_CLASS(pa->pa_class) == PCI_CLASS_MASS_STORAGE &&
 	    PCI_SUBCLASS(pa->pa_class) == PCI_SUBCLASS_MASS_STORAGE_NVM &&
-	    PCI_INTERFACE(pa->pa_class) == PCI_INTERFACE_NVM_NVME)
+	    PCI_INTERFACE(pa->pa_class) == PCI_INTERFACE_NVM_NVME_IO)
 		return 1;
 
 	return 0;
@@ -495,31 +495,41 @@ nvme_modcmd(modcmd_t cmd, void *opaque)
 #ifdef _MODULE
 	devmajor_t cmajor, bmajor;
 	extern const struct cdevsw nvme_cdevsw;
+	static bool devsw_ok;
 #endif
 	int error = 0;
 
 #ifdef _MODULE
 	switch (cmd) {
 	case MODULE_CMD_INIT:
-		error = config_init_component(cfdriver_ioconf_nvme_pci,
-		    cfattach_ioconf_nvme_pci, cfdata_ioconf_nvme_pci);
-		if (error)
-			break;
-
 		bmajor = cmajor = NODEVMAJOR;
 		error = devsw_attach(nvme_cd.cd_name, NULL, &bmajor,
 		    &nvme_cdevsw, &cmajor);
 		if (error) {
-			aprint_error("%s: unable to register devsw\n",
-			    nvme_cd.cd_name);
+			aprint_error("%s: unable to register devsw, err %d\n",
+			    nvme_cd.cd_name, error);
 			/* do not abort, just /dev/nvme* will not work */
+		}
+		else
+			devsw_ok = true;
+
+		error = config_init_component(cfdriver_ioconf_nvme_pci,
+		    cfattach_ioconf_nvme_pci, cfdata_ioconf_nvme_pci);
+		if (error) {
+			if (devsw_ok) {
+				devsw_detach(NULL, &nvme_cdevsw);
+				devsw_ok = false;
+			}
+			break;
 		}
 		break;
 	case MODULE_CMD_FINI:
-		devsw_detach(NULL, &nvme_cdevsw);
-
 		error = config_fini_component(cfdriver_ioconf_nvme_pci,
 		    cfattach_ioconf_nvme_pci, cfdata_ioconf_nvme_pci);
+		if (devsw_ok) {
+			devsw_detach(NULL, &nvme_cdevsw);
+			devsw_ok = false;
+		}
 		break;
 	default:
 		break;

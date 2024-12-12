@@ -1,4 +1,4 @@
-/*	$NetBSD: apple_smc_temp.c,v 1.5 2015/04/23 23:23:00 pgoyette Exp $	*/
+/*	$NetBSD: apple_smc_temp.c,v 1.7 2023/08/08 05:20:14 mrg Exp $	*/
 
 /*
  * Apple System Management Controller: Temperature Sensors
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: apple_smc_temp.c,v 1.5 2015/04/23 23:23:00 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: apple_smc_temp.c,v 1.7 2023/08/08 05:20:14 mrg Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -153,7 +153,6 @@ apple_smc_temp_detach(device_t self, int flags)
 	/* If we registered with sysmon_envsys, unregister.  */
 	if (sc->sc_sme != NULL) {
 		sysmon_envsys_unregister(sc->sc_sme);
-		sc->sc_sme = NULL;
 
 		KASSERT(sc->sc_sensors != NULL);
 		KASSERT(sc->sc_nsensors > 0);
@@ -426,12 +425,12 @@ apple_smc_bound_temp_sensors(struct apple_smc_tag *smc, uint32_t *tstart,
 	int error;
 
 	/* Find the first `T...' key.  */
-	error = apple_smc_key_search(smc, "T", tstart);
+	error = apple_smc_key_search(smc, "T\0\0\0", tstart);
 	if (error)
 		return error;
 
 	/* Find the first `U...' key.  */
-	error = apple_smc_key_search(smc, "U", ustart);
+	error = apple_smc_key_search(smc, "U\0\0\0", ustart);
 	if (error)
 		return error;
 

@@ -1,4 +1,4 @@
-/* $NetBSD: cpu.h,v 1.104 2021/08/14 17:51:18 ryo Exp $ */
+/* $NetBSD: cpu.h,v 1.106 2024/03/31 17:13:29 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2001 The NetBSD Foundation, Inc.
@@ -88,6 +88,10 @@
 #include <sys/cctr.h>
 #include <sys/intr.h>
 #include <machine/frame.h>
+
+#ifndef _KERNEL
+#include <stddef.h>
+#endif /* ! _KERNEL */
 
 /*
  * Machine check information.
@@ -237,6 +241,8 @@ void	cpu_signotify(struct lwp *);
 #define	CPU_CCTR		8	/* int: using CC timecounter */
 #define	CPU_IS_QEMU		9	/* int: running under Qemu */
 #define	CPU_FP_COMPLETE_DEBUG	10	/* int: enable FP completion debug */
+#define	CPU_RPB_TYPE		11	/* quad: system type (from RPB) */
+#define	CPU_RPB_VARIATION	12	/* quad: system variation (from RPB) */
 
 
 #ifdef _KERNEL

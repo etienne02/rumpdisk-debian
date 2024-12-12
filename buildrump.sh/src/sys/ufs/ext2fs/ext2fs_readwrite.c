@@ -1,4 +1,4 @@
-/*	$NetBSD: ext2fs_readwrite.c,v 1.77 2020/04/23 21:47:08 ad Exp $	*/
+/*	$NetBSD: ext2fs_readwrite.c,v 1.79 2024/10/19 14:13:44 jakllsch Exp $	*/
 
 /*-
  * Copyright (c) 1993
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ext2fs_readwrite.c,v 1.77 2020/04/23 21:47:08 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ext2fs_readwrite.c,v 1.79 2024/10/19 14:13:44 jakllsch Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -74,6 +74,7 @@ __KERNEL_RCSID(0, "$NetBSD: ext2fs_readwrite.c,v 1.77 2020/04/23 21:47:08 ad Exp
 #include <sys/vnode.h>
 #include <sys/signalvar.h>
 #include <sys/kauth.h>
+#include <sys/bitops.h>
 
 #include <ufs/ufs/inode.h>
 #include <ufs/ufs/ufsmount.h>
@@ -83,7 +84,7 @@ __KERNEL_RCSID(0, "$NetBSD: ext2fs_readwrite.c,v 1.77 2020/04/23 21:47:08 ad Exp
 
 static int	ext2fs_post_read_update(struct vnode *, int, int);
 static int	ext2fs_post_write_update(struct vnode *, struct uio *, int,
-		    kauth_cred_t, off_t, int, int, int);
+		    kauth_cred_t, off_t, int, int);
 
 /*
  * Vnode op for reading.
@@ -271,8 +272,8 @@ ext2fs_write(void *v)
 	vsize_t bytelen;
 	off_t oldoff = 0;					/* XXX */
 	bool async;
-	int extended = 0;
 	int advice;
+	const unsigned int fshift = ilog2(MAXPHYS);
 
 	ioflag = ap->a_ioflag;
 	advice = IO_ADV_DECODE(ioflag);
@@ -327,7 +328,6 @@ ext2fs_write(void *v)
 
 		if (vp->v_size < uio->uio_offset) {
 			uvm_vnp_setsize(vp, uio->uio_offset);
-			extended = 1;
 		}
 
 		/*
@@ -335,10 +335,10 @@ ext2fs_write(void *v)
 		 * XXXUBC simplistic async flushing.
 		 */
 
-		if (!async && oldoff >> 16 != uio->uio_offset >> 16) {
+		if (!async && oldoff >> fshift != uio->uio_offset >> fshift) {
 			rw_enter(vp->v_uobj.vmobjlock, RW_WRITER);
-			error = VOP_PUTPAGES(vp, (oldoff >> 16) << 16,
-			    (uio->uio_offset >> 16) << 16,
+			error = VOP_PUTPAGES(vp, (oldoff >> fshift) << fshift,
+			    (uio->uio_offset >> fshift) << fshift,
 			    PGO_CLEANIT | PGO_LAZY);
 		}
 	}
@@ -350,7 +350,7 @@ ext2fs_write(void *v)
 	}
 
 	error = ext2fs_post_write_update(vp, uio, ioflag, ap->a_cred, osize,
-	    resid, extended, error);
+	    resid, error);
 	return error;
 }
 
@@ -368,7 +368,6 @@ ext2fs_bufwr(struct vnode *vp, struct uio *uio, int ioflag, kauth_cred_t cred)
 	off_t osize;
 	daddr_t lbn;
 	int resid, blkoffset, xfersize;
-	int extended = 0;
 	int error;
 
 	KASSERT(VOP_ISLOCKED(vp) == LK_EXCLUSIVE);
@@ -418,7 +417,6 @@ ext2fs_bufwr(struct vnode *vp, struct uio *uio, int ioflag, kauth_cred_t cred)
 
 		if (vp->v_size < uio->uio_offset) {
 			uvm_vnp_setsize(vp, uio->uio_offset);
-			extended = 1;
 		}
 
 		if (ioflag & IO_SYNC)
@@ -432,13 +430,13 @@ ext2fs_bufwr(struct vnode *vp, struct uio *uio, int ioflag, kauth_cred_t cred)
 	}
 
 	error = ext2fs_post_write_update(vp, uio, ioflag, cred, osize, resid,
-	    extended, error);
+	    error);
 	return error;
 }
 
 static int
 ext2fs_post_write_update(struct vnode *vp, struct uio *uio, int ioflag,
-    kauth_cred_t cred, off_t osize, int resid, int extended, int oerror)
+    kauth_cred_t cred, off_t osize, int resid, int oerror)
 {
 	struct inode *ip = VTOI(vp);
 	int error = oerror;
@@ -466,10 +464,6 @@ ext2fs_post_write_update(struct vnode *vp, struct uio *uio, int ioflag,
 				ip->i_e2fs_mode &= ~ISGID;
 		}
 	}
-
-	/* If we successfully wrote anything, notify kevent listeners.  */
-	if (resid > uio->uio_resid)
-		VN_KNOTE(vp, NOTE_WRITE | (extended ? NOTE_EXTEND : 0));
 
 	/*
 	 * Update the size on disk: truncate back to original size on

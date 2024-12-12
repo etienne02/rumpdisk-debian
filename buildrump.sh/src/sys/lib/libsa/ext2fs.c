@@ -1,4 +1,4 @@
-/*	$NetBSD: ext2fs.c,v 1.29 2020/01/24 13:20:33 jakllsch Exp $	*/
+/*	$NetBSD: ext2fs.c,v 1.34 2022/04/29 07:42:07 rin Exp $	*/
 
 /*
  * Copyright (c) 1997 Manuel Bouyer.
@@ -417,7 +417,7 @@ read_sblock(struct open_file *f, struct m_ext2fs *fs)
 	int rc;
 
 	rc = DEV_STRATEGY(f->f_dev)(f->f_devdata, F_READ,
-	    SBOFF / DEV_BSIZE, SBSIZE, sbbuf, &buf_size);
+	    SBOFF / GETSECSIZE(f), SBSIZE, sbbuf, &buf_size);
 	if (rc)
 		return rc;
 
@@ -544,7 +544,7 @@ ext2fs_open(const char *path, struct open_file *f)
 		/*
 		 * We note that the number of indirect blocks is always
 		 * a power of 2.  This lets us use shifts and masks instead
-		 * of divide and remainder and avoinds pulling in the
+		 * of divide and remainder and avoids pulling in the
 		 * 64bit division routine into the boot code.
 		 */
 		mult = EXT2_NINDIR(fs);

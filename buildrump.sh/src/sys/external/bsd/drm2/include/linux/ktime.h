@@ -1,4 +1,4 @@
-/*	$NetBSD: ktime.h,v 1.9 2020/02/14 14:34:59 maya Exp $	*/
+/*	$NetBSD: ktime.h,v 1.21 2021/12/19 12:30:23 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -36,20 +36,17 @@
 #include <sys/endian.h>
 #include <sys/kernel.h>
 #include <sys/time.h>
+#include <sys/timevar.h>
 
 #include <linux/jiffies.h>
 #include <linux/time.h>
 
-union ktime {
-	int64_t kt_nsec;
-};
-
-typedef union ktime ktime_t;
+typedef int64_t	ktime_t;
 
 static inline int64_t
 ktime_to_ns(ktime_t kt)
 {
-	return kt.kt_nsec;
+	return kt;
 }
 
 static inline int64_t
@@ -58,16 +55,34 @@ ktime_to_us(ktime_t kt)
 	return ktime_to_ns(kt)/1000;
 }
 
+static inline int64_t
+ktime_to_ms(ktime_t kt)
+{
+	return ktime_to_ns(kt)/1000000;
+}
+
 static inline ktime_t
 ns_to_ktime(int64_t nsec)
 {
-	return (ktime_t) { .kt_nsec = nsec };
+	return nsec;
+}
+
+static inline ktime_t
+ktime_add(ktime_t a, ktime_t b)
+{
+	return ns_to_ktime(ktime_to_ns(a) + ktime_to_ns(b));
 }
 
 static inline ktime_t
 ktime_add_ns(ktime_t kt, int64_t nsec)
 {
 	return ns_to_ktime(ktime_to_ns(kt) + nsec);
+}
+
+static inline ktime_t
+ktime_add_us(ktime_t kt, int64_t usec)
+{
+	return ktime_add_ns(kt, 1000 * usec);
 }
 
 static inline ktime_t
@@ -87,6 +102,7 @@ ktime_to_timespec(ktime_t kt)
 {
 	return ns_to_timespec(ktime_to_ns(kt));
 }
+#define	ktime_to_timespec64	ktime_to_timespec
 
 static inline struct timeval
 ktime_to_timeval(ktime_t kt)
@@ -100,6 +116,7 @@ timespec_to_ktime(struct timespec ts)
 	/* XXX Silently truncate?  */
 	return ns_to_ktime(1000000000*(int64_t)ts.tv_sec + ts.tv_nsec);
 }
+#define	timespec64_to_ktime	timespec_to_ktime
 
 static inline ktime_t
 ktime_get(void)
@@ -121,12 +138,36 @@ ktime_get_real(void)
 	return timespec_to_ktime(ts);
 }
 
+static inline ktime_t
+ktime_get_boottime(void)
+{
+	/* XXX include time spent in suspend */
+	return ktime_get();
+}
+
+static inline ktime_t
+ktime_get_raw(void)
+{
+	/* XXX */
+	return ktime_get();
+}
+
+static inline uint64_t
+ktime_get_ns(void)
+{
+	return ktime_to_ns(ktime_get());
+}
+
 static inline uint64_t
 ktime_get_raw_ns(void)
 {
+	return ktime_to_ns(ktime_get_raw());
+}
 
-	/* XXX */
-	return ktime_to_ns(ktime_get());
+static inline uint64_t
+ktime_get_mono_fast_ns(void)
+{
+	return ktime_get_raw_ns();
 }
 
 static inline ktime_t
@@ -157,10 +198,36 @@ ktime_us_delta(ktime_t a, ktime_t b)
 	return ktime_to_us(ktime_sub(a, b));
 }
 
+static inline int64_t
+ktime_ms_delta(ktime_t a, ktime_t b)
+{
+	return ktime_to_ms(ktime_sub(a, b));
+}
+
+
 static inline bool
 time_in_range(unsigned long x, unsigned long a, unsigned long b)
 {
 	return ((a <= x) && (x <= b));
+}
+
+static inline bool
+ktime_after(ktime_t a, ktime_t b)
+{
+	return ktime_to_ns(a) > ktime_to_ns(b);
+}
+
+static inline time_t
+ktime_get_real_seconds(void)
+{
+	return time_second;
+}
+
+static inline void
+ktime_get_ts64(struct timespec64 *ts)
+{
+
+	nanotime(ts);
 }
 
 #endif  /* _LINUX_KTIME_H_ */

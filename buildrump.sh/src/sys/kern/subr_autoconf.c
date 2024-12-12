@@ -1,4 +1,4 @@
-/* $NetBSD: subr_autoconf.c,v 1.289 2021/08/07 16:19:18 thorpej Exp $ */
+/* $NetBSD: subr_autoconf.c,v 1.314 2023/07/18 11:57:37 riastradh Exp $ */
 
 /*
  * Copyright (c) 1996, 2000 Christopher G. Demetriou
@@ -77,7 +77,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_autoconf.c,v 1.289 2021/08/07 16:19:18 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_autoconf.c,v 1.314 2023/07/18 11:57:37 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
@@ -86,6 +86,7 @@ __KERNEL_RCSID(0, "$NetBSD: subr_autoconf.c,v 1.289 2021/08/07 16:19:18 thorpej 
 
 #include <sys/param.h>
 #include <sys/device.h>
+#include <sys/device_impl.h>
 #include <sys/disklabel.h>
 #include <sys/conf.h>
 #include <sys/kauth.h>
@@ -108,6 +109,7 @@ __KERNEL_RCSID(0, "$NetBSD: subr_autoconf.c,v 1.289 2021/08/07 16:19:18 thorpej 
 #include <sys/cpu.h>
 #include <sys/sysctl.h>
 #include <sys/stdarg.h>
+#include <sys/localcount.h>
 
 #include <sys/disk.h>
 
@@ -838,8 +840,7 @@ cfdriver_get_iattr(const struct cfdriver *cd, const char *ia)
 	return 0;
 }
 
-#if defined(DIAGNOSTIC)
-static int
+static int __diagused
 cfdriver_iattr_count(const struct cfdriver *cd)
 {
 	const struct cfiattrdata * const *cpp;
@@ -853,7 +854,6 @@ cfdriver_iattr_count(const struct cfdriver *cd)
 	}
 	return i;
 }
-#endif /* DIAGNOSTIC */
 
 /*
  * Lookup an interface attribute description by name.
@@ -1143,10 +1143,20 @@ config_search_internal(device_t parent, void *aux,
 	struct matchinfo m;
 
 	KASSERT(config_initialized);
-	KASSERT(!args->iattr ||
-		cfdriver_get_iattr(parent->dv_cfdriver, args->iattr));
-	KASSERT(args->iattr ||
-		cfdriver_iattr_count(parent->dv_cfdriver) < 2);
+	KASSERTMSG((!args->iattr ||
+		cfdriver_get_iattr(parent->dv_cfdriver, args->iattr)),
+	    "%s searched for child at interface attribute %s,"
+	    " but device %s(4) has no such interface attribute in config(5)",
+	    device_xname(parent), args->iattr,
+	    parent->dv_cfdriver->cd_name);
+	KASSERTMSG((args->iattr ||
+		cfdriver_iattr_count(parent->dv_cfdriver) < 2),
+	    "%s searched for child without interface attribute,"
+	    " needed to disambiguate among the %d declared for in %s(4)"
+	    " in config(5)",
+	    device_xname(parent),
+	    cfdriver_iattr_count(parent->dv_cfdriver),
+	    parent->dv_cfdriver->cd_name);
 
 	m.fn = args->submatch;		/* N.B. union */
 	m.parent = parent;
@@ -1186,6 +1196,7 @@ config_search_internal(device_t parent, void *aux,
 				mapply(&m, cf);
 		}
 	}
+	rnd_add_uint32(&rnd_autoconf_source, 0);
 	return m.match;
 }
 
@@ -1248,17 +1259,21 @@ static const char * const msgs[] = {
  * not configured, call the given `print' function and return NULL.
  */
 device_t
-config_found(device_t parent, void *aux, cfprint_t print,
+config_found_acquire(device_t parent, void *aux, cfprint_t print,
     const struct cfargs * const cfargs)
 {
 	cfdata_t cf;
 	struct cfargs_internal store;
 	const struct cfargs_internal * const args =
 	    cfargs_canonicalize(cfargs, &store);
+	device_t dev;
+
+	KERNEL_LOCK(1, NULL);
 
 	cf = config_search_internal(parent, aux, args);
 	if (cf != NULL) {
-		return config_attach_internal(parent, cf, aux, print, args);
+		dev = config_attach_internal(parent, cf, aux, print, args);
+		goto out;
 	}
 
 	if (print) {
@@ -1272,15 +1287,39 @@ config_found(device_t parent, void *aux, cfprint_t print,
 		aprint_normal("%s", msgs[pret]);
 	}
 
-	/*
-	 * This has the effect of mixing in a single timestamp to the
-	 * entropy pool.  Experiments indicate the estimator will almost
-	 * always attribute one bit of entropy to this sample; analysis
-	 * of device attach/detach timestamps on FreeBSD indicates 4
-	 * bits of entropy/sample so this seems appropriately conservative.
-	 */
-	rnd_add_uint32(&rnd_autoconf_source, 0);
-	return NULL;
+	dev = NULL;
+
+out:	KERNEL_UNLOCK_ONE(NULL);
+	return dev;
+}
+
+/*
+ * config_found(parent, aux, print, cfargs)
+ *
+ *	Legacy entry point for callers whose use of the returned
+ *	device_t is not delimited by device_release.
+ *
+ *	The caller is required to hold the kernel lock as a fragile
+ *	defence against races.
+ *
+ *	Callers should ignore the return value or be converted to
+ *	config_found_acquire with a matching device_release once they
+ *	have finished with the returned device_t.
+ */
+device_t
+config_found(device_t parent, void *aux, cfprint_t print,
+    const struct cfargs * const cfargs)
+{
+	device_t dev;
+
+	KASSERT(KERNEL_LOCKED_P());
+
+	dev = config_found_acquire(parent, aux, print, cfargs);
+	if (dev == NULL)
+		return NULL;
+	device_release(dev);
+
+	return dev;
 }
 
 /*
@@ -1332,6 +1371,7 @@ config_makeroom(int n, struct cfdriver *cd)
 	KASSERT(mutex_owned(&alldevs_lock));
 	alldevs_nwrite++;
 
+	/* XXX arithmetic overflow */
 	for (nndevs = MAX(4, cd->cd_ndevs); nndevs <= n; nndevs += nndevs)
 		;
 
@@ -1354,7 +1394,7 @@ config_makeroom(int n, struct cfdriver *cd)
 		 * If another thread moved the array while we did
 		 * not hold alldevs_lock, try again.
 		 */
-		if (cd->cd_devs != osp) {
+		if (cd->cd_devs != osp || cd->cd_ndevs != ondevs) {
 			mutex_exit(&alldevs_lock);
 			kmem_free(nsp, sizeof(device_t) * nndevs);
 			mutex_enter(&alldevs_lock);
@@ -1455,6 +1495,9 @@ config_devdelete(device_t dev)
 	if (dg->dg_devs != NULL)
 		kmem_free(dg->dg_devs, sizeof(device_t) * dg->dg_ndevs);
 
+	localcount_fini(dev->dv_localcount);
+	kmem_free(dev->dv_localcount, sizeof(*dev->dv_localcount));
+
 	cv_destroy(&dvl->dvl_cv);
 	mutex_destroy(&dvl->dvl_mtx);
 
@@ -1475,10 +1518,14 @@ config_devdelete(device_t dev)
 static int
 config_unit_nextfree(cfdriver_t cd, cfdata_t cf)
 {
-	int unit;
+	int unit = cf->cf_unit;
 
+	KASSERT(mutex_owned(&alldevs_lock));
+
+	if (unit < 0)
+		return -1;
 	if (cf->cf_fstate == FSTATE_STAR) {
-		for (unit = cf->cf_unit; unit < cd->cd_ndevs; unit++)
+		for (; unit < cd->cd_ndevs; unit++)
 			if (cd->cd_devs[unit] == NULL)
 				break;
 		/*
@@ -1486,7 +1533,6 @@ config_unit_nextfree(cfdriver_t cd, cfdata_t cf)
 		 * or max(cd->cd_ndevs,cf->cf_unit).
 		 */
 	} else {
-		unit = cf->cf_unit;
 		if (unit < cd->cd_ndevs && cd->cd_devs[unit] != NULL)
 			unit = -1;
 	}
@@ -1558,6 +1604,7 @@ config_devalloc(const device_t parent, const cfdata_t cf,
 	dev->dv_activity_handlers = NULL;
 	dev->dv_private = dev_private;
 	dev->dv_flags = ca->ca_flags;	/* inherit flags from class */
+	dev->dv_attaching = curlwp;
 
 	myunit = config_unit_alloc(dev, cd, cf);
 	if (myunit == -1) {
@@ -1605,6 +1652,10 @@ config_devalloc(const device_t parent, const cfdata_t cf,
 		prop_dictionary_set_string(dev->dv_properties,
 		    "device-parent", device_xname(parent));
 	}
+
+	dev->dv_localcount = kmem_zalloc(sizeof(*dev->dv_localcount),
+	    KM_SLEEP);
+	localcount_init(dev->dv_localcount);
 
 	if (dev->dv_cfdriver->cd_attrs != NULL)
 		config_add_attrib_dict(dev);
@@ -1693,6 +1744,8 @@ config_add_attrib_dict(device_t dev)
 
 /*
  * Attach a found device.
+ *
+ * Returns the device referenced, to be released with device_release.
  */
 static device_t
 config_attach_internal(device_t parent, cfdata_t cf, void *aux, cfprint_t print,
@@ -1757,8 +1810,35 @@ config_attach_internal(device_t parent, cfdata_t cf, void *aux, cfprint_t print,
 	/* Let userland know */
 	devmon_report_device(dev, true);
 
+	/*
+	 * Prevent detach until the driver's attach function, and all
+	 * deferred actions, have finished.
+	 */
 	config_pending_incr(dev);
+
+	/*
+	 * Prevent concurrent detach from destroying the device_t until
+	 * the caller has released the device.
+	 */
+	device_acquire(dev);
+
+	/* Call the driver's attach function.  */
 	(*dev->dv_cfattach->ca_attach)(parent, dev, aux);
+
+	/*
+	 * Allow other threads to acquire references to the device now
+	 * that the driver's attach function is done.
+	 */
+	mutex_enter(&config_misc_lock);
+	KASSERT(dev->dv_attaching == curlwp);
+	dev->dv_attaching = NULL;
+	cv_broadcast(&config_misc_cv);
+	mutex_exit(&config_misc_lock);
+
+	/*
+	 * Synchronous parts of attach are done.  Allow detach, unless
+	 * the driver's attach function scheduled deferred actions.
+	 */
 	config_pending_decr(dev);
 
 	mutex_enter(&config_misc_lock);
@@ -1772,19 +1852,52 @@ config_attach_internal(device_t parent, cfdata_t cf, void *aux, cfprint_t print,
 	config_process_deferred(&deferred_config_queue, dev);
 
 	device_register_post_config(dev, aux);
+	rnd_add_uint32(&rnd_autoconf_source, 0);
 	return dev;
 }
 
 device_t
-config_attach(device_t parent, cfdata_t cf, void *aux, cfprint_t print,
+config_attach_acquire(device_t parent, cfdata_t cf, void *aux, cfprint_t print,
     const struct cfargs *cfargs)
 {
 	struct cfargs_internal store;
+	device_t dev;
+
+	KERNEL_LOCK(1, NULL);
+	dev = config_attach_internal(parent, cf, aux, print,
+	    cfargs_canonicalize(cfargs, &store));
+	KERNEL_UNLOCK_ONE(NULL);
+
+	return dev;
+}
+
+/*
+ * config_attach(parent, cf, aux, print, cfargs)
+ *
+ *	Legacy entry point for callers whose use of the returned
+ *	device_t is not delimited by device_release.
+ *
+ *	The caller is required to hold the kernel lock as a fragile
+ *	defence against races.
+ *
+ *	Callers should ignore the return value or be converted to
+ *	config_attach_acquire with a matching device_release once they
+ *	have finished with the returned device_t.
+ */
+device_t
+config_attach(device_t parent, cfdata_t cf, void *aux, cfprint_t print,
+    const struct cfargs *cfargs)
+{
+	device_t dev;
 
 	KASSERT(KERNEL_LOCKED_P());
 
-	return config_attach_internal(parent, cf, aux, print,
-	    cfargs_canonicalize(cfargs, &store));
+	dev = config_attach_acquire(parent, cf, aux, print, cfargs);
+	if (dev == NULL)
+		return NULL;
+	device_release(dev);
+
+	return dev;
 }
 
 /*
@@ -1797,7 +1910,7 @@ config_attach(device_t parent, cfdata_t cf, void *aux, cfprint_t print,
  * name by the attach routine.
  */
 device_t
-config_attach_pseudo(cfdata_t cf)
+config_attach_pseudo_acquire(cfdata_t cf, void *aux)
 {
 	device_t dev;
 
@@ -1824,13 +1937,68 @@ config_attach_pseudo(cfdata_t cf)
 	/* Let userland know */
 	devmon_report_device(dev, true);
 
+	/*
+	 * Prevent detach until the driver's attach function, and all
+	 * deferred actions, have finished.
+	 */
 	config_pending_incr(dev);
-	(*dev->dv_cfattach->ca_attach)(ROOT, dev, NULL);
+
+	/*
+	 * Prevent concurrent detach from destroying the device_t until
+	 * the caller has released the device.
+	 */
+	device_acquire(dev);
+
+	/* Call the driver's attach function.  */
+	(*dev->dv_cfattach->ca_attach)(ROOT, dev, aux);
+
+	/*
+	 * Allow other threads to acquire references to the device now
+	 * that the driver's attach function is done.
+	 */
+	mutex_enter(&config_misc_lock);
+	KASSERT(dev->dv_attaching == curlwp);
+	dev->dv_attaching = NULL;
+	cv_broadcast(&config_misc_cv);
+	mutex_exit(&config_misc_lock);
+
+	/*
+	 * Synchronous parts of attach are done.  Allow detach, unless
+	 * the driver's attach function scheduled deferred actions.
+	 */
 	config_pending_decr(dev);
 
 	config_process_deferred(&deferred_config_queue, dev);
 
 out:	KERNEL_UNLOCK_ONE(NULL);
+	return dev;
+}
+
+/*
+ * config_attach_pseudo(cf)
+ *
+ *	Legacy entry point for callers whose use of the returned
+ *	device_t is not delimited by device_release.
+ *
+ *	The caller is required to hold the kernel lock as a fragile
+ *	defence against races.
+ *
+ *	Callers should ignore the return value or be converted to
+ *	config_attach_pseudo_acquire with a matching device_release
+ *	once they have finished with the returned device_t.  As a
+ *	bonus, config_attach_pseudo_acquire can pass a non-null aux
+ *	argument into the driver's attach routine.
+ */
+device_t
+config_attach_pseudo(cfdata_t cf)
+{
+	device_t dev;
+
+	dev = config_attach_pseudo_acquire(cf, NULL);
+	if (dev == NULL)
+		return dev;
+	device_release(dev);
+
 	return dev;
 }
 
@@ -1874,33 +2042,61 @@ config_dump_garbage(struct devicelist *garbage)
 static int
 config_detach_enter(device_t dev)
 {
-	int error;
+	struct lwp *l __diagused;
+	int error = 0;
 
 	mutex_enter(&config_misc_lock);
-	for (;;) {
-		if (dev->dv_pending == 0 && dev->dv_detaching == NULL) {
-			dev->dv_detaching = curlwp;
-			error = 0;
-			break;
-		}
+
+	/*
+	 * Wait until attach has fully completed, and until any
+	 * concurrent detach (e.g., drvctl racing with USB event
+	 * thread) has completed.
+	 *
+	 * Caller must hold alldevs_nread or alldevs_nwrite (e.g., via
+	 * deviter) to ensure the winner of the race doesn't free the
+	 * device leading the loser of the race into use-after-free.
+	 *
+	 * XXX Not all callers do this!
+	 */
+	while (dev->dv_pending || dev->dv_detaching) {
 		KASSERTMSG(dev->dv_detaching != curlwp,
 		    "recursively detaching %s", device_xname(dev));
 		error = cv_wait_sig(&config_misc_cv, &config_misc_lock);
 		if (error)
-			break;
+			goto out;
 	}
-	KASSERT(error || dev->dv_detaching == curlwp);
-	mutex_exit(&config_misc_lock);
 
+	/*
+	 * Attach has completed, and no other concurrent detach is
+	 * running.  Claim the device for detaching.  This will cause
+	 * all new attempts to acquire references to block.
+	 */
+	KASSERTMSG((l = dev->dv_attaching) == NULL,
+	    "lwp %ld [%s] @ %p attaching %s",
+	    (long)l->l_lid, (l->l_name ? l->l_name : l->l_proc->p_comm), l,
+	    device_xname(dev));
+	KASSERTMSG((l = dev->dv_detaching) == NULL,
+	    "lwp %ld [%s] @ %p detaching %s",
+	    (long)l->l_lid, (l->l_name ? l->l_name : l->l_proc->p_comm), l,
+	    device_xname(dev));
+	dev->dv_detaching = curlwp;
+
+out:	mutex_exit(&config_misc_lock);
 	return error;
 }
 
 static void
 config_detach_exit(device_t dev)
 {
+	struct lwp *l __diagused;
 
 	mutex_enter(&config_misc_lock);
-	KASSERT(dev->dv_detaching == curlwp);
+	KASSERTMSG(dev->dv_detaching != NULL, "not detaching %s",
+	    device_xname(dev));
+	KASSERTMSG((l = dev->dv_detaching) == curlwp,
+	    "lwp %ld [%s] @ %p detaching %s",
+	    (long)l->l_lid, (l->l_name ? l->l_name : l->l_proc->p_comm), l,
+	    device_xname(dev));
 	dev->dv_detaching = NULL;
 	cv_broadcast(&config_misc_cv);
 	mutex_exit(&config_misc_lock);
@@ -1914,9 +2110,12 @@ config_detach_exit(device_t dev)
  * Note that this code wants to be run from a process context, so
  * that the detach can sleep to allow processes which have a device
  * open to run and unwind their stacks.
+ *
+ * Caller must hold a reference with device_acquire or
+ * device_lookup_acquire.
  */
 int
-config_detach(device_t dev, int flags)
+config_detach_release(device_t dev, int flags)
 {
 	struct alldevs_foray af;
 	struct cftable *ct;
@@ -1945,6 +2144,7 @@ config_detach(device_t dev, int flags)
 	 * attached.
 	 */
 	rv = config_detach_enter(dev);
+	device_release(dev);
 	if (rv) {
 		KERNEL_UNLOCK_ONE(NULL);
 		return rv;
@@ -1964,6 +2164,11 @@ config_detach(device_t dev, int flags)
 	alldevs_nwrite++;
 	mutex_exit(&alldevs_lock);
 
+	/*
+	 * Call the driver's .ca_detach function, unless it has none or
+	 * we are skipping it because it's unforced shutdown time and
+	 * the driver didn't ask to detach on shutdown.
+	 */
 	if (!detachall &&
 	    (flags & (DETACH_SHUTDOWN|DETACH_FORCE)) == DETACH_SHUTDOWN &&
 	    (dev->dv_flags & DVF_DETACH_SHUTDOWN) == 0) {
@@ -1973,25 +2178,59 @@ config_detach(device_t dev, int flags)
 	} else
 		rv = EOPNOTSUPP;
 
+	KASSERTMSG(!dev->dv_detach_done, "%s detached twice, error=%d",
+	    device_xname(dev), rv);
+
 	/*
 	 * If it was not possible to detach the device, then we either
 	 * panic() (for the forced but failed case), or return an error.
-	 *
-	 * If it was possible to detach the device, ensure that the
-	 * device is deactivated.
 	 */
-	if (rv == 0)
-		dev->dv_flags &= ~DVF_ACTIVE;
-	else if ((flags & DETACH_FORCE) == 0)
-		goto out;
-	else {
-		panic("config_detach: forced detach of %s failed (%d)",
+	if (rv) {
+		/*
+		 * Detach failed -- likely EOPNOTSUPP or EBUSY.  Driver
+		 * must not have called config_detach_commit.
+		 */
+		KASSERTMSG(!dev->dv_detach_committed,
+		    "%s committed to detaching and then backed out, error=%d",
 		    device_xname(dev), rv);
+		if (flags & DETACH_FORCE) {
+			panic("config_detach: forced detach of %s failed (%d)",
+			    device_xname(dev), rv);
+		}
+		goto out;
 	}
 
 	/*
 	 * The device has now been successfully detached.
 	 */
+	dev->dv_detach_done = true;
+
+	/*
+	 * If .ca_detach didn't commit to detach, then do that for it.
+	 * This wakes any pending device_lookup_acquire calls so they
+	 * will fail.
+	 */
+	config_detach_commit(dev);
+
+	/*
+	 * If it was possible to detach the device, ensure that the
+	 * device is deactivated.
+	 */
+	dev->dv_flags &= ~DVF_ACTIVE; /* XXXSMP */
+
+	/*
+	 * Wait for all device_lookup_acquire references -- mostly, for
+	 * all attempts to open the device -- to drain.  It is the
+	 * responsibility of .ca_detach to ensure anything with open
+	 * references will be interrupted and release them promptly,
+	 * not block indefinitely.  All new attempts to acquire
+	 * references will fail, as config_detach_commit has arranged
+	 * by now.
+	 */
+	mutex_enter(&config_misc_lock);
+	localcount_drain(dev->dv_localcount,
+	    &config_misc_cv, &config_misc_lock);
+	mutex_exit(&config_misc_lock);
 
 	/* Let userland know */
 	devmon_report_device(dev, false);
@@ -2058,6 +2297,60 @@ out:
 	KERNEL_UNLOCK_ONE(NULL);
 
 	return rv;
+}
+
+/*
+ * config_detach(dev, flags)
+ *
+ *	Legacy entry point for callers that have not acquired a
+ *	reference to dev.
+ *
+ *	The caller is required to hold the kernel lock as a fragile
+ *	defence against races.
+ *
+ *	Callers should be converted to use device_acquire under a lock
+ *	taken also by .ca_childdetached to synchronize access to the
+ *	device_t, and then config_detach_release ouside the lock.
+ *	Alternatively, most drivers detach children only in their own
+ *	detach routines, which can be done with config_detach_children
+ *	instead.
+ */
+int
+config_detach(device_t dev, int flags)
+{
+
+	device_acquire(dev);
+	return config_detach_release(dev, flags);
+}
+
+/*
+ * config_detach_commit(dev)
+ *
+ *	Issued by a driver's .ca_detach routine to notify anyone
+ *	waiting in device_lookup_acquire that the driver is committed
+ *	to detaching the device, which allows device_lookup_acquire to
+ *	wake up and fail immediately.
+ *
+ *	Safe to call multiple times -- idempotent.  Must be called
+ *	during config_detach_enter/exit.  Safe to use with
+ *	device_lookup because the device is not actually removed from
+ *	the table until after config_detach_exit.
+ */
+void
+config_detach_commit(device_t dev)
+{
+	struct lwp *l __diagused;
+
+	mutex_enter(&config_misc_lock);
+	KASSERTMSG(dev->dv_detaching != NULL, "not detaching %s",
+	    device_xname(dev));
+	KASSERTMSG((l = dev->dv_detaching) == curlwp,
+	    "lwp %ld [%s] @ %p detaching %s",
+	    (long)l->l_lid, (l->l_name ? l->l_name : l->l_proc->p_comm), l,
+	    device_xname(dev));
+	dev->dv_detach_committed = true;
+	cv_broadcast(&config_misc_cv);
+	mutex_exit(&config_misc_lock);
 }
 
 int
@@ -2397,6 +2690,7 @@ config_finalize(void)
 	struct finalize_hook *f;
 	struct pdevinit *pdev;
 	extern struct pdevinit pdevinit[];
+	unsigned t0 = getticks();
 	int errcnt, rv;
 
 	/*
@@ -2405,10 +2699,27 @@ config_finalize(void)
 	 */
 	mutex_enter(&config_misc_lock);
 	while (!TAILQ_EMPTY(&config_pending)) {
-		device_t dev;
-		TAILQ_FOREACH(dev, &config_pending, dv_pending_list)
-			aprint_debug_dev(dev, "holding up boot\n");
-		cv_wait(&config_misc_cv, &config_misc_lock);
+		const unsigned t1 = getticks();
+
+		if (t1 - t0 >= hz) {
+			void (*pr)(const char *, ...) __printflike(1,2);
+			device_t dev;
+
+			if (t1 - t0 >= 60*hz) {
+				pr = aprint_normal;
+				t0 = t1;
+			} else {
+				pr = aprint_debug;
+			}
+
+			(*pr)("waiting for devices:");
+			TAILQ_FOREACH(dev, &config_pending, dv_pending_list)
+				(*pr)(" %s", device_xname(dev));
+			(*pr)("\n");
+		}
+
+		(void)cv_timedwait(&config_misc_cv, &config_misc_lock,
+		    mstohz(1000));
 	}
 	mutex_exit(&config_misc_lock);
 
@@ -2493,6 +2804,17 @@ config_alldevs_exit(struct alldevs_foray *af)
  * device_lookup:
  *
  *	Look up a device instance for a given driver.
+ *
+ *	Caller is responsible for ensuring the device's state is
+ *	stable, either by holding a reference already obtained with
+ *	device_lookup_acquire or by otherwise ensuring the device is
+ *	attached and can't be detached (e.g., holding an open device
+ *	node and ensuring *_detach calls vdevgone).
+ *
+ *	XXX Find a way to assert this.
+ *
+ *	Safe for use up to and including interrupt context at IPL_VM.
+ *	Never sleeps.
  */
 device_t
 device_lookup(cfdriver_t cd, int unit)
@@ -2519,6 +2841,95 @@ device_lookup_private(cfdriver_t cd, int unit)
 {
 
 	return device_private(device_lookup(cd, unit));
+}
+
+/*
+ * device_lookup_acquire:
+ *
+ *	Look up a device instance for a given driver, and return a
+ *	reference to it that must be released by device_release.
+ *
+ *	=> If the device is still attaching, blocks until *_attach has
+ *	   returned.
+ *
+ *	=> If the device is detaching, blocks until *_detach has
+ *	   returned.  May succeed or fail in that case, depending on
+ *	   whether *_detach has backed out (EBUSY) or committed to
+ *	   detaching.
+ *
+ *	May sleep.
+ */
+device_t
+device_lookup_acquire(cfdriver_t cd, int unit)
+{
+	device_t dv;
+
+	ASSERT_SLEEPABLE();
+
+	/* XXX This should have a pserialized fast path -- TBD.  */
+	mutex_enter(&config_misc_lock);
+	mutex_enter(&alldevs_lock);
+retry:	if (unit < 0 || unit >= cd->cd_ndevs ||
+	    (dv = cd->cd_devs[unit]) == NULL ||
+	    dv->dv_del_gen != 0 ||
+	    dv->dv_detach_committed) {
+		dv = NULL;
+	} else {
+		/*
+		 * Wait for the device to stabilize, if attaching or
+		 * detaching.  Either way we must wait for *_attach or
+		 * *_detach to complete, and either way we must retry:
+		 * even if detaching, *_detach might fail (EBUSY) so
+		 * the device may still be there.
+		 */
+		if ((dv->dv_attaching != NULL && dv->dv_attaching != curlwp) ||
+		    dv->dv_detaching != NULL) {
+			mutex_exit(&alldevs_lock);
+			cv_wait(&config_misc_cv, &config_misc_lock);
+			mutex_enter(&alldevs_lock);
+			goto retry;
+		}
+		device_acquire(dv);
+	}
+	mutex_exit(&alldevs_lock);
+	mutex_exit(&config_misc_lock);
+
+	return dv;
+}
+
+/*
+ * device_acquire:
+ *
+ *	Acquire a reference to a device.  It is the caller's
+ *	responsibility to ensure that the device's .ca_detach routine
+ *	cannot return before calling this.  Caller must release the
+ *	reference with device_release or config_detach_release.
+ */
+void
+device_acquire(device_t dv)
+{
+
+	/*
+	 * No lock because the caller has promised that this can't
+	 * change concurrently with device_acquire.
+	 */
+	KASSERTMSG(!dv->dv_detach_done, "%s",
+	    dv == NULL ? "(null)" : device_xname(dv));
+	localcount_acquire(dv->dv_localcount);
+}
+
+/*
+ * device_release:
+ *
+ *	Release a reference to a device acquired with device_acquire or
+ *	device_lookup_acquire.
+ */
+void
+device_release(device_t dv)
+{
+
+	localcount_release(dv->dv_localcount,
+	    &config_misc_cv, &config_misc_lock);
 }
 
 /*
@@ -2921,26 +3332,17 @@ device_pmf_driver_shutdown(device_t dev, int how)
 	return true;
 }
 
-bool
+void
 device_pmf_driver_register(device_t dev,
     bool (*suspend)(device_t, const pmf_qual_t *),
     bool (*resume)(device_t, const pmf_qual_t *),
     bool (*shutdown)(device_t, int))
 {
+
 	dev->dv_driver_suspend = suspend;
 	dev->dv_driver_resume = resume;
 	dev->dv_driver_shutdown = shutdown;
 	dev->dv_flags |= DVF_POWER_HANDLERS;
-	return true;
-}
-
-static const char *
-curlwp_name(void)
-{
-	if (curlwp->l_name != NULL)
-		return curlwp->l_name;
-	else
-		return curlwp->l_proc->p_comm;
 }
 
 void
@@ -2967,19 +3369,19 @@ device_pmf_driver_deregister(device_t dev)
 	mutex_exit(&dvl->dvl_mtx);
 }
 
-bool
+void
 device_pmf_driver_child_register(device_t dev)
 {
 	device_t parent = device_parent(dev);
 
 	if (parent == NULL || parent->dv_driver_child_register == NULL)
-		return true;
-	return (*parent->dv_driver_child_register)(dev);
+		return;
+	(*parent->dv_driver_child_register)(dev);
 }
 
 void
 device_pmf_driver_set_child_register(device_t dev,
-    bool (*child_register)(device_t))
+    void (*child_register)(device_t))
 {
 	dev->dv_driver_child_register = child_register;
 }
@@ -2987,11 +3389,19 @@ device_pmf_driver_set_child_register(device_t dev,
 static void
 pmflock_debug(device_t dev, const char *func, int line)
 {
+#ifdef PMFLOCK_DEBUG
 	device_lock_t dvl = device_getlock(dev);
+	const char *curlwp_name;
+
+	if (curlwp->l_name != NULL)
+		curlwp_name = curlwp->l_name;
+	else
+		curlwp_name = curlwp->l_proc->p_comm;
 
 	aprint_debug_dev(dev,
 	    "%s.%d, %s dvl_nlock %d dvl_nwait %d dv_flags %x\n", func, line,
-	    curlwp_name(), dvl->dvl_nlock, dvl->dvl_nwait, dev->dv_flags);
+	    curlwp_name, dvl->dvl_nlock, dvl->dvl_nwait, dev->dv_flags);
+#endif	/* PMFLOCK_DEBUG */
 }
 
 static bool

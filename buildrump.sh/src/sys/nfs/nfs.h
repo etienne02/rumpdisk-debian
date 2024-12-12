@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs.h,v 1.79 2021/06/04 10:44:58 hannken Exp $	*/
+/*	$NetBSD: nfs.h,v 1.81 2024/12/07 02:05:55 riastradh Exp $	*/
 /*
  * Copyright (c) 1989, 1993, 1995
  *	The Regents of the University of California.  All rights reserved.
@@ -44,6 +44,8 @@
 #include <sys/rbtree.h>
 #endif
 
+#include <nfs/rpcv2.h>
+
 /*
  * Tunable constants for nfs
  */
@@ -69,8 +71,8 @@
 #define	NFS_TRYLATERDELMAX (1*60)	/* Maximum try later delay (sec) */
 #define	NFS_TRYLATERDELMUL 2		/* Exponential backoff multiplier */
 
-#define NFS_CWNDSCALE   256             
-#define NFS_MAXCWND     (NFS_CWNDSCALE * 32)    
+#define NFS_CWNDSCALE   256
+#define NFS_MAXCWND     (NFS_CWNDSCALE * 32)
 
 /*
  * These can be overridden through <machine/param.h>, included via
@@ -91,7 +93,7 @@
  * NFS client IO daemon threads. May be overridden by config options.
  */
 #ifndef NFS_MAXASYNCDAEMON
-#define	NFS_MAXASYNCDAEMON 	128	/* Max. number async_daemons runable */
+#define	NFS_MAXASYNCDAEMON 	128    /* Max. number async_daemons runnable */
 #endif
 
 /*

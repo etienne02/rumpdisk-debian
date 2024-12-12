@@ -1,4 +1,4 @@
-/*	$NetBSD: sni_i2c.c,v 1.12 2021/08/07 16:18:45 thorpej Exp $	*/
+/*	$NetBSD: sni_i2c.c,v 1.15 2022/03/24 08:08:05 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2020 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sni_i2c.c,v 1.12 2021/08/07 16:18:45 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sni_i2c.c,v 1.15 2022/03/24 08:08:05 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -53,23 +53,67 @@ __KERNEL_RCSID(0, "$NetBSD: sni_i2c.c,v 1.12 2021/08/07 16:18:45 thorpej Exp $")
 #include <dev/acpi/acpivar.h>
 #include <dev/acpi/acpi_intr.h>
 
+#define BSR		0x00		/* status */
+#define  BSR_BB		(1U<<7)		/* busy */
+#define  BSR_RSC	(1U<<6)		/* repeated cycle condition */
+#define  BSR_AL		(1U<<5)		/* arbitration lost */
+#define  BSR_LRB	(1U<<4)		/* last bit received */
+#define  BSR_XFR	(1U<<3)		/* start transfer */
+#define  BSR_AAS	(1U<<2)		/* ??? address as slave */
+#define  BSR_GCA	(1U<<1)		/* ??? general call address */
+#define  BSR_FBT	(1U<<0)		/* first byte transfer detected */
+#define BCR		0x04		/* control */
+#define  BCR_BERR	(1U<<7)		/* bus error report; W0C */
+#define  BCR_BEIEN	(1U<<6)		/* enable bus error interrupt */
+#define  BCR_SCC	(1U<<5)		/* make start condition */
+#define  BCR_MSS	(1U<<4)		/* 1: xmit, 0: recv */ 
+#define  BCR_ACK	(1U<<3)		/* make acknowledge at last byte */
+#define  BCR_GCAA	(1U<<2)		/* ??? general call access ack */
+#define  BCR_IEN	(1U<<1)		/* enable interrupt */
+#define  BCR_INT	(1U<<0)		/* interrupt report; W0C */
+#define CCR		0x08
+#define  CCR_FM		(1U<<6)		/* speed; 1: fast, 0: standard */
+#define  CCR_EN		(1U<<5)		/* enable clock feed */
+/* 4:0 clock rate select */
+#define ADR		0x0c		/* 6:0 my own address */
+#define DAR		0x10		/* 7:0 data port */
+#define CSR		0x14		/* 5:0 clock divisor */
+#define FSR		0x18		/* bus clock frequency */
+#define BC2R		0x1c		/* control 2 */
+#define  BC2R_SDA	(1U<<5)		/* detected SDA signal */
+#define  BC2R_SCL	(1U<<5)		/* detected SCL signal */
+#define  BC2R_SDA_L	(1U<<1)		/* make SDA signal low */
+#define  BC2R_SCL_L	(1U<<1)		/* make SCL signal low */
+
 static int sniiic_fdt_match(device_t, struct cfdata *, void *);
 static void sniiic_fdt_attach(device_t, device_t, void *);
 static int sniiic_acpi_match(device_t, struct cfdata *, void *);
 static void sniiic_acpi_attach(device_t, device_t, void *);
+
+typedef enum {
+	EXEC_IDLE	= 0,	/* sane and idle */
+	EXEC_ADDR	= 1,	/* send address bits */
+	EXEC_CMD	= 2,	/* send command bits */
+	EXEC_SEND	= 3,	/* data xmit */
+	EXEC_RECV	= 4,	/* data recv */
+	EXEC_DONE	= 5,	/* xter done */
+	EXEC_ERR	= 6,	/* recover error */
+} state_t;
 
 struct sniiic_softc {
 	device_t		sc_dev;
 	struct i2c_controller	sc_ic;
 	bus_space_tag_t		sc_iot;
 	bus_space_handle_t	sc_ioh;
-	bus_addr_t		sc_iob;
 	bus_size_t		sc_ios;
 	void			*sc_ih;
 	kmutex_t		sc_lock;
 	kmutex_t		sc_mtx;
 	kcondvar_t		sc_cv;
 	volatile bool		sc_busy;
+	state_t			sc_state;
+	u_int			sc_frequency;
+	u_int			sc_clkrate;
 	int			sc_phandle;
 };
 
@@ -90,13 +134,17 @@ static int sni_i2c_intr(void *);
 static void sni_i2c_reset(struct sniiic_softc *);
 static void sni_i2c_flush(struct sniiic_softc *);
 
-#define I2C_READ(sc, reg) \
+#define CSR_READ(sc, reg) \
     bus_space_read_4((sc)->sc_ioh,(sc)->sc_ioh,(reg))
-#define I2C_WRITE(sc, reg, val) \
+#define CSR_WRITE(sc, reg, val) \
     bus_space_write_4((sc)->sc_ioh,(sc)->sc_ioh,(reg),(val))
 
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "socionext,synquacer-i2c" },
+	DEVICE_COMPAT_EOL
+};
+static const struct device_compatible_entry compatible[] = {
+	{ .compat = "SCX0003" },
 	DEVICE_COMPAT_EOL
 };
 
@@ -119,13 +167,16 @@ sniiic_fdt_attach(device_t parent, device_t self, void *aux)
 	bus_size_t size;
 	char intrstr[128];
 
+	aprint_naive("\n");
+	aprint_normal(": Socionext I2C controller\n");
+
 	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0
 	    || bus_space_map(faa->faa_bst, addr, size, 0, &ioh) != 0) {
-		aprint_error(": unable to map device\n");
+		aprint_error_dev(self, "unable to map device\n");
 		return;
 	}
 	if (!fdtbus_intr_str(phandle, 0, intrstr, sizeof(intrstr))) {
-		aprint_error(": failed to decode interrupt\n");
+		aprint_error_dev(self, "failed to decode interrupt\n");
 		goto fail;
 	}
 	sc->sc_ih = fdtbus_intr_establish(phandle,
@@ -134,15 +185,13 @@ sniiic_fdt_attach(device_t parent, device_t self, void *aux)
 		aprint_error_dev(self, "couldn't establish interrupt\n");
 		goto fail;
 	}
-
-	aprint_naive("\n");
 	aprint_normal_dev(self, "interrupting on %s\n", intrstr);
 
 	sc->sc_dev = self;
 	sc->sc_iot = faa->faa_bst;
 	sc->sc_ioh = ioh;
-	sc->sc_iob = addr;
 	sc->sc_ios = size;
+	sc->sc_phandle = phandle;
 
 	sni_i2c_common_i(sc);
 
@@ -159,15 +208,9 @@ sniiic_fdt_attach(device_t parent, device_t self, void *aux)
 static int
 sniiic_acpi_match(device_t parent, struct cfdata *match, void *aux)
 {
-	static const char * compatible[] = {
-		"SCX0003",
-		NULL
-	};
 	struct acpi_attach_args *aa = aux;
 
-	if (aa->aa_node->ad_type != ACPI_TYPE_DEVICE)
-		return 0;
-	return acpi_match_hid(aa->aa_node->ad_devinfo, compatible);
+	return acpi_compatible_match(aa, compatible);
 }
 
 static void
@@ -175,6 +218,7 @@ sniiic_acpi_attach(device_t parent, device_t self, void *aux)
 {
 	struct sniiic_softc * const sc = device_private(self);
 	struct acpi_attach_args *aa = aux;
+	ACPI_HANDLE handle = aa->aa_node->ad_handle;
 	bus_space_handle_t ioh;
 	struct i2cbus_attach_args iba;
 	struct acpi_resources res;
@@ -182,36 +226,38 @@ sniiic_acpi_attach(device_t parent, device_t self, void *aux)
 	struct acpi_irq *irq;
 	ACPI_STATUS rv;
 
+	aprint_naive("\n");
+	aprint_normal(": Socionext I2C controller\n");
+
 	rv = acpi_resource_parse(self, aa->aa_node->ad_handle, "_CRS",
 	    &res, &acpi_resource_parse_ops_default);
-	if (ACPI_FAILURE(rv))
+	if (ACPI_FAILURE(rv)) {
+		aprint_error_dev(self, "missing crs resources\n");
 		return;
+	}
 	mem = acpi_res_mem(&res, 0);
 	irq = acpi_res_irq(&res, 0);
 	if (mem == NULL || irq == NULL || mem->ar_length == 0) {
-		aprint_error(": incomplete resources\n");
+		aprint_error_dev(self, "incomplete resources\n");
 		return;
 	}
 	if (bus_space_map(aa->aa_memt, mem->ar_base, mem->ar_length, 0,
 	    &ioh)) {
-		aprint_error(": couldn't map registers\n");
+		aprint_error_dev(self, "couldn't map registers\n");
 		return;
 	}
-	sc->sc_ih = acpi_intr_establish(self,
-	    (uint64_t)(uintptr_t)aa->aa_node->ad_handle,
+	sc->sc_ih = acpi_intr_establish(self, (uint64_t)handle,
 	    IPL_BIO, false, sni_i2c_intr, sc, device_xname(self));
 	if (sc->sc_ih == NULL) {
 		aprint_error_dev(self, "couldn't establish interrupt\n");
 		goto fail;
 	}
 
-	aprint_naive("\n");
-
 	sc->sc_dev = self;
 	sc->sc_iot = aa->aa_memt;
 	sc->sc_ioh = ioh;
-	sc->sc_iob = mem->ar_base;
 	sc->sc_ios = mem->ar_length;
+	sc->sc_phandle = 0;
 
 	sni_i2c_common_i(sc);
 
@@ -233,8 +279,6 @@ sniiic_acpi_attach(device_t parent, device_t self, void *aux)
 void
 sni_i2c_common_i(struct sniiic_softc *sc)
 {
-
-	aprint_normal_dev(sc->sc_dev, "Socionext I2C controller\n");
 
 	iic_tag_init(&sc->sc_ic);
 	sc->sc_ic.ic_cookie = sc;

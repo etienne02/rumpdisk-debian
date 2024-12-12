@@ -1,7 +1,14 @@
-/*	$NetBSD: msg_059.c,v 1.2 2021/02/21 09:07:58 rillig Exp $	*/
+/*	$NetBSD: msg_059.c,v 1.5 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_059.c"
 
-// Test for message: formal parameter lacks name: param #%d [59]
+// Test for message: formal parameter #%d lacks name [59]
 
-TODO: "Add example code that triggers the above message." /* expect: 249 */
-TODO: "Add example code that almost triggers the above message."
+/* lint1-extra-flags: -X 351 */
+
+/* expect+4: error: formal parameter #2 lacks name [59] */
+/* expect+3: error: formal parameter #3 lacks name [59] */
+int
+function_definition(int a, int, double)
+{
+	return a;
+}

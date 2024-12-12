@@ -1,7 +1,7 @@
-/* $NetBSD: bus_dma.c,v 1.36 2020/12/19 21:39:24 thorpej Exp $ */
+/* $NetBSD: bus_dma.c,v 1.40 2023/09/26 12:46:30 tsutsui Exp $ */
 
 /*
- * This file was taken from from alpha/common/bus_dma.c
+ * This file was taken from alpha/common/bus_dma.c
  * should probably be re-synced when needed.
  * Darrin B. Jewell <dbj@NetBSD.org> Sat Jul 31 06:11:33 UTC 1999
  * original cvs id: NetBSD: bus_dma.c,v 1.31 1999/07/08 18:05:23 thorpej Exp
@@ -41,7 +41,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.36 2020/12/19 21:39:24 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bus_dma.c,v 1.40 2023/09/26 12:46:30 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -69,7 +69,7 @@ _bus_dmamap_mapsize(int const nsegments)
 	KASSERT(nsegments > 0);
 	return sizeof(struct m68k_bus_dmamap) +
 	   (sizeof(bus_dma_segment_t) * (nsegments - 1));
-}              
+}
 
 /*
  * Common function for DMA map creation.  May be called by bus-specific
@@ -494,7 +494,8 @@ _bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 			}
 
 			/* flush cachelines per 128bytes */
-			while ((p < e) && (p & PAGE_MASK) != 0) {
+			while ((p + CACHELINE_SIZE * 8 <= e) &&
+			    (p & PAGE_MASK) != 0) {
 				DCFL(p);
 				p += CACHELINE_SIZE;
 				DCFL(p);
@@ -570,7 +571,8 @@ _bus_dmamap_sync(bus_dma_tag_t t, bus_dmamap_t map, bus_addr_t offset,
 			}
 
 			/* purge cachelines per 128bytes */
-			while ((p < e) && (p & PAGE_MASK) != 0) {
+			while ((p + CACHELINE_SIZE * 8 <= e) &&
+			    (p & PAGE_MASK) != 0) {
 				DCPL(p);
 				p += CACHELINE_SIZE;
 				DCPL(p);
@@ -803,7 +805,7 @@ _bus_dmamem_unmap(bus_dma_tag_t t, void *kva, size_t size)
 }
 
 /*
- * Common functin for mmap(2)'ing DMA-safe memory.  May be called by
+ * Common function for mmap(2)'ing DMA-safe memory.  May be called by
  * bus-specific DMA mmap(2)'ing functions.
  */
 paddr_t

@@ -1,4 +1,4 @@
-/*      $NetBSD: wmcom.c,v 1.8 2019/11/10 21:16:25 chs Exp $      */
+/*      $NetBSD: wmcom.c,v 1.10 2023/09/01 08:53:52 andvar Exp $      */
 /*
  * Copyright (c) 2012 KIYOHARA Takashi
  * All rights reserved.
@@ -25,7 +25,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wmcom.c,v 1.8 2019/11/10 21:16:25 chs Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wmcom.c,v 1.10 2023/09/01 08:53:52 andvar Exp $");
 
 #include "rnd.h"
 
@@ -43,6 +43,8 @@ __KERNEL_RCSID(0, "$NetBSD: wmcom.c,v 1.8 2019/11/10 21:16:25 chs Exp $");
 #include <sys/termios.h>
 #include <sys/tty.h>
 #include <sys/types.h>
+
+#include <ddb/db_active.h>
 
 #include <epoc32/windermere/windermerereg.h>
 #include <epoc32/windermere/windermerevar.h>
@@ -90,7 +92,7 @@ struct wmcom_softc {
 #define WMCOM_IRDA	(1 << 0)
 
 #ifdef RND_COM
-	krandsource_t rnd_source;
+	krndsource_t rnd_source;
 #endif
 };
 
@@ -890,10 +892,7 @@ wmcom_cngetc(dev_t dev)
 	ch = WMCOM_CNREAD_4(UARTDR);
 
 	{
-#ifdef DDB
-		extern int db_active;
 		if (!db_active)
-#endif
 			cn_check_magic(dev, ch, wmcom_cnm_state);
 	}
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: t_ifunc.c,v 1.9 2019/07/09 16:24:01 maya Exp $	*/
+/*	$NetBSD: t_ifunc.c,v 1.13 2022/06/21 16:24:37 christos Exp $	*/
 
 /*
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -35,7 +35,13 @@
 
 #include "h_macros.h"
 
-#if defined( __arm__) || defined(__i386__) || defined(__x86_64__) || defined(__powerpc__) || defined(__sparc__)
+#if \
+    defined(__aarch64__) || \
+    defined(__arm__) || \
+    defined(__i386__) || \
+    defined(__powerpc__) || \
+    defined(__sparc__) || \
+    defined(__x86_64__)
 #define	LINKER_SUPPORT 1
 #else
 #define	LINKER_SUPPORT 0

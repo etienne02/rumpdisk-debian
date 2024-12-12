@@ -1,4 +1,4 @@
-/*	$NetBSD: mainbus.c,v 1.24 2021/08/07 16:18:58 thorpej Exp $	*/
+/*	$NetBSD: mainbus.c,v 1.26 2023/05/09 10:49:46 macallan Exp $	*/
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All rights reserved.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mainbus.c,v 1.24 2021/08/07 16:18:58 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mainbus.c,v 1.26 2023/05/09 10:49:46 macallan Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -73,15 +73,24 @@ mainbus_attach(device_t parent, device_t self, void *aux)
 
 	printf("\n");
 
+	devhandle_t selfh = device_handle(self);
+
 	cpus = OF_finddevice("/cpus");
-	if (cpus != 0) {
+	/*
+	 * XXX
+	 * the canonical error value is -1 but I dimly remember some OF
+	 * variants returning 0 here, so check for both just in case.
+	 * It's not like this is a performance critical path.
+	 */
+	if ((cpus != -1) && (cpus != 0)) {
 		node = OF_child(cpus);
 		while (node != 0) {
 			ca.ca_name = "cpu";
 			ca.ca_reg = reg;
 			ca.ca_nreg = OF_getprop(node, "reg", reg, sizeof(reg));
 			config_found(self, &ca, NULL,
-			    CFARGS(.devhandle = devhandle_from_of(node)));
+			    CFARGS(.devhandle = devhandle_from_of(selfh,
+								  node)));
 			node = OF_peer(node);
 		}			
 	} else {
@@ -100,7 +109,7 @@ mainbus_attach(device_t parent, device_t self, void *aux)
 		oba.oba_busname = "ofw";
 		oba.oba_phandle = node;
 		config_found(self, &oba, NULL,
-		    CFARGS(.devhandle = devhandle_from_of(node)));
+		    CFARGS(.devhandle = devhandle_from_of(selfh, node)));
 	}
 
 	for (node = OF_child(OF_finddevice("/")); node; node = OF_peer(node)) {
@@ -113,7 +122,7 @@ mainbus_attach(device_t parent, device_t self, void *aux)
 		ca.ca_nreg = OF_getprop(node, "reg", reg, sizeof(reg));
 		ca.ca_reg  = reg;
 		config_found(self, &ca, NULL,
-		    CFARGS(.devhandle = devhandle_from_of(node)));
+		    CFARGS(.devhandle = devhandle_from_of(selfh, node)));
 	}
 
 #ifdef MAMBO

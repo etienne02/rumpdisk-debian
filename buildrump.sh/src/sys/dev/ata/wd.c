@@ -1,4 +1,4 @@
-/*	$NetBSD: wd.c,v 1.465 2020/09/28 12:47:49 jakllsch Exp $ */
+/*	$NetBSD: wd.c,v 1.470 2024/09/22 17:31:43 uwe Exp $ */
 
 /*
  * Copyright (c) 1998, 2001 Manuel Bouyer.  All rights reserved.
@@ -54,7 +54,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wd.c,v 1.465 2020/09/28 12:47:49 jakllsch Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wd.c,v 1.470 2024/09/22 17:31:43 uwe Exp $");
 
 #include "opt_ata.h"
 #include "opt_wd.h"
@@ -104,7 +104,7 @@ __KERNEL_RCSID(0, "$NetBSD: wd.c,v 1.465 2020/09/28 12:47:49 jakllsch Exp $");
 #define DEBUG_FUNCS  0x08
 #define DEBUG_PROBE  0x10
 #define DEBUG_DETACH 0x20
-#define	DEBUG_XFERS  0x40
+#define DEBUG_XFERS  0x40
 #ifdef ATADEBUG
 #ifndef ATADEBUG_WD_MASK
 #define ATADEBUG_WD_MASK 0x0
@@ -152,6 +152,8 @@ const struct bdevsw wd_bdevsw = {
 	.d_dump = wddump,
 	.d_psize = wdsize,
 	.d_discard = wddiscard,
+	.d_cfdriver = &wd_cd,
+	.d_devtounit = disklabel_dev_unit,
 	.d_flag = D_DISK
 };
 
@@ -167,6 +169,8 @@ const struct cdevsw wd_cdevsw = {
 	.d_mmap = nommap,
 	.d_kqfilter = nokqfilter,
 	.d_discard = wddiscard,
+	.d_cfdriver = &wd_cd,
+	.d_devtounit = disklabel_dev_unit,
 	.d_flag = D_DISK
 };
 
@@ -316,6 +320,7 @@ wdattach(device_t parent, device_t self, void *aux)
 	mutex_init(&wd->sc_lock, MUTEX_DEFAULT, IPL_BIO);
 #ifdef WD_SOFTBADSECT
 	SLIST_INIT(&wd->sc_bslist);
+	cv_init(&wd->sc_bslist_cv, "wdbadsect");
 #endif
 	wd->atabus = adev->adev_bustype;
 	wd->inflight = 0;
@@ -407,17 +412,37 @@ wdattach(device_t parent, device_t self, void *aux)
 		wd->sc_capacity28 =
 		    (wd->sc_params.atap_capacity[1] << 16) |
 		    wd->sc_params.atap_capacity[0];
+		/*
+		 * Force LBA48 addressing for invalid numbers.
+		 */
+		if (wd->sc_capacity28 > 0xfffffff)
+			wd->sc_capacity28 = 0xfffffff;
 	} else if ((wd->sc_flags & WDF_LBA) != 0) {
 		aprint_verbose(" LBA addressing\n");
-		wd->sc_capacity28 = wd->sc_capacity =
+		wd->sc_capacity28 =
 		    (wd->sc_params.atap_capacity[1] << 16) |
 		    wd->sc_params.atap_capacity[0];
+		/*
+		 * Limit capacity to LBA28 numbers to avoid overflow.
+		 */
+		if (wd->sc_capacity28 > 0xfffffff)
+			wd->sc_capacity28 = 0xfffffff;
+		wd->sc_capacity = wd->sc_capacity28;
 	} else {
 		aprint_verbose(" chs addressing\n");
-		wd->sc_capacity28 = wd->sc_capacity =
+		wd->sc_capacity =
 		    wd->sc_params.atap_cylinders *
 		    wd->sc_params.atap_heads *
 		    wd->sc_params.atap_sectors;
+		/*
+		 * LBA28 size is ignored for CHS addressing. Use a reasonable
+		 * value for debugging. The CHS values may be artificial and
+		 * are mostly ignored.
+		 */
+		if (wd->sc_capacity < 0xfffffff)
+			wd->sc_capacity28 = wd->sc_capacity;
+		else
+			wd->sc_capacity28 = 0xfffffff;
 	}
 	if ((wd->sc_params.atap_secsz & ATA_SECSZ_VALID_MASK) == ATA_SECSZ_VALID
 	    && ((wd->sc_params.atap_secsz & ATA_SECSZ_LLS) != 0)) {
@@ -586,6 +611,11 @@ wddetach(device_t self, int flags)
 	pmf_device_deregister(self);
 
 	wd_sysctl_detach(wd);
+
+#ifdef WD_SOFTBADSECT
+	KASSERT(SLIST_EMPTY(&wd->sc_bslist));
+	cv_destroy(&wd->sc_bslist_cv);
+#endif
 
 	mutex_destroy(&wd->sc_lock);
 
@@ -1279,13 +1309,13 @@ wdioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 		return 0;
 #endif
 #ifdef WD_SOFTBADSECT
-	case DIOCBSLIST :
-	{
+	case DIOCBSLIST: {
 		uint32_t count, missing, skip;
 		struct disk_badsecinfo dbsi;
-		struct disk_badsectors *dbs;
+		struct disk_badsectors *dbs, dbsbuf;
 		size_t available;
 		uint8_t *laddr;
+		int error;
 
 		dbsi = *(struct disk_badsecinfo *)addr;
 		missing = wd->sc_bscount;
@@ -1303,7 +1333,9 @@ wdioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 		 * back to user space whilst the summary is returned via
 		 * the struct passed in via the ioctl.
 		 */
+		error = 0;
 		mutex_enter(&wd->sc_lock);
+		wd->sc_bslist_inuse++;
 		SLIST_FOREACH(dbs, &wd->sc_bslist, dbs_next) {
 			if (skip > 0) {
 				missing--;
@@ -1313,30 +1345,57 @@ wdioctl(dev_t dev, u_long cmd, void *addr, int flag, struct lwp *l)
 			if (available < sizeof(*dbs))
 				break;
 			available -= sizeof(*dbs);
-			copyout(dbs, laddr, sizeof(*dbs));
+			memset(&dbsbuf, 0, sizeof(dbsbuf));
+			dbsbuf.dbs_min = dbs->dbs_min;
+			dbsbuf.dbs_max = dbs->dbs_max;
+			dbsbuf.dbs_failedat = dbs->dbs_failedat;
+			mutex_exit(&wd->sc_lock);
+			error = copyout(&dbsbuf, laddr, sizeof(dbsbuf));
+			mutex_enter(&wd->sc_lock);
+			if (error)
+				break;
 			laddr += sizeof(*dbs);
 			missing--;
 			count++;
 		}
+		if (--wd->sc_bslist_inuse == 0)
+			cv_broadcast(&wd->sc_bslist_cv);
 		mutex_exit(&wd->sc_lock);
 		dbsi.dbsi_left = missing;
 		dbsi.dbsi_copied = count;
 		*(struct disk_badsecinfo *)addr = dbsi;
-		return 0;
+
+		/*
+		 * If we copied anything out, ignore error and return
+		 * success -- can't back it out.
+		 */
+		return count ? 0 : error;
 	}
 
-	case DIOCBSFLUSH :
+	case DIOCBSFLUSH: {
+		int error;
+
 		/* Clean out the bad sector list */
 		mutex_enter(&wd->sc_lock);
+		while (wd->sc_bslist_inuse) {
+			error = cv_wait_sig(&wd->sc_bslist_cv, &wd->sc_lock);
+			if (error) {
+				mutex_exit(&wd->sc_lock);
+				return error;
+			}
+		}
 		while (!SLIST_EMPTY(&wd->sc_bslist)) {
 			struct disk_badsectors *dbs =
 			    SLIST_FIRST(&wd->sc_bslist);
 			SLIST_REMOVE_HEAD(&wd->sc_bslist, dbs_next);
+			mutex_exit(&wd->sc_lock);
 			kmem_free(dbs, sizeof(*dbs));
+			mutex_enter(&wd->sc_lock);
 		}
 		mutex_exit(&wd->sc_lock);
 		wd->sc_bscount = 0;
 		return 0;
+	}
 #endif
 
 #ifdef notyet

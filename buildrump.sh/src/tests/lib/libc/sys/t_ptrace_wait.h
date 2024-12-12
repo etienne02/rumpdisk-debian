@@ -1,4 +1,4 @@
-/*	$NetBSD: t_ptrace_wait.h,v 1.33 2021/05/24 10:44:06 gson Exp $	*/
+/*	$NetBSD: t_ptrace_wait.h,v 1.36 2024/05/14 16:06:20 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2016, 2017, 2018, 2019 The NetBSD Foundation, Inc.
@@ -143,7 +143,7 @@ do {									\
  * A child process cannot call atf functions and expect them to magically
  * work like in the parent.
  * The printf(3) messaging from a child will not work out of the box as well
- * without estabilishing a communication protocol with its parent. To not
+ * without establishing a communication protocol with its parent. To not
  * overcomplicate the tests - do not log from a child and use err(3)/errx(3)
  * wrapped with FORKEE_ASSERT()/FORKEE_ASSERTX() as that is guaranteed to work.
  */
@@ -673,9 +673,13 @@ are_fpu_exceptions_supported(void)
 		return false;
 	return true;
 }
+#elif defined __riscv__
+#define are_fpu_exceptions_supported() 0
 #else
 #define are_fpu_exceptions_supported() 1
 #endif
+
+volatile double ignore_result;
 
 static void __used
 trigger_fpe(void)
@@ -701,7 +705,7 @@ trigger_fpe(void)
 #endif
 
 	/* Division by zero causes CPU trap, translated to SIGFPE */
-	usleep((int)(a / b));
+	ignore_result = (int)(a / b);
 }
 
 static void __used

@@ -1,4 +1,4 @@
-/*	$NetBSD: expr_range.c,v 1.3 2021/07/05 19:43:29 rillig Exp $	*/
+/*	$NetBSD: expr_range.c,v 1.6 2024/11/13 04:32:49 rillig Exp $	*/
 # 3 "expr_range.c"
 
 /*
@@ -16,7 +16,7 @@
  * possible values may be related to RangeConstraintManager, just guessing.
  */
 
-/* lint1-extra-flags: -chap */
+/* lint1-extra-flags: -chap -X 351 */
 
 void println(const char *);
 
@@ -27,7 +27,8 @@ example(unsigned x)
 	case 0:
 		println("0 is reachable");
 		break;
-	case 1:			/* expect: statement not reached */
+	case 1:
+		/* expect-1: warning: 'case' statement not reached [193] */
 		println("1 is not reachable");
 		break;
 	case 2:
@@ -36,7 +37,8 @@ example(unsigned x)
 	case 6:
 		println("6 is reachable");
 		break;
-	case 7:			/* expect: statement not reached */
+	case 7:
+		/* expect-1: warning: 'case' statement not reached [193] */
 		println("7 is not reachable");
 		break;
 	}

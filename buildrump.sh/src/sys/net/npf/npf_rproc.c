@@ -33,7 +33,7 @@
 
 #ifdef _KERNEL
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: npf_rproc.c,v 1.20 2020/05/30 14:16:56 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: npf_rproc.c,v 1.23 2023/02/24 11:03:01 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -330,9 +330,12 @@ npf_rproc_release(npf_rproc_t *rp)
 {
 	KASSERT(atomic_load_relaxed(&rp->rp_refcnt) > 0);
 
+	membar_release();
 	if (atomic_dec_uint_nv(&rp->rp_refcnt) != 0) {
 		return;
 	}
+	membar_acquire();
+
 	/* XXXintr */
 	for (unsigned i = 0; i < rp->rp_ext_count; i++) {
 		npf_ext_t *ext = rp->rp_ext[i];

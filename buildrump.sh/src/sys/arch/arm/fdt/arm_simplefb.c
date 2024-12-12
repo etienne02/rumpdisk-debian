@@ -1,4 +1,4 @@
-/* $NetBSD: arm_simplefb.c,v 1.11 2021/08/30 22:47:24 jmcneill Exp $ */
+/* $NetBSD: arm_simplefb.c,v 1.13 2022/10/14 22:10:15 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2019 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
 #include "opt_vcons.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm_simplefb.c,v 1.11 2021/08/30 22:47:24 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm_simplefb.c,v 1.13 2022/10/14 22:10:15 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -174,26 +174,6 @@ arm_simplefb_pollc(void *v, int on)
 {
 }
 
-#if NPCI > 0 && defined(PCI_NETBSD_CONFIGURE)
-static void
-arm_simplefb_reconfig(void *arg, uint64_t new_addr)
-{
-	struct arm_simplefb_softc * const sc = &arm_simplefb_softc;
-	struct rasops_info *ri = &arm_simplefb_screen.scr_ri;
-	bus_space_tag_t bst = &arm_generic_bs_tag;
-
-	bus_space_unmap(bst, arm_simplefb_bsh, arm_simplefb_size);
-	bus_space_map(bst, new_addr, arm_simplefb_size,
-	    BUS_SPACE_MAP_LINEAR | BUS_SPACE_MAP_PREFETCHABLE,
-	    &arm_simplefb_bsh);
-
-	sc->sc_bits = bus_space_vaddr(bst, arm_simplefb_bsh);
-	ri->ri_bits = sc->sc_bits;
-
-	arm_simplefb_addr = (bus_addr_t)new_addr;
-}
-#endif
-
 uint64_t
 arm_simplefb_physaddr(void)
 {
@@ -281,9 +261,6 @@ arm_simplefb_preattach(void)
 	vcons_earlyinit(&arm_simplefb_vcons_data, sc, &arm_simplefb_stdscreen,
 	    &arm_simplefb_accessops);
 	arm_simplefb_vcons_data.init_screen = arm_simplefb_init_screen;
-#ifdef VCONS_DRAW_INTR
-	arm_simplefb_vcons_data.use_intr = 0;
-#endif
 	vcons_init_screen(&arm_simplefb_vcons_data, &arm_simplefb_screen, 1,
 	    &defattr);
 	arm_simplefb_screen.scr_flags |= VCONS_SCREEN_IS_STATIC;
@@ -299,14 +276,4 @@ arm_simplefb_preattach(void)
 	wsdisplay_preattach(&arm_simplefb_stdscreen, ri, 0, 0, defattr);
 
 	vcons_replay_msgbuf(&arm_simplefb_screen);
-
-#if NPCI > 0 && defined(PCI_NETBSD_CONFIGURE)
-	/*
-	 * Let the PCI resource allocator know about our framebuffer. This
-	 * lets us know if the FB base address changes so we can remap the
-	 * framebuffer if necessary.
-	 */
-	pciconf_resource_reserve(PCI_CONF_MAP_MEM, addr, size,
-	    arm_simplefb_reconfig, NULL);
-#endif
 }

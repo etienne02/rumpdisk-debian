@@ -1,4 +1,4 @@
-/*	$NetBSD: move.c,v 1.21 2019/06/09 07:40:14 blymn Exp $	*/
+/*	$NetBSD: move.c,v 1.25 2022/11/04 06:12:22 blymn Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)move.c	8.2 (Berkeley) 5/4/94";
 #else
-__RCSID("$NetBSD: move.c,v 1.21 2019/06/09 07:40:14 blymn Exp $");
+__RCSID("$NetBSD: move.c,v 1.25 2022/11/04 06:12:22 blymn Exp $");
 #endif
 #endif				/* not lint */
 
@@ -62,13 +62,19 @@ move(int y, int x)
 int
 wmove(WINDOW *win, int y, int x)
 {
-#ifdef DEBUG
-	__CTRACE(__CTRACE_MISC, "wmove: (%d, %d)\n", y, x);
-#endif
+	__CTRACE(__CTRACE_MISC, "wmove: win %p, (%d, %d)\n", win, y, x);
 	if (x < 0 || y < 0)
 		return ERR;
-	if (x >= win->maxx || y >= win->maxy)
+	if (x > win->maxx || y >= win->maxy)
 		return ERR;
+
+	/* clear the EOL flags for both where we were and where we are going */
+	if (win->cury < win->maxy)
+		win->alines[win->cury]->flags &= ~ __ISPASTEOL;
+	win->alines[y]->flags &= ~ __ISPASTEOL;
+
+	if (x == win->maxx)
+		win->alines[y]->flags |= __ISPASTEOL;
 
 	win->curx = x;
 	win->cury = y;

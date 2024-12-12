@@ -1,4 +1,4 @@
-/*	$NetBSD: vioscsi.c,v 1.27 2021/08/07 16:19:14 thorpej Exp $	*/
+/*	$NetBSD: vioscsi.c,v 1.36 2023/03/25 11:04:34 mlelstv Exp $	*/
 /*	$OpenBSD: vioscsi.c,v 1.3 2015/03/14 03:38:49 jsg Exp $	*/
 
 /*
@@ -18,7 +18,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vioscsi.c,v 1.27 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vioscsi.c,v 1.36 2023/03/25 11:04:34 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -67,7 +67,7 @@ struct vioscsi_softc {
 	kmutex_t		 sc_mutex;
 };
 
-/*      
+/*
  * Each block request uses at least two segments - one for the header
  * and one for the status.
 */
@@ -128,8 +128,7 @@ vioscsi_attach(device_t parent, device_t self, void *aux)
 
 	sc->sc_dev = self;
 
-	virtio_child_attach_start(vsc, self, ipl, sc->sc_vqs,
-	    NULL, virtio_vq_intr, VIRTIO_F_INTR_MSIX,
+	virtio_child_attach_start(vsc, self, ipl,
 	    0, VIRTIO_COMMON_FLAG_BITS);
 
 	mutex_init(&sc->sc_mutex, MUTEX_DEFAULT, ipl);
@@ -149,7 +148,9 @@ vioscsi_attach(device_t parent, device_t self, void *aux)
 	sc->sc_seg_max = seg_max;
 
 	for(i=0; i < __arraycount(sc->sc_vqs); i++) {
-		rv = virtio_alloc_vq(vsc, &sc->sc_vqs[i], i, MAXPHYS,
+		virtio_init_vq_vqdone(vsc, &sc->sc_vqs[i], i,
+		    vioscsi_vq_done);
+		rv = virtio_alloc_vq(vsc, &sc->sc_vqs[i], MAXPHYS,
 		    VIRTIO_SCSI_MIN_SEGMENTS + howmany(MAXPHYS, NBPG),
 		    vioscsi_vq_names[i]);
 		if (rv) {
@@ -171,7 +172,9 @@ vioscsi_attach(device_t parent, device_t self, void *aux)
 	    " max_lun %u\n",
 	    cmd_per_lun, qsize, seg_max, max_target, max_lun);
 
-	if (virtio_child_attach_finish(vsc) != 0)
+	if (virtio_child_attach_finish(vsc, sc->sc_vqs,
+	    __arraycount(sc->sc_vqs), NULL,
+	    VIRTIO_F_INTR_MSIX | VIRTIO_F_INTR_MPSAFE) != 0)
 		goto err;
 
 	/*
@@ -184,6 +187,7 @@ vioscsi_attach(device_t parent, device_t self, void *aux)
 	adapt->adapt_max_periph = adapt->adapt_openings;
 	adapt->adapt_request = vioscsi_scsipi_request;
 	adapt->adapt_minphys = minphys;
+	adapt->adapt_flags = SCSIPI_ADAPT_MPSAFE;
 
 	/*
 	 * Fill in the scsipi_channel.
@@ -192,25 +196,10 @@ vioscsi_attach(device_t parent, device_t self, void *aux)
 	chan->chan_adapter = adapt;
 	chan->chan_bustype = &scsi_bustype;
 	chan->chan_channel = 0;
-	chan->chan_ntargets = MIN(max_target, 16);	/* cap reasonably */
-	chan->chan_nluns = MIN(max_lun, 1024);		/* cap reasonably */
-	chan->chan_id = max_target;
+	chan->chan_ntargets = MIN(1 + max_target, 256);	/* cap reasonably */
+	chan->chan_nluns = MIN(1 + max_lun, 16384);	/* cap reasonably */
+	chan->chan_id = max_target + 1;
 	chan->chan_flags = SCSIPI_CHAN_NOSETTLE;
-	/*
-	 * XXX Remove this when scsipi is REPORT LUNS-aware.
-	 * scsipi(4) insists that LUNs must be contiguous starting from 0.
-	 * This is not true on Linode (circa 2020).
-	 *
-	 * Also if explicitly selecting the 'Virtio SCSI Single'
-	 * controller (which is not the default SCSI controller) on
-	 * Proxmox hosts, each disk will be on its own scsi bus at
-	 * target 0 but unexpectedly on a LUN matching the drive number
-	 * on the system (i.e. drive 0 will be bus 0, target 0, lun
-	 * 0; drive 1 will be bus 1, target 0, lun 1, drive 2 will be
-	 * bus 2, target 0, lun 2 -- which is where the gaps start
-	 * happening). https://bugzilla.proxmox.com/show_bug.cgi?id=2985
-	 */
-	chan->chan_defquirks = PQUIRK_FORCELUNS;
 
 	config_found(self, &sc->sc_channel, scsiprint, CFARGS_NONE);
 	return;
@@ -220,8 +209,7 @@ err:
 		vioscsi_free_reqs(sc, vsc);
 
 	for (i=0; i < __arraycount(sc->sc_vqs); i++) {
-		if (sc->sc_vqs[i].vq_num > 0)
-			virtio_free_vq(vsc, &sc->sc_vqs[i]);
+		virtio_free_vq(vsc, &sc->sc_vqs[i]);
 	}
 
 	virtio_child_attach_failed(vsc);
@@ -279,7 +267,7 @@ vioscsi_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t
 	struct vioscsi_softc *sc =
 	    device_private(chan->chan_adapter->adapt_dev);
 	struct virtio_softc *vsc = device_private(device_parent(sc->sc_dev));
-	struct scsipi_xfer *xs; 
+	struct scsipi_xfer *xs;
 	struct scsipi_periph *periph;
 	struct vioscsi_req *vr;
 	struct virtio_scsi_req_hdr *req;
@@ -305,7 +293,7 @@ vioscsi_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t
 		DPRINTF(("%s: unhandled %d\n", __func__, request));
 		return;
 	}
-	
+
 	xs = arg;
 	periph = xs->xs_periph;
 
@@ -314,7 +302,7 @@ vioscsi_scsipi_request(struct scsipi_channel *chan, scsipi_adapter_req_t
 	 */
 	vr = vioscsi_req_get(sc);
 	if (vr == NULL) {
-		xs->error = XS_RESOURCE_SHORTAGE;
+		xs->error = XS_BUSY;
 		scsipi_done(xs);
 		return;
 	}
@@ -401,11 +389,9 @@ stuffup:
 
 	error = virtio_enqueue_reserve(vsc, vq, slot, nsegs);
 	if (error) {
-		aprint_error_dev(sc->sc_dev, "error reserving %d (nsegs %d)\n",
-		    error, nsegs);
 		bus_dmamap_unload(virtio_dmat(vsc), vr->vr_data);
 		/* slot already freed by virtio_enqueue_reserve() */
-		xs->error = XS_RESOURCE_SHORTAGE;
+		xs->error = XS_BUSY;
 		scsipi_done(xs);
 		return;
 	}
@@ -619,7 +605,7 @@ vioscsi_alloc_reqs(struct vioscsi_softc *sc, struct virtio_softc *vsc,
 	sc->sc_reqs = vaddr;
 	sc->sc_nreqs = qsize;
 
-	/* Prepare maps for the requests */ 
+	/* Prepare maps for the requests */
 	for (slot=0; slot < qsize; slot++) {
 		vr = &sc->sc_reqs[slot];
 
@@ -629,7 +615,7 @@ vioscsi_alloc_reqs(struct vioscsi_softc *sc, struct virtio_softc *vsc,
 		    BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW, &vr->vr_control);
 		if (r != 0) {
 			aprint_error_dev(sc->sc_dev,
-		    	    "%s: bus_dmamem_create ctrl failed, error %d\n",
+		    	    "%s: bus_dmamap_create ctrl failed, error %d\n",
 			    __func__, r);
 			goto cleanup;
 		}
@@ -638,7 +624,7 @@ vioscsi_alloc_reqs(struct vioscsi_softc *sc, struct virtio_softc *vsc,
 		    MAXPHYS, 0, BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW, &vr->vr_data);
 		if (r != 0) {
 			aprint_error_dev(sc->sc_dev,
-		    	    "%s: bus_dmamem_create data failed, error %d\n",
+		    	    "%s: bus_dmamap_create data failed, error %d\n",
 			    __func__, r);
 			goto cleanup;
 		}
@@ -689,7 +675,7 @@ vioscsi_free_reqs(struct vioscsi_softc *sc, struct virtio_softc *vsc)
 		return;
 	}
 
-	/* Free request maps */ 
+	/* Free request maps */
 	for (slot=0; slot < sc->sc_nreqs; slot++) {
 		vr = &sc->sc_reqs[slot];
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: memalloc.c,v 1.33 2019/02/09 03:35:55 kre Exp $	*/
+/*	$NetBSD: memalloc.c,v 1.39 2023/04/07 10:42:28 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -37,10 +37,12 @@
 #if 0
 static char sccsid[] = "@(#)memalloc.c	8.3 (Berkeley) 5/4/95";
 #else
-__RCSID("$NetBSD: memalloc.c,v 1.33 2019/02/09 03:35:55 kre Exp $");
+__RCSID("$NetBSD: memalloc.c,v 1.39 2023/04/07 10:42:28 kre Exp $");
 #endif
 #endif /* not lint */
 
+#include <limits.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -238,7 +240,7 @@ growstackblock(void)
 
 		/*
 		 * Stack marks pointing to the start of the old block
-		 * must be relocated to point to the new block 
+		 * must be relocated to point to the new block
 		 */
 		xmark = markp;
 		while (xmark != NULL && xmark->stackp == oldstackp) {
@@ -323,7 +325,7 @@ makestrspace(void)
  * of the string we have stored beyond there and are now releasing.
  * (ie: "p" should be the same as in the call to grabstackstr()).
  *
- * stunalloc(s) and ungrabstackstr(s, p) are almost interchangable after
+ * stunalloc(s) and ungrabstackstr(s, p) are almost interchangeable after
  * a grabstackstr(), however the latter also returns string space so we
  * can just continue with STPUTC() etc without needing a new STARTSTACKSTR(s)
  */
@@ -337,4 +339,66 @@ ungrabstackstr(char *s, char *p)
 	stacknleft += stacknxt - s;
 	stacknxt = s;
 	sstrnleft = stacknleft - (p - s);
+}
+
+/*
+ * Save the concat of a sequence of strings in stack space
+ *
+ * The first arg (if not NULL) is a pointer to where the final string
+ * length will be returned.
+ *
+ * Remaining args are pointers to strings - sufficient space to hold
+ * the concat of the strings is allocated on the stack, the strings
+ * are copied into that space, and a pointer to its start is returned.
+ * The arg list is terminated with STSTRC_END.
+ *
+ * Use stunalloc(string) (in proper sequence) to release the string
+ */
+char *
+ststrcat(size_t *lp, ...)
+{
+	va_list ap;
+	const char *arg;
+	size_t len, tlen = 0, alen[8];
+	char *str, *nxt;
+	unsigned int n;
+
+	n = 0;
+	va_start(ap, lp);
+	arg = va_arg(ap, const char *);
+	while (arg != STSTRC_END) {
+		len = strlen(arg);
+		if (n < sizeof(alen)/sizeof(alen[0]))
+			alen[n++] = len;
+		tlen += len;
+		arg = va_arg(ap, const char *);
+	}
+	va_end(ap);
+
+	if (lp != NULL)
+		*lp = tlen;
+
+	if (tlen >= INT_MAX)
+		error("ststrcat() over length botch");
+	str = (char *)stalloc((int)tlen + 1);	/* 1 for \0 */
+	str[tlen] = '\0';	/* in case of no args  */
+
+	n = 0;
+	nxt = str;
+	va_start(ap, lp);
+	arg = va_arg(ap, const char *);
+	while (arg != STSTRC_END) {
+		if (n < sizeof(alen)/sizeof(alen[0]))
+			len = alen[n++];
+		else
+			len = strlen(arg);
+
+		scopy(arg, nxt);
+		nxt += len;
+
+		arg = va_arg(ap, const char *);
+	}
+	va_end(ap);
+
+	return str;
 }

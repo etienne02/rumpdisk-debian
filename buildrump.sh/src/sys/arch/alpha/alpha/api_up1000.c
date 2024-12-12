@@ -1,4 +1,4 @@
-/* $NetBSD: api_up1000.c,v 1.31 2020/10/14 00:59:50 thorpej Exp $ */
+/* $NetBSD: api_up1000.c,v 1.33 2024/03/31 19:06:30 thorpej Exp $ */
 
 /*
  * Copyright (c) 1995, 1996, 1997 Carnegie-Mellon University.
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: api_up1000.c,v 1.31 2020/10/14 00:59:50 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: api_up1000.c,v 1.33 2024/03/31 19:06:30 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -114,7 +114,7 @@ api_up1000_cons_init(void)
 	extern struct irongate_config irongate_configuration;
 
 	icp = &irongate_configuration;
-	irongate_init(icp, 0);
+	irongate_init(icp);
 
 	ctb = (struct ctb *)(((char *)hwrpb) + hwrpb->rpb_ctb_off);
 
@@ -178,7 +178,7 @@ api_up1000_device_register(device_t dev, void *aux)
 	struct bootdev_data *b = bootdev_data;
 	device_t parent = device_parent(dev);
 
-	if (found)
+	if (b == NULL || found)
 		return;
 
 	if (!initted) {

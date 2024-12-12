@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_scatter.c,v 1.5 2018/08/27 07:02:06 riastradh Exp $	*/
+/*	$NetBSD: drm_scatter.c,v 1.9 2021/12/19 12:30:05 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,19 +30,23 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_scatter.c,v 1.5 2018/08/27 07:02:06 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_scatter.c,v 1.9 2021/12/19 12:30:05 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/bus.h>
 #include <sys/errno.h>
 #include <sys/systm.h>
 
+#include <linux/mm.h>
 #include <linux/slab.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_internal.h>
+#include <drm/drm_device.h>
+#include <drm/drm_drv.h>
+
+#include "../dist/drm/drm_internal.h"
 #include "../dist/drm/drm_legacy.h"
 
+#if IS_ENABLED(CONFIG_DRM_LEGACY)
 static int	drm_sg_alloc_mem(struct drm_device *, size_t,
 		    struct drm_sg_mem **);
 static void	drm_sg_free_mem(struct drm_device *, struct drm_sg_mem *);
@@ -237,3 +241,4 @@ drm_sg_free_mem(struct drm_device *dev, struct drm_sg_mem *sg)
 	sg->sg_tag = NULL;	/* XXX paranoia */
 	kmem_free(sg, offsetof(struct drm_sg_mem, sg_segs[sg->sg_nsegs_max]));
 }
+#endif

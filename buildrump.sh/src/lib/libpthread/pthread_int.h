@@ -1,4 +1,4 @@
-/*	$NetBSD: pthread_int.h,v 1.107 2020/06/10 22:45:15 ad Exp $	*/
+/*	$NetBSD: pthread_int.h,v 1.112 2024/11/30 01:04:04 christos Exp $	*/
 
 /*-
  * Copyright (c) 2001, 2002, 2003, 2006, 2007, 2008, 2020
@@ -41,9 +41,6 @@
 #include "pthread_queue.h"
 #include "pthread_md.h"
 
-/* Need to use libc-private names for atomic operations. */
-#include "../../common/lib/libc/atomic/atomic_op_namespace.h"
-
 #include <sys/atomic.h>
 #include <sys/rbtree.h>
 #include <sys/param.h>
@@ -52,6 +49,8 @@
 #include <lwp.h>
 #include <signal.h>
 #include <stdbool.h>
+
+#include <machine/lwp_private.h>
 
 #ifdef __GNUC__
 #define	PTHREAD_HIDE	__attribute__ ((visibility("hidden")))
@@ -249,7 +248,7 @@ int	pthread__find(pthread_t) PTHREAD_HIDE;
 #define _INITCONTEXT_U(ucp) do {					\
 	(ucp)->uc_flags = _UC_CPU | _UC_STACK;				\
 	_INITCONTEXT_U_MD(ucp)						\
-	} while (/*CONSTCOND*/0)
+	} while (0)
 
 
 #if !defined(__HAVE_TLS_VARIANT_I) && !defined(__HAVE_TLS_VARIANT_II)
@@ -279,14 +278,14 @@ pthread__self(void)
 #define pthread__assert(e) do {						\
 	if (__predict_false(!(e)))					\
        	       pthread__assertfunc(__FILE__, __LINE__, __func__, #e);	\
-        } while (/*CONSTCOND*/0)
+        } while (0)
 
 #define pthread__error(err, msg, e) do {				\
 	if (__predict_false(!(e))) {					\
        	       pthread__errorfunc(__FILE__, __LINE__, __func__, msg);	\
 	       return (err);						\
 	} 								\
-        } while (/*CONSTCOND*/0)
+        } while (0)
 
 void 	*pthread_tsd_init(size_t *) PTHREAD_HIDE;
 void	pthread__destroy_tsd(pthread_t) PTHREAD_HIDE;
@@ -304,10 +303,13 @@ int	pthread__checkpri(int) PTHREAD_HIDE;
 int	pthread__add_specific(pthread_t, pthread_key_t, const void *) PTHREAD_HIDE;
 
 #ifndef pthread__smt_pause
-#define	pthread__smt_pause()	/* nothing */
+#define	pthread__smt_pause()	__nothing
+#endif
+#ifndef pthread__smt_wait
+#define	pthread__smt_wait()	__nothing
 #endif
 #ifndef pthread__smt_wake
-#define	pthread__smt_wake()	/* nothing */
+#define	pthread__smt_wake()	__nothing
 #endif
 
 /*

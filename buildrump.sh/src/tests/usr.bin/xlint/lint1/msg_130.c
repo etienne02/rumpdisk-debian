@@ -1,9 +1,11 @@
-/*	$NetBSD: msg_130.c,v 1.14 2021/05/25 19:04:07 rillig Exp $	*/
+/*	$NetBSD: msg_130.c,v 1.17 2024/11/13 04:32:49 rillig Exp $	*/
 # 3 "msg_130.c"
 
 // Test for message: enum type mismatch: '%s' '%s' '%s' [130]
 
 /* See also msg_241.c, which covers unusual operators on enums. */
+
+/* lint1-extra-flags: -X 351 */
 
 enum color {
 	RED	= 1 << 0,
@@ -26,10 +28,12 @@ void sink(_Bool);
 void
 example(_Bool cond, enum color c, enum size s)
 {
-	sink(cond ? GREEN : MORNING);	/* expect: 130 */
-
-	sink(c != s);			/* expect: 130 */
-	sink(c == s);			/* expect: 130 */
+	/* expect+1: warning: enum type mismatch: 'enum color' ':' 'enum daytime' [130] */
+	sink(cond ? GREEN : MORNING);
+	/* expect+1: warning: enum type mismatch: 'enum color' '!=' 'enum size' [130] */
+	sink(c != s);
+	/* expect+1: warning: enum type mismatch: 'enum color' '==' 'enum size' [130] */
+	sink(c == s);
 	sink((c & MEDIUM) != 0);	/* might be useful to warn about */
 	sink((c | MEDIUM) != 0);	/* might be useful to warn about */
 
@@ -86,10 +90,13 @@ enum_constant_from_unnamed_type(int x)
 	if (x > sizeof_int)
 		return 5;
 
-	if (sizeof_int == sizeof_uint)	/* expect: 130 *//* FIXME */
+	/* FIXME */
+	/* expect+1: warning: enum type mismatch: 'enum <unnamed>' '==' 'enum <unnamed>' [130] */
+	if (sizeof_int == sizeof_uint)
 		return 6;
 
-	return 0;		/* expect: statement not reached */
+	/* expect+1: warning: 'return' statement not reached [193] */
+	return 0;
 }
 
 /*
@@ -124,7 +131,8 @@ state_machine(const char *str)
 
 	if (state == 2)			/* might be worth a warning */
 		return;
-	if (state == sizeof_int)	/* expect: 130 */
+	/* expect+1: warning: enum type mismatch: 'enum <unnamed>' '==' 'enum <unnamed>' [130] */
+	if (state == sizeof_int)
 		return;
 }
 

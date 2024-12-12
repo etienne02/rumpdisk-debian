@@ -1,4 +1,4 @@
-/*	$NetBSD: gpt_uuid.h,v 1.9 2019/06/30 11:38:16 sevan Exp $	*/
+/*	$NetBSD: gpt_uuid.h,v 1.11 2024/08/19 17:15:38 christos Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -46,7 +46,7 @@
  * support anyway
  */
 
-// Must match the array in gpt_uuid.c
+/* Must match the gpt_nv array in gpt_uuid.c */
 typedef enum {
 	GPT_TYPE_INVALID = -1,
 	GPT_TYPE_APPLE_HFS = 0,
@@ -64,12 +64,14 @@ typedef enum {
 	GPT_TYPE_LINUX_LVM,
 	GPT_TYPE_MS_BASIC_DATA,
 	GPT_TYPE_MS_RESERVED,
+	GPT_TYPE_MS_RECOVERY,
 	GPT_TYPE_NETBSD_CCD,
 	GPT_TYPE_NETBSD_CGD,
 	GPT_TYPE_NETBSD_FFS,
 	GPT_TYPE_NETBSD_LFS,
 	GPT_TYPE_NETBSD_RAIDFRAME,
 	GPT_TYPE_NETBSD_SWAP,
+	GPT_TYPE_OPENBSD_DATA,
 	GPT_TYPE_VMWARE_VMKCORE,
 	GPT_TYPE_VMWARE_VMFS,
 	GPT_TYPE_VMWARE_RESERVED

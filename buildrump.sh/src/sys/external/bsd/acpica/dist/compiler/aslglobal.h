@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -217,6 +217,7 @@ ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_ReferenceOptimizatio
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_DisplayRemarks, TRUE);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_DisplayWarnings, TRUE);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_DisplayOptimizations, FALSE);
+ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_Deterministic, TRUE);
 ASL_EXTERN UINT8                    ASL_INIT_GLOBAL (AslGbl_WarningLevel, ASL_WARNING);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_UseOriginalCompilerId, FALSE);
 ASL_EXTERN BOOLEAN                  ASL_INIT_GLOBAL (AslGbl_VerboseTemplates, FALSE);

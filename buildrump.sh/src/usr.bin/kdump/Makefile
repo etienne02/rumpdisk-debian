@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.35 2021/08/22 22:24:12 rillig Exp $
+#	$NetBSD: Makefile,v 1.37 2024/04/20 13:24:49 rillig Exp $
 #	@(#)Makefile	8.1 (Berkeley) 6/6/93
 
 .include <bsd.own.mk>		# for MKDYNAMICROOT & NETBSDSRCDIR
@@ -11,7 +11,7 @@ MAN=	kdump.1 ioctlprint.1
 SRCS=	kdump.c subr.c setemul.c siginfo.c
 .PATH:	${NETBSDSRCDIR}/usr.bin/ktrace
 CLEANFILES+=siginfo.c
-LINT_SUPPORTED=	no	# kdump-ioctl.c defines uio_t twice.
+NOLINT=	# kdump-ioctl.c defines uio_t twice.
 
 .if (${MKDYNAMICROOT} == "no")
 LDSTATIC?=-static
@@ -25,6 +25,6 @@ CPPFLAGS+=-I${NETBSDSRCDIR}/usr.bin/ktrace -I${NETBSDSRCDIR}/sys -D_KERNTYPES
 LDADD+=-lutil
 DPADD+=${LIBUTIL}
 
-CWARNFLAGS.gcc+=	${GCC_NO_ADDR_OF_PACKED_MEMBER}
+CWARNFLAGS.gcc+=	${CC_WNO_ADDRESS_OF_PACKED_MEMBER}
 
 .include <bsd.prog.mk>

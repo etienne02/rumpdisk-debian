@@ -1,4 +1,4 @@
-/* $NetBSD: imc.c,v 1.4 2021/08/07 16:19:08 thorpej Exp $ */
+/* $NetBSD: imc.c,v 1.6 2023/05/10 00:07:49 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: imc.c,v 1.4 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: imc.c,v 1.6 2023/05/10 00:07:49 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -137,12 +137,12 @@ __KERNEL_RCSID(0, "$NetBSD: imc.c,v 1.4 2021/08/07 16:19:08 thorpej Exp $");
 
 #define IMCSMB_PCI_DEV_ID_IMC0_SBX	0x3ca8
 #define IMCSMB_PCI_DEV_ID_IMC0_IBX	0x0ea8
-#define IMCSMB_PCI_DEV_ID_IMC0_HSX	PCI_PRODUCT_INTEL_XE5_V3_IMC0_MAIN
+#define IMCSMB_PCI_DEV_ID_IMC0_HSX	PCI_PRODUCT_INTEL_XE5_V3_IMC0_TATRR
 #define IMCSMB_PCI_DEV_ID_IMC0_BDX	PCI_PRODUCT_INTEL_XEOND_MEM_0_TTR_1
 
 /* (Sandy,Ivy)bridge-Xeon only have a single memory controller per socket */
 
-#define IMCSMB_PCI_DEV_ID_IMC1_HSX	PCI_PRODUCT_INTEL_XE5_V3_IMC1_MAIN
+#define IMCSMB_PCI_DEV_ID_IMC1_HSX	PCI_PRODUCT_INTEL_XE5_V3_IMC1_TATRR
 #define IMCSMB_PCI_DEV_ID_IMC1_BDX	PCI_PRODUCT_INTEL_COREI76K_IMC_0
 
 /* There are two SMBus controllers in each device. These define the registers
@@ -259,16 +259,11 @@ imc_rescan(device_t self, const char *ifattr, const int *locs)
 static int
 imc_detach(device_t self, int flags)
 {
-	struct imc_softc *sc = device_private(self);
-	int i, error;
+	int error;
 
-	for (i = 0; i < 2; i++) {
-		if (sc->sc_smbchild[i] != NULL) {
-			error = config_detach(sc->sc_smbchild[i], flags);     
-			if (error)
-				return error;
-		}
-	}
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
 	pmf_device_deregister(self);
 	return 0;
@@ -291,8 +286,8 @@ imc_probe(device_t dev, cfdata_t cf, void *aux)
 		switch(PCI_PRODUCT(pa->pa_id)) {
 		case  PCI_PRODUCT_INTEL_COREI76K_IMC_0:
 		case  PCI_PRODUCT_INTEL_XEOND_MEM_0_TTR_1:
-		case  PCI_PRODUCT_INTEL_XE5_V3_IMC0_MAIN:
-		case  PCI_PRODUCT_INTEL_XE5_V3_IMC1_MAIN:
+		case  PCI_PRODUCT_INTEL_XE5_V3_IMC0_TATRR:
+		case  PCI_PRODUCT_INTEL_XE5_V3_IMC1_TATRR:
 		case  PCI_PRODUCT_INTEL_E5_IMC_TA:
 		case  PCI_PRODUCT_INTEL_E5V2_IMC_TA:
 			return 1;

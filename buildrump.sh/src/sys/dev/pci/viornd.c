@@ -1,4 +1,4 @@
-/* 	$NetBSD: viornd.c,v 1.14 2021/01/20 19:46:48 reinoud Exp $ */
+/* 	$NetBSD: viornd.c,v 1.22 2023/08/04 07:38:53 riastradh Exp $ */
 /*	$OpenBSD: viornd.c,v 1.1 2014/01/21 21:14:58 sf Exp $	*/
 
 /*
@@ -141,7 +141,7 @@ viornd_attach(device_t parent, device_t self, void *aux)
 
 	mutex_init(&sc->sc_mutex, MUTEX_DEFAULT, IPL_VM);
 
-	error = bus_dmamem_alloc(virtio_dmat(vsc), 
+	error = bus_dmamem_alloc(virtio_dmat(vsc),
 				 VIRTIO_PAGE_SIZE, 0, 0, segs, 1, &nsegs,
 				 BUS_DMA_NOWAIT|BUS_DMA_ALLOCNOW);
 	if (error) {
@@ -176,11 +176,12 @@ viornd_attach(device_t parent, device_t self, void *aux)
 		goto load_failed;
 	}
 
-	virtio_child_attach_start(vsc, self, IPL_NET, &sc->sc_vq,
-	    NULL, virtio_vq_intr, 0,
+	virtio_child_attach_start(vsc, self, IPL_NET,
 	    0, VIRTIO_COMMON_FLAG_BITS);
 
-	error = virtio_alloc_vq(vsc, &sc->sc_vq, 0, VIORND_BUFSIZE, 1,
+	virtio_init_vq_vqdone(vsc, &sc->sc_vq, 0, viornd_vq_done);
+
+	error = virtio_alloc_vq(vsc, &sc->sc_vq, VIORND_BUFSIZE, 1,
 	    "Entropy request");
 	if (error) {
 		aprint_error_dev(sc->sc_dev, "can't alloc virtqueue: %d\n",
@@ -189,7 +190,9 @@ viornd_attach(device_t parent, device_t self, void *aux)
 	}
 	sc->sc_vq.vq_done = viornd_vq_done;
 
-	if (virtio_child_attach_finish(vsc) != 0) {
+	error = virtio_child_attach_finish(vsc, &sc->sc_vq, 1,
+	    NULL, VIRTIO_F_INTR_MPSAFE);
+	if (error) {
 		virtio_free_vq(vsc, &sc->sc_vq);
 		goto vio_failed;
 	}
@@ -242,11 +245,12 @@ viornd_vq_done(struct virtqueue *vq)
 #if VIORND_DEBUG
 	aprint_normal("%s: got %d bytes of entropy\n", __func__, len);
 #endif
-	rnd_add_data(&sc->sc_rndsource, sc->sc_buf, VIORND_BUFSIZE,
-		     VIORND_BUFSIZE * NBBY);
+	/* XXX Shouldn't this be len instead of VIORND_BUFSIZE?  */
+	rnd_add_data_intr(&sc->sc_rndsource, sc->sc_buf, VIORND_BUFSIZE,
+	    VIORND_BUFSIZE * NBBY);
 out:
 	virtio_dequeue_commit(vsc, vq, slot);
 	mutex_exit(&sc->sc_mutex);
-	
+
 	return 1;
 }

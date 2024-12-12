@@ -1,4 +1,4 @@
-/*	$NetBSD: devopen.c,v 1.12 2018/03/08 03:12:01 mrg Exp $	*/
+/*	$NetBSD: devopen.c,v 1.15 2024/05/09 15:11:11 tsutsui Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -32,7 +32,7 @@
 /*-
  *  Copyright (c) 1993 John Brezak
  *  All rights reserved.
- * 
+ *
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions
  *  are met:
@@ -43,7 +43,7 @@
  *     documentation and/or other materials provided with the distribution.
  *  3. The name of the author may not be used to endorse or promote products
  *     derived from this software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR `AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -63,6 +63,7 @@
 #include <lib/libkern/libkern.h>
 
 #include <lib/libsa/stand.h>
+#include <hp300/stand/common/conf.h>
 #include <hp300/stand/common/samachdep.h>
 
 u_int opendev;
@@ -86,7 +87,7 @@ devlookup(const char *d, int len)
 {
 	struct devsw *dp = devsw;
 	int i;
-    
+
 	for (i = 0; i < ndevs; i++, dp++) {
 		if (dp->dv_name && strncmp(dp->dv_name, d, len) == 0) {
 			/*
@@ -96,18 +97,21 @@ devlookup(const char *d, int len)
 			switch (i) {
 			case 0:	/* ct */
 				memcpy(file_system, file_system_rawfs,
-				    sizeof(struct fs_ops));
+				    sizeof(file_system_rawfs));
+				nfsys = 1;
 				break;
 
 			case 2:	/* rd */
 			case 4:	/* sd */
 				memcpy(file_system, file_system_ufs,
-				    sizeof(struct fs_ops));
+				    sizeof(file_system_ufs));
+				nfsys = NFSYS_FS;
 				break;
 
 			case 6:	/* le */
 				memcpy(file_system, file_system_nfs,
-				    sizeof(struct fs_ops));
+				    sizeof(file_system_nfs));
+				nfsys = 1;
 				break;
 
 			default:
@@ -190,7 +194,7 @@ devparse(const char *fname, int *dev, int *adapt, int *ctlr, int *unit,
 		/* isolate device */
 		for (s = (char *)fname; *s != ':' && !isdigit(*s); s++)
 			continue;
-	
+
 		/* lookup device and get index */
 		if ((*dev = devlookup(fname, s - fname)) < 0)
 			goto baddev;
@@ -202,11 +206,11 @@ devparse(const char *fname, int *dev, int *adapt, int *ctlr, int *unit,
 		*ctlr = temp % 8;
 		for (; isdigit(*s); s++)
 			continue;
-	
+
 		/* translate partition */
 		if (!ispart(*s))
 			goto bad;
-	
+
 		*part = *s++ - 'a';
 		if (*s != ':')
 			goto bad;
@@ -216,16 +220,16 @@ devparse(const char *fname, int *dev, int *adapt, int *ctlr, int *unit,
 	/* no device present */
 	else
 		*file = (char *)fname;
-    
+
 	/* return the remaining unparsed part as the file to boot */
 	return 0;
-    
+
  bad:
 	usage();
 
  baddev:
 	return -1;
-}    
+}
 
 
 int
@@ -250,16 +254,22 @@ devopen(struct open_file *f, const char *fname, char **file)
 	 */
 	switch (dev) {
 	case 0:		/* ct */
-		memcpy(file_system, file_system_rawfs, sizeof(struct fs_ops));
+		memcpy(file_system, file_system_rawfs,
+		    sizeof(file_system_rawfs));
+		nfsys = 1;
 		break;
 
 	case 2:		/* rd */
 	case 4:		/* sd */
-		memcpy(file_system, file_system_ufs, sizeof(struct fs_ops));
-		break; 
+		memcpy(file_system, file_system_ufs,
+		    sizeof(file_system_ufs));
+		nfsys = NFSYS_FS;
+		break;
 
 	case 6:		/* le */
-		memcpy(file_system, file_system_nfs, sizeof(struct fs_ops));
+		memcpy(file_system, file_system_nfs,
+		    sizeof(file_system_nfs));
+		nfsys = 1;
 		break;
 
 	default:
@@ -269,7 +279,7 @@ devopen(struct open_file *f, const char *fname, char **file)
 	}
 
 	dp = &devsw[dev];
-	
+
 	if (!dp->dv_open)
 		return ENODEV;
 

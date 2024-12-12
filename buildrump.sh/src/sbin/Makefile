@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.134 2018/09/30 15:56:46 jmcneill Exp $
+#	$NetBSD: Makefile,v 1.139 2022/06/06 13:28:55 nia Exp $
 #	@(#)Makefile	8.5 (Berkeley) 3/31/94
 
 # Not ported: XNSrouted enpload scsiformat startslip
@@ -6,7 +6,7 @@
 
 .include <bsd.own.mk>
 
-SUBDIR=	amrctl apmlabel atactl badsect bioctl brconfig \
+SUBDIR=	amrctl apmlabel atactl badsect bioctl blkdiscard brconfig \
 	canconfig ccdconfig cgdconfig chown \
 	devpubd disklabel dkctl dkscan_bsdlabel dmesg dmctl \
 	drvctl fastboot fdisk fsck fsirand gpt ifconfig init ldconfig luactl \
@@ -22,7 +22,7 @@ SUBDIR+= newfs fsck_ffs fsdb dump restore clri tunefs resize_ffs
 SUBDIR+= newfs_lfs fsck_lfs dump_lfs resize_lfs
 SUBDIR+= newfs_msdos fsck_msdos
 SUBDIR+= newfs_sysvbfs
-SUBDIR+= newfs_udf
+SUBDIR+= newfs_udf fsck_udf
 SUBDIR+= newfs_v7fs fsck_v7fs
 SUBDIR+= mount_ados
 SUBDIR+= mount_autofs

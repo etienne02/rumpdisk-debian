@@ -1,4 +1,4 @@
-/*	$NetBSD: compat_defs.h,v 1.120 2021/05/30 10:39:41 cjep Exp $	*/
+/*	$NetBSD: compat_defs.h,v 1.123 2024/10/31 17:05:05 kre Exp $	*/
 
 #ifndef	__NETBSD_COMPAT_DEFS_H__
 #define	__NETBSD_COMPAT_DEFS_H__
@@ -518,6 +518,9 @@ int pwcache_groupdb(int (*)(int), void (*)(void),
     struct group * (*)(const char *), struct group * (*)(gid_t));
 #endif
 
+#if !HAVE_DECL_SHQUOTE
+size_t		shquote(const char *, char *, size_t);
+#endif
 #if !HAVE_DECL_STRLCAT
 size_t		strlcat(char *, const char *, size_t);
 #endif
@@ -996,6 +999,15 @@ void *setmode(const char *);
 #ifndef MAXPATHLEN
 #define MAXPATHLEN	4096
 #endif
+
+#ifndef NAME_MAX
+#ifdef _XOPEN_NAME_MAX
+#define NAME_MAX _XOPEN_NAME_MAX
+#else
+#error "Both NAME_MAX and _XOPEN_NAME_MAX are not defined"
+#endif
+#endif
+
 #ifndef PATH_MAX
 #define PATH_MAX	MAXPATHLEN
 #endif

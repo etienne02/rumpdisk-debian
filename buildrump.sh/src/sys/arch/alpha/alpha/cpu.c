@@ -1,4 +1,4 @@
-/* $NetBSD: cpu.c,v 1.104 2021/05/05 03:54:16 thorpej Exp $ */
+/* $NetBSD: cpu.c,v 1.108 2024/03/06 07:22:45 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2001, 2020 The NetBSD Foundation, Inc.
@@ -59,7 +59,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.104 2021/05/05 03:54:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.108 2024/03/06 07:22:45 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -82,7 +82,8 @@ __KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.104 2021/05/05 03:54:16 thorpej Exp $");
 #include <machine/alpha.h>
 
 struct cpu_info cpu_info_primary __cacheline_aligned = {
-	.ci_curlwp = &lwp0
+	.ci_curlwp = &lwp0,
+	.ci_flags  = CPUF_PRIMARY|CPUF_RUNNING,
 };
 struct cpu_info *cpu_info_list __read_mostly = &cpu_info_primary;
 
@@ -450,7 +451,8 @@ cpuattach(device_t parent, device_t self, void *aux)
 	if (primary) {
 		cpu_announce_extensions(ci);
 #if defined(MULTIPROCESSOR)
-		ci->ci_flags |= CPUF_PRIMARY|CPUF_RUNNING;
+		KASSERT(ci->ci_flags & CPUF_PRIMARY);
+		KASSERT(ci->ci_flags & CPUF_RUNNING);
 		atomic_or_ulong(&cpus_booted, (1UL << ma->ma_slot));
 		atomic_or_ulong(&cpus_running, (1UL << ma->ma_slot));
 #endif /* MULTIPROCESSOR */
@@ -850,7 +852,7 @@ cpu_hatch(struct cpu_info *ci)
 	/*
 	 * Invalidate the TLB and sync the I-stream before we
 	 * jump into the kernel proper.  We have to do this
-	 * beacause we haven't been getting IPIs while we've
+	 * because we haven't been getting IPIs while we've
 	 * been spinning.
 	 */
 	ALPHA_TBIA();
@@ -882,12 +884,13 @@ cpu_iccb_send(long cpu_id, const char *msg)
 
 	/*
 	 * Copy the message into the ICCB, and tell the secondary console
-	 * that it's there.
+	 * that it's there.  Ensure the buffer is initialized before we
+	 * set the rxrdy bits, as a store-release.
 	 */
 	strcpy(pcsp->pcs_iccb.iccb_rxbuf, msg);
 	pcsp->pcs_iccb.iccb_rxlen = strlen(msg);
+	membar_release();
 	atomic_or_ulong(&hwrpb->rpb_rxrdy, cpumask);
-	membar_sync();
 
 	/* Wait for the message to be received. */
 	for (timeout = 10000; timeout != 0; timeout--) {

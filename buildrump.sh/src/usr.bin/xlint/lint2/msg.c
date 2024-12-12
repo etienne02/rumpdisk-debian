@@ -1,4 +1,4 @@
-/*	$NetBSD: msg.c,v 1.16 2021/08/28 12:21:53 rillig Exp $	*/
+/*	$NetBSD: msg.c,v 1.26 2024/11/30 18:17:12 rillig Exp $	*/
 
 /*
  * Copyright (c) 1994, 1995 Jochen Pohl
@@ -14,7 +14,7 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
+ *	This product includes software developed by Jochen Pohl for
  *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
@@ -36,8 +36,8 @@
 #endif
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: msg.c,v 1.16 2021/08/28 12:21:53 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: msg.c,v 1.26 2024/11/30 18:17:12 rillig Exp $");
 #endif
 
 #include <stdarg.h>
@@ -46,39 +46,37 @@ __RCSID("$NetBSD: msg.c,v 1.16 2021/08/28 12:21:53 rillig Exp $");
 
 #include "lint2.h"
 
-static	const	char *msgs[] = {
-	"%s used( %s ), but not defined",			      /* 0 */
-	"%s defined( %s ), but never used",			      /* 1 */
-	"%s declared( %s ), but never used or defined",		      /* 2 */
-	"%s multiply defined  \t%s  ::  %s",			      /* 3 */
-	"%s value used inconsistently  \t%s  ::  %s",		      /* 4 */
-	"%s value declared inconsistently (%s != %s) \t%s  ::  %s",   /* 5 */
-	"%s, arg %d used inconsistently  \t%s[%s]  ::  %s[%s]",	      /* 6 */
-	"%s: variable # of args  \t%s  ::  %s",			      /* 7 */
-	"%s returns value which is always ignored",		      /* 8 */
-	"%s returns value which is sometimes ignored",		      /* 9 */
-	"%s value is used( %s ), but none returned",		      /* 10 */
-	"%s, arg %d declared inconsistently (%s != %s)\t%s :: %s",    /* 11 */
-	"%s: variable # of args declared  \t%s  ::  %s",	      /* 12 */
-	"%s: malformed format string  \t%s",			      /* 13 */
-	"%s, arg %d inconsistent with format  \t%s",		      /* 14 */
-	"%s: too few args for format  \t%s",			      /* 15 */
-	"%s: too many args for format  \t%s",			      /* 16 */
-	"%s function value must be declared before use  \t%s  ::  %s",/* 17 */
-	"%s renamed multiple times  \t%s  ::  %s",		      /* 18 */
+static const char *msgs[] = {
+	"%s is used in %s but never defined",				// 0
+	"%s is defined in %s but never used",				// 1
+	"%s is declared in %s but never used or defined",		// 2
+	"%s has multiple definitions in %s and %s",			// 3
+	"%s has its return value used inconsistently by %s and %s",	// 4
+	"%s returns '%s' at %s, versus '%s' at %s",			// 5
+	"%s has argument %d with type '%s' at %s, versus '%s' at %s",	// 6
+	"%s has %d parameters in %s, versus %d arguments in %s",	// 7
+	"%s returns a value that is always ignored",			// 8
+	"%s returns a value that is sometimes ignored",			// 9
+	"%s has its return value used in %s but doesn't return one",	// 10
+	"%s has parameter %d declared as '%s' in %s, versus '%s' in %s", // 11
+	"%s has %d parameters in %s, versus %d in %s",			// 12
+	"%s is called with a malformed format string in %s",		// 13
+	"%s is called in %s with argument %d being incompatible with format string", // 14
+	"%s is called in %s with too few arguments for format string",	// 15
+	"%s is called in %s with too many arguments for format string",	// 16
+	"%s's return type in %s must be declared before use in %s",	// 17
+	"%s is renamed multiple times in %s and %s",			// 18
 };
-
-static	const	char *lbasename(const char *);
 
 void
 msg(int n, ...)
 {
-	va_list	ap;
+	va_list ap;
 
 	va_start(ap, n);
 
 	(void)vprintf(msgs[n], ap);
-	(void)printf("\n");
+	(void)printf(" [lint2:%03d]\n", n);
 
 	va_end(ap);
 }
@@ -89,54 +87,53 @@ msg(int n, ...)
 static const char *
 lbasename(const char *path)
 {
-	const	char *cp, *cp1, *cp2;
 
 	if (Fflag)
 		return path;
 
-	cp = cp1 = cp2 = path;
-	while (*cp != '\0') {
-		if (*cp++ == '/') {
-			cp2 = cp1;
-			cp1 = cp;
-		}
-	}
-	return *cp1 == '\0' ? cp2 : cp1;
+	const char *base = path;
+	for (const char *p = path; *p != '\0'; p++)
+		if (*p == '/')
+			base = p + 1;
+	return base;
 }
 
 /*
  * Create a string which describes a position in a source file.
  */
 const char *
-mkpos(pos_t *posp)
+mkpos(const pos_t *posp)
 {
-	size_t	len;
-	const	char *fn;
-	static	char	*buf;
-	static	size_t	blen = 0;
-	bool	qm;
-	int	src, line;
+	static struct buffer {
+		char *buf;
+		size_t cap;
+	} buffers[2];
+	static unsigned int buf_index;
 
+	struct buffer *buf = buffers + buf_index;
+	buf_index ^= 1;
+
+	int filename;
+	int lineno;
 	if (Hflag && posp->p_src != posp->p_isrc) {
-		src = posp->p_isrc;
-		line = posp->p_iline;
+		filename = posp->p_isrc;
+		lineno = posp->p_iline;
 	} else {
-		src = posp->p_src;
-		line = posp->p_line;
-	}
-	qm = !Hflag && posp->p_src != posp->p_isrc;
-
-	len = strlen(fn = lbasename(fnames[src]));
-	len += 3 * sizeof(unsigned short) + 4;
-
-	if (len > blen)
-		buf = xrealloc(buf, blen = len);
-	if (line != 0) {
-		(void)sprintf(buf, "%s%s(%d)",
-			      fn, qm ? "?" : "", line);
-	} else {
-		(void)sprintf(buf, "%s", fn);
+		filename = posp->p_src;
+		lineno = posp->p_line;
 	}
 
-	return buf;
+	bool qm = !Hflag && posp->p_src != posp->p_isrc;
+	const char *fn = lbasename(fnames[filename]);
+	size_t len = strlen(fn) + 1 + 1 + 3 * sizeof(int) + 1 + 1;
+
+	if (len > buf->cap)
+		buf->buf = xrealloc(buf->buf, buf->cap = len);
+	if (lineno != 0)
+		(void)snprintf(buf->buf, buf->cap, "%s%s(%d)",
+		    fn, qm ? "?" : "", lineno);
+	else
+		(void)snprintf(buf->buf, buf->cap, "%s", fn);
+
+	return buf->buf;
 }

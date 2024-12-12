@@ -1,4 +1,4 @@
-/*	$NetBSD: getconf.c,v 1.35 2013/12/19 19:11:50 rmind Exp $	*/
+/*	$NetBSD: getconf.c,v 1.38 2024/07/22 21:03:17 rillig Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1998 The NetBSD Foundation, Inc.
@@ -30,9 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-#ifndef lint
-__RCSID("$NetBSD: getconf.c,v 1.35 2013/12/19 19:11:50 rmind Exp $");
-#endif /* not lint */
+__RCSID("$NetBSD: getconf.c,v 1.38 2024/07/22 21:03:17 rillig Exp $");
 
 #include <err.h>
 #include <errno.h>
@@ -177,6 +175,10 @@ static const struct conf_variable conf_table[] =
   { "GETGR_R_SIZE_MAX",		SYSCONF,	_SC_GETGR_R_SIZE_MAX	},
   { "GETPW_R_SIZE_MAX",		SYSCONF,	_SC_GETPW_R_SIZE_MAX	},
 
+  /* Extensions found in Solaris and Linux. */
+  { "SC_PHYS_PAGES",		SYSCONF,	_SC_PHYS_PAGES		},
+  { "SC_AVPHYS_PAGES",		SYSCONF,	_SC_AVPHYS_PAGES	},
+
 #ifdef _NETBSD_SOURCE
   /* Commonly provided extensions */
   { "NPROCESSORS_CONF",		SYSCONF,	_SC_NPROCESSORS_CONF	},
@@ -193,7 +195,7 @@ main(int argc, char **argv)
 {
 	int ch;
 	const struct conf_variable *cp;
-	const char *varname, *pathname;
+	const char *varname, *pathname, *vn;
 	int found;
 
 	setprogname(argv[0]);
@@ -226,9 +228,10 @@ main(int argc, char **argv)
 	pathname = argv[0];	/* may be NULL */
 
 	found = 0;
+	vn = varname;
+again:
 	for (cp = conf_table; cp->name != NULL; cp++) {
-		if (a_flag || strcmp(varname, cp->name) == 0) {
-			/*LINTED weird expression*/
+		if (a_flag || strcmp(vn, cp->name) == 0) {
 			if ((cp->type == PATHCONF) == (pathname != NULL)) {
 				printvar(cp, pathname);
 				found = 1;
@@ -238,8 +241,11 @@ main(int argc, char **argv)
 		}
 	}
 
-	if (!a_flag && !found)
+	if (!a_flag && !found) {
+		if (*vn++ == '_')
+			goto again;
 		errx(EXIT_FAILURE, "%s: unknown variable", varname);
+	}
 
 	(void)fflush(stdout);
 	return ferror(stdout) ? EXIT_FAILURE : EXIT_SUCCESS;

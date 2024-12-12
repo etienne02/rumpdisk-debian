@@ -1,4 +1,4 @@
-/*	$NetBSD: net_stub.c,v 1.43 2021/07/14 03:19:24 ozaki-r Exp $	*/
+/*	$NetBSD: net_stub.c,v 1.49 2022/04/04 06:10:00 yamaguchi Exp $	*/
 
 /*
  * Copyright (c) 2008 Antti Kantee.  All Rights Reserved.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: net_stub.c,v 1.43 2021/07/14 03:19:24 ozaki-r Exp $");
+__KERNEL_RCSID(0, "$NetBSD: net_stub.c,v 1.49 2022/04/04 06:10:00 yamaguchi Exp $");
 
 #include <sys/mutex.h>
 #include <sys/param.h>
@@ -59,10 +59,8 @@ rumpnet_stub(void)
  */
 
 /* bridge */
-__weak_alias(bridge_ifdetach,rumpnet_stub);
 __weak_alias(bridge_output,rumpnet_stub);
 __weak_alias(bridge_calc_csum_flags,rumpnet_stub);
-__weak_alias(bridge_calc_link_state,rumpnet_stub);
 
 /* agr */
 __weak_alias(agr_input,rumpnet_stub);
@@ -75,8 +73,6 @@ __weak_alias(pppoedisc_input,rumpnet_stub);
 
 /* vlan */
 __weak_alias(vlan_input,rumpnet_stub);
-__weak_alias(vlan_ifdetach,rumpnet_stub);
-__weak_alias(vlan_link_state_changed,rumpnet_stub);
 
 /* ipsec */
 /* FIXME: should modularize netipsec and reduce reverse symbol references */
@@ -107,11 +103,6 @@ __weak_alias(ipsec_pcbconn,rumpnet_stub);
 __weak_alias(ipsec_pcbdisconn,rumpnet_stub);
 __weak_alias(key_sa_routechange,rumpnet_stub);
 __weak_alias(key_sp_unref,rumpnet_stub);
-
-/* lagg */
-__weak_alias(lagg_ifdetach,rumpnet_stub);
-__weak_alias(lagg_input_ethernet,rumpnet_stub);
-__weak_alias(lagg_linkstate_changed,rumpnet_stub);
 
 /* altq */
 int (*altq_input)(struct mbuf *, int);

@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.413 2021/07/23 14:38:58 thorpej Exp $
+# $NetBSD: GENERIC,v 1.421 2024/03/06 13:37:35 thorpej Exp $
 #
 # This machine description file is used to generate the default NetBSD
 # kernel.
@@ -19,7 +19,7 @@ include 	"arch/alpha/conf/std.alpha"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-ident		"GENERIC-$Revision: 1.413 $"
+ident		"GENERIC-$Revision: 1.421 $"
 
 maxusers 32
 
@@ -34,6 +34,7 @@ options 	DEC_AXPPCI_33	# NoName:	AXPpci33, Multia, etc.
 options 	DEC_EB164	# EB164:	AlphaPC 164
 options 	DEC_EB64PLUS	# EB64+:	AlphaPC 64, etc.
 options 	DEC_KN20AA	# KN20AA:	AlphaStation 500 and 600
+options 	DEC_KN7AA	# KN7AA:	DEC 7000 and 10000
 options 	DEC_KN8AE	# KN8AE:	AlphaServer 8200 and 8400
 options 	DEC_KN300	# KN300:	AlphaServer 4100 and 1200
 options 	DEC_550		# Miata:	Digital Personal Workstation
@@ -92,14 +93,15 @@ file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
 # File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER	# Sun NFS-compatible file system server
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 #options 	GATEWAY		# packet forwarding
@@ -189,9 +191,9 @@ qemu*	at	mainbus?
 
 # TurboLaser bus support and devices
 tlsb*	at	mainbus?
-gbus*	at	tlsb? node ? offset ?
-tlsbmem* at	tlsb? node ? offset ?
-kft*	at	tlsb? node ? offset ?
+gbus*	at	tlsb? node ?
+tlsbmem* at	tlsb? node ?
+kft*	at	tlsb? node ?
 
 # Gbus Devices
 mcclock* at	gbus? offset ?
@@ -490,6 +492,7 @@ scsibus* at	scsi?
 cd*	at	scsibus? target ? lun ?		# SCSI CD-ROM drives
 ch*	at	scsibus? target ? lun ?		# SCSI autochangers
 sd*	at	scsibus? target ? lun ?		# SCSI disk drives
+dse*	at	scsibus? target ? lun ?		# SCSI ethernet (Dayna)
 se*	at	scsibus? target ? lun ?		# Cabletron SCSI<->Ethernet
 ses*	at	scsibus? target ? lun ?		# SCSI SES/SAF-TE
 ss*	at	scsibus? target ? lun ?		# SCSI scanners
@@ -726,14 +729,18 @@ pseudo-device	vcoda			# coda minicache <-> venus comm.
 pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	drvctl			# user control of drive subsystem
 pseudo-device	wsfont
-pseudo-device	wsmux			# mouse and keyboad multiplexing
+pseudo-device	wsmux			# mouse and keyboard multiplexing
 pseudo-device	ksyms			# /dev/ksyms
 pseudo-device	lockstat		# lock profiling
 pseudo-device	bcsp			# BlueCore Serial Protocol
 pseudo-device	btuart			# Bluetooth HCI UART (H4)
 pseudo-device	putter			# for puffs and pud
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 include "dev/veriexec.config"
 
 options PAX_MPROTECT=0			# PaX mprotect(2) restrictions
 options PAX_ASLR=0			# PaX Address Space Layout Randomization
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/alpha/conf/GENERIC.local"

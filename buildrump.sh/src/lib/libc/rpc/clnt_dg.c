@@ -1,4 +1,4 @@
-/*	$NetBSD: clnt_dg.c,v 1.30 2021/08/21 23:00:30 andvar Exp $	*/
+/*	$NetBSD: clnt_dg.c,v 1.33 2024/01/23 17:24:38 christos Exp $	*/
 
 /*
  * Copyright (c) 2010, Oracle America, Inc.
@@ -41,7 +41,7 @@
 #if 0
 static char sccsid[] = "@(#)clnt_dg.c 1.19 89/03/16 Copyr 1988 Sun Micro";
 #else
-__RCSID("$NetBSD: clnt_dg.c,v 1.30 2021/08/21 23:00:30 andvar Exp $");
+__RCSID("$NetBSD: clnt_dg.c,v 1.33 2024/01/23 17:24:38 christos Exp $");
 #endif
 #endif
 
@@ -104,7 +104,6 @@ static void clnt_dg_destroy(CLIENT *);
 static int	*dg_fd_locks;
 #ifdef _REENTRANT
 #define __rpc_lock_value __isthreaded;
-extern mutex_t clnt_fd_lock;
 static cond_t	*dg_cv;
 #define	release_fd_lock(fd, mask) {		\
 	mutex_lock(&clnt_fd_lock);	\
@@ -484,7 +483,7 @@ send_again:
 			}
 		}		/* end successful completion */
 		/*
-		 * If unsuccesful AND error is an authentication error
+		 * If unsuccessful AND error is an authentication error
 		 * then refresh credentials and try again, else break
 		 */
 		else if (cu->cu_error.re_status == RPC_AUTHERROR)
@@ -652,7 +651,7 @@ clnt_dg_control(CLIENT *cl, u_int request, char *info)
 		/*
 		 * This RELIES on the information that, in the call body,
 		 * the version number field is the fifth field from the
-		 * begining of the RPC header. MUST be changed if the
+		 * beginning of the RPC header. MUST be changed if the
 		 * call_struct is changed
 		 */
 		*(u_int32_t *)(void *)info =
@@ -669,7 +668,7 @@ clnt_dg_control(CLIENT *cl, u_int request, char *info)
 		/*
 		 * This RELIES on the information that, in the call body,
 		 * the program number field is the fourth field from the
-		 * begining of the RPC header. MUST be changed if the
+		 * beginning of the RPC header. MUST be changed if the
 		 * call_struct is changed
 		 */
 		*(u_int32_t *)(void *)info =
@@ -729,7 +728,6 @@ clnt_dg_ops(void)
 {
 	static struct clnt_ops ops;
 #ifdef _REENTRANT
-	extern mutex_t	ops_lock;
 	sigset_t mask;
 #endif
 	sigset_t newmask;

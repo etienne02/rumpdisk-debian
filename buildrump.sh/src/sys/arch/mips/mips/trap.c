@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.261 2021/04/07 02:59:01 simonb Exp $	*/
+/*	$NetBSD: trap.c,v 1.265 2023/10/24 18:08:16 andvar Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.261 2021/04/07 02:59:01 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.265 2023/10/24 18:08:16 andvar Exp $");
 
 #include "opt_cputype.h"	/* which mips CPU levels do we support? */
 #include "opt_ddb.h"
@@ -194,7 +194,6 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 	if (USERMODE(status)) {
 		tf = utf;
 		type |= T_USER;
-		LWP_CACHE_CREDS(l, p);
 	}
 
 #ifdef KDTRACE_HOOKS
@@ -283,10 +282,10 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 			 * that db_machdep.h macros will work with it, and
 			 * allow gdb to alter the PC.
 			 */
-			db_set_ddb_regs(type, tf);
+			db_set_ddb_regs(type, &tf->tf_registers);
 			PC_BREAK_ADVANCE(regs);
 			if (kgdb_trap(type, regs)) {
-				tf->tf_regs[TF_EPC] = regs->r_regs[_R_PC];
+				tf->tf_regs[_R_PC] = regs->r_regs[_R_PC];
 				return;
 			}
 		}
@@ -347,7 +346,7 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 			 * Since we don't block interrupts here,
 			 * this can legitimately happen if we get
 			 * a TLB miss that's serviced in an interrupt
-			 * hander that happens to randomly evict the
+			 * handler that happens to randomly evict the
 			 * TLB entry we're concerned about.
 			 */
 			printf("pmap_tlb_update_addr(%p,%#"
@@ -604,7 +603,7 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 			ksi.ksi_trap = type & ~T_USER;
 			ksi.ksi_signo = SIGTRAP;
 			ksi.ksi_addr = (void *)va;
-			ksi.ksi_code = TRAP_TRACE;
+			ksi.ksi_code = TRAP_BRKPT;
 
 			if ((insn.JType.op == OP_SPECIAL) &&
 			    (insn.RType.func == OP_BREAK)) {
@@ -662,7 +661,7 @@ trap(uint32_t status, uint32_t cause, vaddr_t vaddr, vaddr_t pc,
 		ksi.ksi_trap = type & ~T_USER;
 		ksi.ksi_signo = SIGTRAP;
 		ksi.ksi_addr = (void *)va;
-		ksi.ksi_code = TRAP_BRKPT;
+		ksi.ksi_code = TRAP_TRACE;
 		break; /* SIGNAL */
 	}
 	case T_DSP+T_USER:

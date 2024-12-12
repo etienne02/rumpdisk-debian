@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_wait_netbsd.h,v 1.17 2020/07/03 16:23:02 maxv Exp $	*/
+/*	$NetBSD: drm_wait_netbsd.h,v 1.19 2021/12/19 12:41:15 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -41,6 +41,7 @@
 
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
+#include <linux/sched.h>
 
 typedef kcondvar_t drm_waitqueue_t;
 
@@ -115,7 +116,7 @@ DRM_SPIN_WAKEUP_ALL(drm_waitqueue_t *q, spinlock_t *interlock)
  * . -EINTR/-ERESTARTSYS if interrupted by a signal, or
  * . 0 if the condition was true before or just after the timeout.
  *
- * Note that cv_timedwait* return -EWOULDBLOCK, not -EBUSY, on timeout.
+ * Note that cv_timedwait* return EWOULDBLOCK, not EBUSY, on timeout.
  *
  * Note that ERESTARTSYS is actually ELAST+1 and only used in Linux
  * code and must be converted for use in NetBSD code (user or kernel.)
@@ -144,7 +145,9 @@ DRM_SPIN_WAKEUP_ALL(drm_waitqueue_t *q, spinlock_t *interlock)
 		/* XXX errno NetBSD->Linux */				      \
 		(RET) = -cv_timedwait_sig((Q), &(INTERLOCK)->sl_lock, 1);     \
 		_dswo_end = getticks();					      \
-		if (_dswo_end - _dswo_start < _dswo_ticks)		      \
+		if (_dswo_ticks == MAX_SCHEDULE_TIMEOUT)		      \
+			/* nothing, never time out */;			      \
+		else if (_dswo_end - _dswo_start < _dswo_ticks)		      \
 			_dswo_ticks -= _dswo_end - _dswo_start;		      \
 		else							      \
 			_dswo_ticks = 0;				      \
@@ -179,10 +182,10 @@ DRM_SPIN_WAKEUP_ALL(drm_waitqueue_t *q, spinlock_t *interlock)
  * . the number of ticks remaining if the condition was true before the
  * timeout.
  *
- * Contrast DRM_SPIN_WAIT_ON which returns -EINTR/-ERESTARTSYS on signal,
- * -EBUSY on timeout, and zero on success; and cv_*wait*, which return
- * -EINTR/-ERESTARTSYS on signal, -EWOULDBLOCK on timeout, and zero on
- * success.
+ * Contrast DRM_SPIN_WAIT_ON which returns -EINTR/-ERESTARTSYS on
+ * signal, -EBUSY on timeout, and zero on success; and cv_*wait*, which
+ * return EINTR/ERESTARTSYS on signal, EWOULDBLOCK on timeout, and zero
+ * on success.
  *
  * XXX In retrospect, giving the timed and untimed macros a different
  * return convention from one another to match Linux may have been a
@@ -244,7 +247,9 @@ DRM_SPIN_WAKEUP_ALL(drm_waitqueue_t *q, spinlock_t *interlock)
 		(RET) = -WAIT((Q), &(INTERLOCK)->mtx_lock,		\
 		    MIN(_dtwu_ticks, INT_MAX/2));			\
 		_dtwu_end = getticks();					\
-		if ((_dtwu_end - _dtwu_start) < _dtwu_ticks)		\
+		if (_dtwu_ticks == MAX_SCHEDULE_TIMEOUT)		\
+			/* nothing, never time out */;			\
+		else if ((_dtwu_end - _dtwu_start) < _dtwu_ticks)	\
 			_dtwu_ticks -= _dtwu_end - _dtwu_start;		\
 		else							\
 			_dtwu_ticks = 0;				\
@@ -319,7 +324,9 @@ DRM_SPIN_WAKEUP_ALL(drm_waitqueue_t *q, spinlock_t *interlock)
 		(RET) = -WAIT((Q), &(INTERLOCK)->sl_lock,		\
 		    MIN(_dstwu_ticks, INT_MAX/2));			\
 		_dstwu_end = getticks();				\
-		if ((_dstwu_end - _dstwu_start) < _dstwu_ticks)		\
+		if (_dstwu_ticks == MAX_SCHEDULE_TIMEOUT)		\
+			/* nothing, never time out */;			\
+		else if ((_dstwu_end - _dstwu_start) < _dstwu_ticks)	\
 			_dstwu_ticks -= _dstwu_end - _dstwu_start;	\
 		else							\
 			_dstwu_ticks = 0;				\

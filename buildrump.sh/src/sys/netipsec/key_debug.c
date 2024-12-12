@@ -1,4 +1,4 @@
-/*	$NetBSD: key_debug.c,v 1.23 2019/01/27 02:08:48 pgoyette Exp $	*/
+/*	$NetBSD: key_debug.c,v 1.25 2022/10/11 09:51:47 knakahara Exp $	*/
 /*	$FreeBSD: key_debug.c,v 1.1.4.1 2003/01/24 05:11:36 sam Exp $	*/
 /*	$KAME: key_debug.c,v 1.26 2001/06/27 10:46:50 sakane Exp $	*/
 
@@ -33,7 +33,7 @@
 
 #ifdef _KERNEL
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: key_debug.c,v 1.23 2019/01/27 02:08:48 pgoyette Exp $");
+__KERNEL_RCSID(0, "$NetBSD: key_debug.c,v 1.25 2022/10/11 09:51:47 knakahara Exp $");
 #endif
 
 #if defined(_KERNEL_OPT)
@@ -90,7 +90,7 @@ static void kdebug_secreplay(const struct secreplay *);
 #endif
 
 #ifndef _KERNEL
-#define panic(...)	err(EXIT_FAILURE, __VA_ARGS__)
+#define panic(fmt, ...)	err(EXIT_FAILURE, fmt, __VA_ARGS__)
 #endif
 
 /* NOTE: host byte order */
@@ -377,9 +377,9 @@ kdebug_sadb_x_policy(const struct sadb_ext *ext)
 	if (ext == NULL)
 		panic("%s: NULL pointer was passed", __func__);
 
-	printf(" sadb_x_policy { type=%u dir=%u id=%x }",
+	printf(" sadb_x_policy { type=%u dir=%u flags=0x%02x id=%x }",
 		xpl->sadb_x_policy_type, xpl->sadb_x_policy_dir,
-		xpl->sadb_x_policy_id);
+		xpl->sadb_x_policy_flags, xpl->sadb_x_policy_id);
 
 	if (xpl->sadb_x_policy_type == IPSEC_POLICY_IPSEC) {
 		int tlen;

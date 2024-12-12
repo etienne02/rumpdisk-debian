@@ -1,5 +1,6 @@
-/*	$NetBSD: os.h,v 1.5 2019/12/07 13:31:41 jmcneill Exp $	*/
+/*	$NetBSD: os.h,v 1.8 2021/12/19 10:47:30 riastradh Exp $	*/
 
+/* SPDX-License-Identifier: MIT */
 #ifndef __NOUVEAU_OS_H__
 #define __NOUVEAU_OS_H__
 
@@ -35,7 +36,6 @@
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/list.h>
-#include <linux/spinlock.h>
 #include <linux/math64.h>
 #include <linux/errno.h>
 #include <linux/workqueue.h>
@@ -55,33 +55,8 @@
 #include <soc/tegra/pmc.h>
 
 #ifdef __NetBSD__
-#include <drm/drm_os_netbsd.h>	/* drm_waitqueue_t, IRQ_HANDLED */
-#endif
-
-#ifndef __NetBSD__		/* XXX ioread */
-#ifndef ioread32_native
-#ifdef __BIG_ENDIAN
-#define ioread16_native ioread16be
-#define iowrite16_native iowrite16be
-#define ioread32_native  ioread32be
-#define iowrite32_native iowrite32be
-#else /* def __BIG_ENDIAN */
-#define ioread16_native ioread16
-#define iowrite16_native iowrite16
-#define ioread32_native  ioread32
-#define iowrite32_native iowrite32
-#endif /* def __BIG_ENDIAN else */
-#endif /* !ioread32_native */
-#endif
-
-#ifdef __NetBSD__
-#include <sys/bus.h>
-#ifndef __BUS_SPACE_HAS_STREAM_METHODS
-#define	bus_space_read_stream_2	bus_space_read_2
-#define	bus_space_read_stream_4	bus_space_read_4
-#define	bus_space_write_stream_2 bus_space_write_2
-#define	bus_space_write_stream_4 bus_space_write_4
-#endif
+#include <drm/drm_irq_netbsd.h>
+#include <drm/drm_wait_netbsd.h>
 #endif
 
 #endif

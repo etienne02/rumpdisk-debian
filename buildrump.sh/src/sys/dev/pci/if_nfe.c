@@ -1,4 +1,4 @@
-/*	$NetBSD: if_nfe.c,v 1.78 2020/03/13 05:10:39 msaitoh Exp $	*/
+/*	$NetBSD: if_nfe.c,v 1.81 2024/07/05 04:31:51 rin Exp $	*/
 /*	$OpenBSD: if_nfe.c,v 1.77 2008/02/05 16:52:50 brad Exp $	*/
 
 /*-
@@ -21,7 +21,7 @@
 /* Driver for NVIDIA nForce MCP Fast Ethernet and Gigabit Ethernet */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_nfe.c,v 1.78 2020/03/13 05:10:39 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_nfe.c,v 1.81 2024/07/05 04:31:51 rin Exp $");
 
 #include "opt_inet.h"
 #include "vlan.h"
@@ -324,7 +324,7 @@ nfe_attach(device_t parent, device_t self, void *aux)
 	if (pci_dma64_available(pa) && (sc->sc_flags & NFE_40BIT_ADDR) != 0) {
 		if (bus_dmatag_subregion(pa->pa_dmat64,
 					 0,
-					 (bus_addr_t)(1ULL << 40),
+					 (bus_addr_t)__MASK(40),
 					 &sc->sc_dmat,
 					 BUS_DMA_WAITOK) != 0) {
 			aprint_error_dev(self,
@@ -1598,8 +1598,7 @@ nfe_free_rx_ring(struct nfe_softc *sc, struct nfe_rx_ring *ring)
 			bus_dmamap_unload(sc->sc_dmat, data->map);
 			bus_dmamap_destroy(sc->sc_dmat, data->map);
 		}
-		if (data->m != NULL)
-			m_freem(data->m);
+		m_freem(data->m);
 	}
 
 	nfe_jpool_free(sc);

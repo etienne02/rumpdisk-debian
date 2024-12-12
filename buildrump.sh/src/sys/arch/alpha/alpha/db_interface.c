@@ -1,4 +1,4 @@
-/* $NetBSD: db_interface.c,v 1.36 2021/02/23 07:13:51 mrg Exp $ */
+/* $NetBSD: db_interface.c,v 1.43 2024/02/05 22:08:04 andvar Exp $ */
 
 /*
  * Mach Operating System
@@ -47,12 +47,14 @@
  *	NASA Ames Research Center
  */
 
+#ifdef _KERNEL_OPT
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
+#endif
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.36 2021/02/23 07:13:51 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.43 2024/02/05 22:08:04 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -66,8 +68,10 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.36 2021/02/23 07:13:51 mrg Exp $"
 #include <machine/pal.h>
 #include <machine/prom.h>
 
-#include <alpha/alpha/db_instruction.h>
+#include <machine/alpha_instruction.h>
 
+#include <ddb/db_user.h>
+#include <ddb/db_active.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_command.h>
 #include <ddb/db_extern.h>
@@ -75,7 +79,6 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.36 2021/02/23 07:13:51 mrg Exp $"
 #include <ddb/db_output.h>
 #include <ddb/db_variables.h>
 #include <ddb/db_interface.h>
-
 
 #if 0
 extern char *trap_type[];
@@ -102,44 +105,52 @@ static int db_alpha_regop(const struct db_variable *, db_expr_t *, int);
 
 #define	dbreg(xx)	((long *)(xx))
 
+#define	DBREG(n, r)						\
+	{	.name = __STRING(n),				\
+		.valuep = ((long *)(r)),			\
+		.fcn = db_alpha_regop,				\
+		.modif = NULL, }
+
 const struct db_variable db_regs[] = {
-	{	"v0",	dbreg(FRAME_V0),	db_alpha_regop	},
-	{	"t0",	dbreg(FRAME_T0),	db_alpha_regop	},
-	{	"t1",	dbreg(FRAME_T1),	db_alpha_regop	},
-	{	"t2",	dbreg(FRAME_T2),	db_alpha_regop	},
-	{	"t3",	dbreg(FRAME_T3),	db_alpha_regop	},
-	{	"t4",	dbreg(FRAME_T4),	db_alpha_regop	},
-	{	"t5",	dbreg(FRAME_T5),	db_alpha_regop	},
-	{	"t6",	dbreg(FRAME_T6),	db_alpha_regop	},
-	{	"t7",	dbreg(FRAME_T7),	db_alpha_regop	},
-	{	"s0",	dbreg(FRAME_S0),	db_alpha_regop	},
-	{	"s1",	dbreg(FRAME_S1),	db_alpha_regop	},
-	{	"s2",	dbreg(FRAME_S2),	db_alpha_regop	},
-	{	"s3",	dbreg(FRAME_S3),	db_alpha_regop	},
-	{	"s4",	dbreg(FRAME_S4),	db_alpha_regop	},
-	{	"s5",	dbreg(FRAME_S5),	db_alpha_regop	},
-	{	"s6",	dbreg(FRAME_S6),	db_alpha_regop	},
-	{	"a0",	dbreg(FRAME_A0),	db_alpha_regop	},
-	{	"a1",	dbreg(FRAME_A1),	db_alpha_regop	},
-	{	"a2",	dbreg(FRAME_A2),	db_alpha_regop	},
-	{	"a3",	dbreg(FRAME_A3),	db_alpha_regop	},
-	{	"a4",	dbreg(FRAME_A4),	db_alpha_regop	},
-	{	"a5",	dbreg(FRAME_A5),	db_alpha_regop	},
-	{	"t8",	dbreg(FRAME_T8),	db_alpha_regop	},
-	{	"t9",	dbreg(FRAME_T9),	db_alpha_regop	},
-	{	"t10",	dbreg(FRAME_T10),	db_alpha_regop	},
-	{	"t11",	dbreg(FRAME_T11),	db_alpha_regop	},
-	{	"ra",	dbreg(FRAME_RA),	db_alpha_regop	},
-	{	"t12",	dbreg(FRAME_T12),	db_alpha_regop	},
-	{	"at",	dbreg(FRAME_AT),	db_alpha_regop	},
-	{	"gp",	dbreg(FRAME_GP),	db_alpha_regop	},
-	{	"sp",	dbreg(FRAME_SP),	db_alpha_regop	},
-	{	"pc",	dbreg(FRAME_PC),	db_alpha_regop	},
-	{	"ps",	dbreg(FRAME_PS),	db_alpha_regop	},
-	{	"ai",	dbreg(FRAME_T11),	db_alpha_regop	},
-	{	"pv",	dbreg(FRAME_T12),	db_alpha_regop	},
+	DBREG(v0,	FRAME_V0),
+	DBREG(t0,	FRAME_T0),
+	DBREG(t1,	FRAME_T1),
+	DBREG(t2,	FRAME_T2),
+	DBREG(t3,	FRAME_T3),
+	DBREG(t4,	FRAME_T4),
+	DBREG(t5,	FRAME_T5),
+	DBREG(t6,	FRAME_T6),
+	DBREG(t7,	FRAME_T7),
+	DBREG(s0,	FRAME_S0),
+	DBREG(s1,	FRAME_S1),
+	DBREG(s2,	FRAME_S2),
+	DBREG(s3,	FRAME_S3),
+	DBREG(s4,	FRAME_S4),
+	DBREG(s5,	FRAME_S5),
+	DBREG(s6,	FRAME_S6),
+	DBREG(a0,	FRAME_A0),
+	DBREG(a1,	FRAME_A1),
+	DBREG(a2,	FRAME_A2),
+	DBREG(a3,	FRAME_A3),
+	DBREG(a4,	FRAME_A4),
+	DBREG(a5,	FRAME_A5),
+	DBREG(t8,	FRAME_T8),
+	DBREG(t9,	FRAME_T9),
+	DBREG(t10,	FRAME_T10),
+	DBREG(t11,	FRAME_T11),
+	DBREG(ra,	FRAME_RA),
+	DBREG(t12,	FRAME_T12),
+	DBREG(at,	FRAME_AT),
+	DBREG(gp,	FRAME_GP),
+	DBREG(sp,	FRAME_SP),
+	DBREG(pc,	FRAME_PC),
+	DBREG(ps,	FRAME_PS),
+	DBREG(ai,	FRAME_T11),
+	DBREG(pv,	FRAME_T12),
 };
 const struct db_variable * const db_eregs = db_regs + sizeof(db_regs)/sizeof(db_regs[0]);
+
+#undef DBREG
 
 static int
 db_alpha_regop(const struct db_variable *vp, db_expr_t *val, int opcode)
@@ -148,10 +159,13 @@ db_alpha_regop(const struct db_variable *vp, db_expr_t *val, int opcode)
 	unsigned long zeroval = 0;
 	struct trapframe *f = NULL;
 
+#ifdef _KERNEL			/* XXX ?? */
 	if (vp->modif != NULL && *vp->modif == 'u') {
 		if (curlwp != NULL)
 			f = curlwp->l_md.md_tf;
-	} else	f = DDB_REGS;
+	} else
+#endif /* _KERNEL */
+		f = DDB_REGS;
 	tfaddr = f == NULL ? &zeroval : &f->tf_regs[(u_long)vp->valuep];
 	switch (opcode) {
 	case DB_VAR_GET:
@@ -163,12 +177,16 @@ db_alpha_regop(const struct db_variable *vp, db_expr_t *val, int opcode)
 		break;
 
 	default:
+#ifdef _KERNEL
 		panic("db_alpha_regop: unknown op %d", opcode);
+#endif
+		break;
 	}
 
 	return (0);
 }
 
+#ifdef _KERNEL
 /*
  * ddb_trap - field a kernel trap
  */
@@ -202,7 +220,7 @@ ddb_trap(unsigned long a0, unsigned long a1, unsigned long a2, unsigned long ent
 
 	/*
 	 * Use SWPIPL directly; we want to avoid processing
-	 * software interrrupts when we go back.  Soft ints
+	 * software interrupts when we go back.  Soft ints
 	 * will be caught later, so not to worry.
 	 */
 	psl = alpha_pal_swpipl(ALPHA_PSL_IPL_HIGH);
@@ -258,6 +276,7 @@ cpu_Debugger(void)
 
 	__asm volatile("call_pal 0x81");		/* bugchk */
 }
+#endif /* _KERNEL */
 
 /*
  * Alpha-specific ddb commands:
@@ -361,6 +380,7 @@ db_register_value(db_regs_t *regs, int regno)
 	return (regs->tf_regs[reg_to_frame[regno]]);
 }
 
+#ifdef _KERNEL
 /*
  * Support functions for software single-step.
  */
@@ -564,4 +584,92 @@ db_branch_taken(int ins, db_addr_t pc, db_regs_t *regs)
 	}
 
 	return (newpc);
+}
+#endif /* _KERNEL */
+
+unsigned long
+db_alpha_read_saved_reg(unsigned long *regp)
+{
+	unsigned long reg;
+
+	db_read_bytes((db_addr_t)regp, sizeof(reg), (char *)&reg);
+	return reg;
+}
+
+unsigned long
+db_alpha_tf_reg(struct trapframe *tf, unsigned int regno)
+{
+	return db_alpha_read_saved_reg(&tf->tf_regs[regno]);
+}
+
+/*
+ * Alpha special symbol handling.
+ */
+db_alpha_nlist db_alpha_nl[] = {
+	DB_ALPHA_SYM(SYM_XentArith, XentArith),
+	DB_ALPHA_SYM(SYM_XentIF, XentIF),
+	DB_ALPHA_SYM(SYM_XentInt, XentInt),
+	DB_ALPHA_SYM(SYM_XentMM, XentMM),
+	DB_ALPHA_SYM(SYM_XentSys, XentSys),
+	DB_ALPHA_SYM(SYM_XentUna, XentUna),
+	DB_ALPHA_SYM(SYM_XentRestart, XentRestart),
+	DB_ALPHA_SYM(SYM_exception_return, exception_return),
+	DB_ALPHA_SYM(SYM_alpha_kthread_backstop, alpha_kthread_backstop),
+#ifndef _KERNEL
+	DB_ALPHA_SYM(SYM_dumppcb, dumppcb),
+#endif /* _KERNEL */
+	DB_ALPHA_SYM_EOL
+};
+
+static int
+db_alpha_nlist_lookup(db_addr_t addr)
+{
+	int i;
+
+	for (i = 0; i < SYM___eol; i++) {
+		if (db_alpha_nl[i].n_value == addr) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+bool
+db_alpha_sym_is_trap(db_addr_t addr)
+{
+	int i = db_alpha_nlist_lookup(addr);
+	return i >= SYM_XentArith && i <= SYM_exception_return;
+}
+
+bool
+db_alpha_sym_is_backstop(db_addr_t addr)
+{
+	return db_alpha_nlist_lookup(addr) == SYM_alpha_kthread_backstop;
+}
+
+bool
+db_alpha_sym_is_syscall(db_addr_t addr)
+{
+	return db_alpha_nlist_lookup(addr) == SYM_XentSys;
+}
+
+const char *
+db_alpha_trapsym_description(db_addr_t addr)
+{
+	static const char * const trap_descriptions[] = {
+	[SYM_XentArith]		=	"arithmetic trap",
+	[SYM_XentIF]		=	"instruction fault",
+	[SYM_XentInt]		=	"interrupt",
+	[SYM_XentMM]		=	"memory management fault",
+	[SYM_XentSys]		=	"syscall",
+	[SYM_XentUna]		=	"unaligned access fault",
+	[SYM_XentRestart]	=	"console restart",
+	[SYM_exception_return]	=	"(exception return)",
+	};
+
+	int i = db_alpha_nlist_lookup(addr);
+	if (i >= SYM_XentArith && i <= SYM_exception_return) {
+		return trap_descriptions[i];
+	}
+	return "??? trap ???";
 }

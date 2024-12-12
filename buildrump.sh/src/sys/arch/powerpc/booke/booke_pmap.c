@@ -1,4 +1,4 @@
-/*	$NetBSD: booke_pmap.c,v 1.32 2021/03/19 07:51:33 skrll Exp $	*/
+/*	$NetBSD: booke_pmap.c,v 1.39 2024/09/24 07:29:55 skrll Exp $	*/
 /*-
  * Copyright (c) 2010, 2011 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -37,7 +37,7 @@
 #define __PMAP_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: booke_pmap.c,v 1.32 2021/03/19 07:51:33 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: booke_pmap.c,v 1.39 2024/09/24 07:29:55 skrll Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_multiprocessor.h"
@@ -100,7 +100,7 @@ pmap_md_page_syncicache(struct vm_page_md *mdpg, const kcpuset_t *onproc)
 	 * the next time page is faulted, it will get icache
 	 * synched.  But this is easier. :)
 	 */
-	paddr_t pa = VM_PAGE_TO_PHYS(pg);
+	const paddr_t pa = VM_PAGE_TO_PHYS(pg);
 	dcache_wb_page(pa);
 	icache_inv_page(pa);
 }
@@ -125,20 +125,24 @@ pmap_md_direct_mapped_vaddr_to_paddr(vaddr_t va)
 
 #ifdef PMAP_MINIMALTLB
 static pt_entry_t *
-kvtopte(const pmap_segtab_t *stp, vaddr_t va)
+pmap_kvtopte(const pmap_segtab_t *stb, vaddr_t va)
 {
-	pt_entry_t * const ptep = stp->seg_tab[va >> SEGSHIFT];
-	if (ptep == NULL)
+	const vaddr_t segtab_mask = PMAP_SEGTABSIZE - 1;
+	const size_t idx = (va >> SEGSHIFT) & segtab_mask;
+	pmap_ptpage_t * const ppg = stb->seg_ppg[idx];
+	if (ppg == NULL)
 		return NULL;
-	return &ptep[(va & SEGOFSET) >> PAGE_SHIFT];
+	const size_t pte_idx = (va >> PGSHIFT) & (NPTEPG - 1);
+
+	return &ppg->ppg_ptes[pte_idx];
 }
 
 vaddr_t
 pmap_kvptefill(vaddr_t sva, vaddr_t eva, pt_entry_t pt_entry)
 {
-	pmap_segtab_t * const stp = &pmap_kern_segtab;
+	pmap_segtab_t * const stb = &pmap_kern_segtab;
 	KASSERT(sva == trunc_page(sva));
-	pt_entry_t *ptep = kvtopte(stp, sva);
+	pt_entry_t *ptep = pmap_kvtopte(stb, sva);
 	for (; sva < eva; sva += NBPG) {
 		*ptep++ = pt_entry ? (sva | pt_entry) : 0;
 	}
@@ -154,7 +158,7 @@ vaddr_t
 pmap_bootstrap(vaddr_t startkernel, vaddr_t endkernel,
 	phys_ram_seg_t *avail, size_t cnt)
 {
-	pmap_segtab_t * const stp = &pmap_kern_segtab;
+	pmap_segtab_t * const stb = &pmap_kern_segtab;
 
 	KASSERT(endkernel == trunc_page(endkernel));
 
@@ -227,14 +231,15 @@ pmap_bootstrap(vaddr_t startkernel, vaddr_t endkernel,
 	 * an extra page for the segment table and allows the user/kernel
 	 * access to be common.
 	 */
-	pt_entry_t **ptp = &stp->seg_tab[VM_MIN_KERNEL_ADDRESS >> SEGSHIFT];
-	pt_entry_t *ptep = (void *)kv_segtabs;
-	memset(ptep, 0, NBPG * kv_nsegtabs);
-	for (size_t i = 0; i < kv_nsegtabs; i++, ptep += NPTEPG) {
-		*ptp++ = ptep;
+
+	pmap_ptpage_t **ppg_p = &stb->seg_ppg[VM_MIN_KERNEL_ADDRESS >> SEGSHIFT];
+	pmap_ptpage_t *ppg = (void *)kv_segtabs;
+	memset(ppg, 0, NBPG * kv_nsegtabs);
+	for (size_t i = 0; i < kv_nsegtabs; i++, ppg++) {
+		*ppg_p++ = ppg;
 	}
 
-#if PMAP_MINIMALTLB
+#ifdef PMAP_MINIMALTLB
 	const vsize_t dm_nsegtabs = (physmem + NPTEPG - 1) / NPTEPG;
 	const vaddr_t dm_segtabs = avail[0].start;
 	printf(" dm_nsegtabs=%#"PRIxVSIZE, dm_nsegtabs);
@@ -245,11 +250,11 @@ pmap_bootstrap(vaddr_t startkernel, vaddr_t endkernel,
 	avail[0].size -= NBPG * dm_nsegtabs;
 	endkernel += NBPG * dm_nsegtabs;
 
-	ptp = stp->seg_tab;
-	ptep = (void *)dm_segtabs;
-	memset(ptep, 0, NBPG * dm_nsegtabs);
-	for (size_t i = 0; i < dm_nsegtabs; i++, ptp++, ptep += NPTEPG) {
-		*ptp = ptep;
+	ppg_p = stb->seg_ppg;
+	ppg = (void *)dm_segtabs;
+	memset(ppg, 0, NBPG * dm_nsegtabs);
+	for (size_t i = 0; i < dm_nsegtabs; i++, ppg_p++, ppg++) {
+		*ppg_p = ppg;
 	}
 
 	/*
@@ -300,7 +305,7 @@ pmap_bootstrap(vaddr_t startkernel, vaddr_t endkernel,
 	pool_init(&pmap_pv_pool, sizeof(struct pv_entry), 0, 0, 0, "pvpl",
 	    &pmap_pv_page_allocator, IPL_NONE);
 
-	tlb_set_asid(0);
+	tlb_set_asid(KERNEL_PID, pmap_kernel());
 
 	return endkernel;
 }
@@ -308,6 +313,7 @@ pmap_bootstrap(vaddr_t startkernel, vaddr_t endkernel,
 struct vm_page *
 pmap_md_alloc_poolpage(int flags)
 {
+
 	/*
 	 * Any managed page works for us.
 	 */
@@ -404,7 +410,7 @@ bool
 pmap_md_tlb_check_entry(void *ctx, vaddr_t va, tlb_asid_t asid, pt_entry_t pte)
 {
 	pmap_t pm = ctx;
-        struct pmap_asid_info * const pai = PMAP_PAI(pm, curcpu()->ci_tlb_info);
+	struct pmap_asid_info * const pai = PMAP_PAI(pm, curcpu()->ci_tlb_info);
 
 	if (asid != pai->pai_asid)
 		return true;

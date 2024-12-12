@@ -1,15 +1,18 @@
-/*	$NetBSD: msg_285.c,v 1.3 2021/06/15 08:48:49 rillig Exp $	*/
+/*	$NetBSD: msg_285.c,v 1.6 2024/12/01 18:37:54 rillig Exp $	*/
 # 3 "msg_285.c"
 
 // Test for message: prototype declaration [285]
 
-/* lint1-extra-flags: -r */
+/* lint1-extra-flags: -r -X 351 */
 
-void function(int, int, int);	/* expect: 285 */
+/* expect+1: prototype declaration [285] */
+void function(int, int, int);
 
 /* ARGSUSED */
 extern void
+/* expect+1: warning: function definition with identifier list is obsolete in C23 [384] */
 function(a, b)
     int a, b;
-{				/* expect: 3 declared, 2 defined */
+/* expect+1: error: parameter mismatch: 3 declared, 2 defined [51] */
+{
 }

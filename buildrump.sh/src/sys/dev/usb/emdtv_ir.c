@@ -1,4 +1,4 @@
-/* $NetBSD: emdtv_ir.c,v 1.4 2021/08/07 16:19:16 thorpej Exp $ */
+/* $NetBSD: emdtv_ir.c,v 1.6 2022/06/26 22:49:09 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2008 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: emdtv_ir.c,v 1.4 2021/08/07 16:19:16 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: emdtv_ir.c,v 1.6 2022/06/26 22:49:09 riastradh Exp $");
 
 #include <sys/select.h>
 #include <sys/param.h>
@@ -75,9 +75,19 @@ emdtv_ir_attach(struct emdtv_softc *sc)
 	usbd_status status;
 	int err;
 
+	mutex_init(&sc->sc_ir_mutex, MUTEX_DEFAULT, IPL_VM);
+
 	ed = usbd_interface2endpoint_descriptor(sc->sc_iface, 0);
 	if (ed == NULL)
 		return;
+
+	err = workqueue_create(&sc->sc_ir_wq, "emdtvir",
+	    emdtv_ir_worker, sc, PRI_NONE, IPL_VM, 0);
+	if (err) {
+		aprint_error_dev(sc->sc_dev, "couldn't create workqueue: %d\n",
+		    err);
+		return;
+	}
 
 	status = usbd_open_pipe_intr(sc->sc_iface, ed->bEndpointAddress,
 	    USBD_EXCLUSIVE_USE, &sc->sc_intr_pipe, sc, &sc->sc_intr_buf, 1,
@@ -87,14 +97,6 @@ emdtv_ir_attach(struct emdtv_softc *sc)
 		    usbd_errstr(status));
 		return;
 	}
-
-	mutex_init(&sc->sc_ir_mutex, MUTEX_DEFAULT, IPL_VM);
-
-	err = workqueue_create(&sc->sc_ir_wq, "emdtvir",
-	    emdtv_ir_worker, sc, PRI_NONE, IPL_VM, 0);
-	if (err)
-		aprint_error_dev(sc->sc_dev, "couldn't create workqueue: %d\n",
-		    err);
 
 	ia.ia_type = IR_TYPE_CIR;
 	ia.ia_methods = &emdtv_ir_methods;
@@ -108,8 +110,6 @@ emdtv_ir_attach(struct emdtv_softc *sc)
 void
 emdtv_ir_detach(struct emdtv_softc *sc, int flags)
 {
-	if (sc->sc_ir_wq != NULL)
-		workqueue_destroy(sc->sc_ir_wq);
 
 	if (sc->sc_intr_pipe != NULL) {
 		usbd_abort_pipe(sc->sc_intr_pipe);
@@ -117,12 +117,10 @@ emdtv_ir_detach(struct emdtv_softc *sc, int flags)
 		sc->sc_intr_pipe = NULL;
 	}
 
-	mutex_enter(&sc->sc_ir_mutex);
-	mutex_exit(&sc->sc_ir_mutex);
-	mutex_destroy(&sc->sc_ir_mutex);
+	if (sc->sc_ir_wq != NULL)
+		workqueue_destroy(sc->sc_ir_wq);
 
-	if (sc->sc_cirdev != NULL)
-		config_detach(sc->sc_cirdev, flags);
+	mutex_destroy(&sc->sc_ir_mutex);
 }
 
 static void

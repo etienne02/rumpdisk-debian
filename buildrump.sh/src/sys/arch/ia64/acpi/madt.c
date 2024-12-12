@@ -1,4 +1,4 @@
-/*	$NetBSD: madt.c,v 1.4 2019/04/29 16:39:58 scole Exp $	*/
+/*	$NetBSD: madt.c,v 1.6 2023/07/13 18:43:34 mrg Exp $	*/
 /*-
  * Copyright (c) 2001 Doug Rabson
  * All rights reserved.
@@ -29,6 +29,7 @@
 
 #include <sys/param.h>
 #include <sys/reboot.h>
+#include <sys/mutex.h>
 
 #include <machine/md_var.h>
 #include <machine/sapicvar.h>
@@ -149,7 +150,7 @@ ia64_probe_sapics(void)
 
 		if (strncmp(table->Header.Signature, ACPI_SIG_MADT,
 		    ACPI_NAMESEG_SIZE) != 0 ||
-		    ACPI_FAILURE(AcpiTbChecksum((void *)table,
+		    ACPI_FAILURE(AcpiUtChecksum((void *)table,
 		    table->Header.Length)))
 			continue;
 
@@ -243,7 +244,7 @@ ia64_count_cpus(void)
 
 		if (strncmp(table->Header.Signature, ACPI_SIG_MADT,
 		    ACPI_NAMESEG_SIZE) != 0 ||
-		    ACPI_FAILURE(AcpiTbChecksum((void *)table,
+		    ACPI_FAILURE(AcpiUtChecksum((void *)table,
 			table->Header.Length)))
 			continue;
 

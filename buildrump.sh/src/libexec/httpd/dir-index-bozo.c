@@ -1,9 +1,9 @@
-/*	$NetBSD: dir-index-bozo.c,v 1.34 2020/10/15 02:19:23 mrg Exp $	*/
+/*	$NetBSD: dir-index-bozo.c,v 1.37 2024/04/26 20:27:12 maya Exp $	*/
 
 /*	$eterna: dir-index-bozo.c,v 1.20 2011/11/18 09:21:15 mrg Exp $	*/
 
 /*
- * Copyright (c) 1997-2020 Matthew R. Green
+ * Copyright (c) 1997-2022 Matthew R. Green
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -123,6 +123,7 @@ bozo_dir_index(bozo_httpreq_t *request, const char *dirpath, int isindex)
 	bozo_printf(httpd,
 		"<!DOCTYPE html>\r\n"
 		"<html><head><meta charset=\"utf-8\"/>\r\n"
+		"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\r\n"
 		"<style type=\"text/css\">\r\n"
 		"table {\r\n"
 		"\tborder-top: 1px solid black;\r\n"
@@ -141,7 +142,7 @@ bozo_dir_index(bozo_httpreq_t *request, const char *dirpath, int isindex)
 		"<tbody>\r\n");
 
 	for (j = k = scandir(dirpath, &de, NULL, alphasort), deo = de;
-	    j--; de++) {
+	    j-- > 0; de++) {
 		int nostat = 0;
 		char *name = (*de)->d_name;
 		char *urlname, *htmlname;

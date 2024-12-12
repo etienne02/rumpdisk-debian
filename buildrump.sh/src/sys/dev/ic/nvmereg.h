@@ -1,4 +1,4 @@
-/*	$NetBSD: nvmereg.h,v 1.15 2020/09/27 16:44:24 jdolecek Exp $	*/
+/*	$NetBSD: nvmereg.h,v 1.19 2022/10/12 20:50:43 andvar Exp $	*/
 /*	$OpenBSD: nvmereg.h,v 1.10 2016/04/14 11:18:32 dlg Exp $ */
 
 /*
@@ -77,16 +77,16 @@
 #define  NVME_CSTS_SHST_NONE	(0x0 << 2) /* normal operation */
 #define  NVME_CSTS_SHST_WAIT	(0x1 << 2) /* shutdown processing occurring */
 #define  NVME_CSTS_SHST_DONE	(0x2 << 2) /* shutdown processing complete */
-#define  NVME_CSTS_CFS		(1 << 1)
-#define  NVME_CSTS_RDY		(1 << 0)
+#define  NVME_CSTS_CFS		__BIT(1)
+#define  NVME_CSTS_RDY		__BIT(0)
 #define NVME_NSSR	0x0020	/* NVM Subsystem Reset (Optional) */
 #define NVME_AQA	0x0024	/* Admin Queue Attributes */
 				/* Admin Completion Queue Size */
 #define  NVME_AQA_ACQS(_v)	(((_v) - 1) << 16)
-#define  NVME_AQA_ACQS_R(_v)	((_v >> 16) & ((1 << 12) - 1))
+#define  NVME_AQA_ACQS_R(_v)	((_v >> 16) & (__BIT(12) - 1))
 				/* Admin Submission Queue Size */
 #define  NVME_AQA_ASQS(_v)	(((_v) - 1) << 0)
-#define  NVME_AQA_ASQS_R(_v)	(_v & ((1 << 12) - 1))
+#define  NVME_AQA_ASQS_R(_v)	(_v & (__BIT(12) - 1))
 #define NVME_ASQ	0x0028	/* Admin Submission Queue Base Address */
 #define NVME_ACQ	0x0030	/* Admin Completion Queue Base Address */
 
@@ -166,8 +166,8 @@ struct nvme_sqe_q {
 #define NVM_SQE_SQ_QPRIO_HI	(0x1 << 1)
 #define NVM_SQE_SQ_QPRIO_MED	(0x2 << 1)
 #define NVM_SQE_SQ_QPRIO_LOW	(0x3 << 1)
-#define NVM_SQE_CQ_IEN		(1 << 1)
-#define NVM_SQE_Q_PC		(1 << 0)
+#define NVM_SQE_CQ_IEN		__BIT(1)
+#define NVM_SQE_Q_PC		__BIT(0)
 	uint8_t		_reserved3;
 	uint16_t	cqid; /* XXX interrupt vector for cq */
 
@@ -214,7 +214,7 @@ struct nvme_sqe_io {
 #define  NVM_SQE_IO_FREQ_FRR_FRW	0x5	/* Freq. read and writes */
 #define  NVM_SQE_IO_FREQ_ONCE		0x6	/* One time i/o operation */
 /* Extra Access Frequency bits for read operations */
-#define  NVM_SQE_IO_FREQ_SPEC		0x7	/* Speculative read - prefech */
+#define  NVM_SQE_IO_FREQ_SPEC		0x7	/* Speculative read - prefetch */
 #define  NVM_SQE_IO_FREQ_OVERWRITE	0x8	/* Will be overwritten soon */
 	uint8_t		_reserved2[3];
 
@@ -240,14 +240,14 @@ struct nvme_cqe {
 	uint16_t	flags;
 #define NVME_CQE_DNR		__BIT(15)
 #define NVME_CQE_M		__BIT(14)
-#define NVME_CQE_SCT_MASK	__BITS(8, 10)
-#define NVME_CQE_SCT(_f)	((_f) & (0x07 << 8))
-#define  NVME_CQE_SCT_GENERIC		(0x00 << 8)
-#define  NVME_CQE_SCT_COMMAND		(0x01 << 8)
-#define  NVME_CQE_SCT_MEDIAERR		(0x02 << 8)
-#define  NVME_CQE_SCT_VENDOR		(0x07 << 8)
-#define NVME_CQE_SC_MASK	__BITS(1, 7)
-#define NVME_CQE_SC(_f)		((_f) & (0x7f << 1))
+#define NVME_CQE_SCT_MASK	__BITS(9, 11)
+#define NVME_CQE_SCT(_f)	((_f) & NVME_CQE_SCT_MASK)
+#define  NVME_CQE_SCT_GENERIC		(0x00 << 9)
+#define  NVME_CQE_SCT_COMMAND		(0x01 << 9)
+#define  NVME_CQE_SCT_MEDIAERR		(0x02 << 9)
+#define  NVME_CQE_SCT_VENDOR		(0x07 << 9)
+#define NVME_CQE_SC_MASK	__BITS(1, 8)
+#define NVME_CQE_SC(_f)		((_f) & NVME_CQE_SC_MASK)
 /* generic command status codes */
 #define  NVME_CQE_SC_SUCCESS		(0x00 << 1)
 #define  NVME_CQE_SC_INVALID_OPCODE	(0x01 << 1)
@@ -320,8 +320,8 @@ NVME_CTASSERT(sizeof(struct nvme_cqe) == 16, "bad size for nvme_cqe");
 #define NVM_ADMIN_DEV_SELFTEST	0x14 /* Device Self Test */
 #define NVM_ADMIN_NS_ATTACHMENT	0x15 /* Namespace Attachment */
 #define NVM_ADMIN_KEEP_ALIVE	0x18 /* Keep Alive */
-#define NVM_ADMIN_DIRECTIVE_SND	0x19 /* Derective Send */
-#define NVM_ADMIN_DIRECTIVE_RCV	0x1a /* Derective Receive */
+#define NVM_ADMIN_DIRECTIVE_SND	0x19 /* Directive Send */
+#define NVM_ADMIN_DIRECTIVE_RCV	0x1a /* Directive Receive */
 #define NVM_ADMIN_VIRT_MGMT	0x1c /* Virtualization Management */
 #define NVM_ADMIN_NVME_MI_SEND	0x1d /* NVMe-MI Send */
 #define NVM_ADMIN_NVME_MI_RECV	0x1e /* NVMe-MI Receive */

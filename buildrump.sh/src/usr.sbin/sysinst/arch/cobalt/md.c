@@ -1,4 +1,4 @@
-/*	$NetBSD: md.c,v 1.14 2020/10/12 16:14:33 martin Exp $ */
+/*	$NetBSD: md.c,v 1.16 2022/06/11 16:25:23 tsutsui Exp $ */
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -205,7 +205,7 @@ md_post_newfs(struct install_partition_desc *install)
 }
 
 int
-md_post_extract(struct install_partition_desc *install)
+md_post_extract(struct install_partition_desc *install, bool upgrade)
 {
 	return 0;
 }
@@ -296,7 +296,7 @@ md_parts_use_wholedisk(struct disk_partitions *parts)
 	};
 
 	boot_part.nat_type = parts->pscheme->get_fs_part_type(
-	    PT_root, boot_part.fs_type, boot_part.fs_sub_type);
+	    PT_EXT2, boot_part.fs_type, boot_part.fs_sub_type);
 
 	return parts_use_wholedisk(parts, 1, &boot_part);
 }

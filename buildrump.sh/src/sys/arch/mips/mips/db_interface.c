@@ -1,4 +1,4 @@
-/*	$NetBSD: db_interface.c,v 1.94 2021/05/23 23:22:55 dholland Exp $	*/
+/*	$NetBSD: db_interface.c,v 1.99 2023/02/19 11:19:51 simonb Exp $	*/
 
 /*
  * Mach Operating System
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.94 2021/05/23 23:22:55 dholland Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.99 2023/02/19 11:19:51 simonb Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_multiprocessor.h"
@@ -59,6 +59,7 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.94 2021/05/23 23:22:55 dholland E
 #include <machine/int_fmtio.h>
 #include <machine/db_machdep.h>
 #include <ddb/db_access.h>
+#include <ddb/db_active.h>
 #include <ddb/db_user.h>
 #ifndef KGDB
 #include <ddb/db_command.h>
@@ -87,9 +88,11 @@ static void db_unwatch_cmd(db_expr_t, bool, db_expr_t, const char *);
 static void db_mach_cpu_cmd(db_expr_t, bool, db_expr_t, const char *);
 #endif
 
-void db_tlbdump_cmd(db_expr_t, bool, db_expr_t, const char *);
-void db_kvtophys_cmd(db_expr_t, bool, db_expr_t, const char *);
 void db_cp0dump_cmd(db_expr_t, bool, db_expr_t, const char *);
+void db_cpuinfo_cmd(db_expr_t, bool, db_expr_t, const char *);
+void db_kvtophys_cmd(db_expr_t, bool, db_expr_t, const char *);
+void db_tlbdump_cmd(db_expr_t, bool, db_expr_t, const char *);
+
 #ifdef MIPS64_XLS
 void db_mfcr_cmd(db_expr_t, bool, db_expr_t, const char *);
 void db_mtcr_cmd(db_expr_t, bool, db_expr_t, const char *);
@@ -182,12 +185,8 @@ db_read_bytes(vaddr_t addr, size_t size, char *data)
 	const char *src = (char *)addr;
 	int err;
 
-	/*
-	 * If asked to fetch from userspace, do it safely.
-	 * Note that MIPS_KSEG0_START is the proper address for
-	 * both 32-bit and 64-bit kernels.
-	 */
-	if (addr < (vaddr_t)MIPS_KSEG0_START) {
+	/* If asked to fetch from userspace, do it safely */
+	if (addr < VM_MAXUSER_ADDRESS) {
 		err = copyin(src, data, size);
 		if (err) {
 #ifdef DDB
@@ -224,8 +223,8 @@ db_write_bytes(vaddr_t addr, size_t size, const char *data)
 	size_t n = size;
 	int err;
 
-	/* If asked to fetch from userspace, do it safely */
-	if (addr < (vaddr_t)MIPS_KSEG0_START) {
+	/* If asked to store to userspace, do it safely */
+	if (addr < VM_MAXUSER_ADDRESS) {
 		err = copyout(data, p, size);
 		if (err) {
 #ifdef DDB
@@ -570,6 +569,66 @@ db_cp0dump_cmd(db_expr_t addr, bool have_addr, db_expr_t count,
 	}
 }
 
+
+static void
+show_cpuinfo(struct cpu_info *kci)
+{
+	struct cpu_info cpuinfobuf;
+	cpuid_t cpuid;
+	int i;
+
+	db_read_bytes((db_addr_t)kci, sizeof(cpuinfobuf), (char *)&cpuinfobuf);
+
+	struct cpu_info *ci = &cpuinfobuf;
+	cpuid = ci->ci_cpuid;
+	db_printf("cpu_info=%p, cpu_name=%s\n", kci, ci->ci_cpuname);
+	db_printf("%p cpu[%lu].ci_cpuid         = %lu\n",
+	    &ci->ci_cpuid, cpuid, ci->ci_cpuid);
+	db_printf("%p cpu[%lu].ci_curlwp        = %p\n",
+	    &ci->ci_curlwp, cpuid, ci->ci_curlwp);
+	for (i = 0; i < SOFTINT_COUNT; i++) {
+		db_printf("%p cpu[%lu].ci_softlwps[%d]   = %p\n",
+		    &ci->ci_softlwps[i], cpuid, i, ci->ci_softlwps[i]);
+	}
+	db_printf("%p cpu[%lu].ci_want_resched  = %d\n",
+	    &ci->ci_want_resched, cpuid, ci->ci_want_resched);
+	db_printf("%p cpu[%lu].ci_cpl           = %d\n",
+	    &ci->ci_cpl, cpuid, ci->ci_cpl);
+	db_printf("%p cpu[%lu].ci_softints      = 0x%08x\n",
+	    &ci->ci_softints, cpuid, ci->ci_softints);
+	db_printf("%p cpu[%lu].ci_idepth        = %u\n",
+	    &ci->ci_idepth, cpuid, ci->ci_idepth);
+}
+
+void
+db_cpuinfo_cmd(db_expr_t addr, bool have_addr, db_expr_t count,
+    const char *modif)
+{
+#ifdef MULTIPROCESSOR
+	CPU_INFO_ITERATOR cii;
+	struct cpu_info *ci;
+	bool showall = false;
+
+	if (modif != NULL) {
+		for (; *modif != '\0'; modif++) {
+			switch (*modif) {
+			case 'a':
+				showall = true;
+				break;
+			}
+		}
+	}
+
+	if (showall) {
+		for (CPU_INFO_FOREACH(cii, ci)) {
+			show_cpuinfo(ci);
+		}
+	} else
+#endif /* MULTIPROCESSOR */
+		show_cpuinfo(curcpu());
+}
+
+
 #if (MIPS32 + MIPS32R2 + MIPS64 + MIPS64R2) > 0
 static void
 db_watch_cmd(db_expr_t address, bool have_addr, db_expr_t count,
@@ -827,6 +886,10 @@ const struct db_command db_machine_command_table[] = {
 	{ DDB_ADD_CMD("cp0",	db_cp0dump_cmd,	0,
 		"Dump CP0 registers.",
 		NULL, NULL) },
+	{ DDB_ADD_CMD("cpuinfo", db_cpuinfo_cmd,	0,
+			"Displays the cpuinfo",
+		    NULL, NULL)
+	},
 	{ DDB_ADD_CMD("kvtop",	db_kvtophys_cmd,	0,
 		"Print the physical address for a given kernel virtual address",
 		"address",

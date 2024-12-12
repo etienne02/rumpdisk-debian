@@ -1,4 +1,4 @@
-/*	$NetBSD: db_disasm.c,v 1.8 2021/05/23 23:22:55 dholland Exp $	*/
+/*	$NetBSD: db_disasm.c,v 1.13 2024/11/24 19:41:18 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -31,12 +31,13 @@
 
 #include <sys/cdefs.h>
 
-__RCSID("$NetBSD: db_disasm.c,v 1.8 2021/05/23 23:22:55 dholland Exp $");
+__RCSID("$NetBSD: db_disasm.c,v 1.13 2024/11/24 19:41:18 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 
 #include <riscv/db_machdep.h>
+#include <riscv/frame.h>
 #include <riscv/insn.h>
 
 #include <ddb/db_access.h>
@@ -138,7 +139,6 @@ db_disasm_16(db_addr_t loc, uint32_t insn, bool altfmt)
 	uint32_t imm;
 	unsigned rd, rs1, rs2;
 
-	//warnx("toot 0x%x", insn);
 	switch (COMBINE(INSN16_FUNCT3(insn), INSN16_QUADRANT(insn))) {
 	    case IN_Q0(Q0_ADDI4SPN):
 		rd = INSN16_RS2x(insn);
@@ -467,7 +467,6 @@ db_disasm_16(db_addr_t loc, uint32_t insn, bool altfmt)
 		break;
 	    default:
 		/* 0b11 marks 32-bit instructions and shouldn't come here */
-		KASSERT(INSN16_QUADRANT(insn) != 0b11);
 		return EINVAL;
 	}
 	return 0;
@@ -548,7 +547,7 @@ struct riscv_disasm32_entry {
 		// R4, In, U, J
 		const char *name;
 		// R, I, S, B
-	        struct {
+		struct {
 			const struct riscv_disasm_insn *v;
 			unsigned n;
 		} entries;
@@ -1004,7 +1003,6 @@ riscv_int_size(unsigned fpsize)
 	    case OPFP_LU: return ".lu";
 	    default:
 		/* matching should prevent it coming here */
-		KASSERT(0);
 		return ".?";
 	}
 }
@@ -1018,7 +1016,6 @@ riscv_fp_size(unsigned fpsize)
 	    case OPFP_Q: return ".q";
 	    default:
 		/* matching should prevent it coming here */
-		KASSERT(0);
 		return ".?";
 	}
 }
@@ -1051,7 +1048,6 @@ larger_f_i(unsigned sz1, unsigned sz2)
 		break;
 	    default:
 		/* matching should keep it from coming here */
-		KASSERT(0);
 		break;
 	}
 	return false;
@@ -1082,7 +1078,6 @@ larger_f_f(unsigned sz1, unsigned sz2)
 		break;
 	    default:
 		/* matching should keep it from coming here */
-		KASSERT(0);
 		break;
 	}
 	return false;
@@ -1100,7 +1095,6 @@ db_print_riscv_fpround(const char *sep, unsigned round)
 	    case ROUND_DYN: break;
 	    default:
 		/* matching should prevent it coming here */
-		KASSERT(0);
 		db_printf("%s<unknown-rounding-mode>", sep);
 		break;
 	}
@@ -1203,7 +1197,7 @@ db_disasm_32(db_addr_t loc, uint32_t insn, bool altfmt)
 		} else if (info->printflags & CSRIIMM) {
 			/*
 			 * CSR instruction with immediate; the CSR
-			 * number is in the immediate fiel and the RS1
+			 * number is in the immediate field and the RS1
 			 * field contains the immediate. Bleck.
 			 */
 			imm = INSN_IMM_I(insn);
@@ -1242,8 +1236,6 @@ db_disasm_32(db_addr_t loc, uint32_t insn, bool altfmt)
 			bool suppress;
 
 			if (info->printflags & ISCVT) {
-				KASSERT(info->matchflags & F7SIZE);
-				KASSERT(info->matchflags & RS2_FSIZE);
 				if (info->matchflags & RS2SIZE_FIRST) {
 					/* convert to int */
 					suppress = false;
@@ -1281,7 +1273,7 @@ db_disasm_32(db_addr_t loc, uint32_t insn, bool altfmt)
 			  INSN_FUNCT7(insn) >> 2);
 		db_print_riscv_fpround(", ", INSN_FUNCT3(insn));
 		db_printf("\n");
-	        break;
+		break;
 	    case FMT_I:
 		/* immediates */
 		imm = INSN_IMM_I(insn);
@@ -1341,7 +1333,6 @@ db_disasm_32(db_addr_t loc, uint32_t insn, bool altfmt)
 				db_print_riscv_fencebits(succ);
 			} else if (info->printflags & BRANCHIMM) {
 				/* should be B format and not come here */
-				KASSERT(0);
 			} else if (info->printflags & DECIMM) {
 				db_printf("%s%d", sep, (int32_t)imm);
 			} else {
@@ -1372,9 +1363,6 @@ db_disasm_32(db_addr_t loc, uint32_t insn, bool altfmt)
 			return EINVAL;
 		}
 
-		KASSERT((info->matchflags & (RS1_0 | RS2_0 | CHECK_RS2)) == 0);
-		KASSERT(info->printflags & MEMORYIMM);
-
 		/* name */
 		db_print_riscv_insnname(insn, info);
 		db_printf(" ");
@@ -1398,9 +1386,6 @@ db_disasm_32(db_addr_t loc, uint32_t insn, bool altfmt)
 		if (info == NULL) {
 			return EINVAL;
 		}
-
-		KASSERT((info->matchflags & (RS1_0 | RS2_0 | CHECK_RS2)) == 0);
-		KASSERT(info->printflags & BRANCHIMM);
 
 		/* name */
 		db_print_riscv_insnname(insn, info);
@@ -1436,7 +1421,6 @@ db_disasm_32(db_addr_t loc, uint32_t insn, bool altfmt)
 		return EINVAL;
 	    case FMT_ASSERT:
 		/* shouldn't have come here */
-		KASSERTMSG(false, "db_disasm_32: non-32-bit instruction");
 		return EINVAL;
 	}
 	return 0;
@@ -1470,7 +1454,6 @@ db_disasm(db_addr_t loc, bool altfmt)
 	 */
 	db_read_bytes(loc, sizeof(insn[0]), (void *)&insn[0]);
 	n = INSN_HALFWORDS(insn[0]);
-	KASSERT(n > 0 && n <= 5);
 	for (i = 1; i < n; i++) {
 		db_read_bytes(loc + i * sizeof(insn[i]), sizeof(insn[i]),
 			      (void *)&insn[i]);

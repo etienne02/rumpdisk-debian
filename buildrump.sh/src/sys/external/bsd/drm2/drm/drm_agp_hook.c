@@ -1,4 +1,4 @@
-/*	$NetBSD: drm_agp_hook.c,v 1.3 2018/08/30 22:39:54 mrg Exp $	*/
+/*	$NetBSD: drm_agp_hook.c,v 1.7 2022/07/19 22:24:34 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: drm_agp_hook.c,v 1.3 2018/08/30 22:39:54 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: drm_agp_hook.c,v 1.7 2022/07/19 22:24:34 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/condvar.h>
@@ -38,8 +38,9 @@ __KERNEL_RCSID(0, "$NetBSD: drm_agp_hook.c,v 1.3 2018/08/30 22:39:54 mrg Exp $")
 #include <sys/mutex.h>
 #include <sys/once.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_internal.h>
+#include <drm/drm_agpsupport.h>
+#include <drm/drm_drv.h>
+#include "../dist/drm/drm_internal.h"
 
 static struct {
 	kmutex_t			lock;
@@ -164,7 +165,7 @@ drm_agp_fini(struct drm_device *dev)
 }
 
 void
-drm_agp_clear(struct drm_device *dev)
+drm_legacy_agp_clear(struct drm_device *dev)
 {
 
 	if (dev->agp == NULL)
@@ -262,20 +263,6 @@ DEFINE_AGP_HOOK_IOCTL(drm_agp_alloc_ioctl, agph_alloc_ioctl)
 DEFINE_AGP_HOOK_IOCTL(drm_agp_free_ioctl, agph_free_ioctl)
 DEFINE_AGP_HOOK_IOCTL(drm_agp_bind_ioctl, agph_bind_ioctl)
 DEFINE_AGP_HOOK_IOCTL(drm_agp_unbind_ioctl, agph_unbind_ioctl)
-
-void __pci_iomem *
-drm_agp_borrow(struct drm_device *dev, unsigned bar, bus_size_t size)
-{
-	const struct drm_agp_hooks *hooks;
-	void __pci_iomem *iomem;
-
-	if ((hooks = drm_agp_hooks_acquire()) == NULL)
-		return NULL;
-	iomem = hooks->agph_borrow(dev, bar, size);
-	drm_agp_hooks_release(hooks);
-
-	return iomem;
-}
 
 void
 drm_agp_flush(void)

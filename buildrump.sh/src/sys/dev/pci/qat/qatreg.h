@@ -1,4 +1,4 @@
-/*	$NetBSD: qatreg.h,v 1.1 2019/11/20 09:37:46 hikaru Exp $	*/
+/*	$NetBSD: qatreg.h,v 1.3 2022/04/08 10:27:04 andvar Exp $	*/
 
 /*
  * Copyright (c) 2019 Internet Initiative Japan, Inc.
@@ -89,7 +89,7 @@
 
 #define AE_ALL_CTX		0xff
 
-/* PCIe configuration space paramter */
+/* PCIe configuration space parameter */
 #define NO_PCI_REG			(-1)
 #define NO_REG_OFFSET			0
 
@@ -919,7 +919,7 @@ struct mof_uof_chunk_hdr {
 #define UOF_MAX_NUM_OF_AE	16	/* maximum number of AE */
 
 #define UOF_OBJ_ID_LEN		8	/* length of object ID */
-#define UOF_FIELD_POS_SIZE	12	/* field postion size */
+#define UOF_FIELD_POS_SIZE	12	/* field position size */
 #define MIN_UOF_SIZE		24	/* minimum .uof file size */
 #define UOF_FID			0xc6c2	/* uof magic number */
 #define UOF_MIN_VER		0x11

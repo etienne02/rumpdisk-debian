@@ -1,4 +1,4 @@
-/*	$NetBSD: loader.c,v 1.4 2008/04/28 20:23:18 martin Exp $	*/
+/*	$NetBSD: loader.c,v 1.6 2023/09/09 21:04:26 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2004 The NetBSD Foundation, Inc.
@@ -98,7 +98,7 @@ cmd_load_binary(int argc, char *argp[], int interactive)
 	q = (uint8_t *)strtoul(argp[1], 0, 0);
 	p = kernel_binary;
 
-	/* check load reagion */
+	/* check load region */
 	printf("load end=%p loader start=%p\n",
 	    q + kernel_binary_size, start);
 	if ((uint32_t)(q + kernel_binary_size) >= (uint32_t)start) {
@@ -284,5 +284,5 @@ boot_usage(void)
 	printf("\tex).\n");
 	printf("\t Disk 0, Partition 10, /netbsd => sd0k:netbsd\n");
 	printf("\t NFS, /netbsd => nfs:netbsd\n");
-	printf("\t `kernel embeded in data section' => mem:\n");
+	printf("\t `kernel embedded in data section' => mem:\n");
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: spinlock.h,v 1.8 2018/08/27 06:17:30 riastradh Exp $	*/
+/*	$NetBSD: spinlock.h,v 1.15 2022/10/25 23:33:29 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -36,11 +36,11 @@
 #include <sys/mutex.h>
 
 #include <machine/limits.h>
-#include <linux/irqflags.h>
-#include <linux/preempt.h>
 
-#define	__acquires(lock)	/* XXX lockdep stuff */
-#define	__releases(lock)	/* XXX lockdep stuff */
+#include <linux/atomic.h>
+#include <linux/irqflags.h>
+#include <linux/lockdep.h>
+#include <linux/preempt.h>
 
 typedef struct spinlock {
 	kmutex_t sl_lock;
@@ -65,6 +65,18 @@ spin_unlock(spinlock_t *spinlock)
 }
 
 static inline void
+spin_lock_bh(spinlock_t *spinlock)
+{
+	spin_lock(spinlock);
+}
+
+static inline void
+spin_unlock_bh(spinlock_t *spinlock)
+{
+	spin_unlock(spinlock);
+}
+
+static inline void
 spin_lock_irq(spinlock_t *spinlock)
 {
 	spin_lock(spinlock);
@@ -83,11 +95,24 @@ spin_unlock_irq(spinlock_t *spinlock)
 		mutex_enter(&((spinlock_t *)(SPINLOCK))->sl_lock);	\
 	} while (0)
 
+#define	spin_trylock_irqsave(SPINLOCK, FLAGS)				\
+		( (FLAGS) = 0,						\
+		mutex_tryenter(&((spinlock_t *)(SPINLOCK))->sl_lock) )
+
 static inline void
 spin_unlock_irqrestore(spinlock_t *spinlock, unsigned long __unused flags)
 {
 	mutex_exit(&spinlock->sl_lock);
 }
+
+static inline void
+spin_lock_nested(spinlock_t *spinlock, int subclass)
+{
+	spin_lock(spinlock);
+}
+
+#define	spin_lock_irqsave_nested(SPINLOCK, FLAGS, SUBCLASS)		      \
+	spin_lock_irqsave(SPINLOCK, FLAGS)
 
 static inline void
 spin_lock_init(spinlock_t *spinlock)
@@ -177,6 +202,43 @@ read_unlock(rwlock_t *rw)
 	KASSERT(0 < rw->rw_nreaders);
 	rw->rw_nreaders--;
 	mutex_spin_exit(&rw->rw_lock);
+}
+
+static inline void
+local_bh_disable(void)
+{
+}
+
+static inline void
+local_bh_enable(void)
+{
+}
+
+#define	atomic_dec_and_lock_irqsave(A, L, F)				      \
+	_atomic_dec_and_lock_irqsave(A, L, &(F))
+
+static inline bool __must_check
+_atomic_dec_and_lock_irqsave(atomic_t *atomic, spinlock_t *lock,
+    unsigned long *flagsp)
+{
+	unsigned old, new;
+
+	do {
+		old = atomic_read(atomic);
+		KASSERT(old);
+		if (old == 1) {
+			spin_lock_irqsave(lock, *flagsp);
+			if (atomic_dec_return(atomic) == 0)
+				return true;
+			spin_unlock_irqrestore(lock, *flagsp);
+			return false;
+		}
+		new = old - 1;
+	} while (atomic_cmpxchg(atomic, old, new) != old);
+
+	KASSERT(old != 1);
+	KASSERT(new != 0);
+	return false;
 }
 
 #endif  /* _LINUX_SPINLOCK_H_ */

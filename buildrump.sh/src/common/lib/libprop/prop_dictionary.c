@@ -1,4 +1,4 @@
-/*	$NetBSD: prop_dictionary.c,v 1.42 2020/06/06 21:25:59 thorpej Exp $	*/
+/*	$NetBSD: prop_dictionary.c,v 1.46 2023/06/14 00:35:18 rin Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2020 The NetBSD Foundation, Inc.
@@ -133,7 +133,7 @@ static const struct _prop_object_type _prop_object_type_dictionary = {
 	.pot_equals		=	_prop_dictionary_equals,
 	.pot_equals_finish	=	_prop_dictionary_equals_finish,
 	.pot_lock 	        =       _prop_dictionary_lock,
-	.pot_unlock 	        =       _prop_dictionary_unlock,		
+	.pot_unlock 	        =       _prop_dictionary_unlock,
 };
 
 static _prop_object_free_rv_t
@@ -257,7 +257,7 @@ _prop_dict_keysym_externalize(struct _prop_object_externalize_context *ctx,
 						pdk->pdk_key) == false ||
 	    _prop_object_externalize_end_tag(ctx, "string") == false)
 		return (false);
-	
+
 	return (true);
 }
 
@@ -448,7 +448,7 @@ _prop_dictionary_externalize(struct _prop_object_externalize_context *ctx,
 	pi = _prop_dictionary_iterator_locked(pd);
 	if (pi == NULL)
 		goto out;
-	
+
 	ctx->poec_depth++;
 	_PROP_ASSERT(ctx->poec_depth != 0);
 
@@ -475,7 +475,7 @@ _prop_dictionary_externalize(struct _prop_object_externalize_context *ctx,
 	}
 	if (_prop_object_externalize_end_tag(ctx, "dict") == false)
 		goto out;
-	
+
 	rv = true;
 
  out:
@@ -597,7 +597,7 @@ _prop_dictionary_expand(prop_dictionary_t pd, unsigned int capacity)
 
 	if (oarray != NULL)
 		_PROP_FREE(oarray, M_PROP_DICT);
-	
+
 	return (true);
 }
 
@@ -689,7 +689,7 @@ prop_dictionary_create_with_capacity(unsigned int capacity)
  * prop_dictionary_copy --
  *	Copy a dictionary.  The new dictionary has an initial capacity equal
  *	to the number of objects stored int the original dictionary.  The new
- *	dictionary contains refrences to the original dictionary's objects,
+ *	dictionary contains references to the original dictionary's objects,
  *	not copies of those objects (i.e. a shallow copy).
  */
 prop_dictionary_t
@@ -915,15 +915,17 @@ _prop_dictionary_get(prop_dictionary_t pd, const char *key, bool locked)
 	if (! prop_object_is_dictionary(pd))
 		return (NULL);
 
-	if (!locked)
+	if (!locked) {
 		_PROP_RWLOCK_RDLOCK(pd->pd_rwlock);
+	}
 	pde = _prop_dict_lookup(pd, key, NULL);
 	if (pde != NULL) {
 		_PROP_ASSERT(pde->pde_objref != NULL);
 		po = pde->pde_objref;
 	}
-	if (!locked)
+	if (!locked) {
 		_PROP_RWLOCK_UNLOCK(pd->pd_rwlock);
+	}
 	return (po);
 }
 /*
@@ -970,7 +972,7 @@ prop_dictionary_get_keysym(prop_dictionary_t pd, prop_dictionary_keysym_t pdk)
 /*
  * prop_dictionary_set --
  *	Store a reference to an object at with the specified key.
- *	If the key already exisit, the original object is released.
+ *	If the key already exist, the original object is released.
  */
 bool
 prop_dictionary_set(prop_dictionary_t pd, const char *key, prop_object_t po)
@@ -1356,7 +1358,7 @@ _prop_dictionary_internalize_body(prop_stack_t stack, prop_object_t *obj,
 	if (_prop_object_internalize_find_tag(ctx, "key",
 				_PROP_TAG_TYPE_END) == false)
 		goto bad;
-   
+
 	/* ..and now the beginning of the value. */
 	if (_prop_object_internalize_find_tag(ctx, NULL,
 				_PROP_TAG_TYPE_START) == false)

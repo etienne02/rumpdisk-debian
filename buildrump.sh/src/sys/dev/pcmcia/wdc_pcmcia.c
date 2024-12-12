@@ -1,4 +1,4 @@
-/*	$NetBSD: wdc_pcmcia.c,v 1.127 2018/09/03 16:29:33 riastradh Exp $ */
+/*	$NetBSD: wdc_pcmcia.c,v 1.130 2022/09/25 21:53:54 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 2003, 2004 The NetBSD Foundation, Inc.
@@ -30,12 +30,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: wdc_pcmcia.c,v 1.127 2018/09/03 16:29:33 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: wdc_pcmcia.c,v 1.130 2022/09/25 21:53:54 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
 #include <sys/kernel.h>
-#include <sys/malloc.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
 
@@ -231,7 +230,7 @@ wdc_pcmcia_attach(device_t parent, device_t self, void *aux)
 	}
 
 	cfe = pa->pf->cfe;
-	sc->sc_wdcdev.sc_atac.atac_cap |= ATAC_CAP_DATA16;
+	sc->sc_wdcdev.sc_atac.atac_cap |= ATAC_CAP_DATA16 | ATAC_CAP_DATA32;
 
 	sc->sc_wdcdev.regs = wdr = &sc->wdc_regs;
 
@@ -286,7 +285,6 @@ wdc_pcmcia_attach(device_t parent, device_t self, void *aux)
 		aprint_normal_dev(self, "i/o mapped mode\n");
 		wdr->data32iot = wdr->cmd_iot;
 		wdr->data32ioh = wdr->cmd_iohs[wd_data];
-		sc->sc_wdcdev.sc_atac.atac_cap |= ATAC_CAP_DATA32;
 	}
 
 	sc->sc_wdcdev.sc_atac.atac_pio_cap = 0;
@@ -372,22 +370,28 @@ wdc_pcmcia_enable(device_t self, int onoff)
 #endif
 
 	if (onoff) {
-		/* Establish the interrupt handler. */
-		sc->sc_ih = pcmcia_intr_establish(sc->sc_pf, IPL_BIO,
-		    wdcintr, &sc->ata_channel);
-		if (!sc->sc_ih)
-			return (EIO);
+		if (!(sc->sc_wdcdev.sc_atac.atac_cap & ATAC_CAP_NOIRQ)) {
+			/* Establish the interrupt handler. */
+			sc->sc_ih = pcmcia_intr_establish(sc->sc_pf, IPL_BIO,
+			    wdcintr, &sc->ata_channel);
+			if (!sc->sc_ih)
+				return (EIO);
+		}
 
 		error = pcmcia_function_enable(sc->sc_pf);
 		if (error) {
-			pcmcia_intr_disestablish(sc->sc_pf, sc->sc_ih);
-			sc->sc_ih = 0;
+			if (sc->sc_ih) {
+				pcmcia_intr_disestablish(sc->sc_pf, sc->sc_ih);
+				sc->sc_ih = 0;
+			}
 			return (error);
 		}
 	} else {
 		pcmcia_function_disable(sc->sc_pf);
-		pcmcia_intr_disestablish(sc->sc_pf, sc->sc_ih);
-		sc->sc_ih = 0;
+		if (sc->sc_ih) {
+			pcmcia_intr_disestablish(sc->sc_pf, sc->sc_ih);
+			sc->sc_ih = 0;
+		}
 	}
 
 	return (0);

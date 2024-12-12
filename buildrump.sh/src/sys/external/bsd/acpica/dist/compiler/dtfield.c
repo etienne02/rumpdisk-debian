@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -173,8 +173,8 @@ DtCompileString (
     if (Length > ByteLength)
     {
         snprintf (AslGbl_MsgBuffer, sizeof(AslGbl_MsgBuffer),
-            "Maximum %u characters, found %u characters [%s]",
-            ByteLength, Length, Field->Value);
+            "Maximum %u characters, found %u characters [%.*s]",
+            ByteLength, Length, (ASL_MSG_BUFFER_SIZE / 2), Field->Value);
         DtError (ASL_ERROR, ASL_MSG_STRING_LENGTH, Field, AslGbl_MsgBuffer);
         Length = ByteLength;
     }
@@ -326,14 +326,14 @@ DtCompileInteger (
         {
             if (Value != 1)
             {
-                DtError (ASL_WARNING, ASL_MSG_RESERVED_FIELD, Field,
+                DtError (ASL_ERROR, ASL_MSG_RESERVED_FIELD, Field,
                     "Must be one, setting to one");
                 Value = 1;
             }
         }
         else if (Value != 0)
         {
-            DtError (ASL_WARNING, ASL_MSG_RESERVED_FIELD, Field,
+            DtError (ASL_ERROR, ASL_MSG_RESERVED_FIELD, Field,
                 "Must be zero, setting to zero");
             Value = 0;
         }
@@ -566,6 +566,12 @@ DtCompileFlag (
 
         BitPosition = 2;
         BitLength = 2;
+        break;
+
+    case ACPI_DMT_FLAGS8_2:
+
+        BitPosition = 2;
+        BitLength = 8;
         break;
 
     case ACPI_DMT_FLAGS4:

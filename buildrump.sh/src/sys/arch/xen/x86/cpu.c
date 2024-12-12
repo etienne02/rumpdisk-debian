@@ -1,4 +1,4 @@
-/*	$NetBSD: cpu.c,v 1.141 2021/08/07 16:19:08 thorpej Exp $	*/
+/*	$NetBSD: cpu.c,v 1.145 2023/02/25 00:35:01 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
@@ -65,7 +65,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.141 2021/08/07 16:19:08 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.145 2023/02/25 00:35:01 riastradh Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -93,6 +93,7 @@ __KERNEL_RCSID(0, "$NetBSD: cpu.c,v 1.141 2021/08/07 16:19:08 thorpej Exp $");
 #include <machine/cpufunc.h>
 #include <machine/cpuvar.h>
 #include <machine/pmap.h>
+#include <machine/pmap_private.h>
 #include <machine/vmparam.h>
 #include <machine/mpbiosvar.h>
 #include <machine/pcb.h>
@@ -520,7 +521,7 @@ cpu_attach_common(device_t parent, device_t self, void *aux)
 		    (void *)pcb->pcb_rsp
 #endif
 		);
-		
+
 	}
 #endif /* MPVERBOSE */
 }
@@ -689,10 +690,10 @@ cpu_boot_secondary(struct cpu_info *ci)
 
 /*
  * APs end up here immediately after initialisation and VCPUOP_up in
- * mp_cpu_start(). 
+ * mp_cpu_start().
  * At this point, we are running in the idle pcb/idle stack of the new
  * CPU.  This function jumps to the idle loop and starts looking for
- * work. 
+ * work.
  */
 extern void x86_64_tls_switch(struct lwp *);
 void
@@ -847,7 +848,7 @@ xen_init_amd64_vcpuctxt(struct cpu_info *ci, struct vcpu_guest_context *initctx,
 	/* resume with interrupts off */
 	vci = ci->ci_vcpu;
 	vci->evtchn_upcall_mask = 1;
-	xen_mb();
+	__insn_barrier();
 
 	/* resume in kernel-mode */
 	initctx->flags = VGCF_in_kernel | VGCF_online;
@@ -930,8 +931,8 @@ xen_init_i386_vcpuctxt(struct cpu_info *ci, struct vcpu_guest_context *initctx,
 
 	gdt_prepframes(frames, (vaddr_t)ci->ci_gdt, gdt_ents);
 
-	/* 
-	 * Initialise the vcpu context: 
+	/*
+	 * Initialise the vcpu context:
 	 * We use this cpu's idle_loop() pcb context.
 	 */
 
@@ -944,7 +945,7 @@ xen_init_i386_vcpuctxt(struct cpu_info *ci, struct vcpu_guest_context *initctx,
 	/* resume with interrupts off */
 	vci = ci->ci_vcpu;
 	vci->evtchn_upcall_mask = 1;
-	xen_mb();
+	__insn_barrier();
 
 	/* resume in kernel-mode */
 	initctx->flags = VGCF_in_kernel | VGCF_online;
@@ -1108,6 +1109,7 @@ cpu_load_pmap(struct pmap *pmap, struct pmap *oldpmap)
 	cpuid_t cid = cpu_index(ci);
 	int i;
 
+	KASSERT(kpreempt_disabled());
 	KASSERT(pmap != pmap_kernel());
 
 	mutex_enter(&ci->ci_kpm_mtx);
@@ -1158,7 +1160,7 @@ cpu_load_pmap(struct pmap *pmap, struct pmap *oldpmap)
 
 /*
  * pmap_cpu_init_late: perform late per-CPU initialization.
- * 
+ *
  * Short note about percpu PDIR pages. Both the PAE and __x86_64__ architectures
  * have per-cpu PDIR tables, for two different reasons:
  *  - on PAE, this is to get around Xen's pagetable setup constraints (multiple
@@ -1168,7 +1170,7 @@ cpu_load_pmap(struct pmap *pmap, struct pmap *oldpmap)
  *    (see cpu_load_pmap()).
  *
  * What this means for us is that the PDIR of the pmap_kernel() is considered
- * to be a canonical "SHADOW" PDIR with the following properties: 
+ * to be a canonical "SHADOW" PDIR with the following properties:
  *  - its recursive mapping points to itself
  *  - per-cpu recursive mappings point to themselves on __x86_64__
  *  - per-cpu L4 pages' kernel entries are expected to be in sync with

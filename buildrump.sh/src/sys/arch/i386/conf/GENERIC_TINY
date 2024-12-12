@@ -1,4 +1,4 @@
-#	$NetBSD: GENERIC_TINY,v 1.170 2021/01/21 06:51:55 nia Exp $
+#	$NetBSD: GENERIC_TINY,v 1.172 2024/01/29 18:27:13 christos Exp $
 #
 #	GENERIC_TINY -- suitable default for 4M machines
 #			No EISA, PCI, or SCSI.
@@ -86,8 +86,6 @@ file-system	KERNFS		# /kern
 #options 	FFS_EI		# FFS Endian Independent support
 #options 	NFSSERVER	# Network File System server
 options 	FFS_NO_SNAPSHOT	# No FF snapshot support
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
 
 # Networking options
 #options 	GATEWAY		# packet forwarding
@@ -492,10 +490,6 @@ we1	at isa? port 0x300 iomem 0xcc000 irq 10
 # ISA joysticks. Probe is a little strange; add only if you have one.
 #joy0	at isa? port 0x201
 
-# Pull in optional local configuration
-cinclude "arch/i386/conf/GENERIC.local"
-
-
 # Pseudo-Devices
 
 # disk/mass storage pseudo-devices
@@ -524,3 +518,6 @@ pseudo-device	clockctl		# user control of clock subsystem
 
 # wscons pseudo-devices
 pseudo-device	wsmux			# mouse & keyboard multiplexor
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/i386/conf/GENERIC.local"

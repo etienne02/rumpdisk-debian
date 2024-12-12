@@ -1,4 +1,4 @@
-/*	$NetBSD: rtc.c,v 1.21 2014/04/19 05:37:54 tsutsui Exp $	*/
+/*	$NetBSD: rtc.c,v 1.23 2023/12/20 00:40:43 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -43,12 +43,11 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtc.c,v 1.21 2014/04/19 05:37:54 tsutsui Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtc.c,v 1.23 2023/12/20 00:40:43 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 
 #include <hp300/dev/intiovar.h>
 #include <hp300/dev/rtcreg.h>
@@ -140,7 +139,7 @@ rtc_gettime_ymdhms(todr_chip_handle_t handle, struct clock_ymdhms *dt)
 				read_okay = false;
 	}
 
-#define	rtc_to_decimal(a,b) 	(rtc_registers[a] * 10 + rtc_registers[b])
+#define	rtc_to_decimal(a,b)	(rtc_registers[a] * 10 + rtc_registers[b])
 
 	dt->dt_sec  = rtc_to_decimal(1, 0);
 	dt->dt_min  = rtc_to_decimal(3, 2);

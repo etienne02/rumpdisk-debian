@@ -1,4 +1,4 @@
-/*	$NetBSD: viomb.c,v 1.12 2021/01/20 19:46:48 reinoud Exp $	*/
+/*	$NetBSD: viomb.c,v 1.17 2023/03/25 11:04:34 mlelstv Exp $	*/
 
 /*
  * Copyright (c) 2010 Minoura Makoto.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: viomb.c,v 1.12 2021/01/20 19:46:48 reinoud Exp $");
+__KERNEL_RCSID(0, "$NetBSD: viomb.c,v 1.17 2023/03/25 11:04:34 mlelstv Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -53,10 +53,10 @@ __KERNEL_RCSID(0, "$NetBSD: viomb.c,v 1.12 2021/01/20 19:46:48 reinoud Exp $");
 #define VIRTIO_BALLOON_F_MUST_TELL_HOST (1<<0)
 #define VIRTIO_BALLOON_F_STATS_VQ	(1<<1)
 
-#define VIRTIO_BALLOON_FLAG_BITS \
-	VIRTIO_COMMON_FLAG_BITS \
-	"\x02""STATS_VQ" \
-	"\x01""MUST_TELL_HOST"
+#define VIRTIO_BALLOON_FLAG_BITS		\
+	VIRTIO_COMMON_FLAG_BITS			\
+	"b\x01" "STATS_VQ\0"			\
+	"b\x00" "MUST_TELL_HOST\0"
 
 #define PGS_PER_REQ		(256) /* 1MB, 4KB/page */
 #define VQ_INFLATE	0
@@ -148,8 +148,7 @@ viomb_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->sc_virtio = vsc;
 
-	virtio_child_attach_start(vsc, self, IPL_VM, sc->sc_vq,
-	    viomb_config_change, virtio_vq_intr, 0,
+	virtio_child_attach_start(vsc, self, IPL_VM,
 	    VIRTIO_BALLOON_F_MUST_TELL_HOST, VIRTIO_BALLOON_FLAG_BITS);
 
 	features = virtio_features(vsc);
@@ -164,17 +163,19 @@ viomb_attach(device_t parent, device_t self, void *aux)
 	mutex_init(&sc->sc_waitlock, MUTEX_DEFAULT, IPL_VM); /* spin */
 	cv_init(&sc->sc_wait, "balloon");
 
-	if (virtio_alloc_vq(vsc, &sc->sc_vq[VQ_INFLATE], 0,
+	virtio_init_vq_vqdone(vsc, &sc->sc_vq[VQ_INFLATE], VQ_INFLATE,
+	    inflateq_done);
+	virtio_init_vq_vqdone(vsc, &sc->sc_vq[VQ_DEFLATE], VQ_DEFLATE,
+	    deflateq_done);
+
+	if (virtio_alloc_vq(vsc, &sc->sc_vq[VQ_INFLATE],
 			     sizeof(uint32_t)*PGS_PER_REQ, 1,
 			     "inflate") != 0)
 		goto err_mutex;
-	if (virtio_alloc_vq(vsc, &sc->sc_vq[VQ_DEFLATE], 1,
+	if (virtio_alloc_vq(vsc, &sc->sc_vq[VQ_DEFLATE],
 			     sizeof(uint32_t)*PGS_PER_REQ, 1,
 			     "deflate") != 0)
 		goto err_vq0;
-
-	sc->sc_vq[VQ_INFLATE].vq_done = inflateq_done;
-	sc->sc_vq[VQ_DEFLATE].vq_done = deflateq_done;
 
 	if (bus_dmamap_create(virtio_dmat(vsc), sizeof(uint32_t)*PGS_PER_REQ,
 			      1, sizeof(uint32_t)*PGS_PER_REQ, 0,
@@ -190,7 +191,8 @@ viomb_attach(device_t parent, device_t self, void *aux)
 		goto err_dmamap;
 	}
 
-	if (virtio_child_attach_finish(vsc) != 0)
+	if (virtio_child_attach_finish(vsc, sc->sc_vq, __arraycount(sc->sc_vq),
+	    viomb_config_change, VIRTIO_F_INTR_MPSAFE) != 0)
 		goto err_out;
 
 	if (kthread_create(PRI_IDLE, KTHREAD_MPSAFE, NULL,
@@ -284,8 +286,8 @@ inflate(struct viomb_softc *sc)
 	nhpages = nvpages * VIRTIO_PAGE_SIZE / PAGE_SIZE;
 
 	b = &sc->sc_req;
-	if (uvm_pglistalloc(nhpages*PAGE_SIZE, 0, UINT32_MAX*PAGE_SIZE,
-			    0, 0, &b->bl_pglist, nhpages, 1)) {
+	if (uvm_pglistalloc(nhpages*PAGE_SIZE, 0, UINT32_MAX*(paddr_t)PAGE_SIZE,
+			    0, 0, &b->bl_pglist, nhpages, 0)) {
 		printf("%s: %" PRIu64 " pages of physical memory "
 		       "could not be allocated, retrying...\n",
 		       device_xname(sc->sc_dev), nhpages);
@@ -505,9 +507,9 @@ viomb_thread(void *arg)
 				if (r != 0)
 					sleeptime = 10000;
 				else
-					sleeptime = 1000;
+					sleeptime = 100;
 			} else
-				sleeptime = 100;
+				sleeptime = 20;
 		} else if (sc->sc_npages < sc->sc_actual + sc->sc_inflight) {
 			if (sc->sc_inflight == 0)
 				r = deflate(sc);

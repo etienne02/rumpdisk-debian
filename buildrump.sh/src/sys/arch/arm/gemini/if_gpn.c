@@ -1,4 +1,4 @@
-/* $NetBSD: if_gpn.c,v 1.14 2020/02/01 21:45:11 thorpej Exp $ */
+/* $NetBSD: if_gpn.c,v 1.18 2024/06/29 12:11:10 riastradh Exp $ */
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -32,7 +32,7 @@
 
 #include "opt_gemini.h"
 
-__KERNEL_RCSID(0, "$NetBSD: if_gpn.c,v 1.14 2020/02/01 21:45:11 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_gpn.c,v 1.18 2024/06/29 12:11:10 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -106,6 +106,7 @@ struct gpn_softc {
 #define	sc_if sc_ec.ec_if
 	size_t sc_free;
 	size_t sc_txactive;
+	bool sc_txbusy;
 	void *sc_ih;
 	ipm_gpn_ack_desc_t sc_ack_desc;
 	struct mbuf *sc_rxmbuf;
@@ -327,8 +328,8 @@ gpn_free_txid(struct gpn_softc *sc, size_t txid)
 	ti->ti_mbuf = NULL;
 	sc->sc_txactive--;
 	KASSERT(sc->sc_txactive < MAX_TXACTIVE);
-	if (sc->sc_if.if_flags & IFF_OACTIVE) {
-		sc->sc_if.if_flags &= ~IFF_OACTIVE;
+	if (sc->sc_txbusy) {
+		sc->sc_txbusy = false;
 		gpn_ifstart(&sc->sc_if);
 	}
 }
@@ -342,7 +343,7 @@ gpn_ipm_rebate(void *arg, size_t count)
 	s = splnet();
 	sc->sc_free += count;
 
-	sc->sc_if.if_flags &= ~IFF_OACTIVE;
+	sc->sc_txbusy = false;
 	gpn_ifstart(&sc->sc_if);
 	splx(s);
 }
@@ -359,11 +360,11 @@ gpn_ifstart(struct ifnet *ifp)
 		size_t count;
 
 		if (sc->sc_free == 0) {
-			ifp->if_flags |= IFF_OACTIVE;
+			sc->sc_txbusy = true;
 			break;
 		}
 
-		IF_DEQUEUE(&ifp->if_snd, m);
+		IF_POLL(&ifp->if_snd, m);
 		if (!m)
 			break;
 
@@ -396,10 +397,10 @@ gpn_ifstart(struct ifnet *ifp)
 		 */
 		if (sc->sc_free < count
 		    || sc->sc_txactive + count > MAX_TXACTIVE) {
-			IF_PREPEND(&ifp->if_snd, m);
-			ifp->if_flags |= IFF_OACTIVE;
+			sc->sc_txbusy = true;
 			return;
 		}
+		IF_DEQUEUE(&ifp->if_snd, m);
 
 		bpf_mtap(ifp, m, BPF_D_OUT);
 #ifdef GPNDEBUG
@@ -443,7 +444,7 @@ gpn_ifstart(struct ifnet *ifp)
 			    mtod(m, void *), m->m_len, NULL,
 			    BUS_DMA_READ | BUS_DMA_NOWAIT);
 			if (error) {
-				if_statinc_ref(nsr, if_oerrors);
+				if_statinc_ref(ifp, nsr, if_oerrors);
 				m_freem(m);
 				break;
 			}
@@ -466,19 +467,18 @@ gpn_ifstart(struct ifnet *ifp)
 			gd.gd_txid = id;
 			ti->ti_mbuf = m;
 			last_gd = &gd;
-			if_statadd_ref(nsr, if_obytes, m->m_len);
+			if_statadd_ref(ifp, nsr, if_obytes, m->m_len);
 		}
-		if_statinc_ref(nsr, if_opackets);
+		if_statinc_ref(ifp, nsr, if_opackets);
 		IF_STAT_PUTREF(ifp);
 
-		/*
-		 * XXX XXX 'last_gd' could be NULL
-		 */
-		last_gd->gd_subtype |= GPN_EOF;
+		if (last_gd != NULL) {
+			last_gd->gd_subtype |= GPN_EOF;
 
-		sc->sc_txactive++;
-		sc->sc_free--;
-		gemini_ipm_produce(last_gd, 1);
+			sc->sc_txactive++;
+			sc->sc_free--;
+			gemini_ipm_produce(last_gd, 1);
+		}
 	}
 }
 

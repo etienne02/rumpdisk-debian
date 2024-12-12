@@ -1,4 +1,4 @@
-/*	$NetBSD: nouveau_nvkm_subdev_mxm_base.c,v 1.2 2018/08/27 04:58:34 riastradh Exp $	*/
+/*	$NetBSD: nouveau_nvkm_subdev_mxm_base.c,v 1.5 2024/04/16 14:34:02 riastradh Exp $	*/
 
 /*
  * Copyright 2011 Red Hat Inc.
@@ -24,7 +24,7 @@
  * Authors: Ben Skeggs
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nouveau_nvkm_subdev_mxm_base.c,v 1.2 2018/08/27 04:58:34 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nouveau_nvkm_subdev_mxm_base.c,v 1.5 2024/04/16 14:34:02 riastradh Exp $");
 
 #include "mxms.h"
 
@@ -32,6 +32,15 @@ __KERNEL_RCSID(0, "$NetBSD: nouveau_nvkm_subdev_mxm_base.c,v 1.2 2018/08/27 04:5
 #include <subdev/bios.h>
 #include <subdev/bios/mxm.h>
 #include <subdev/i2c.h>
+
+#ifdef __NetBSD__
+#ifdef CONFIG_ACPI
+#include <dev/acpi/acpireg.h>
+#define	_COMPONENT	ACPI_DISPLAY_COMPONENT
+ACPI_MODULE_NAME("nouveau_nvkm_subdev_mxm_base")
+#include <linux/nbsd-namespace-acpi.h>
+#endif
+#endif
 
 static bool
 mxm_shadow_rom_fetch(struct nvkm_i2c_bus *bus, u8 addr,
@@ -86,10 +95,9 @@ mxm_shadow_dsm(struct nvkm_mxm *mxm, u8 version)
 {
 	struct nvkm_subdev *subdev = &mxm->subdev;
 	struct nvkm_device *device = subdev->device;
-	static char muid[] = {
-		0x00, 0xA4, 0x04, 0x40, 0x7D, 0x91, 0xF2, 0x4C,
-		0xB8, 0x9C, 0x79, 0xB6, 0x2F, 0xD5, 0x56, 0x65
-	};
+	static guid_t muid =
+		GUID_INIT(0x4004A400, 0x917D, 0x4CF2,
+			  0xB8, 0x9C, 0x79, 0xB6, 0x2F, 0xD5, 0x56, 0x65);
 	u32 mxms_args[] = { 0x00000000 };
 	union acpi_object argv4 = {
 		.buffer.type = ACPI_TYPE_BUFFER,
@@ -100,7 +108,11 @@ mxm_shadow_dsm(struct nvkm_mxm *mxm, u8 version)
 	acpi_handle handle;
 	int rev;
 
+#ifdef __NetBSD__
+	handle = (device->acpidev ? device->acpidev->ad_handle : NULL);
+#else
 	handle = ACPI_HANDLE(device->dev);
+#endif
 	if (!handle)
 		return false;
 
@@ -110,7 +122,7 @@ mxm_shadow_dsm(struct nvkm_mxm *mxm, u8 version)
 	 * unless you pass in exactly the version it supports..
 	 */
 	rev = (version & 0xf0) << 4 | (version & 0x0f);
-	obj = acpi_evaluate_dsm(handle, muid, rev, 0x00000010, &argv4);
+	obj = acpi_evaluate_dsm(handle, &muid, rev, 0x00000010, &argv4);
 	if (!obj) {
 		nvkm_debug(subdev, "DSM MXMS failed\n");
 		return false;
@@ -159,7 +171,7 @@ wmi_wmmx_mxmi(struct nvkm_mxm *mxm, u8 version)
 		nvkm_debug(subdev, "WMMX MXMI returned non-integer\n");
 	}
 
-	kfree(obj);
+	ACPI_FREE(obj);
 	return version;
 }
 
@@ -196,7 +208,7 @@ mxm_shadow_wmi(struct nvkm_mxm *mxm, u8 version)
 				    obj->buffer.length, GFP_KERNEL);
 	}
 
-	kfree(obj);
+	ACPI_FREE(obj);
 	return mxm->mxms != NULL;
 }
 #endif
@@ -246,7 +258,7 @@ nvkm_mxm_new_(struct nvkm_device *device, int index, struct nvkm_mxm **pmxm)
 	if (!(mxm = *pmxm = kzalloc(sizeof(*mxm), GFP_KERNEL)))
 		return -ENOMEM;
 
-	nvkm_subdev_ctor(&nvkm_mxm, device, index, 0, &mxm->subdev);
+	nvkm_subdev_ctor(&nvkm_mxm, device, index, &mxm->subdev);
 
 	data = mxm_table(bios, &ver, &len);
 	if (!data || !(ver = nvbios_rd08(bios, data))) {
@@ -255,6 +267,10 @@ nvkm_mxm_new_(struct nvkm_device *device, int index, struct nvkm_mxm **pmxm)
 	}
 
 	nvkm_info(&mxm->subdev, "BIOS version %d.%d\n", ver >> 4, ver & 0x0f);
+	nvkm_debug(&mxm->subdev, "module flags: %02x\n",
+		   nvbios_rd08(bios, data + 0x01));
+	nvkm_debug(&mxm->subdev, "config flags: %02x\n",
+		   nvbios_rd08(bios, data + 0x02));
 
 	if (mxm_shadow(mxm, ver)) {
 		nvkm_warn(&mxm->subdev, "failed to locate valid SIS\n");

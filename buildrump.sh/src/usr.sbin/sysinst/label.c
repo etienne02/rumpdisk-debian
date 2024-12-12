@@ -1,4 +1,4 @@
-/*	$NetBSD: label.c,v 1.33 2021/05/09 11:06:20 martin Exp $	*/
+/*	$NetBSD: label.c,v 1.51 2024/02/14 13:52:11 martin Exp $	*/
 
 /*
  * Copyright 1997 Jonathan Stone
@@ -36,7 +36,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: label.c,v 1.33 2021/05/09 11:06:20 martin Exp $");
+__RCSID("$NetBSD: label.c,v 1.51 2024/02/14 13:52:11 martin Exp $");
 #endif
 
 #include <sys/types.h>
@@ -74,9 +74,7 @@ boringpart(const struct disk_part_info *info)
 
 	if (info->size == 0)
 		return true;
-	if (info->flags &
-	     (PTI_PSCHEME_INTERNAL|PTI_WHOLE_DISK|PTI_SEC_CONTAINER|
-	     PTI_RAW_PART))
+	if (info->flags & PTI_SPECIAL_PARTS)
 		return true;
 
 	return false;
@@ -101,7 +99,7 @@ real_partition(const struct partition_usage_set *pset, int index)
 
 /*
  * Check partitioning for overlapping partitions.
- * Returns 0 if no overlapping partition found, nonzero otherwise.
+ * Returns true if no overlapping partition found.
  * Sets reference arguments ovly1 and ovly2 to the indices of
  * overlapping partitions if any are found.
  */
@@ -113,6 +111,9 @@ checklabel(struct disk_partitions *parts,
 	struct disk_part_info info;
 	daddr_t istart, iend, jstart, jend;
 	unsigned int fs_type, fs_sub_type;
+
+	if (parts->num_part == 0)
+		return true;
 
 	for (i = 0; i < parts->num_part - 1; i ++ ) {
 		if (!parts->pscheme->get_part_info(parts, i, &info))
@@ -258,14 +259,18 @@ edit_fs_start(menudesc *m, void *arg)
 
 	start = getpartoff(edit->pset->parts, edit->info.start);
 	if (edit->info.size != 0) {
-		/* Try to keep end in the same place */
-		end = edit->info.start + edit->info.size;
-		if (end < start)
-			edit->info.size = edit->pset->parts->pscheme->
-			    max_free_space_at(edit->pset->parts,
-			    edit->info.start);
-		else
-			edit->info.size = end - start;
+		if (start < (edit->info.start+edit->info.size)) {
+			/* Try to keep end in the same place */
+			end = edit->info.start + edit->info.size;
+			if (end < start)
+				edit->info.size = edit->pset->parts->pscheme->
+				    max_free_space_at(edit->pset->parts,
+				    edit->info.start);
+			else
+				edit->info.size = end - start;
+		} else {
+			edit->info.size = 0;
+		}
 	}
 	edit->info.start = start;
 	return 0;
@@ -279,8 +284,9 @@ edit_fs_size(menudesc *m, void *arg)
 	daddr_t size;
 
 	/* get original partition data, in case start moved already */
-	edit->pset->parts->pscheme->get_part_info(edit->pset->parts,
-	    edit->id, &pinfo);
+	if (!edit->pset->parts->pscheme->get_part_info(edit->pset->parts,
+	    edit->id, &pinfo))
+		pinfo = edit->info;
 	/* ask for new size with old start and current values */
 	size = getpartsize(edit->pset->parts, pinfo.start,
 	    edit->info.start, edit->info.size);
@@ -433,7 +439,7 @@ edit_fs_mountpt(menudesc *m, void *arg)
 	if (last != NULL)
 		last[1] = 0;
 
-	if (first == NULL || *first == 0 || strcmp(first, "none") == 0) {
+	if (first == NULL || *first == 0 || strcmp(first, "-") == 0) {
 		edit->wanted->mount[0] = 0;
 		edit->wanted->instflags &= ~PUIINST_MOUNT;
 		return 0;
@@ -446,6 +452,7 @@ edit_fs_mountpt(menudesc *m, void *arg)
 	} else {
 		strlcpy(edit->wanted->mount, first, sizeof edit->wanted->mount);
 	}
+	edit->wanted->instflags |= PUIINST_MOUNT;
 
 	return 0;
 }
@@ -500,10 +507,14 @@ renumber_partitions(struct partition_usage_set *pset)
 		if (!pset->parts->pscheme->get_part_info(pset->parts, pno,
 		    &info))
 			continue;
-		for (i = 0; i < pset->parts->num_part; i++) {
+		for (i = 0; i < pset->num; i++) {
 			if (pset->infos[i].cur_start != info.start)
 				continue;
-			if (pset->infos[i].cur_flags != info.flags)
+			if ((pset->infos[i].cur_flags & ~PTI_INSTALL_TARGET)
+			    != (info.flags & ~PTI_INSTALL_TARGET))
+				continue;
+			if ((info.flags & PTI_SPECIAL_PARTS) !=
+			    (pset->infos[i].flags & PTI_SPECIAL_PARTS))
 				continue;
 			if ((info.fs_type != FS_UNUSED &&
 			    info.fs_type == pset->infos[i].fs_type) ||
@@ -517,19 +528,21 @@ renumber_partitions(struct partition_usage_set *pset)
 		}
 	}
 
-	memcpy(pset->infos, ninfos, sizeof(*pset->infos)*pset->parts->num_part);
-	free(ninfos);
+	free(pset->infos);
+	pset->infos = ninfos;
+	pset->num = pset->parts->num_part;
 }
 
 /*
  * Most often used file system types, we offer them in a first level menu.
  */
 static const uint edit_fs_common_types[] =
-    { FS_BSDFFS, FS_SWAP, FS_MSDOS, FS_BSDLFS, FS_EX2FS };
+    { FS_BSDFFS, FS_SWAP, FS_MSDOS, FS_EFI_SP, FS_BSDLFS, FS_EX2FS };
 
 /*
  * Functions for uncommon file system types - we offer the full list,
- * but put FFSv2 and FFSv1 at the front.
+ * but put FFSv2 and FFSv1 at the front and duplicate FS_MSDOS as
+ * EFI system partition.
  */
 static void
 init_fs_type_ext(menudesc *menu, void *arg)
@@ -539,17 +552,19 @@ init_fs_type_ext(menudesc *menu, void *arg)
 	size_t i, ndx, max = menu->numopts;
 
 	if (t == FS_BSDFFS) {
-		if (edit->info.fs_sub_type == 2)
+		if (edit->info.fs_sub_type == 3)
 			menu->cursel = 0;
-		else
+		else if (edit->info.fs_sub_type == 2)
 			menu->cursel = 1;
+		else
+			menu->cursel = 2;
 		return;
 	} else if (t == FS_EX2FS && edit->info.fs_sub_type == 1) {
-		menu->cursel = FSMAXTYPES;
+		menu->cursel = FSMAXTYPES+2;
 		return;
 	}
 	/* skip the two FFS entries, and do not add FFS later again */
-	for (ndx = 2, i = 0; i < FSMAXTYPES && ndx < max; i++) {
+	for (ndx = 3, i = 0; i < FSMAXTYPES && ndx < max; i++) {
 		if (i == FS_UNUSED)
 			continue;
 		if (i == FS_BSDFFS)
@@ -560,6 +575,13 @@ init_fs_type_ext(menudesc *menu, void *arg)
 		if (i == t) {
 			menu->cursel = ndx;
 			break;
+		}
+		if (i == FS_MSDOS) {
+			ndx++;
+			if (t == FS_EFI_SP) {
+				menu->cursel = ndx;
+				break;
+			}
 		}
 		ndx++;
 	}
@@ -572,17 +594,17 @@ set_fstype_ext(menudesc *menu, void *arg)
 	size_t i, ndx, max = menu->numopts;
 	enum part_type pt;
 
-	if (menu->cursel == 0 || menu->cursel == 1) {
+	if (menu->cursel >= 0 && menu->cursel <= 2) {
 		edit->info.fs_type = FS_BSDFFS;
-		edit->info.fs_sub_type = menu->cursel == 0 ? 2 : 1;
+		edit->info.fs_sub_type = 3-menu->cursel;
 		goto found_type;
-	} else if (menu->cursel == FSMAXTYPES) {
+	} else if (menu->cursel == FSMAXTYPES+2) {
 		edit->info.fs_type = FS_EX2FS;
 		edit->info.fs_sub_type = 1;
 		goto found_type;
 	}
 
-	for (ndx = 2, i = 0; i < FSMAXTYPES && ndx < max; i++) {
+	for (ndx = 3, i = 0; i < FSMAXTYPES && ndx < max; i++) {
 		if (i == FS_UNUSED)
 			continue;
 		if (i == FS_BSDFFS)
@@ -596,6 +618,14 @@ set_fstype_ext(menudesc *menu, void *arg)
 			goto found_type;
 		}
 		ndx++;
+		if (i == FS_MSDOS) {
+			if (ndx == (size_t)menu->cursel) {
+				edit->info.fs_type = FS_EFI_SP;
+				edit->info.fs_sub_type = 0;
+				goto found_type;
+			}
+			ndx++;
+		}
 	}
 	return 1;
 
@@ -623,12 +653,15 @@ edit_fs_type_ext(menudesc *menu, void *arg)
 	int m;
 	size_t i, ndx, cnt;
 
-	cnt = __arraycount(fstypenames);
+	cnt = __arraycount(fstypenames)+2;
 	opts = calloc(cnt, sizeof(*opts));
 	if (opts == NULL)
 		return 1;
 
 	ndx = 0;
+	opts[ndx].opt_name = msg_string(MSG_fs_type_ffsv2ea);
+	opts[ndx].opt_action = set_fstype_ext;
+	ndx++;
 	opts[ndx].opt_name = msg_string(MSG_fs_type_ffsv2);
 	opts[ndx].opt_action = set_fstype_ext;
 	ndx++;
@@ -645,6 +678,11 @@ edit_fs_type_ext(menudesc *menu, void *arg)
 		opts[ndx].opt_name = fstypenames[i];
 		opts[ndx].opt_action = set_fstype_ext;
 		ndx++;
+		if (i == FS_MSDOS) {
+			opts[ndx] = opts[ndx-1];
+			opts[ndx].opt_name = getfslabelname(FS_EFI_SP, 0);
+			ndx++;
+		}
 	}
 	opts[ndx].opt_name = msg_string(MSG_fs_type_ext2old);
 	opts[ndx].opt_action = set_fstype_ext;
@@ -671,14 +709,16 @@ init_fs_type(menudesc *menu, void *arg)
 
 	/* init menu->cursel from fs type in arg */
 	if (edit->info.fs_type == FS_BSDFFS) {
-		if (edit->info.fs_sub_type == 2)
+		if (edit->info.fs_sub_type == 3)
 			menu->cursel = 0;
-		else
+		else if (edit->info.fs_sub_type == 2)
 			menu->cursel = 1;
+		else
+			menu->cursel = 2;
 	}
 	for (i = 1; i < __arraycount(edit_fs_common_types); i++) {
 		if (edit->info.fs_type == edit_fs_common_types[i]) {
-			menu->cursel = i+1;
+			menu->cursel = i+2;
 			break;
 		}
 	}
@@ -692,11 +732,11 @@ set_fstype(menudesc *menu, void *arg)
 	int ndx;
 
 	pt = edit->info.nat_type ? edit->info.nat_type->generic_ptype : PT_root;
-	if (menu->cursel < 2) {
+	if (menu->cursel < 3) {
 		edit->info.fs_type = FS_BSDFFS;
-		edit->info.fs_sub_type = menu->cursel == 0 ? 2 : 1;
+		edit->info.fs_sub_type = 3-menu->cursel;
 		edit->info.nat_type = edit->pset->parts->pscheme->
-		    get_fs_part_type(pt, FS_BSDFFS, 2);
+		    get_fs_part_type(pt, FS_BSDFFS, edit->info.fs_sub_type);
 		if (edit->info.nat_type == NULL)
 			edit->info.nat_type = edit->pset->parts->
 			    pscheme->get_generic_part_type(PT_root);
@@ -705,7 +745,7 @@ set_fstype(menudesc *menu, void *arg)
 		edit->wanted->fs_version = edit->info.fs_sub_type;
 		return 1;
 	}
-	ndx = menu->cursel-1;
+	ndx = menu->cursel-2;
 
 	if (ndx < 0 ||
 	    (size_t)ndx >= __arraycount(edit_fs_common_types))
@@ -753,24 +793,25 @@ edit_fs_type(menudesc *menu, void *arg)
 	/*
 	 * Starting with a common type, show short menu first
 	 */
-	cnt = __arraycount(edit_fs_common_types) + 2;
+	cnt = __arraycount(edit_fs_common_types) + 3;
 	opts = calloc(cnt, sizeof(*opts));
 	if (opts == NULL)
 		return 0;
 
-	/* special case entry 0: two FFS entries */
+	/* special case entry 0 - 2: three FFS entries */
 	for (i = 0; i < __arraycount(edit_fs_common_types); i++) {
-		opts[i+1].opt_name = getfslabelname(edit_fs_common_types[i], 0);
-		opts[i+1].opt_action = set_fstype;
+		opts[i+2].opt_name = getfslabelname(edit_fs_common_types[i], 0);
+		opts[i+2].opt_action = set_fstype;
 	}
-	/* duplicate FFS (at offset 1) into first entry */
-	opts[0] = opts[1];
-	opts[0].opt_name = msg_string(MSG_fs_type_ffsv2);
-	opts[1].opt_name = msg_string(MSG_fs_type_ffs);
+	/* duplicate FFS (at offset 2) into first two entries */
+	opts[0] = opts[1] = opts[2];
+	opts[0].opt_name = msg_string(MSG_fs_type_ffsv2ea);
+	opts[1].opt_name = msg_string(MSG_fs_type_ffsv2);
+	opts[2].opt_name = msg_string(MSG_fs_type_ffs);
 	/* add secondary sub-menu */
-	assert(i+1 < (size_t)cnt);
-	opts[i+1].opt_name = msg_string(MSG_other_fs_type);
-	opts[i+1].opt_action = edit_fs_type_ext;
+	assert(i+2 < (size_t)cnt);
+	opts[i+2].opt_name = msg_string(MSG_other_fs_type);
+	opts[i+2].opt_action = edit_fs_type_ext;
 
 	m = new_menu(MSG_Select_the_type, opts, cnt,
 		30, 6, 0, 0, MC_SUBMENU | MC_SCROLL,
@@ -954,6 +995,8 @@ edit_ptn(menudesc *menu, void *arg)
 		edit.info.last_mounted = edit.wanted->mount;
 		if (is_new_part) {
 			edit.wanted->parts = pset->parts;
+			if (!can_newfs_fstype(edit.info.fs_type))
+				edit.wanted->instflags &= ~PUIINST_NEWFS;
 			edit.wanted->cur_part_id = pset->parts->pscheme->
 			    add_partition(pset->parts, &edit.info, &err);
 			if (edit.wanted->cur_part_id == NO_PART)
@@ -968,6 +1011,7 @@ edit_ptn(menudesc *menu, void *arg)
 				    edit.info.nat_type->generic_ptype;
 				edit.wanted->fs_type = edit.info.fs_type;
 				edit.wanted->fs_version = edit.info.fs_sub_type;
+				edit.wanted->cur_flags = edit.info.flags;
 				/* things have changed, re-sort */
 				renumber_partitions(pset);
 			}
@@ -975,6 +1019,9 @@ edit_ptn(menudesc *menu, void *arg)
 			if (!pset->parts->pscheme->set_part_info(pset->parts,
 			    edit.id, &edit.info, &err))
 				err_msg_win(err);
+			else
+				pset->cur_free_space += edit.old_info.size -
+				    edit.info.size;
 		}
 
 		/*
@@ -1004,7 +1051,7 @@ edit_ptn(menudesc *menu, void *arg)
 		}
 		remember_deleted(pset,
 		    pset->infos[edit.index].parts);
-		pset->cur_free_space += pset->infos[edit.index].size;
+		pset->cur_free_space += edit.info.size;
 		memmove(pset->infos+edit.index,
 		    pset->infos+edit.index+1,
 		    sizeof(*pset->infos)*(pset->num-edit.index));
@@ -1057,8 +1104,7 @@ update_edit_ptn_menu(menudesc *m, void *arg)
 			/* can only install onto PT_root partitions */
 			continue;
 		if (m->opts[i].opt_action == edit_fs_preserve &&
-		    t != FS_BSDFFS && t != FS_BSDLFS && t != FS_APPLEUFS &&
-		    t != FS_MSDOS && t != FS_EX2FS) {
+		    !can_newfs_fstype(t)) {
 			/* Can not newfs this filesystem */
 			edit->wanted->instflags &= ~PUIINST_NEWFS;
 			continue;
@@ -1148,14 +1194,17 @@ draw_edit_ptn_line(menudesc *m, int opt, void *arg)
 	if (opt < 4) {
 		switch (opt) {
 		case 0:
-			if (edit->info.fs_type == FS_BSDFFS)
-				if (edit->info.fs_sub_type == 2)
+			if (edit->info.fs_type == FS_BSDFFS) {
+				if (edit->info.fs_sub_type == 3)
+					c = msg_string(MSG_fs_type_ffsv2ea);
+				else if (edit->info.fs_sub_type == 2)
 					c = msg_string(MSG_fs_type_ffsv2);
 				else
 					c = msg_string(MSG_fs_type_ffs);
-			else
+			} else {
 				c = getfslabelname(edit->info.fs_type,
 				    edit->info.fs_sub_type);
+			}
 			wprintw(m->mw, "%*s : %s", col_width, ptn_type, c);
 			return;
 		case 1:
@@ -1471,7 +1520,8 @@ fmt_fspart_row(menudesc *m, int ptn, void *arg)
 	*fp = 0;
 	if (pset->parts->pscheme->get_part_attr_str != NULL)
 		pset->parts->pscheme->get_part_attr_str(pset->parts,
-		    pset->infos[ptn].cur_part_id, fp, sizeof(flag_str)-1);
+		    pset->infos[ptn].cur_part_id, fp,
+		    sizeof(flag_str)-1-(fp-flag_str));
 
 	/* if the fstype description does not fit, check if we can overrun */
 	if (strlen(desc) > (size_t)fstype_width &&
@@ -1918,7 +1968,7 @@ const char *
 get_last_mounted(int fd, daddr_t partstart, uint *fs_type, uint *fs_sub_type,
     uint flags)
 {
-	static char sblk[SBLOCKSIZE];		/* is this enough? */
+	static char sblk[SBLOCKSIZE] __aligned(8);	/* is this enough? */
 	struct fs *SB = (struct fs *)sblk;
 	static const off_t sblocks[] = SBLOCKSEARCH;
 	const off_t *sbp;
@@ -1989,7 +2039,9 @@ get_last_mounted(int fd, daddr_t partstart, uint *fs_type, uint *fs_sub_type,
 				*fs_sub_type = 1;
 			continue;
 		case FS_UFS2_MAGIC:
+		case FS_UFS2EA_MAGIC:
 		case FS_UFS2_MAGIC_SWAPPED:
+		case FS_UFS2EA_MAGIC_SWAPPED:
 			/* Check we have the main superblock */
 			if (SB->fs_sblockloc == *sbp) {
 				mnt = (const char *)SB->fs_fsmnt;

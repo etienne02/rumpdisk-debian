@@ -1,4 +1,4 @@
-/*	$NetBSD: ahcisatavar.h,v 1.26 2020/12/28 14:08:42 jmcneill Exp $	*/
+/*	$NetBSD: ahcisatavar.h,v 1.28 2023/09/10 14:04:28 abs Exp $	*/
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.

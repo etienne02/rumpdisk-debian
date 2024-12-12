@@ -1,4 +1,4 @@
-/*	$NetBSD: clock.c,v 1.18 2018/09/03 16:29:27 riastradh Exp $	*/
+/*	$NetBSD: clock.c,v 1.20 2023/12/09 00:02:10 andvar Exp $	*/
 
 /*
  * Copyright 1997
@@ -154,7 +154,7 @@ WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: clock.c,v 1.18 2018/09/03 16:29:27 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: clock.c,v 1.20 2023/12/09 00:02:10 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -252,14 +252,14 @@ unsigned fiqReason = 0;
 unsigned hatCount = 0;
 unsigned hatCount2 = 0;
 
-void hatTest(int testReason)
+static void hatTest(int testReason)
 {
 
 	fiqReason |= testReason;
 	nHats++;
 }
 
-void hatWedge(int nFIQs)
+static void hatWedge(int nFIQs)
 {
 
 	printf("Unwedging the HAT.  fiqs_happened = %d\n", nFIQs);
@@ -399,7 +399,7 @@ gettick(void)
 /* modifications from i386 to shark isa version:
    - removed hardcoded "n -=" values that approximated the time to
      calculate delay ticks
-   - made the time to calculate delay ticks almost negligable. 4 multiplies
+   - made the time to calculate delay ticks almost negligible. 4 multiplies
      = maximum of 12 cycles = 75ns on a slow SA-110, plus a bunch of shifts;
      as opposed to 4 multiplies plus a bunch of divides.
    - removed i386 assembly language hack

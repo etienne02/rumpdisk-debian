@@ -1,4 +1,4 @@
-/*	$NetBSD: vm_machdep.c,v 1.81 2020/11/30 05:33:32 msaitoh Exp $	*/
+/*	$NetBSD: vm_machdep.c,v 1.84 2023/12/20 15:34:45 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc. All rights reserved.
@@ -81,14 +81,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.81 2020/11/30 05:33:32 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vm_machdep.c,v 1.84 2023/12/20 15:34:45 thorpej Exp $");
 
 #include "opt_kstack_debug.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/malloc.h>
 #include <sys/vnode.h>
 #include <sys/buf.h>
 #include <sys/core.h>
@@ -147,7 +146,7 @@ cpu_lwp_fork(struct lwp *l1, struct lwp *l2, void *stack,
 	sh3_setup_uarea(l2);
 
 	l2->l_md.md_flags = l1->l_md.md_flags;
-	l2->l_md.md_astpending = 0;
+	KASSERT(l2->l_md.md_astpending == 0);
 
 	/* Copy user context, may be give a different stack */
 	memcpy(l2->l_md.md_regs, l1->l_md.md_regs, sizeof(struct trapframe));
@@ -299,7 +298,7 @@ cpu_lwp_free2(struct lwp *l)
 
 /*
  * Map an IO request into kernel virtual address space.  Requests fall into
- * one of five catagories:
+ * one of five categories:
  *
  *	B_PHYS|B_UAREA:	User u-area swap.
  *			Address is relative to start of u-area.

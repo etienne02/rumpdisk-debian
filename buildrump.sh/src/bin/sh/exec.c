@@ -1,4 +1,4 @@
-/*	$NetBSD: exec.c,v 1.55 2021/02/16 15:30:12 kre Exp $	*/
+/*	$NetBSD: exec.c,v 1.59 2024/07/12 07:30:30 kre Exp $	*/
 
 /*-
  * Copyright (c) 1991, 1993
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)exec.c	8.4 (Berkeley) 6/8/95";
 #else
-__RCSID("$NetBSD: exec.c,v 1.55 2021/02/16 15:30:12 kre Exp $");
+__RCSID("$NetBSD: exec.c,v 1.59 2024/07/12 07:30:30 kre Exp $");
 #endif
 #endif /* not lint */
 
@@ -125,18 +125,56 @@ void
 shellexec(char **argv, char **envp, const char *path, int idx, int vforked)
 {
 	char *cmdname;
-	int e;
+	int e, action;
+	struct stat statb;
+
+	action = E_EXEC;
 
 	if (strchr(argv[0], '/') != NULL) {
 		tryexec(argv[0], argv, envp, vforked);
 		e = errno;
+		if (e == EACCES && stat(argv[0], &statb) == -1)
+			action = E_OPEN;
 	} else {
 		e = ENOENT;
 		while ((cmdname = padvance(&path, argv[0], 1)) != NULL) {
 			if (--idx < 0 && pathopt == NULL) {
+				/*
+				 * tryexec() does not return if it works.
+				 */
 				tryexec(cmdname, argv, envp, vforked);
-				if (errno != ENOENT && errno != ENOTDIR)
-					e = errno;
+				/*
+				 * If do not already have a meaningful error
+				 * from earlier in the PATH, examine this one
+				 * if it is a simple "not found", just keep
+				 * searching.
+				 */
+				if (e == ENOENT &&
+				    errno != ENOENT && errno != ENOTDIR) {
+					/*
+					 * If the error is from permission
+					 * denied on the path search (a call
+					 * to stat() also fails) ignore it
+					 * (just continue with the search)
+					 * If it is EACCESS and the file exists
+					 * (the stat succeeds) that means no
+					 * 'x' perm on the file itself, which
+					 * is a meaningful error, this will be
+					 * the one reported if no later PATH
+					 * element actually succeeds.
+					 */
+					if (errno == EACCES) {
+						if (stat(cmdname, &statb) != -1)
+							e = EACCES;
+					} else {
+						/*
+						 * any other error we will
+						 * remember as the significant
+						 * error
+						 */
+						e = errno;
+					}
+				}
 			}
 			stunalloc(cmdname);
 		}
@@ -145,11 +183,17 @@ shellexec(char **argv, char **envp, const char *path, int idx, int vforked)
 	/* Map to POSIX errors */
 	switch (e) {
 	case EACCES:	/* particularly this (unless no search perm) */
-		/*
-		 * should perhaps check if this EACCES is an exec()
-		 * EACESS or a namei() EACESS - the latter should be 127
-		 * - but not today
-		 */
+		if (action == E_OPEN) {
+			/*
+			 * this is an EACCES from namei
+			 * ie: no permission to search the path given
+			 * rather than an EACCESS from exec
+			 * ie: no 'x' bit on the file to be executed
+			 */
+			exerrno = 127;
+			break;
+		}
+		/* FALLTHROUGH */
 	case EINVAL:	/* also explicitly these */
 	case ENOEXEC:
 	default:	/* and anything else */
@@ -166,7 +210,7 @@ shellexec(char **argv, char **envp, const char *path, int idx, int vforked)
 	CTRACE(DBG_ERRS|DBG_CMDS|DBG_EVAL,
 	    ("shellexec failed for %s, errno %d, vforked %d, suppressint %d\n",
 		argv[0], e, vforked, suppressint));
-	exerror(EXEXEC, "%s: %s", argv[0], errmsg(e, E_EXEC));
+	exerror(EXEXEC, "%s: %s", argv[0], errmsg(e, action));
 	/* NOTREACHED */
 }
 
@@ -360,17 +404,24 @@ hashcmd(int argc, char **argv)
 	struct cmdentry entry;
 	char *name;
 	int allopt=0, bopt=0, fopt=0, ropt=0, sopt=0, uopt=0, verbose=0;
+	int errs=1, emsg=DO_ERR;
+	int status = 0;
 
-	while ((c = nextopt("bcfrsuv")) != '\0')
+	while ((c = nextopt("bcefqrsuv")) != '\0')
 		switch (c) {
 		case 'b':	bopt = 1;	break;
 		case 'c':	uopt = 1;	break;	/* c == u */
+		case 'e':	errs = 0;	break;
 		case 'f':	fopt = 1;	break;
+		case 'q':	emsg = 0;	break;
 		case 'r':	ropt = 1;	break;
 		case 's':	sopt = 1;	break;
 		case 'u':	uopt = 1;	break;
 		case 'v':	verbose = 1;	break;
 		}
+
+	if (!errs)
+		emsg ^= DO_ERR;
 
 	if (ropt)
 		clearcmdentry(0);
@@ -406,6 +457,11 @@ hashcmd(int argc, char **argv)
 					printentry(cmdp, verbose);
 			}
 		}
+		flushout(out1);
+		if (io_err(out1)) {
+			out2str("hash: I/O error writing to standard output\n");
+			return 1;
+		}
 		return 0;
 	}
 
@@ -433,7 +489,9 @@ hashcmd(int argc, char **argv)
 				break;
 			}
 		}
-		find_command(name, &entry, DO_ERR, pathval());
+		find_command(name, &entry, emsg, pathval());
+		if (errs && entry.cmdtype == CMDUNKNOWN)
+			status = 1;
 		if (verbose) {
 			if (entry.cmdtype != CMDUNKNOWN) {	/* if no error msg */
 				cmdp = cmdlookup(name, 0);
@@ -443,7 +501,7 @@ hashcmd(int argc, char **argv)
 			flushall();
 		}
 	}
-	return 0;
+	return status;
 }
 
 STATIC void
@@ -548,31 +606,23 @@ find_command(char *name, struct cmdentry *entry, int act, const char *path)
 
 	/* If name is in the table, check answer will be ok */
 	if ((cmdp = cmdlookup(name, 0)) != NULL) {
-		do {
-			switch (cmdp->cmdtype) {
-			case CMDNORMAL:
-				if (act & DO_ALTPATH) {
-					cmdp = NULL;
-					continue;
-				}
-				break;
-			case CMDFUNCTION:
-				if (act & DO_NOFUNC) {
-					cmdp = NULL;
-					continue;
-				}
-				break;
-			case CMDBUILTIN:
-				if ((act & DO_ALTBLTIN) || builtinloc >= 0) {
-					cmdp = NULL;
-					continue;
-				}
-				break;
-			}
-			/* if not invalidated by cd, we're done */
-			if (cmdp->rehash == 0)
-				goto success;
-		} while (0);
+		switch (cmdp->cmdtype) {
+		case CMDNORMAL:
+			if (act & DO_ALTPATH)
+				cmdp = NULL;
+			break;
+		case CMDFUNCTION:
+			if (act & DO_NOFUNC)
+				cmdp = NULL;
+			break;
+		case CMDBUILTIN:
+			if ((act & DO_ALTBLTIN) || builtinloc >= 0)
+				cmdp = NULL;
+			break;
+		}
+		/* if not invalidated by cd, we're done */
+		if (cmdp != NULL && cmdp->rehash == 0)
+			goto success;
 	}
 
 	/* If %builtin not in path, check for builtin next */
@@ -794,7 +844,7 @@ hashcd(void)
  */
 
 void
-changepath(const char *newval)
+changepath(char *newval, int flags __unused)
 {
 	const char *old, *new;
 	int idx;

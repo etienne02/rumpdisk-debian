@@ -1,4 +1,4 @@
-/*	$NetBSD: locore.s,v 1.117 2021/03/31 09:48:14 simonb Exp $	*/
+/*	$NetBSD: locore.s,v 1.131 2024/01/18 05:12:30 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -45,6 +45,7 @@
 #include "opt_kgdb.h"
 #include "opt_lockdebug.h"
 #include "opt_m68k_arch.h"
+#include "opt_mvmeconf.h"
 
 #include "assym.h"
 #include <machine/asm.h>
@@ -61,12 +62,6 @@
 	.data
 	.space	PAGE_SIZE
 ASLOCAL(tmpstk)
-
-ASLOCAL(bug_vbr)
-	.long	0
-
-#include <mvme68k/mvme68k/vectors.s>
-
 
 /*
  * Macro to relocate a symbol, used before MMU is enabled.
@@ -201,8 +196,6 @@ ASLOCAL(Lbrdid2mach)
 	.word		CPU_68030
 	.word		MMU_68030
 	.word		FPU_68882
-	.long		_C_LABEL(busaddrerr2030)
-	.long		_C_LABEL(busaddrerr2030)
 	.long		Linit147
 #endif
 #ifdef MVME162
@@ -210,8 +203,6 @@ ASLOCAL(Lbrdid2mach)
 	.word		CPU_68040
 	.word		MMU_68040
 	.word		FPU_68040
-	.long		_C_LABEL(buserr40)
-	.long		_C_LABEL(addrerr4060)
 	.long		Linit1x2
 #endif
 #ifdef MVME167
@@ -219,8 +210,6 @@ ASLOCAL(Lbrdid2mach)
 	.word		CPU_68040
 	.word		MMU_68040
 	.word		FPU_68040
-	.long		_C_LABEL(buserr40)
-	.long		_C_LABEL(addrerr4060)
 	.long		Linit1x7
 #endif
 #ifdef MVME172
@@ -228,8 +217,6 @@ ASLOCAL(Lbrdid2mach)
 	.word		CPU_68060
 	.word		MMU_68040
 	.word		FPU_68060
-	.long		_C_LABEL(buserr60)
-	.long		_C_LABEL(addrerr4060)
 	.long		Linit1x2
 #endif
 #ifdef MVME177
@@ -237,8 +224,6 @@ ASLOCAL(Lbrdid2mach)
 	.word		CPU_68060
 	.word		MMU_68040
 	.word		FPU_68060
-	.long		_C_LABEL(buserr60)
-	.long		_C_LABEL(addrerr4060)
 	.long		Linit1x7
 #endif
 	.word	0
@@ -254,19 +239,17 @@ Lgotmatch:
 	extl	%d1
 	RELOC(cputype,%a1)
 	movel	%d1,%a1@
+
 	movew	%a0@+,%d1		| Copy the MMU type
 	extl	%d1
 	RELOC(mmutype,%a1)
 	movel	%d1,%a1@
+
 	movew	%a0@+,%d1		| Copy the FPU type
 	extl	%d1
 	RELOC(fputype,%a1)
 	movel	%d1,%a1@
-	movel	%a0@+,%a2		| Fetch the bus error vector
-	RELOC(vectab,%a1)
-	movl	%a2,%a1@(8)
-	movel	%a0@+,%a2		| Fetch the address error vector
-	movl	%a2,%a1@(12)
+
 	movel	%a0@,%a0		| Finally, the board-specific init code
 	jmp	%a0@
 
@@ -580,11 +563,11 @@ Lstart2:
 	.long	0x4e7b1807		| movc d1,srp
 	jra	Lstploaddone
 Lmotommu1:
+#ifdef M68030
 	RELOC(protorp, %a0)
-	movl	#0x80000202,%a0@	| nolimit + share global + 4 byte PTEs
-	movl	%d1,%a0@(4)		| + segtable address
+	movl	%d1,%a0@(4)		| segtable address
 	pmove	%a0@,%srp		| load the supervisor root pointer
-	movl	#0x80000002,%a0@	| reinit upper half for CRP loads
+#endif /* M68030 */
 Lstploaddone:
 	RELOC(mmutype, %a0)
 	cmpl	#MMU_68040,%a0@		| 68040?
@@ -614,7 +597,7 @@ Lnot060cache:
 	jmp	Lenab1
 Lmotommu2:
 	pflusha
-	movl	#0x82c0aa00,%sp@-	| value to load TC with
+	movl	#MMU51_TCR_BITS,%sp@-	| value to load TC with
 	pmove	%sp@,%tc		| load it
 
 /*
@@ -622,11 +605,8 @@ Lmotommu2:
  */
 Lenab1:
 /* Point the CPU VBR at our vector table */
-	movc	%vbr,%d0		| Preserve Bug's VBR address
-	movl	%d0,_ASM_LABEL(bug_vbr)
-	movl	#_C_LABEL(vectab),%d0	| get our VBR address
-	movc	%d0,%vbr
-	lea	_ASM_LABEL(tmpstk),%sp	| temporary stack
+	lea	_ASM_LABEL(tmpstk),%sp	| re-load temporary stack
+	jbsr	_C_LABEL(vec_init)	| initialize vector table
 /* call final pmap setup */
 	jbsr	_C_LABEL(pmap_bootstrap_finalize)
 /* set kernel stack, user SP */
@@ -929,57 +909,11 @@ Lbrkpt3:
 	rte				| all done
 
 /*
- * Use common m68k sigreturn routine.
- */
-#include <m68k/m68k/sigreturn.s>
-
-/*
- * Interrupt handlers.
- *
- * For auto-vectored interrupts, the CPU provides the
- * vector 0x18+level.
- *
- * intrhand_autovec is the entry point for auto-vectored
- * interrupts.
- *
- * For vectored interrupts, we pull the pc, evec, and exception frame
- * and pass them to the vectored interrupt dispatcher.  The vectored
- * interrupt dispatcher will deal with strays.
- *
- * intrhand_vectored is the entry point for vectored interrupts.
- */
-
-ENTRY_NOPROFILE(intrhand_autovec)
-	addql	#1,_C_LABEL(interrupt_depth)
-	INTERRUPT_SAVEREG
-	lea	%sp@(16),%a1		| get pointer to frame
-	movl	%a1,%sp@-
-	jbsr	_C_LABEL(isrdispatch_autovec)  | call dispatcher
-	addql	#4,%sp
-	jbra	Lintrhand_exit
-
-ENTRY_NOPROFILE(intrhand_vectored)
-	addql	#1,_C_LABEL(interrupt_depth)
-	INTERRUPT_SAVEREG
-	lea	%sp@(16),%a1		| get pointer to frame
-	movl	%a1,%sp@-
-	movw	%sr,%d0
-	bfextu	%d0,21,3,%d0		| Get current ipl
-	movl	%d0,%sp@-		| Push it
-	jbsr	_C_LABEL(isrdispatch_vectored) | call dispatcher
-	addql	#8,%sp
-Lintrhand_exit:
-	INTERRUPT_RESTOREREG
-	subql	#1,_C_LABEL(interrupt_depth)
-
-	/* FALLTHROUGH to rei */
-
-/*
  * Emulation of VAX REI instruction.
  *
  * This code deals with checking for and servicing ASTs
  * (profiling, scheduling).
- * After identifing that we need an AST we drop the IPL to allow device
+ * After identifying that we need an AST we drop the IPL to allow device
  * interrupts.
  *
  * This code is complicated by the fact that sendsig may have been called
@@ -1022,21 +956,8 @@ Laststkadj:
 	rte				| and do real RTE
 
 /*
- * Use common m68k sigcode.
- */
-#include <m68k/m68k/sigcode.s>
-#ifdef COMPAT_SUNOS
-#include <m68k/m68k/sunos_sigcode.s>
-#endif
-
-/*
  * Primitives
  */
-
-/*
- * Use common m68k support routines.
- */
-#include <m68k/m68k/support.s>
 
 /*
  * Use common m68k process/lwp switch and context save subroutines.
@@ -1081,66 +1002,6 @@ ENTRY(ecacheoff)
 	rts
 
 /*
- * Get callers current SP value.
- * Note that simply taking the address of a local variable in a C function
- * doesn't work because callee saved registers may be outside the stack frame
- * defined by A6 (e.g. GCC generated code).
- */
-ENTRY_NOPROFILE(getsp)
-	movl	%sp,%d0			| get current SP
-	addql	#4,%d0			| compensate for return address
-	movl	%d0,%a0
-	rts
-
-/*
- * Load a new user segment table pointer.
- */
-ENTRY(loadustp)
-	movl	%sp@(4),%d0		| new USTP
-	moveq	#PGSHIFT, %d1
-	lsll	%d1,%d0			| convert to addr
-#if defined(M68040) || defined(M68060)
-	cmpl    #MMU_68040,_C_LABEL(mmutype) | 68040?
-	jne     LmotommuC               | no, skip
-	.word	0xf518			| pflusha
-	.long   0x4e7b0806              | movc d0,urp
-#ifdef M68060
-	cmpl	#CPU_68060,_C_LABEL(cputype)
-	jne	Lldno60
-	movc	%cacr,%d0
-	orl	#IC60_CUBC,%d0		| clear user branch cache entries
-	movc	%d0,%cacr
-Lldno60:
-#endif
-	rts
-LmotommuC:
-#endif
-	pflusha				| flush entire TLB
-	lea	_C_LABEL(protorp),%a0	| CRP prototype
-	movl	%d0,%a0@(4)		| stash USTP
-	pmove	%a0@,%crp		| load root pointer
-	movl	#CACHE_CLR,%d0
-	movc	%d0,%cacr		| invalidate cache(s)
-	rts
-
-ENTRY(ploadw)
-#ifdef M68030
-#if defined(M68040) || defined(M68060)
-	cmpl	#MMU_68040,_C_LABEL(mmutype) | 68040?
-	jeq	Lploadwskp		| yes, skip
-#endif
-	movl	%sp@(4),%a0		| address to load
-	ploadw	#1,%a0@			| pre-load translation
-Lploadwskp:
-#endif
-	rts
-
-ENTRY(getsr)
-	moveq	#0,%d0
-	movw	%sr,%d0
-	rts
-
-/*
  * _delay(unsigned N)
  *
  * Delay for at least (N/1024) microseconds.
@@ -1181,7 +1042,7 @@ ENTRY_NOPROFILE(doboot)
 	movw	#PSL_HIGHIPL,%sr
 	movl	_C_LABEL(boothowto),%d1	| load howto
 	movl	%sp@(4),%d2		| arg
-	movl	_ASM_LABEL(bug_vbr),%d3	| Fetch Bug's original VBR value
+	movl	_C_LABEL(saved_vbr),%d3	| Fetch Bug's original VBR value
 	movl	_C_LABEL(machineid),%d4	| What type of board is this?
 	movl	#CACHE_OFF,%d0
 #if defined(M68040) || defined(M68060)
@@ -1251,9 +1112,6 @@ GLOBAL(cputype)
 GLOBAL(fputype)
 	.long	FPU_68882	| default to FPU_68882
 
-GLOBAL(protorp)
-	.long	0,0		| prototype root pointer
-
 /*
  * Information from first stage boot program
  */
@@ -1277,24 +1135,3 @@ GLOBAL(intiobase_phys)
 
 GLOBAL(intiotop_phys)
 	.long	0		| PA of top of board's I/O registers
-
-/*
- * interrupt counters.
- * XXXSCW: Will go away soon; kept here to keep vmstat happy
- */
-GLOBAL(intrnames)
-	.asciz	"spur"
-	.asciz	"lev1"
-	.asciz	"lev2"
-	.asciz	"lev3"
-	.asciz	"lev4"
-	.asciz	"clock"
-	.asciz	"lev6"
-	.asciz	"nmi"
-	.asciz	"statclock"
-GLOBAL(eintrnames)
-	.even
-
-GLOBAL(intrcnt)
-	.long	0,0,0,0,0,0,0,0,0
-GLOBAL(eintrcnt)

@@ -1,4 +1,4 @@
-/*	$NetBSD: uatp.c,v 1.27 2021/08/07 16:19:17 thorpej Exp $	*/
+/*	$NetBSD: uatp.c,v 1.31 2022/03/28 12:45:04 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2011-2014 The NetBSD Foundation, Inc.
@@ -146,7 +146,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: uatp.c,v 1.27 2021/08/07 16:19:17 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: uatp.c,v 1.31 2022/03/28 12:45:04 riastradh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -298,10 +298,10 @@ static void uatp_disable(void *);
 static int uatp_ioctl(void *, unsigned long, void *, int, struct lwp *);
 static void geyser34_enable_raw_mode(struct uatp_softc *);
 static void geyser34_initialize(struct uatp_softc *);
-static int geyser34_finalize(struct uatp_softc *);
+static void geyser34_finalize(struct uatp_softc *);
 static void geyser34_deferred_reset(struct uatp_softc *);
 static void geyser34_reset_task(void *);
-static void uatp_intr(struct uhidev *, void *, unsigned int);
+static void uatp_intr(void *, void *, unsigned int);
 static bool base_sample_softc_flag(const struct uatp_softc *, const uint8_t *);
 static bool base_sample_input_flag(const struct uatp_softc *, const uint8_t *);
 static void read_sample_1(uint8_t *, uint8_t *, const uint8_t *);
@@ -486,7 +486,10 @@ static const struct uatp_knobs default_knobs = {
 };
 
 struct uatp_softc {
-	struct uhidev sc_hdev;		/* USB parent.  */
+	device_t sc_dev;
+	struct uhidev *sc_hdev;		/* uhidev(9) parent.  */
+	struct usbd_device *sc_udev;	/* USB device.  */
+	struct usbd_interface *sc_iface0; /* Geyser 3/4 reset interface.  */
 	device_t sc_wsmousedev;		/* Attached wsmouse device.  */
 	const struct uatp_parameters *sc_parameters;
 	struct uatp_knobs sc_knobs;
@@ -551,8 +554,8 @@ struct uatp_parameters {
 	/* Device-specific initialization routine.  May be null.  */
 	void (*initialize)(struct uatp_softc *);
 
-	/* Device-specific finalization routine.  May be null.  May fail.  */
-	int (*finalize)(struct uatp_softc *);
+	/* Device-specific finalization routine.  May be null.  */
+	void (*finalize)(struct uatp_softc *);
 
 	/* Tests whether this is a base sample.  Second argument is
 	 * input_size bytes long.  */
@@ -690,7 +693,7 @@ find_uatp_descriptor(const struct uhidev_attach_arg *uha)
 static device_t
 uatp_dev(const struct uatp_softc *sc)
 {
-	return sc->sc_hdev.sc_dev;
+	return sc->sc_dev;
 }
 
 static uint8_t *
@@ -930,11 +933,9 @@ uatp_attach(device_t parent, device_t self, void *aux)
 	int report_size, input_size;
 	struct wsmousedev_attach_args a;
 
-	/* Set up uhidev state.  (Why doesn't uhidev do most of this?)  */
-	sc->sc_hdev.sc_dev = self;
-	sc->sc_hdev.sc_intr = uatp_intr;
-	sc->sc_hdev.sc_parent = uha->parent;
-	sc->sc_hdev.sc_report_id = uha->reportid;
+	sc->sc_dev = self;
+	sc->sc_hdev = uha->parent;
+	sc->sc_udev = uha->uiaa->uiaa_device;
 
 	/* Identify ourselves to dmesg.  */
 	uatp_descriptor = find_uatp_descriptor(uha);
@@ -945,7 +946,7 @@ uatp_attach(device_t parent, device_t self, void *aux)
 	    "vendor 0x%04x, product 0x%04x, report id %d\n",
 	    (unsigned int)uha->uiaa->uiaa_vendor,
 	    (unsigned int)uha->uiaa->uiaa_product,
-	    (int)uha->reportid);
+	    uha->reportid);
 
 	uhidev_get_report_desc(uha->parent, &report_descriptor, &report_size);
 	input_size = hid_report_size(report_descriptor, report_size, hid_input,
@@ -1182,19 +1183,18 @@ static int
 uatp_detach(device_t self, int flags)
 {
 	struct uatp_softc *sc = device_private(self);
+	int error;
 
 	DPRINTF(sc, UATP_DEBUG_MISC, ("detaching with flags %d\n", flags));
 
-        if (sc->sc_status & UATP_ENABLED) {
-		aprint_error_dev(uatp_dev(sc), "can't detach while enabled\n");
-		return EBUSY;
-        }
+	error = config_detach_children(self, flags);
+	if (error)
+		return error;
 
-	if (sc->sc_parameters->finalize) {
-		int error = sc->sc_parameters->finalize(sc);
-		if (error != 0)
-			return error;
-	}
+	KASSERT((sc->sc_status & UATP_ENABLED) == 0);
+
+	if (sc->sc_parameters->finalize)
+		sc->sc_parameters->finalize(sc);
 
 	pmf_device_deregister(self);
 
@@ -1203,7 +1203,7 @@ uatp_detach(device_t self, int flags)
 
 	tap_finalize(sc);
 
-	return config_detach_children(self, flags);
+	return 0;
 }
 
 static int
@@ -1248,8 +1248,8 @@ uatp_enable(void *v)
 	tap_enable(sc);
 	uatp_clear_position(sc);
 
-	DPRINTF(sc, UATP_DEBUG_MISC, ("uhidev_open(%p)\n", &sc->sc_hdev));
-	return uhidev_open(&sc->sc_hdev);
+	DPRINTF(sc, UATP_DEBUG_MISC, ("uhidev_open(%p)\n", sc->sc_hdev));
+	return uhidev_open(sc->sc_hdev, &uatp_intr, sc);
 }
 
 static void
@@ -1267,8 +1267,8 @@ uatp_disable(void *v)
 	tap_disable(sc);
 	sc->sc_status &=~ UATP_ENABLED;
 
-	DPRINTF(sc, UATP_DEBUG_MISC, ("uhidev_close(%p)\n", &sc->sc_hdev));
-	uhidev_close(&sc->sc_hdev);
+	DPRINTF(sc, UATP_DEBUG_MISC, ("uhidev_close(%p)\n", sc->sc_hdev));
+	uhidev_close(sc->sc_hdev);
 }
 
 static int
@@ -1296,19 +1296,12 @@ uatp_ioctl(void *v, unsigned long cmd, void *data, int flag, struct lwp *p)
 static void
 geyser34_enable_raw_mode(struct uatp_softc *sc)
 {
-	struct usbd_device *udev = sc->sc_hdev.sc_parent->sc_udev;
-	usb_device_request_t req;
-	usbd_status status;
 	uint8_t report[GEYSER34_MODE_PACKET_SIZE];
-
-	req.bmRequestType = UT_READ_CLASS_INTERFACE;
-	req.bRequest = UR_GET_REPORT;
-	USETW2(req.wValue, UHID_FEATURE_REPORT, GEYSER34_MODE_REPORT_ID);
-	USETW(req.wIndex, GEYSER34_MODE_INTERFACE);
-	USETW(req.wLength, GEYSER34_MODE_PACKET_SIZE);
+	usbd_status status;
 
 	DPRINTF(sc, UATP_DEBUG_RESET, ("get feature report\n"));
-	status = usbd_do_request(udev, &req, report);
+	status = usbd_get_report(sc->sc_iface0, UHID_FEATURE_REPORT,
+	    GEYSER34_MODE_REPORT_ID, report, sizeof(report));
 	if (status != USBD_NORMAL_COMPLETION) {
 		aprint_error_dev(uatp_dev(sc),
 		    "error reading feature report: %s\n", usbd_errstr(status));
@@ -1334,14 +1327,9 @@ geyser34_enable_raw_mode(struct uatp_softc *sc)
 
 	report[0] = GEYSER34_RAW_MODE;
 
-	req.bmRequestType = UT_WRITE_CLASS_INTERFACE;
-	req.bRequest = UR_SET_REPORT;
-	USETW2(req.wValue, UHID_FEATURE_REPORT, GEYSER34_MODE_REPORT_ID);
-	USETW(req.wIndex, GEYSER34_MODE_INTERFACE);
-	USETW(req.wLength, GEYSER34_MODE_PACKET_SIZE);
-
 	DPRINTF(sc, UATP_DEBUG_RESET, ("set feature report\n"));
-	status = usbd_do_request(udev, &req, report);
+	status = usbd_set_report(sc->sc_iface0, UHID_FEATURE_REPORT,
+	    GEYSER34_MODE_REPORT_ID, report, sizeof(report));
 	if (status != USBD_NORMAL_COMPLETION) {
 		aprint_error_dev(uatp_dev(sc),
 		    "error writing feature report: %s\n", usbd_errstr(status));
@@ -1357,21 +1345,22 @@ geyser34_enable_raw_mode(struct uatp_softc *sc)
 static void
 geyser34_initialize(struct uatp_softc *sc)
 {
+	usbd_status err __diagused;
 
 	DPRINTF(sc, UATP_DEBUG_MISC, ("initializing\n"));
+	err = usbd_device2interface_handle(sc->sc_udev, 0, &sc->sc_iface0);
+	KASSERT(err == 0);	/* always an interface 0 if attached */
 	geyser34_enable_raw_mode(sc);
 	usb_init_task(&sc->sc_reset_task, &geyser34_reset_task, sc, 0);
 }
 
-static int
+static void
 geyser34_finalize(struct uatp_softc *sc)
 {
 
 	DPRINTF(sc, UATP_DEBUG_MISC, ("finalizing\n"));
-	usb_rem_task_wait(sc->sc_hdev.sc_parent->sc_udev, &sc->sc_reset_task,
-	    USB_TASKQ_DRIVER, NULL);
-
-	return 0;
+	usb_rem_task_wait(sc->sc_udev, &sc->sc_reset_task, USB_TASKQ_DRIVER,
+	    NULL);
 }
 
 static void
@@ -1379,8 +1368,7 @@ geyser34_deferred_reset(struct uatp_softc *sc)
 {
 
 	DPRINTF(sc, UATP_DEBUG_RESET, ("deferring reset\n"));
-	usb_add_task(sc->sc_hdev.sc_parent->sc_udev, &sc->sc_reset_task,
-	    USB_TASKQ_DRIVER);
+	usb_add_task(sc->sc_udev, &sc->sc_reset_task, USB_TASKQ_DRIVER);
 }
 
 static void
@@ -1397,15 +1385,15 @@ geyser34_reset_task(void *arg)
 /* Interrupt handler */
 
 static void
-uatp_intr(struct uhidev *addr, void *ibuf, unsigned int len)
+uatp_intr(void *cookie, void *ibuf, unsigned int len)
 {
-	struct uatp_softc *sc = (struct uatp_softc *)addr;
+	struct uatp_softc *sc = cookie;
 	uint8_t *input;
 	int dx, dy, dz, dw;
 	uint32_t buttons;
 
 	DPRINTF(sc, UATP_DEBUG_INTR, ("softc %p, ibuf %p, len %u\n",
-	    addr, ibuf, len));
+	    sc, ibuf, len));
 
 	/*
 	 * Some devices break packets up into chunks, so we accumulate

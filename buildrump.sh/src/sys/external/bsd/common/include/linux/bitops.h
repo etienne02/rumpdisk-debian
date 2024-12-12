@@ -1,4 +1,4 @@
-/*	$NetBSD: bitops.h,v 1.9 2019/12/05 20:03:09 maya Exp $	*/
+/*	$NetBSD: bitops.h,v 1.17 2024/10/02 01:56:02 rin Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -41,6 +41,10 @@
 #include <machine/limits.h>
 
 #include <lib/libkern/libkern.h>
+
+#include <asm/barrier.h>
+
+#include <linux/bits.h>
 
 /*
  * Linux __ffs/__ffs64 is zero-based; zero input is undefined.  Our
@@ -96,18 +100,23 @@ hweight64(uint64_t n)
 	return popcount64(n);
 }
 
-/*
- * XXX Don't define BITS_PER_LONG as sizeof(unsigned long)*CHAR_BIT
- * because that won't work in preprocessor conditionals, where it often
- * turns up.
- */
+static inline int64_t
+sign_extend64(uint64_t x, unsigned n)
+{
+	return (int64_t)(x << (63 - n)) >> (63 - n);
+}
 
-#define BITS_PER_BYTE 8
 #define	BITS_TO_LONGS(n)						\
-	roundup2((n), (sizeof(unsigned long) * CHAR_BIT))
+	howmany((n), (sizeof(unsigned long) * CHAR_BIT))
 
-#define	BIT(n)	((uintmax_t)1 << (n))
-#define	GENMASK(h,l)	__BITS(h,l)
+#define	BITS_PER_TYPE(type)	(sizeof(type) * NBBY)
+#define	BITS_PER_BYTE		NBBY
+#define	BITS_PER_LONG		(__SIZEOF_LONG__ * CHAR_BIT)
+
+#define	BIT(n)		((unsigned long)__BIT(n))
+#define	BIT_ULL(n)	((unsigned long long)__BIT(n))
+#define	GENMASK(h,l)	((unsigned long)__BITS(h,l))
+#define	GENMASK_ULL(h,l)((unsigned long long)__BITS(h,l))
 
 static inline int
 test_bit(unsigned int n, const volatile unsigned long *p)
@@ -271,5 +280,95 @@ find_first_zero_bit(const unsigned long *ptr, unsigned long nbits)
 	for ((BIT) = find_first_bit((PTR), (NBITS));			      \
 	     (BIT) < (NBITS);						      \
 	     (BIT) = find_next_bit((PTR), (NBITS), (BIT) + 1))
+
+#define	for_each_clear_bit(BIT, PTR, NBITS)				      \
+	for ((BIT) = find_first_zero_bit((PTR), (NBITS));		      \
+	     (BIT) < (NBITS);						      \
+	     (BIT) = find_next_zero_bit((PTR), (NBITS), (BIT) + 1))
+
+static inline void
+set_bit(unsigned int bit, volatile unsigned long *ptr)
+{
+	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
+
+	/* no memory barrier */
+	atomic_or_ulong(&ptr[bit / units], (1UL << (bit % units)));
+}
+
+static inline void
+clear_bit(unsigned int bit, volatile unsigned long *ptr)
+{
+	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
+
+	/* no memory barrier */
+	atomic_and_ulong(&ptr[bit / units], ~(1UL << (bit % units)));
+}
+
+static inline void
+clear_bit_unlock(unsigned int bit, volatile unsigned long *ptr)
+{
+	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
+
+	/* store-release */
+	smp_mb__before_atomic();
+	atomic_and_ulong(&ptr[bit / units], ~(1UL << (bit % units)));
+}
+
+static inline void
+change_bit(unsigned int bit, volatile unsigned long *ptr)
+{
+	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
+	volatile unsigned long *const p = &ptr[bit / units];
+	const unsigned long mask = (1UL << (bit % units));
+	unsigned long v;
+
+	/* no memory barrier */
+	do v = *p; while (atomic_cas_ulong(p, v, (v ^ mask)) != v);
+}
+
+static inline int
+test_and_set_bit(unsigned int bit, volatile unsigned long *ptr)
+{
+	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
+	volatile unsigned long *const p = &ptr[bit / units];
+	const unsigned long mask = (1UL << (bit % units));
+	unsigned long v;
+
+	smp_mb__before_atomic();
+	do v = *p; while (atomic_cas_ulong(p, v, (v | mask)) != v);
+	smp_mb__after_atomic();
+
+	return ((v & mask) != 0);
+}
+
+static inline int
+test_and_clear_bit(unsigned int bit, volatile unsigned long *ptr)
+{
+	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
+	volatile unsigned long *const p = &ptr[bit / units];
+	const unsigned long mask = (1UL << (bit % units));
+	unsigned long v;
+
+	smp_mb__before_atomic();
+	do v = *p; while (atomic_cas_ulong(p, v, (v & ~mask)) != v);
+	smp_mb__after_atomic();
+
+	return ((v & mask) != 0);
+}
+
+static inline int
+test_and_change_bit(unsigned int bit, volatile unsigned long *ptr)
+{
+	const unsigned int units = (sizeof(*ptr) * CHAR_BIT);
+	volatile unsigned long *const p = &ptr[bit / units];
+	const unsigned long mask = (1UL << (bit % units));
+	unsigned long v;
+
+	smp_mb__before_atomic();
+	do v = *p; while (atomic_cas_ulong(p, v, (v ^ mask)) != v);
+	smp_mb__after_atomic();
+
+	return ((v & mask) != 0);
+}
 
 #endif  /* _LINUX_BITOPS_H_ */

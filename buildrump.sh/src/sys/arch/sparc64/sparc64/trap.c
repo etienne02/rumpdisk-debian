@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.193 2021/02/02 08:18:42 martin Exp $ */
+/*	$NetBSD: trap.c,v 1.198 2024/05/13 00:12:33 msaitoh Exp $ */
 
 /*
  * Copyright (c) 1996-2002 Eduardo Horvath.  All rights reserved.
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.193 2021/02/02 08:18:42 martin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.198 2024/05/13 00:12:33 msaitoh Exp $");
 
 #include "opt_ddb.h"
 #include "opt_multiprocessor.h"
@@ -342,7 +342,7 @@ const char *trap_type[] = {
 	T, T, T, T, T, T, T, T, /* 128..12f */
 	T, T,			/* 130..131 */
 	"get condition codes",	/* 132 */
-	"set condision codes",	/* 133 */
+	"set condition codes",	/* 133 */
 	T, T, T, T,		/* 134..137 */
 	T, T, T, T, T, T, T, T, /* 138..13f */
 	T, T, T, T, T, T, T, T, /* 140..147 */
@@ -352,7 +352,7 @@ const char *trap_type[] = {
 	T, T, T, T,		/* 160..163 */
 	"SVID syscall64",	/* 164 */
 	"SPARC Intl syscall64",	/* 165 */
-	"OS vedor spec syscall",/* 166 */
+	"OS vendor spec syscall",	/* 166 */
 	"HW OEM syscall",	/* 167 */
 	"ret from deferred trap",	/* 168 */
 };
@@ -520,7 +520,7 @@ trap(struct trapframe64 *tf, unsigned int type, vaddr_t pc, long tstate)
 #endif
 		/*
 		 * The kernel needs to use FPU registers for block
-		 * load/store.  If we trap in priviliged code, save
+		 * load/store.  If we trap in privileged code, save
 		 * the FPU state if there is any and enable the FPU.
 		 *
 		 * We rely on the kernel code properly enabling the FPU
@@ -561,12 +561,16 @@ trap(struct trapframe64 *tf, unsigned int type, vaddr_t pc, long tstate)
 		} else if (type == T_ECCERR) {
 			ecc_corrected_error(type, pc);
 			return;
+		} else if (type == T_FAST_ECC_ERROR) {
+			/* Disable D$, clear error, enable D$, continue. */
+			membar_Sync();
+			sp_blast_dcache_disabled(dcache_size, dcache_line_size);
+			return;
 		}
 		goto dopanic;
 	}
 	l = curlwp;
 	p = l->l_proc;
-	LWP_CACHE_CREDS(l, p);
 	sticks = p->p_sticks;
 	pcb = lwp_getpcb(l);
 	l->l_md.md_tf = tf;	/* for ptrace/signals */
@@ -743,20 +747,8 @@ dopanic:
 		  
 			printf("Alignment error: pid=%d.%d comm=%s pc=%lx\n",
 			       l->l_proc->p_pid, l->l_lid, l->l_proc->p_comm, pc);
-			paddr_t mmufsa_ift_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, ift);
-			paddr_t mmufsa_ifa_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, ifa);
-			paddr_t mmufsa_ifc_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, ifc);
-			paddr_t mmufsa_dft_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, dft);
 			paddr_t mmufsa_dfa_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, dfa);
 			paddr_t mmufsa_dfc_addr = cpus->ci_mmufsa + offsetof(struct mmufsa, dfc);
-			int64_t ift = ldxa(mmufsa_ift_addr, ASI_PHYS_CACHED);
-			printf("ift = %016lx\n", ift);
-			int64_t ifa = ldxa(mmufsa_ifa_addr, ASI_PHYS_CACHED);
-			printf("ifa = %016lx\n", ifa);
-			int64_t ifc = ldxa(mmufsa_ifc_addr, ASI_PHYS_CACHED);
-			printf("ifc = %016lx\n", ifc);
-			int64_t dft = ldxa(mmufsa_dft_addr, ASI_PHYS_CACHED);
-			printf("dft = %016lx\n", dft);
 			int64_t dfa = ldxa(mmufsa_dfa_addr, ASI_PHYS_CACHED);
 			printf("dfa = %016lx\n", dfa);
 			int64_t dfc = ldxa(mmufsa_dfc_addr, ASI_PHYS_CACHED);
@@ -1088,7 +1080,6 @@ data_access_fault(struct trapframe64 *tf, unsigned int type, vaddr_t pc,
 	p = l->l_proc;
 	pcb = lwp_getpcb(l);
 	onfault = (vaddr_t)pcb->pcb_onfault;
-	LWP_CACHE_CREDS(l, p);
 	sticks = p->p_sticks;
 	tstate = tf->tf_tstate;
 
@@ -1368,7 +1359,6 @@ data_access_error(struct trapframe64 *tf, unsigned int type, vaddr_t afva,
 
 	l = curlwp;
 	pcb = lwp_getpcb(l);
-	LWP_CACHE_CREDS(l, l->l_proc);
 	sticks = l->l_proc->p_sticks;
 
 	printf("data error type %x sfsr=%lx sfva=%lx afsr=%lx afva=%lx tf=%p\n",
@@ -1396,7 +1386,7 @@ data_access_error(struct trapframe64 *tf, unsigned int type, vaddr_t afva,
 		}
 
 		/*
-		 * If this was a priviliged error but not a probe, we
+		 * If this was a privileged error but not a probe, we
 		 * cannot recover, so panic.
 		 */
 		if (afsr & ASFR_PRIV) {
@@ -1496,7 +1486,6 @@ text_access_fault(struct trapframe64 *tf, unsigned int type, vaddr_t pc,
 	curcpu()->ci_data.cpu_ntrap++;
 	l = curlwp;
 	p = l->l_proc;
-	LWP_CACHE_CREDS(l, p);
 	sticks = p->p_sticks;
 	tstate = tf->tf_tstate;
 	va = trunc_page(pc);
@@ -1615,7 +1604,6 @@ text_access_error(struct trapframe64 *tf, unsigned int type, vaddr_t pc,
 	curcpu()->ci_data.cpu_ntrap++;
 	l = curlwp;
 	p = l->l_proc;
-	LWP_CACHE_CREDS(l, p);
 	sticks = p->p_sticks;
 
 	tstate = tf->tf_tstate;

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -326,18 +326,20 @@ UtDisplaySupportedTables (
 
 
     printf ("\nACPI tables supported by iASL version %8.8X:\n"
-        "  (Compiler, Disassembler, Template Generator)\n\n",
+        "  (Compiler, Disassembler, Template Generator)\n",
         ACPI_CA_VERSION);
 
     /* All ACPI tables with the common table header */
 
-    printf ("\n  Supported ACPI tables:\n");
+    printf ("\nKnown/Supported ACPI tables:\n");
     for (TableData = AcpiGbl_SupportedTables, i = 1;
          TableData->Signature; TableData++, i++)
     {
         printf ("%8u) %s    %s\n", i,
             TableData->Signature, TableData->Description);
     }
+
+    printf ("\nTotal %u ACPI tables\n\n", i-1);
 }
 
 
@@ -500,7 +502,7 @@ UtSetParseOpName (
  *
  * FUNCTION:    UtDisplayOneSummary
  *
- * PARAMETERS:  FileID              - ID of outpout file
+ * PARAMETERS:  FileID              - ID of output file
  *
  * RETURN:      None
  *
@@ -528,7 +530,7 @@ UtDisplayOneSummary (
         /* Compiler name and version number */
 
         FlPrintFile (FileId, "%s version %X [%s]\n\n",
-            ASL_COMPILER_NAME, (UINT32) ACPI_CA_VERSION, "2017-01-19");
+            ASL_COMPILER_NAME, (UINT32) ACPI_CA_VERSION, ACPI_DATE);
     }
 
     /* Summary of main input and output files */
@@ -623,7 +625,7 @@ UtDisplayOneSummary (
  *
  * FUNCTION:    UtDisplayErrorSummary
  *
- * PARAMETERS:  FileID              - ID of outpout file
+ * PARAMETERS:  FileID              - ID of output file
  *
  * RETURN:      None
  *
@@ -690,7 +692,7 @@ UtDisplayErrorSummary (
  *
  * FUNCTION:    UtDisplaySummary
  *
- * PARAMETERS:  FileID              - ID of outpout file
+ * PARAMETERS:  FileID              - ID of output file
  *
  * RETURN:      None
  *

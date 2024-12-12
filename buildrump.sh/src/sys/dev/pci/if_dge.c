@@ -1,4 +1,4 @@
-/*	$NetBSD: if_dge.c,v 1.60 2021/08/09 21:08:06 andvar Exp $ */
+/*	$NetBSD: if_dge.c,v 1.65 2024/07/05 04:31:51 rin Exp $ */
 
 /*
  * Copyright (c) 2004, SUNET, Swedish University Computer Network.
@@ -80,7 +80,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_dge.c,v 1.60 2021/08/09 21:08:06 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_dge.c,v 1.65 2024/07/05 04:31:51 rin Exp $");
 
 
 
@@ -177,7 +177,7 @@ int	dge_debug = 0;
 #define DGE_RXSPACE		10
 #define DGE_PREVRX(x)		(((x) - DGE_RXSPACE) & DGE_NRXDESC_MASK)
 /*
- * Receive descriptor fetch threshholds. These are values recommended
+ * Receive descriptor fetch thresholds. These are values recommended
  * by Intel, do not touch them unless you know what you are doing.
  */
 #define RXDCTL_PTHRESH_VAL	128
@@ -929,7 +929,7 @@ dge_attach(device_t parent, device_t self, void *aux)
 	    ETHERCAP_JUMBO_MTU | ETHERCAP_VLAN_MTU;
 
 	/*
-	 * We can perform TCPv4 and UDPv4 checkums in-bound.
+	 * We can perform TCPv4 and UDPv4 checksums in-bound.
 	 */
 	ifp->if_capabilities |=
 	    IFCAP_CSUM_IPv4_Tx | IFCAP_CSUM_IPv4_Rx |
@@ -1453,7 +1453,7 @@ dge_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		else if ((error = ifioctl_common(ifp, cmd, data)) != ENETRESET)
 			break;
 		else if (ifp->if_flags & IFF_UP)
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		else
 			error = 0;
 		break;
@@ -1488,7 +1488,7 @@ dge_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		error = 0;
 
 		if (cmd == SIOCSIFCAP)
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		else if (cmd != SIOCADDMULTI && cmd != SIOCDELMULTI)
 			;
 		else if (ifp->if_flags & IFF_RUNNING) {
@@ -1708,8 +1708,7 @@ dge_rxintr(struct dge_softc *sc)
 			DGE_INIT_RXDESC(sc, i);
 			if ((status & RDESC_STS_EOP) == 0)
 				sc->sc_rxdiscard = 1;
-			if (sc->sc_rxhead != NULL)
-				m_freem(sc->sc_rxhead);
+			m_freem(sc->sc_rxhead);
 			DGE_RXCHAIN_RESET(sc);
 			DPRINTF(DGE_DEBUG_RX,
 			    ("%s: RX: Rx buffer allocation failed, "
@@ -2120,7 +2119,7 @@ dge_stop(struct ifnet *ifp, int disable)
 /*
  * dge_add_rxbuf:
  *
- *	Add a receive buffer to the indiciated descriptor.
+ *	Add a receive buffer to the indicated descriptor.
  */
 static int
 dge_add_rxbuf(struct dge_softc *sc, int idx)

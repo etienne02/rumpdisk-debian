@@ -1,4 +1,4 @@
-/*	$NetBSD: ulfs_lookup.c,v 1.46 2020/09/05 02:55:38 riastradh Exp $	*/
+/*	$NetBSD: ulfs_lookup.c,v 1.48 2024/09/08 09:36:52 rillig Exp $	*/
 /*  from NetBSD: ufs_lookup.c,v 1.135 2015/07/11 11:04:48 mlelstv  */
 
 /*
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ulfs_lookup.c,v 1.46 2020/09/05 02:55:38 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ulfs_lookup.c,v 1.48 2024/09/08 09:36:52 rillig Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_lfs.h"
@@ -91,7 +91,7 @@ int	lfs_dirchk = 0;
  * exists, lookup returns both the target and its parent directory locked.
  * When creating or renaming and LOCKPARENT is specified, the target may
  * not be ".".  When deleting and LOCKPARENT is specified, the target may
- * be "."., but the caller must check to ensure it does an vrele and vput
+ * be ".", but the caller must check to ensure it does a vrele and vput
  * instead of two vputs.
  *
  * Overall outline of ulfs_lookup:
@@ -162,7 +162,7 @@ ulfs_lookup(void *v)
 	endsearch = 0; /* silence compiler warning */
 
 	/*
-	 * Check accessiblity of directory.
+	 * Check accessibility of directory.
 	 */
 	if ((error = VOP_ACCESS(vdp, VEXEC, cred)) != 0)
 		return (error);

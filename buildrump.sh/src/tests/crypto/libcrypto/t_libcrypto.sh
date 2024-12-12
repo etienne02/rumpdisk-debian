@@ -1,4 +1,4 @@
-# $NetBSD: t_libcrypto.sh,v 1.7 2020/04/11 16:55:33 gson Exp $
+# $NetBSD: t_libcrypto.sh,v 1.10 2024/04/28 07:27:40 rillig Exp $
 #
 # Copyright (c) 2008, 2009, 2010 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -32,14 +32,15 @@ engine_head()
 }
 engine_body()
 {
-	atf_check -o ignore -e ignore "$(atf_get_srcdir)/h_enginetest"
+	atf_check -o ignore -e ignore "$(atf_get_srcdir)/h_enginetest" \
+	    "$(atf_get_srcdir)/d_server.pem"
 }
 
 atf_test_case bn
 bn_head()
 {
 	atf_set "descr" "Checks BIGNUM library"
-	atf_set "timeout" "720"
+	atf_set "timeout" "7200"
 }
 bn_body()
 {
@@ -68,11 +69,17 @@ threads_head()
 }
 threads_body()
 {
-	$(atf_get_srcdir)/h_threadstest \
-	    -cert $(atf_get_srcdir)/d_server.pem \
-	    -ccert $(atf_get_srcdir)/d_client.pem \
-	    2>&1 | tee out
-	atf_check -s eq:1 -o empty -e empty grep :error: out
+	local s=$(atf_get_srcdir)
+	if [ -f "$s/rsakey.pem" ]; then
+	    atf_check -o ignore -e ignore "$s/h_threadstest" \
+		-config "$s/default.cnf" "$s"
+	else
+		"$s/h_threadstest" \
+		    -cert "$s/d_server.pem" \
+		    -ccert "$s/d_client.pem" \
+		2>&1 | tee out
+		atf_check -s exit:1 -o empty -e empty grep :error: out
+	fi
 }
 
 atf_init_test_cases()

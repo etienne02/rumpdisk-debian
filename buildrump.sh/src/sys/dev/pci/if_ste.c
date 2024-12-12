@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ste.c,v 1.62 2020/03/15 22:20:31 thorpej Exp $	*/
+/*	$NetBSD: if_ste.c,v 1.66 2024/06/29 12:11:12 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -35,14 +35,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ste.c,v 1.62 2020/03/15 22:20:31 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ste.c,v 1.66 2024/06/29 12:11:12 riastradh Exp $");
 
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -691,7 +690,7 @@ ste_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we
+		 * didn't fit in the allotted number of segments, or we
 		 * were short on resources.  In this case, we'll copy
 		 * and try again.
 		 */
@@ -722,6 +721,7 @@ ste_start(struct ifnet *ifp)
 				printf("%s: unable to load Tx buffer, "
 				    "error = %d\n", device_xname(sc->sc_dev),
 				    error);
+				m_freem(m);
 				break;
 			}
 		}
@@ -1155,22 +1155,22 @@ ste_stats_update(struct ste_softc *sc)
 
 	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 
-	if_statadd_ref(nsr, if_opackets,
+	if_statadd_ref(ifp, nsr, if_opackets,
 	    (u_int) bus_space_read_2(st, sh, STE_FramesTransmittedOK));
 
 	(void) bus_space_read_2(st, sh, STE_FramesReceivedOK);
 
-	if_statadd_ref(nsr, if_collisions,
+	if_statadd_ref(ifp, nsr, if_collisions,
 	    (u_int) bus_space_read_1(st, sh, STE_LateCollisions) +
 	    (u_int) bus_space_read_1(st, sh, STE_MultipleColFrames) +
 	    (u_int) bus_space_read_1(st, sh, STE_SingleColFrames));
 
 	(void) bus_space_read_1(st, sh, STE_FramesWDeferredXmt);
 
-	if_statadd_ref(nsr, if_ierrors,
+	if_statadd_ref(ifp, nsr, if_ierrors,
 	    (u_int) bus_space_read_1(st, sh, STE_FramesLostRxErrors));
 
-	if_statadd_ref(nsr, if_oerrors,
+	if_statadd_ref(ifp, nsr, if_oerrors,
 	    (u_int) bus_space_read_1(st, sh, STE_FramesWExDeferral) +
 	    (u_int) bus_space_read_1(st, sh, STE_FramesXbortXSColls) +
 	    bus_space_read_1(st, sh, STE_CarrierSenseErrors));

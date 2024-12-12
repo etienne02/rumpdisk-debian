@@ -1,4 +1,4 @@
-/*	$NetBSD: yds.c,v 1.68 2021/08/07 16:19:14 thorpej Exp $	*/
+/*	$NetBSD: yds.c,v 1.70 2024/02/09 22:08:36 andvar Exp $	*/
 
 /*
  * Copyright (c) 2000, 2001 Kazuki Sakamoto and Minoura Makoto.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: yds.c,v 1.68 2021/08/07 16:19:14 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: yds.c,v 1.70 2024/02/09 22:08:36 andvar Exp $");
 
 #include "mpu.h"
 
@@ -592,7 +592,8 @@ yds_configure_legacy(device_t self)
 
 			aa.type = AUDIODEV_TYPE_OPL;
 			aa.hwif = aa.hdl = NULL;
-			dev = config_found(self, &aa, audioprint, CFARGS_NONE);
+			dev = config_found(self, &aa, audioprint,
+			    CFARGS(.iattr = "yds"));
 			if (dev == 0)
 				bus_space_unmap(sc->sc_opl_iot,
 						sc->sc_opl_ioh, 4);
@@ -628,7 +629,8 @@ yds_configure_legacy(device_t self)
 
 			aa.type = AUDIODEV_TYPE_MPU;
 			aa.hwif = aa.hdl = NULL;
-			dev = config_found(self, &aa, audioprint, CFARGS_NONE);
+			dev = config_found(self, &aa, audioprint,
+			    CFARGS(.iattr = "yds"));
 			if (dev == 0)
 				bus_space_unmap(sc->sc_mpu_iot,
 						sc->sc_mpu_ioh, 2);
@@ -1006,7 +1008,7 @@ yds_write_codec(void *sc_, uint8_t reg, uint16_t data)
 }
 
 /*
- * XXX: Must handle the secondary differntly!!
+ * XXX: Must handle the secondary differently!!
  */
 static int
 yds_reset_codec(void *sc_)

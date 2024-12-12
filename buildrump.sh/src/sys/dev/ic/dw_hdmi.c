@@ -1,4 +1,4 @@
-/* $NetBSD: dw_hdmi.c,v 1.7 2019/12/22 23:23:32 thorpej Exp $ */
+/* $NetBSD: dw_hdmi.c,v 1.12 2024/02/09 16:56:23 skrll Exp $ */
 
 /*-
  * Copyright (c) 2019 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,30 +27,32 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: dw_hdmi.c,v 1.7 2019/12/22 23:23:32 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: dw_hdmi.c,v 1.12 2024/02/09 16:56:23 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/intr.h>
-#include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/conf.h>
+#include <sys/systm.h>
 
 #include <dev/ic/dw_hdmi.h>
 
-#include <dev/i2c/i2cvar.h>
-#include <dev/i2c/ddcvar.h>
 #include <dev/i2c/ddcreg.h>
-#include <dev/videomode/videomode.h>
+#include <dev/i2c/ddcvar.h>
+#include <dev/i2c/i2cvar.h>
 #include <dev/videomode/edidvar.h>
+#include <dev/videomode/videomode.h>
 
 #include <dev/audio/audio_dai.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_probe_helper.h>
 
 #define	HDMI_DESIGN_ID		0x0000
 #define	HDMI_REVISION_ID	0x0001
@@ -529,7 +531,7 @@ dwhdmi_audio_init(struct dwhdmi_softc *sc)
 	val &= ~HDMI_AUD_CONF0_I2S_IN_EN;
 	val |= __SHIFTIN(1, HDMI_AUD_CONF0_I2S_IN_EN);	/* XXX 2ch */
 	dwhdmi_write(sc, HDMI_AUD_CONF0, val);
-	
+
 	val = __SHIFTIN(16, HDMI_AUD_CONF1_I2S_WIDTH);
 	dwhdmi_write(sc, HDMI_AUD_CONF1, val);
 
@@ -569,6 +571,9 @@ static const struct drm_connector_funcs dwhdmi_connector_funcs = {
 	.detect = dwhdmi_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = dwhdmi_connector_destroy,
+	.reset = drm_atomic_helper_connector_reset,
+	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
+	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
 static int
@@ -601,37 +606,15 @@ dwhdmi_connector_get_modes(struct drm_connector *connector)
 		dwhdmi_connector->monitor_audio = false;
 	}
 
-	drm_mode_connector_update_edid_property(connector, pedid);
+	drm_connector_update_edid_property(connector, pedid);
 	if (pedid == NULL)
 		return 0;
 
-	error = drm_add_edid_modes(connector, pedid);
-	drm_edid_to_eld(connector, pedid);
-
-	return error;
-}
-
-static struct drm_encoder *
-dwhdmi_connector_best_encoder(struct drm_connector *connector)
-{
-	int enc_id = connector->encoder_ids[0];
-	struct drm_mode_object *obj;
-	struct drm_encoder *encoder = NULL;
-
-	if (enc_id) {
-		obj = drm_mode_object_find(connector->dev, enc_id,
-		    DRM_MODE_OBJECT_ENCODER);
-		if (obj == NULL)
-			return NULL;
-		encoder = obj_to_encoder(obj);
-	}
-
-	return encoder;
+	return drm_add_edid_modes(connector, pedid);
 }
 
 static const struct drm_connector_helper_funcs dwhdmi_connector_helper_funcs = {
 	.get_modes = dwhdmi_connector_get_modes,
-	.best_encoder = dwhdmi_connector_best_encoder,
 };
 
 static int
@@ -652,7 +635,7 @@ dwhdmi_bridge_attach(struct drm_bridge *bridge)
 	    DRM_MODE_CONNECTOR_HDMIA);
 	drm_connector_helper_add(connector, &dwhdmi_connector_helper_funcs);
 
-	error = drm_mode_connector_attach_encoder(connector, bridge->encoder);
+	error = drm_connector_attach_encoder(connector, bridge->encoder);
 	if (error != 0)
 		return error;
 
@@ -700,7 +683,8 @@ dwhdmi_bridge_post_disable(struct drm_bridge *bridge)
 
 static void
 dwhdmi_bridge_mode_set(struct drm_bridge *bridge,
-    struct drm_display_mode *mode, struct drm_display_mode *adjusted_mode)
+    const struct drm_display_mode *mode,
+    const struct drm_display_mode *adjusted_mode)
 {
 	struct dwhdmi_softc * const sc = bridge->driver_private;
 
@@ -745,7 +729,7 @@ dwhdmi_audio_swvol_codec(audio_filter_arg_t *arg)
 {
 	struct dwhdmi_softc * const sc = arg->context;
 	const aint_t *src;
-	aint_t *dst;
+	int16_t *dst;
 	u_int sample_count;
 	u_int i;
 
@@ -917,11 +901,9 @@ dwhdmi_bind(struct dwhdmi_softc *sc, struct drm_encoder *encoder)
 	sc->sc_bridge.funcs = &dwhdmi_bridge_funcs;
 	sc->sc_bridge.encoder = encoder;
 
-	error = drm_bridge_attach(encoder->dev, &sc->sc_bridge);
+	error = drm_bridge_attach(encoder, &sc->sc_bridge, NULL);
 	if (error != 0)
 		return EIO;
-
-	encoder->bridge = &sc->sc_bridge;
 
 	return 0;
 }

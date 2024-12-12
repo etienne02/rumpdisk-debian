@@ -1,4 +1,4 @@
-/* $NetBSD: video.c,v 1.42 2021/08/09 21:38:04 andvar Exp $ */
+/* $NetBSD: video.c,v 1.45 2022/03/03 06:23:25 riastradh Exp $ */
 
 /*
  * Copyright (c) 2008 Patrick Mahoney <pat@polycrystal.org>
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: video.c,v 1.42 2021/08/09 21:38:04 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: video.c,v 1.45 2022/03/03 06:23:25 riastradh Exp $");
 
 #include "video.h"
 #if NVIDEO > 0
@@ -136,7 +136,7 @@ struct video_stream {
 
 	int			vs_frameno; /* toggles between 0 and 1,
 					     * or -1 if new */
-	uint32_t		vs_sequence; /* absoulte frame/sample number in
+	uint32_t		vs_sequence; /* absolute frame/sample number in
 					      * sequence, wraps around */
 	bool			vs_drop; /* drop payloads from current
 					  * frameno? */
@@ -351,7 +351,7 @@ video_attach(device_t parent, device_t self, void *aux)
 	sc->sc_dev = self;
 	sc->hw_dev = parent;
 	sc->hw_if = args->hw_if;
-	sc->hw_softc = device_private(parent);
+	sc->hw_softc = args->hw_softc;
 
 	sc->sc_open = 0;
 	sc->sc_refcnt = 0;
@@ -428,11 +428,12 @@ video_print(void *aux, const char *pnp)
  * gets probed/attached to the hardware driver.
  */
 device_t
-video_attach_mi(const struct video_hw_if *hw_if, device_t parent)
+video_attach_mi(const struct video_hw_if *hw_if, device_t parent, void *sc)
 {
 	struct video_attach_args args;
 
 	args.hw_if = hw_if;
+	args.hw_softc = sc;
 	return config_found(parent, &args, video_print,
 	    CFARGS(.iattr = "videobus"));
 }
@@ -2378,7 +2379,7 @@ videommap(dev_t dev, off_t off, int prot)
 }
 
 
-/* Allocates buffers and initizlizes some fields.  The format field
+/* Allocates buffers and initializes some fields.  The format field
  * must already have been initialized. */
 void
 video_stream_init(struct video_stream *vs)

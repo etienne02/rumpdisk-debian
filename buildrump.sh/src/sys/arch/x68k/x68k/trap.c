@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.c,v 1.109 2019/11/21 19:24:02 ad Exp $	*/
+/*	$NetBSD: trap.c,v 1.114 2024/01/20 00:15:33 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.109 2019/11/21 19:24:02 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: trap.c,v 1.114 2024/01/20 00:15:33 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -85,14 +85,12 @@ void	trap(struct frame *, int, u_int, u_int);
 
 #if defined(M68040) || defined(M68060)
 #ifdef DEBUG
-static void dumpssw(u_short);
-static void dumpwb(int, u_short, u_int, u_int);
+void dumpssw(u_short);
+void dumpwb(int, u_short, u_int, u_int);
 #endif
 #endif
 
 static inline void userret(struct lwp *, struct frame *, u_quad_t, u_int, int);
-
-int	astpending;
 
 const char *trap_type[] = {
 	"Bus error",
@@ -275,7 +273,6 @@ trap(struct frame *fp, int type, unsigned code, unsigned v)
 		type |= T_USER;
 		sticks = p->p_sticks;
 		l->l_md.md_regs = fp->f_regs;
-		LWP_CACHE_CREDS(l, p);
 	}
 	switch (type) {
 
@@ -306,7 +303,10 @@ trap(struct frame *fp, int type, unsigned code, unsigned v)
 			printf("trap during panic!\n");
 #ifdef DEBUG
 			/* XXX should be a machine-dependent hook */
-			printf("(press a key)\n"); (void)cngetc();
+			printf("(press a key)\n");
+			cnpollc(1);
+			(void)cngetc();
+			cnpollc(0);
 #endif
 		}
 		regdump((struct trapframe *)fp, 128);
@@ -542,8 +542,8 @@ trap(struct frame *fp, int type, unsigned code, unsigned v)
 #endif
 		/*
 		 * It is only a kernel address space fault iff:
-		 * 	1. (type & T_USER) == 0  and
-		 * 	2. pcb_onfault not set or
+		 *	1. (type & T_USER) == 0  and
+		 *	2. pcb_onfault not set or
 		 *	3. pcb_onfault set but supervisor space data fault
 		 * The last can occur during an exec() copyin where the
 		 * argument space is lazy-allocated.

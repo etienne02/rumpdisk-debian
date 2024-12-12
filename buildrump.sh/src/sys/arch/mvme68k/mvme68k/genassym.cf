@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.38 2020/02/20 08:27:39 skrll Exp $
+#	$NetBSD: genassym.cf,v 1.41 2024/01/16 01:26:34 thorpej Exp $
 
 #
 # Copyright (c) 1982, 1990, 1993
@@ -42,6 +42,7 @@ include <sys/syscall.h>
 include <uvm/uvm_extern.h>
 
 include <machine/cpu.h>
+include <machine/fcode.h>
 include <machine/psl.h>
 include <machine/pcb.h>
 include <machine/prom.h>
@@ -65,6 +66,8 @@ endif
 
 # MMU options
 define	M68K_MMU_MOTOROLA	1
+
+define	__HAVE_M68K_INTR_VECTORED	1
 
 # values for mmutype
 define	MMU_68060		MMU_68060
@@ -112,6 +115,12 @@ define	MVMEPROM_GETBRDID	MVMEPROM_GETBRDID
 define	MVMEPROM_OUTSTRCRLF	MVMEPROM_OUTSTRCRLF
 define	MVMEPROM_BRDID_SIZE	sizeof(struct mvmeprom_brdid)
 define	MVMEPROM_BRDID_MODEL_OFFSET	offsetof(struct mvmeprom_brdid, model)
+
+# MMU configuration constants (from pmap.h)
+export	MMU51_SRP_BITS
+export	MMU51_CRP_BITS
+export	MMU51_TCR_BITS
+export	MMU40_TCR_BITS
 
 # lwp & proc fields and values
 define	L_PCB			offsetof(struct lwp, l_addr)

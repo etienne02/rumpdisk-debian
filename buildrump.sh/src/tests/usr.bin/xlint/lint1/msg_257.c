@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_257.c,v 1.3 2021/08/27 20:49:25 rillig Exp $	*/
+/*	$NetBSD: msg_257.c,v 1.8 2023/08/02 18:51:25 rillig Exp $	*/
 # 3 "msg_257.c"
 
 // Test for message: extra characters in lint comment [257]
+
+/* lint1-extra-flags: -X 351 */
 
 void take(const void *);
 
@@ -14,7 +16,7 @@ void take(const void *);
 /* PRINTFLIKE 7 */
 void
 my_printf(const char *fmt)
-/* expect+1: warning: argument number mismatch with directive: */
+/* expect+1: warning: parameter number mismatch in comment ** PRINTFLIKE ** [283] */
 {
 	take(fmt);
 }

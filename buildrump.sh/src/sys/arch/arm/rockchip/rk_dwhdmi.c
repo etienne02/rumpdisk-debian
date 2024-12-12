@@ -1,4 +1,4 @@
-/* $NetBSD: rk_dwhdmi.c,v 1.5 2021/01/27 03:10:19 thorpej Exp $ */
+/* $NetBSD: rk_dwhdmi.c,v 1.8 2023/04/11 08:40:19 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2019 Jared D. McNeill <jmcneill@invisible.ca>
@@ -27,24 +27,24 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rk_dwhdmi.c,v 1.5 2021/01/27 03:10:19 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rk_dwhdmi.c,v 1.8 2023/04/11 08:40:19 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/conf.h>
 #include <sys/device.h>
 #include <sys/intr.h>
-#include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/conf.h>
+#include <sys/systm.h>
 
-#include <drm/drmP.h>
-#include <drm/drm_crtc_helper.h>
-
-#include <dev/fdt/fdtvar.h>
 #include <dev/fdt/fdt_port.h>
+#include <dev/fdt/fdtvar.h>
 #include <dev/fdt/syscon.h>
 
 #include <dev/ic/dw_hdmi.h>
+
+#include <drm/drm_drv.h>
+#include <drm/drm_crtc_helper.h>
 
 #define	RK3399_GRF_SOC_CON20		0x6250
 #define	 HDMI_LCDC_SEL			__BIT(6)
@@ -106,31 +106,8 @@ rk_dwhdmi_select_input(struct rk_dwhdmi_softc *sc, u_int crtc_index)
 	syscon_unlock(sc->sc_grf);
 }
 
-static bool
-rk_dwhdmi_encoder_mode_fixup(struct drm_encoder *encoder,
-    const struct drm_display_mode *mode, struct drm_display_mode *adjusted_mode)
-{
-	return true;
-}
-
-static void
-rk_dwhdmi_encoder_mode_set(struct drm_encoder *encoder,
-    struct drm_display_mode *mode, struct drm_display_mode *adjusted)
-{
-}
-
 static void
 rk_dwhdmi_encoder_enable(struct drm_encoder *encoder)
-{
-}
-
-static void
-rk_dwhdmi_encoder_disable(struct drm_encoder *encoder)
-{
-}
-
-static void
-rk_dwhdmi_encoder_prepare(struct drm_encoder *encoder)
 {
 	struct rk_dwhdmi_softc * const sc = to_rk_dwhdmi_encoder(encoder);
 	const u_int crtc_index = drm_crtc_index(encoder->crtc);
@@ -138,22 +115,12 @@ rk_dwhdmi_encoder_prepare(struct drm_encoder *encoder)
 	rk_dwhdmi_select_input(sc, crtc_index);
 }
 
-static void
-rk_dwhdmi_encoder_commit(struct drm_encoder *encoder)
-{
-}
-
 static const struct drm_encoder_funcs rk_dwhdmi_encoder_funcs = {
 	.destroy = drm_encoder_cleanup,
 };
 
 static const struct drm_encoder_helper_funcs rk_dwhdmi_encoder_helper_funcs = {
-	.prepare = rk_dwhdmi_encoder_prepare,
-	.mode_fixup = rk_dwhdmi_encoder_mode_fixup,
-	.mode_set = rk_dwhdmi_encoder_mode_set,
 	.enable = rk_dwhdmi_encoder_enable,
-	.disable = rk_dwhdmi_encoder_disable,
-	.commit = rk_dwhdmi_encoder_commit,
 };
 
 static int
@@ -189,7 +156,7 @@ rk_dwhdmi_ep_activate(device_t dev, struct fdt_endpoint *ep, bool activate)
 
 	sc->sc_encoder.possible_crtcs = 3; // 1U << drm_crtc_index(crtc); /* XXX */
 	drm_encoder_init(crtc->dev, &sc->sc_encoder, &rk_dwhdmi_encoder_funcs,
-	    DRM_MODE_ENCODER_TMDS);
+	    DRM_MODE_ENCODER_TMDS, NULL);
 	drm_encoder_helper_add(&sc->sc_encoder, &rk_dwhdmi_encoder_helper_funcs);
 
 	sc->sc_base.sc_connector.base.connector_type = DRM_MODE_CONNECTOR_HDMIA;
@@ -230,7 +197,7 @@ rk_dwhdmi_enable(struct dwhdmi_softc *dsc)
 
 static void
 rk_dwhdmi_mode_set(struct dwhdmi_softc *dsc,
-    struct drm_display_mode *mode, struct drm_display_mode *adjusted_mode)
+    const struct drm_display_mode *mode, const struct drm_display_mode *adjusted_mode)
 {
 	struct rk_dwhdmi_softc * const sc = to_rk_dwhdmi_softc(dsc);
 	int error;

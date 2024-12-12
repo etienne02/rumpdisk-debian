@@ -8,7 +8,7 @@ NoEcho('
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -86,6 +86,7 @@ ResourceMacroTerm
     | DMATerm                       {}
     | DWordIOTerm                   {}
     | DWordMemoryTerm               {}
+    | DWordPccTerm                  {}
     | DWordSpaceTerm                {}
     | EndDependentFnTerm            {}
     | ExtendedIOTerm                {}
@@ -106,11 +107,13 @@ ResourceMacroTerm
     | Memory32Term                  {}
     | PinConfigTerm                 {}
     | PinFunctionTerm               {}
+    | ClockInputTerm                {}
     | PinGroupTerm                  {}
     | PinGroupConfigTerm            {}
     | PinGroupFunctionTerm          {}
     | QWordIOTerm                   {}
     | QWordMemoryTerm               {}
+    | QWordPccTerm                  {}
     | QWordSpaceTerm                {}
     | RegisterTerm                  {}
     | SpiSerialBusTerm              {}
@@ -123,6 +126,7 @@ ResourceMacroTerm
     | VendorShortTerm               {}
     | WordBusNumberTerm             {}
     | WordIOTerm                    {}
+    | WordPccTerm                   {}
     | WordSpaceTerm                 {}
     ;
 
@@ -206,6 +210,20 @@ DWordMemoryTerm
     | PARSEOP_DWORDMEMORY
         PARSEOP_OPEN_PAREN
         error PARSEOP_CLOSE_PAREN   {$$ = AslDoError(); yyclearin;}
+    ;
+
+DWordPccTerm
+    : PARSEOP_DWORDPCC
+        PARSEOP_OPEN_PAREN           {$<n>$ = TrCreateLeafOp (PARSEOP_DWORDPCC);}
+        ByteConstExpr
+        OptionalByteConstExpr
+        OptionalStringData
+        OptionalNameString_Last
+        PARSEOP_CLOSE_PAREN                         {$$ = TrLinkOpChildren ($<n>3,4,
+                                                        $4,$5,$6,$7);}
+    | PARSEOP_DWORDPCC
+        PARSEOP_OPEN_PAREN
+        error PARSEOP_CLOSE_PAREN                   {$$ = AslDoError(); yyclearin;}
     ;
 
 DWordSpaceTerm
@@ -558,6 +576,21 @@ PinFunctionTerm
         error PARSEOP_CLOSE_PAREN   {$$ = AslDoError(); yyclearin;}
     ;
 
+ClockInputTerm
+    : PARSEOP_CLOCKINPUT
+        PARSEOP_OPEN_PAREN          {$<n>$ = TrCreateLeafOp (PARSEOP_CLOCKINPUT);}
+        DWordConstExpr              /* 04: FrequencyNumerator */
+        ',' WordConstExpr           /* 06: FrequencyDivisor */
+        ',' ClockScaleKeyword       /* 08: Scale */
+        ',' ClockModeKeyword        /* 10: Mode*/
+        OptionalStringData          /* 11: ResourceSource */
+        OptionalByteConstExpr       /* 12: ResourceSourceIndex */
+        PARSEOP_CLOSE_PAREN         {$$ = TrLinkOpChildren ($<n>3,6,$4,$6,$8,$10,$11,$12);}
+    | PARSEOP_CLOCKINPUT
+        PARSEOP_OPEN_PAREN
+        error PARSEOP_CLOSE_PAREN   {$$ = AslDoError(); yyclearin;}
+    ;
+
 PinGroupTerm
     : PARSEOP_PINGROUP
         PARSEOP_OPEN_PAREN          {$<n>$ = TrCreateLeafOp (PARSEOP_PINGROUP);}
@@ -658,6 +691,20 @@ QWordMemoryTerm
     | PARSEOP_QWORDMEMORY
         PARSEOP_OPEN_PAREN
         error PARSEOP_CLOSE_PAREN   {$$ = AslDoError(); yyclearin;}
+    ;
+
+QWordPccTerm
+    : PARSEOP_QWORDPCC
+        PARSEOP_OPEN_PAREN           {$<n>$ = TrCreateLeafOp (PARSEOP_QWORDPCC);}
+        ByteConstExpr
+        OptionalByteConstExpr
+        OptionalStringData
+        OptionalNameString_Last
+        PARSEOP_CLOSE_PAREN                         {$$ = TrLinkOpChildren ($<n>3,4,
+                                                        $4,$5,$6,$7);}
+    | PARSEOP_QWORDPCC
+        PARSEOP_OPEN_PAREN
+        error PARSEOP_CLOSE_PAREN                   {$$ = AslDoError(); yyclearin;}
     ;
 
 QWordSpaceTerm
@@ -886,6 +933,20 @@ WordIOTerm
     | PARSEOP_WORDIO
         PARSEOP_OPEN_PAREN
         error PARSEOP_CLOSE_PAREN   {$$ = AslDoError(); yyclearin;}
+    ;
+
+WordPccTerm
+    : PARSEOP_WORDPCC
+        PARSEOP_OPEN_PAREN           {$<n>$ = TrCreateLeafOp (PARSEOP_WORDPCC);}
+        ByteConstExpr
+        OptionalByteConstExpr
+        OptionalStringData
+        OptionalNameString_Last
+        PARSEOP_CLOSE_PAREN                         {$$ = TrLinkOpChildren ($<n>3,4,
+                                                        $4,$5,$6,$7);}
+    | PARSEOP_WORDPCC
+        PARSEOP_OPEN_PAREN
+        error PARSEOP_CLOSE_PAREN                   {$$ = AslDoError(); yyclearin;}
     ;
 
 WordSpaceTerm

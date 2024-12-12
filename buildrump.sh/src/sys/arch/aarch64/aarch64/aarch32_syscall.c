@@ -1,7 +1,7 @@
-/*	$NetBSD: aarch32_syscall.c,v 1.5 2021/05/15 11:39:20 rin Exp $	*/
+/*	$NetBSD: aarch32_syscall.c,v 1.9 2024/02/07 04:20:26 msaitoh Exp $	*/
 
 /*
- * Copyright (c) 2018 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2018 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aarch32_syscall.c,v 1.5 2021/05/15 11:39:20 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aarch32_syscall.c,v 1.9 2024/02/07 04:20:26 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/ktrace.h>
@@ -67,12 +67,30 @@ EMULNAME(syscall)(struct trapframe *tf)
 	int error, i;
 	bool do_trace, thumbmode;
 
-	LWP_CACHE_CREDS(l, p);
+	curcpu()->ci_data.cpu_nsyscall++; /* XXX unsafe curcpu() */
 
-	curcpu()->ci_data.cpu_nsyscall++;
-
-	uint32_t code = tf->tf_esr & 0xffff;	/* XXX: 16-23bits are omitted */
 	thumbmode = (tf->tf_spsr & SPSR_A32_T) ? true : false;
+#ifdef SYSCALL_CODE_REG
+	/*
+	 * mov.w r<SYSCALL_CODE_REG>, #<syscall_no>
+	 * svc #<SYSCALL_CODE_REG_SVC>
+	 */
+#ifdef SYSCALL_CODE_REG_SVC
+	if ((tf->tf_esr & 0xffff) != SYSCALL_CODE_REG_SVC) {
+		error = EINVAL;
+		goto bad;
+	}
+#endif
+	uint32_t code = tf->tf_reg[SYSCALL_CODE_REG];
+#if (SYSCALL_CODE_REG == 0)
+	int regstart = 1;		/* args start from r1 */
+	int nargs_reg = NARGREG - 1;	/* number of argument in registers */
+#else
+	int regstart = 0;		/* args start from r0 */
+	int nargs_reg = NARGREG;	/* number of argument in registers */
+#endif
+#else /* SYSCALL_CODE_REG */
+	uint32_t code = tf->tf_esr & 0xffff;	/* XXX: 16-23bits are omitted */
 	if (thumbmode) {
 		if (code != 255) {
 			do_trapsignal(l, SIGILL, ILL_ILLTRP,
@@ -83,13 +101,17 @@ EMULNAME(syscall)(struct trapframe *tf)
 		code = tf->tf_reg[0];
 		tf->tf_reg[0] = tf->tf_reg[12];	/* orig $r0 is saved to $ip */
 	}
-
-	int nargs_reg = NARGREG;	/* number of argument in registers */
 	int regstart = 0;		/* args start from r0 */
+	int nargs_reg = NARGREG;	/* number of argument in registers */
+#endif /* SYSCALL_CODE_REG */
 
+#ifdef SYSCALL_CODE_REMAP
+	code = SYSCALL_CODE_REMAP(code);
+#endif
 
 	code %= EMULNAMEU(SYS_NSYSENT);
 	callp = p->p_emul->e_sysent + code;
+#ifndef SYSCALL_NO_INDIRECT
 	if (__predict_false(callp->sy_flags & SYCALL_INDIRECT)) {
 		int off = 1;
 #ifdef NETBSD32_SYS_netbsd32____syscall /* XXX ugly: apply only for NETBSD32 */
@@ -117,6 +139,7 @@ EMULNAME(syscall)(struct trapframe *tf)
 			goto bad;
 		}
 	}
+#endif /* SYSCALL_NO_INDIRECT */
 
 	/* number of argument to fetch from sp */
 	KASSERT(callp->sy_narg <= EMULNAMEU(SYS_MAXSYSARGS));
@@ -133,8 +156,8 @@ EMULNAME(syscall)(struct trapframe *tf)
 			goto bad;
 	}
 
-	rval[0] = rval[1] = 0;
-
+	rval[0] = 0;
+	rval[1] = tf->tf_reg[1];
 #if 0
 	error = sy_invoke(callp, l, args32buf.a32, rval, code);
 #else
@@ -171,7 +194,9 @@ EMULNAME(syscall)(struct trapframe *tf)
 
 	if (__predict_true(error == 0)) {
 		tf->tf_reg[0] = rval[0];
+#ifndef SYSCALL_NO_RVAL1
 		tf->tf_reg[1] = rval[1];
+#endif
 		tf->tf_spsr &= ~NZCV_C;
 	} else {
 		switch (error) {
@@ -190,6 +215,8 @@ EMULNAME(syscall)(struct trapframe *tf)
 #ifndef __HAVE_MINIMAL_EMUL
 			if (p->p_emul->e_errno)
 				error = p->p_emul->e_errno[error];
+#elif defined(SYSCALL_EMUL_ERRNO)
+			error = SYSCALL_EMUL_ERRNO(error);
 #endif
 			tf->tf_reg[0] = error;
 			tf->tf_spsr |= NZCV_C;

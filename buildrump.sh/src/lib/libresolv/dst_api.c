@@ -1,4 +1,4 @@
-/*	$NetBSD: dst_api.c,v 1.3 2012/11/16 02:16:38 christos Exp $	*/
+/*	$NetBSD: dst_api.c,v 1.11 2024/02/05 21:46:05 andvar Exp $	*/
 
 /*
  * Portions Copyright (c) 1995-1998 by Trusted Information Systems, Inc.
@@ -21,7 +21,7 @@
  * This is the only file that needs to be changed if the crypto system is
  * changed.  Exported functions are:
  * void dst_init()	 Initialize the toolkit
- * int  dst_check_algorithm()   Function to determines if alg is suppored.
+ * int  dst_check_algorithm()   Function to determines if alg is supported.
  * int  dst_compare_keys()      Function to compare two keys for equality.
  * int  dst_sign_data()         Incremental signing routine.
  * int  dst_verify_data()       Incremental verify routine.
@@ -40,7 +40,7 @@
 #if 0
 static const char rcsid[] = "Header: /proj/cvs/prod/libbind/dst/dst_api.c,v 1.17 2007/09/24 17:18:25 each Exp ";
 #else
-__RCSID("$NetBSD: dst_api.c,v 1.3 2012/11/16 02:16:38 christos Exp $");
+__RCSID("$NetBSD: dst_api.c,v 1.11 2024/02/05 21:46:05 andvar Exp $");
 #endif
 
 
@@ -240,7 +240,7 @@ dst_compare_keys(const DST_KEY *key1, const DST_KEY *key2)
  *	      The location to which the signature will be written.
  *	sig_len Length of the signature field in bytes.
  * Return
- *	 0      Successfull INIT or Update operation
+ *	 0      Successful INIT or Update operation
  *	&gt;0      success FINAL (sign) operation
  *	&lt;0      failure
  */
@@ -334,7 +334,7 @@ dst_read_key(const char *in_keyname, const u_int16_t in_id,
 	DST_KEY *dg_key = NULL, *pubkey = NULL;
 
 	if (!dst_check_algorithm(in_alg)) { /*%< make sure alg is available */
-		EREPORT(("%s: Algorithm %d not suppored\n", __func__, in_alg));
+		EREPORT(("%s: Algorithm %d not supported\n", __func__, in_alg));
 		return (NULL);
 	}
 	if ((type & (DST_PUBLIC | DST_PRIVATE)) == 0) 
@@ -376,7 +376,7 @@ dst_write_key(const DST_KEY *key, const int type)
 	if (key == NULL) 
 		return (0);
 	if (!dst_check_algorithm(key->dk_alg)) { /*%< make sure alg is available */
-		EREPORT(("%s: Algorithm %d not suppored\n", __func__,
+		EREPORT(("%s: Algorithm %d not supported\n", __func__,
 		    key->dk_alg));
 		return (UNSUPPORTED_KEYALG);
 	}
@@ -537,7 +537,7 @@ dst_s_read_public_key(const char *in_name, const u_int16_t in_id, int in_alg)
 	while ((c = getc(fp)) != EOF)
 		if (!isspace(c))
 			break;
-	ungetc(c, fp);		/*%< return the charcter to the input field */
+	ungetc(c, fp);		/*%< return the character to the input field */
 	/* Handle hex!! FIXME.  */
 
 	if (fscanf(fp, "%d %d %d", &flags, &proto, &alg) != 3) {
@@ -638,9 +638,9 @@ dst_s_write_public_key(const DST_KEY *key)
  *  dst_dnskey_to_public_key
  *	This function converts the contents of a DNS KEY RR into a DST
  *	key structure.
- *  Paramters
+ *  Parameters
  *	len	 Length of the RDATA of the KEY RR RDATA
- *	rdata	 A pointer to the the KEY RR RDATA.
+ *	rdata	 A pointer to the KEY RR RDATA.
  *	in_name     Key name to be stored in key structure.
  *  Returns
  *	NULL	    Failure
@@ -659,7 +659,7 @@ dst_dnskey_to_key(const char *in_name, const u_char *rdata, const int len)
 		return (NULL);
 	alg = (u_int8_t) rdata[DST_KEY_ALG];
 	if (!dst_check_algorithm(alg)) { /*%< make sure alg is available */
-		EREPORT(("%s: Algorithm %d not suppored\n", __func__,
+		EREPORT(("%s: Algorithm %d not supported\n", __func__,
 		    alg));
 		return (NULL);
 	}
@@ -680,7 +680,7 @@ dst_dnskey_to_key(const char *in_name, const u_char *rdata, const int len)
 		start += 2;
 	}
 	/*
-	 * now point to the begining of the data representing the encoding
+	 * now point to the beginning of the data representing the encoding
 	 * of the key
 	 */
 	if (key_st->dk_func && key_st->dk_func->from_dns_key) {
@@ -688,7 +688,7 @@ dst_dnskey_to_key(const char *in_name, const u_char *rdata, const int len)
 						  len - start) > 0)
 			return (key_st);
 	} else
-		EREPORT(("%s: unsuppored alg %d\n", __func__,
+		EREPORT(("%s: unsupported alg %d\n", __func__,
 			 alg));
 
 	SAFE_FREE(key_st);
@@ -718,7 +718,7 @@ dst_key_to_dnskey(const DST_KEY *key, u_char *out_storage,
 		return (-1);
 
 	if (!dst_check_algorithm(key->dk_alg)) { /*%< make sure alg is available */
-		EREPORT(("%s: Algorithm %d not suppored\n", __func__,
+		EREPORT(("%s: Algorithm %d not supported\n", __func__,
 		    key->dk_alg));
 		return (UNSUPPORTED_KEYALG);
 	}
@@ -775,7 +775,7 @@ dst_buffer_to_key(const char *key_name,		/*!< name of the key  */
 	u_char dns[2048];
 
 	if (!dst_check_algorithm(alg)) { /*%< make sure alg is available */
-		EREPORT(("%s: Algorithm %d not suppored\n", __func__, alg));
+		EREPORT(("%s: Algorithm %d not supported\n", __func__, alg));
 		return (NULL);
 	}
 
@@ -820,7 +820,7 @@ dst_key_to_buffer(DST_KEY *key, u_char *out_buff, int buf_len)
  *     pk_key  Structure that the key is returned in.
  *     in_id   Key identifier (tag)
  * Return
- *     1 if everthing works
+ *     1 if everything works
  *     0 if there is any problem
  */
 
@@ -971,7 +971,7 @@ dst_generate_key(const char *name, const int bits, const int exp,
 		return (NULL);
 
 	if (!dst_check_algorithm(alg)) { /*%< make sure alg is available */
-		EREPORT(("%s: Algorithm %d not suppored\n", __func__, alg));
+		EREPORT(("%s: Algorithm %d not supported\n", __func__, alg));
 		return (NULL);
 	}
 
@@ -1030,7 +1030,7 @@ dst_free_key(DST_KEY *f_key)
 }
 
 /*%
- *	Return the maximim size of signature from the key specified in bytes
+ *	Return the maximum size of signature from the key specified in bytes
  *
  * Parameters
  *\li      key 

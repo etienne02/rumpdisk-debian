@@ -1,4 +1,4 @@
-/*	$NetBSD: sc.c,v 1.18 2021/06/15 17:16:16 tsutsui Exp $	*/
+/*	$NetBSD: sc.c,v 1.20 2024/09/25 09:08:22 rin Exp $	*/
 
 /*
  * Copyright (c) 1992 OMRON Corporation.
@@ -174,6 +174,16 @@ screset(struct scsi_softc *hs)
 	printf(", ID %d\n", SCSI_ID);
 }
 
+/*
+ * XXX
+ * sensebuf and inqbuf may be uninitialized for some cases.
+ * Real fix should be to check return values everywhere in
+ * scsi_request_sense(), scsi_immed_command(), and functions
+ * called from them.
+ */
+#pragma GCC diagnostic push					/* XXX { */
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+
 bool
 scident(uint ctlr, uint target, uint lun, struct scsi_inquiry *inqout,
     uint32_t *capout)
@@ -235,6 +245,8 @@ scident(uint ctlr, uint target, uint lun, struct scsi_inquiry *inqout,
 
 	return true;
 }
+
+#pragma GCC diagnostic pop					/* XXX } */
 
 static void
 scprobe(struct scsi_softc *hs, uint target, uint lun)
@@ -651,7 +663,7 @@ scintr(void)
 			goto get_intr;
 	}
 
-	/* Unknown Interrupt occured */
+	/* Unknown interrupt occurred */
 	return -1;
 
 

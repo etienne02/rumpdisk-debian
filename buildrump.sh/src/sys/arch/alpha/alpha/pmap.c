@@ -1,4 +1,4 @@
-/* $NetBSD: pmap.c,v 1.301 2021/08/13 20:19:45 andvar Exp $ */
+/* $NetBSD: pmap.c,v 1.308 2023/12/30 23:07:42 thorpej Exp $ */
 
 /*-
  * Copyright (c) 1998, 1999, 2000, 2001, 2007, 2008, 2020
@@ -135,7 +135,7 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.301 2021/08/13 20:19:45 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.308 2023/12/30 23:07:42 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -544,7 +544,7 @@ pmap_pvlist_free(struct pmap_pvlist * const list)
  * Some things that add complexity:
  *
  * ==> ASNs. A CPU may have valid TLB entries for other than the current
- *     address spaace.  We can only invalidate TLB entries for the current
+ *     address space.  We can only invalidate TLB entries for the current
  *     address space, so when asked to invalidate a VA for the non-current
  *     pmap on a given CPU, we simply invalidate the ASN for that pmap,CPU
  *     tuple so that new one is allocated on the next activation on that
@@ -587,7 +587,7 @@ pmap_pvlist_free(struct pmap_pvlist * const list)
  * global bitmap off CPUs to be notified, and then send the IPIs to
  * each victim.  While the other CPUs are in-flight, we then perform
  * any invalidations necessary on the local CPU.  Once that is done,
- * we then wait the the global context pointer to be cleared, which
+ * we then wait the global context pointer to be cleared, which
  * will be done by the final remote CPU to complete their work. This
  * method reduces cache line contention during processing.
  *
@@ -597,7 +597,7 @@ pmap_pvlist_free(struct pmap_pvlist * const list)
  * CPU might hold for the respective recursive VPT mappings.  This must
  * be done whenever an L1 or L2 PTE is invalidated.  Until these VPT
  * translations are invalidated, the PT pages must not be reused.  For
- * this reason, we keep a list of freed PT pages in the context stucture
+ * this reason, we keep a list of freed PT pages in the context structure
  * and drain them off once all invalidations are complete.
  *
  * NOTE: The value of TLB_CTX_MAXVA is tuned to accommodate the UBC
@@ -1204,13 +1204,15 @@ static bool	vtophys_internal(vaddr_t, paddr_t *p);
 	l1pte_ = pmap_l1pte(kernel_lev1map, va);			\
 	if (pmap_pte_v(l1pte_) == 0) {					\
 		printf("kernel level 1 PTE not valid, va 0x%lx "	\
-		    "(line %d)\n", (va), __LINE__);			\
+		    "(line %d) pte=%p *pte=0x%016lx\n", (va), __LINE__,	\
+		    l1pte_, *l1pte_);					\
 		panic("PMAP_KERNEL_PTE");				\
 	}								\
 	l2pte_ = pmap_l2pte(kernel_lev1map, va, l1pte_);		\
 	if (pmap_pte_v(l2pte_) == 0) {					\
 		printf("kernel level 2 PTE not valid, va 0x%lx "	\
-		    "(line %d)\n", (va), __LINE__);			\
+		    "(line %d) pte=%p *pte=0x%016lx\n", (va), __LINE__,	\
+		    l2pte_, *l2pte_);					\
 		panic("PMAP_KERNEL_PTE");				\
 	}								\
 	pmap_l3pte(kernel_lev1map, va, l2pte_);				\
@@ -1358,8 +1360,19 @@ pmap_bootstrap(paddr_t ptaddr, u_int maxasn, u_long ncpuids)
 		pte = (ALPHA_K0SEG_TO_PHYS(((vaddr_t)lev3map) +
 		    (i*PAGE_SIZE)) >> PGSHIFT) << PG_SHIFT;
 		pte |= PG_V | PG_ASM | PG_KRE | PG_KWE | PG_WIRED;
-		lev2map[l2pte_index(VM_MIN_KERNEL_ADDRESS+
-		    (i*PAGE_SIZE*NPTEPG))] = pte;
+		/*
+		 * No need to use l2pte_index() here; it's equivalent
+		 * to just indexing with our loop variable i, but will
+		 * fall over if we end up with more than 1 L2 PT page.
+		 *
+		 * In other words:
+		 *
+		 *	l2pte_index(VM_MIN_KERNEL_ADDRESS +
+		 *	            (i*PAGE_SIZE*NPTEPG))
+		 *
+		 * ...is the same as 'i' so long as i stays below 1024.
+		 */
+		lev2map[i] = pte;
 	}
 
 	/* Initialize the pmap_growkernel_lock. */
@@ -1659,10 +1672,11 @@ pmap_destroy(pmap_t pmap)
 		printf("pmap_destroy(%p)\n", pmap);
 #endif
 
-	PMAP_MP(membar_exit());
+	PMAP_MP(membar_release());
 	KASSERT(atomic_load_relaxed(&pmap->pm_count) > 0);
 	if (atomic_dec_uint_nv(&pmap->pm_count) > 0)
 		return;
+	PMAP_MP(membar_acquire());
 
 	pt_entry_t *lev1map = pmap_lev1map(pmap);
 
@@ -1705,7 +1719,6 @@ pmap_reference(pmap_t pmap)
 
 	newcount = atomic_inc_uint_nv(&pmap->pm_count);
 	KASSERT(newcount != 0);
-	PMAP_MP(membar_enter());
 }
 
 /*
@@ -2106,7 +2119,7 @@ pmap_enter_l2pt_delref(pmap_t const pmap, pt_entry_t * const l1pte,
 	/*
 	 * PALcode may have tried to service a TLB miss with
 	 * this L2 PTE, so we need to make sure we don't actually
-	 * free the PT page untl we've shot down any TLB entries
+	 * free the PT page until we've shot down any TLB entries
 	 * for this VPT index.
 	 */
 
@@ -3635,7 +3648,7 @@ pmap_l1pt_ctor(void *arg, void *object, int flags)
 /*
  * pmap_l1pt_alloc:
  *
- *	Page alloctaor for L1 PT pages.
+ *	Page allocator for L1 PT pages.
  */
 static void *
 pmap_l1pt_alloc(struct pool *pp, int flags)
@@ -3759,7 +3772,7 @@ pmap_l3pt_delref(pmap_t pmap, vaddr_t va, pt_entry_t *l3pte,
 			    "0x%lx\n", pmap_pte_pa(l2pte));
 #endif
 		/*
-		 * You can pass NULL if you know the last refrence won't
+		 * You can pass NULL if you know the last reference won't
 		 * be dropped.
 		 */
 		KASSERT(tlbctx != NULL);
@@ -3810,7 +3823,7 @@ pmap_l2pt_delref(pmap_t pmap, pt_entry_t *l1pte, pt_entry_t *l2pte,
 			    "0x%lx\n", pmap_pte_pa(l1pte));
 #endif
 		/*
-		 * You can pass NULL if you know the last refrence won't
+		 * You can pass NULL if you know the last reference won't
 		 * be dropped.
 		 */
 		KASSERT(tlbctx != NULL);
@@ -3870,7 +3883,7 @@ pmap_asn_alloc(pmap_t const pmap, struct cpu_info * const ci)
 	KASSERT(pmap->pm_percpu[ci->ci_cpuid].pmc_lev1map != kernel_lev1map);
 	KASSERT(kpreempt_disabled());
 
-	/* No work to do if the the CPU does not implement ASNs. */
+	/* No work to do if the CPU does not implement ASNs. */
 	if (pmap_max_asn == 0)
 		return 0;
 

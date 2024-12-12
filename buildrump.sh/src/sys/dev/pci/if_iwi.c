@@ -1,4 +1,4 @@
-/*	$NetBSD: if_iwi.c,v 1.116 2021/06/16 00:21:18 riastradh Exp $  */
+/*	$NetBSD: if_iwi.c,v 1.121 2024/07/05 04:31:51 rin Exp $  */
 /*	$OpenBSD: if_iwi.c,v 1.111 2010/11/15 19:11:57 damien Exp $	*/
 
 /*-
@@ -19,7 +19,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_iwi.c,v 1.116 2021/06/16 00:21:18 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_iwi.c,v 1.121 2024/07/05 04:31:51 rin Exp $");
 
 /*-
  * Intel(R) PRO/Wireless 2200BG/2225BG/2915ABG driver
@@ -661,17 +661,15 @@ iwi_reset_tx_ring(struct iwi_softc *sc, struct iwi_tx_ring *ring)
 
 	for (i = 0; i < ring->count; i++) {
 		data = &ring->data[i];
-
-		if (data->m != NULL) {
-			m_freem(data->m);
-			data->m = NULL;
-		}
 	
 		if (data->map != NULL) {
 			bus_dmamap_sync(sc->sc_dmat, data->map, 0,
 			    data->map->dm_mapsize, BUS_DMASYNC_POSTWRITE);
 			bus_dmamap_unload(sc->sc_dmat, data->map);
 		}
+
+		m_freem(data->m);
+		data->m = NULL;
 
 		if (data->ni != NULL) {
 			ieee80211_free_node(data->ni);
@@ -702,14 +700,12 @@ iwi_free_tx_ring(struct iwi_softc *sc, struct iwi_tx_ring *ring)
 	for (i = 0; i < ring->count; i++) {
 		data = &ring->data[i];
 
-		if (data->m != NULL) {
-			m_freem(data->m);
-		}
-
 		if (data->map != NULL) {
 			bus_dmamap_unload(sc->sc_dmat, data->map);
 			bus_dmamap_destroy(sc->sc_dmat, data->map);
 		}
+
+		m_freem(data->m);
 	}
 }
 
@@ -776,15 +772,12 @@ iwi_free_rx_ring(struct iwi_softc *sc, struct iwi_rx_ring *ring)
 	for (i = 0; i < ring->count; i++) {
 		data = &ring->data[i];
 
-		if (data->m != NULL) {
-			m_freem(data->m);
-		}
-
 		if (data->map != NULL) {
 			bus_dmamap_unload(sc->sc_dmat, data->map);
 			bus_dmamap_destroy(sc->sc_dmat, data->map);
 		}
 
+		m_freem(data->m);
 	}
 }
 
@@ -1782,19 +1775,16 @@ iwi_start(struct ifnet *ifp)
 		return;
 
 	for (;;) {
-		IFQ_DEQUEUE(&ifp->if_snd, m0);
+		IFQ_POLL(&ifp->if_snd, m0);
 		if (m0 == NULL)
 			break;
 
-		if (m0->m_len < sizeof (struct ether_header) &&
-		    (m0 = m_pullup(m0, sizeof (struct ether_header))) == NULL) {
-			if_statinc(ifp, if_oerrors);
-			continue;
-		}
+		KASSERT(m0->m_len >= sizeof(struct ether_header));
 
 		eh = mtod(m0, struct ether_header *);
 		ni = ieee80211_find_txnode(ic, eh->ether_dhost);
 		if (ni == NULL) {
+			IFQ_DEQUEUE(&ifp->if_snd, m0);
 			m_freem(m0);
 			if_statinc(ifp, if_oerrors);
 			continue;
@@ -1802,6 +1792,7 @@ iwi_start(struct ifnet *ifp)
 
 		/* classify mbuf so we can find which tx ring to use */
 		if (ieee80211_classify(ic, m0, ni) != 0) {
+			IFQ_DEQUEUE(&ifp->if_snd, m0);
 			m_freem(m0);
 			ieee80211_free_node(ni);
 			if_statinc(ifp, if_oerrors);
@@ -1814,12 +1805,10 @@ iwi_start(struct ifnet *ifp)
 
 		if (sc->txq[ac].queued > sc->txq[ac].count - 8) {
 			/* there is no place left in this ring */
-			IFQ_LOCK(&ifp->if_snd);
-			IF_PREPEND(&ifp->if_snd, m0);
-			IFQ_UNLOCK(&ifp->if_snd);
 			ifp->if_flags |= IFF_OACTIVE;
 			break;
 		}
+		IFQ_DEQUEUE(&ifp->if_snd, m0);
 
 		bpf_mtap(ifp, m0, BPF_D_OUT);
 
@@ -1870,8 +1859,9 @@ iwi_get_table0(struct iwi_softc *sc, uint32_t *tbl)
 {
 	uint32_t size, buf[128];
 
+	memset(buf, 0, sizeof buf);
+
 	if (!(sc->flags & IWI_FLAG_FW_INITED)) {
-		memset(buf, 0, sizeof buf);
 		return copyout(buf, tbl, sizeof buf);
 	}
 

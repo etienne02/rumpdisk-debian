@@ -1,4 +1,4 @@
-/* $NetBSD: hcreate.c,v 1.10 2014/07/20 20:17:21 christos Exp $ */
+/* $NetBSD: hcreate.c,v 1.13 2022/03/13 01:44:37 kre Exp $ */
 
 /*
  * Copyright (c) 2001 Christopher G. Demetriou
@@ -43,7 +43,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: hcreate.c,v 1.10 2014/07/20 20:17:21 christos Exp $");
+__RCSID("$NetBSD: hcreate.c,v 1.13 2022/03/13 01:44:37 kre Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #if !defined(lint)
@@ -104,7 +104,6 @@ hcreate_r(size_t nel, struct hsearch_data *head)
 	struct internal_head *table;
 	size_t idx;
 	unsigned int p2;
-	void *p;
 
 	/* If nel is too small, make it min sized. */
 	if (nel < MIN_BUCKETS)
@@ -125,13 +124,11 @@ hcreate_r(size_t nel, struct hsearch_data *head)
 	/* Allocate the table. */
 	head->size = nel;
 	head->filled = 0;
-	p = malloc(nel * sizeof table[0]);
-	if (p == NULL) {
-		errno = ENOMEM;
+	table = NULL;
+	errno = reallocarr(&table, nel, sizeof(*table));
+	if (errno)
 		return 0;
-	}
-	head->table = p;
-	table = p;
+	head->table = (void *)table;
 
 	/* Initialize it. */
 	for (idx = 0; idx < nel; idx++)

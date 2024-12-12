@@ -1,4 +1,4 @@
-/*	$NetBSD: scsictl.c,v 1.39 2016/11/19 08:43:40 flxd Exp $	*/
+/*	$NetBSD: scsictl.c,v 1.42 2024/11/10 01:55:06 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2002 The NetBSD Foundation, Inc.
@@ -36,9 +36,8 @@
 #include <sys/cdefs.h>
 
 #ifndef lint
-__RCSID("$NetBSD: scsictl.c,v 1.39 2016/11/19 08:43:40 flxd Exp $");
+__RCSID("$NetBSD: scsictl.c,v 1.42 2024/11/10 01:55:06 riastradh Exp $");
 #endif
-
 
 #include <sys/param.h>
 #include <sys/ioctl.h>
@@ -49,6 +48,7 @@ __RCSID("$NetBSD: scsictl.c,v 1.39 2016/11/19 08:43:40 flxd Exp $");
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <util.h>
@@ -93,12 +93,13 @@ static void	device_flushcache(int, char *[]);
 static void	device_setspeed(int, char *[]);
 static void	device_getrealloc(int, char *[]);
 static void	device_setrealloc(int, char *[]);
+static void	device_reportluns(int, char *[]);
 
 static struct command device_commands[] = {
 	{ "defects",	"[primary] [grown] [block|byte|physical]",
 						device_defects },
 	{ "format",	"[blocksize [immediate]]", 	device_format },
-	{ "identify",	"",			device_identify },
+	{ "identify",	"[vpd]",		device_identify },
 	{ "reassign",	"blkno [blkno [...]]",	device_reassign },
 	{ "release",	"",			device_release },
 	{ "reserve",	"",			device_reserve },
@@ -115,6 +116,7 @@ static struct command device_commands[] = {
 	{ "setspeed",	"[speed]",		device_setspeed },
 	{ "getrealloc",	"",			device_getrealloc },
 	{ "setrealloc",	"none|r|w|rw [save]",	device_setrealloc },
+	{ "reportluns",	"normal|wellknown|all|#",	device_reportluns },
 	{ NULL,		NULL,			NULL },
 };
 
@@ -198,15 +200,15 @@ usage(void)
 	    getprogname());
 
 	fprintf(stderr, "   Commands pertaining to scsi devices:\n");
-	for (i=0; device_commands[i].cmd_name != NULL; i++)
+	for (i = 0; device_commands[i].cmd_name != NULL; i++)
 		fprintf(stderr, "\t%s %s\n", device_commands[i].cmd_name,
 					    device_commands[i].arg_names);
 	fprintf(stderr, "   Commands pertaining to scsi busses:\n");
-	for (i=0; bus_commands[i].cmd_name != NULL; i++)
+	for (i = 0; bus_commands[i].cmd_name != NULL; i++)
 		fprintf(stderr, "\t%s %s\n", bus_commands[i].cmd_name,
 					    bus_commands[i].arg_names);
 	fprintf(stderr, "   Use `any' or `all' to wildcard target or lun\n");
-	
+
 	exit(1);
 }
 
@@ -270,7 +272,7 @@ device_defects(int argc, char *argv[])
 		cmd.flags |= (RDD_PRIMARY|RDD_GROWN);
 
 	/* list format option. */
-	if (i < argc) { 
+	if (i < argc) {
 		if (strncmp("block", argv[i], 5) == 0) {
 			cmd.flags |= RDD_BF;
 			dlfmt = RDD_BF;
@@ -324,7 +326,6 @@ device_defects(int argc, char *argv[])
 
 	if ((data->flags & RDD_P_G_MASK) == 0)
 		strcat(msg, ": none reported\n");
-
 
 	printf("%s: scsibus%d target %d lun %d %s",
 	       dvname, dvaddr.addr.scsi.scbus, dvaddr.addr.scsi.target,
@@ -475,7 +476,6 @@ device_format(int argc, char *argv[])
 		struct scsi_mode_parameter_header_6 header;
 		struct scsi_general_block_descriptor blk_desc;
 	} data_select;
-	
 
 	/* Blocksize is an optional argument. */
 	if (argc > 2)
@@ -637,26 +637,113 @@ device_format(int argc, char *argv[])
 	return;
 }
 
+static void
+print_designator(const char *pre, struct scsipi_inquiry_evpd_device_id *did)
+{
+	char buf[252 * 4 + 1];
+	unsigned assoc, proto, code, type;
+	static const char *typestr[] = {
+		"vendor",
+		"t10",
+		"eui64",
+		"naa",
+		"target port",
+		"port group",
+		"lun group",
+		"md5",
+		"scsi",
+		"res9",
+		"res10",
+		"res11",
+		"res12",
+		"res13",
+		"res14",
+		"res15"
+	};
+	static const char *assocstr[] = {
+		"lun",
+		"port",
+		"target",
+		"reserved"
+	};
+	static const char *protostr[] = {
+		"fibre channel",
+		"obsolete",
+		"ssa",
+		"ieee1394",
+		"rdma",
+		"iSCSI",
+		"SAS"
+	};
+	const unsigned maxproto = __arraycount(protostr) - 1;
+	const unsigned isbinary =
+	    __SHIFTOUT(SINQ_DEVICE_ID_CODESET_BINARY, SINQ_DEVICE_ID_CODESET);
+	unsigned k;
+
+	assoc = __SHIFTOUT(did->flags, SINQ_DEVICE_ID_ASSOCIATION);
+	proto = __SHIFTOUT(did->pc, SINQ_DEVICE_ID_PROTOCOL);
+	code = __SHIFTOUT(did->pc, SINQ_DEVICE_ID_CODESET);
+	type = __SHIFTOUT(did->flags, SINQ_DEVICE_ID_TYPE);
+
+	printf("%s%s", pre, assocstr[assoc]);
+	if (did->flags & SINQ_DEVICE_ID_PIV) {
+		if (proto > maxproto)
+			printf(" proto%u", proto);
+		else
+			printf(" %s", protostr[proto]);
+	}
+	printf(" %s: ", typestr[type]);
+
+	if (code == isbinary) {
+		for (k = 0; k < did->designator_length; k++) {
+			printf("%02x", did->designator[k]);
+		}
+		printf("\n");
+	} else {
+		scsi_strvis(buf, sizeof(buf), (char *)did->designator,
+		    did->designator_length);
+		printf("%s\n", buf);
+	}
+}
+
 /*
  * device_identify:
  *
  *	Display the identity of the device, including its SCSI bus,
  *	target, lun, and its vendor/product/revision information.
+ *      Optionally query and display vpd identification data.
  */
 static void
 device_identify(int argc, char *argv[])
 {
 	struct scsipi_inquiry_data inqbuf;
+	struct {
+		struct scsipi_inquiry_evpd_header h;
+		uint8_t d[255 - sizeof(struct scsipi_inquiry_evpd_header)];
+	} evpdbuf;
 	struct scsipi_inquiry cmd;
+	unsigned len, rlen;
+	struct scsipi_inquiry_evpd_serial *ser;
+	struct scsipi_inquiry_evpd_device_id *did;
+	int has_serial;
+	int has_device_id;
+	bool getvpd = false;
+	int i;
 
 	/* x4 in case every character is escaped, +1 for NUL. */
 	char vendor[(sizeof(inqbuf.vendor) * 4) + 1],
 	     product[(sizeof(inqbuf.product) * 4) + 1],
-	     revision[(sizeof(inqbuf.revision) * 4) + 1];
+	     revision[(sizeof(inqbuf.revision) * 4) + 1],
+	     ident[252 * 4 + 1];
 
-	/* No arguments. */
-	if (argc != 0)
+	/* Check optional arguments */
+	for (i = 0; i < argc; i++) {
+		if (strncmp("vpd", argv[i], 3) == 0) {
+			getvpd = true;
+			continue;
+		}
 		usage();
+	}
 
 	memset(&cmd, 0, sizeof(cmd));
 	memset(&inqbuf, 0, sizeof(inqbuf));
@@ -677,6 +764,64 @@ device_identify(int argc, char *argv[])
 	printf("%s: scsibus%d target %d lun %d <%s, %s, %s>\n",
 	    dvname, dvaddr.addr.scsi.scbus, dvaddr.addr.scsi.target,
 	    dvaddr.addr.scsi.lun, vendor, product, revision);
+
+	if (!getvpd)
+		return;
+
+	cmd.byte2 |= SINQ_EVPD;
+	cmd.pagecode = SINQ_VPD_PAGES;
+
+	scsi_command(fd, &cmd, sizeof(cmd), &evpdbuf, sizeof(evpdbuf),
+	    10000, SCCMD_READ);
+
+	len = be16dec(evpdbuf.h.length);
+	if (len > sizeof(evpdbuf.d))
+		len = 0;
+
+	has_serial = memchr(evpdbuf.d, SINQ_VPD_SERIAL, len) != NULL;
+	has_device_id = memchr(evpdbuf.d, SINQ_VPD_DEVICE_ID, len) != NULL;
+
+	if (has_serial) {
+		cmd.byte2 |= SINQ_EVPD;
+		cmd.pagecode = SINQ_VPD_SERIAL;
+
+		scsi_command(fd, &cmd, sizeof(cmd), &evpdbuf, sizeof(evpdbuf),
+		    10000, SCCMD_READ);
+
+		len = be16dec(evpdbuf.h.length);
+		if (len > sizeof(evpdbuf.d))
+			len = 0;
+
+		ser = (struct scsipi_inquiry_evpd_serial *)&evpdbuf.d;
+		scsi_strvis(ident, sizeof(ident), (char *)ser->serial_number,
+		    len);
+		printf("VPD Serial:\n");
+		printf("\t%s\n", ident);
+	}
+
+	if (has_device_id) {
+		cmd.byte2 |= SINQ_EVPD;
+		cmd.pagecode = SINQ_VPD_DEVICE_ID;
+
+		scsi_command(fd, &cmd, sizeof(cmd), &evpdbuf, sizeof(evpdbuf),
+		    10000, SCCMD_READ);
+
+		len = be16dec(evpdbuf.h.length);
+		if (len > sizeof(evpdbuf.d))
+			len = 0;
+
+		printf("VPD Device IDs:\n");
+
+		for (unsigned off = 0; off < len - sizeof(*did); off += rlen) {
+			void *p = &evpdbuf.d[off];
+			did = (struct scsipi_inquiry_evpd_device_id *)p;
+			rlen = sizeof(*did) + did->designator_length - 1;
+			if (off + rlen > len)
+				break;
+
+			print_designator("\t", did);
+		}
+	}
 
 	return;
 }
@@ -759,8 +904,6 @@ device_release(int argc, char *argv[])
 
 	return;
 }
-
-
 
 /*
  * device_reserve:
@@ -982,6 +1125,88 @@ device_setspeed(int argc, char *argv[])
 	scsi_command(fd, &cmd, sizeof(cmd), pd, sizeof(pd), 10000, SCCMD_WRITE);
 
 	return;
+}
+
+/*
+ * device_reportluns:
+ *
+ *	Report the known LUNs to which the initiator can send commands
+ */
+static void
+device_reportluns(int argc, char *argv[])
+{
+	struct scsi_report_luns cmd;
+	struct {
+		struct scsi_report_luns_header header;
+		struct scsi_report_luns_lun desc[1];
+	} *data;
+	u_int32_t dlen, len;
+	u_int64_t lun;
+	size_t count, idx;
+	unsigned long sel;
+	char *endp;
+	int i;
+
+	dlen = USHRT_MAX; /* good for > 8000 LUNs */
+	data = malloc(dlen);
+	if (data == NULL)
+		errx(1, "unable to allocate lun report");
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.opcode = SCSI_REPORT_LUNS;
+	cmd.selectreport = SELECTREPORT_NORMAL;
+
+	/* determine which report to read. */
+	for (i = 0; i < argc; i++) {
+		if (strcmp("normal", argv[i]) == 0) {
+			cmd.selectreport = SELECTREPORT_NORMAL;
+			continue;
+		}
+		if (strcmp("wellknown", argv[i]) == 0) {
+			cmd.selectreport = SELECTREPORT_WELLKNOWN;
+			continue;
+		}
+		if (strcmp("all", argv[i]) == 0) {
+			cmd.selectreport = SELECTREPORT_ALL;
+			continue;
+		}
+		sel = strtoul(argv[i], &endp, 0);
+		if (*endp != '\0' || sel > 255)
+			errx(1, "Unknown select report '%s'", argv[i]);
+		cmd.selectreport = sel;
+	}
+
+	_lto4b(dlen, &cmd.alloclen[0]);
+	cmd.control = 0x00;
+
+	scsi_command(fd, &cmd, sizeof(cmd), data, dlen, 30000, SCCMD_READ);
+
+	len = _4btol(data->header.length);
+	if (len > dlen) {
+		/* XXX reallocate and retry */
+		printf("%s: report truncated %" PRIu32 "to %" PRIu32 "\n",
+		    dvname, len, dlen);
+		len = dlen;
+	}
+
+	count = len / sizeof(data->desc[0]);
+
+	for (idx = 0; idx < count; idx++) {
+		lun = _8btol(data->desc[idx].lun);
+
+		/*
+		 * swizzle bits so that LUNs 0..255 are
+		 * mapped to numbers 0..255
+		 */
+		lun = (lun & 0xffff000000000000ull) >> 48
+		    | (lun & 0x0000ffff00000000ull) >> 16
+		    | (lun & 0x00000000ffff0000ull) << 16
+		    | (lun & 0x000000000000ffffull) << 48;
+
+		printf("%s: lun %" PRIu64 "\n", dvname, lun);
+	}
+
+	free(data);
 }
 
 /*

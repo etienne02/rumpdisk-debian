@@ -1,4 +1,4 @@
-/*	$NetBSD: xinstall.c,v 1.126 2020/10/30 20:05:00 rillig Exp $	*/
+/*	$NetBSD: xinstall.c,v 1.128 2024/05/10 09:14:52 wiz Exp $	*/
 
 /*
  * Copyright (c) 1987, 1993
@@ -64,6 +64,7 @@
 #include "nbtool_config.h"
 #else
 #define HAVE_FUTIMES 1
+#define HAVE_POSIX_SPAWN 1
 #define HAVE_STRUCT_STAT_ST_FLAGS 1
 #endif
 
@@ -77,7 +78,7 @@ __COPYRIGHT("@(#) Copyright (c) 1987, 1993\
 #if 0
 static char sccsid[] = "@(#)xinstall.c	8.1 (Berkeley) 7/21/93";
 #else
-__RCSID("$NetBSD: xinstall.c,v 1.126 2020/10/30 20:05:00 rillig Exp $");
+__RCSID("$NetBSD: xinstall.c,v 1.128 2024/05/10 09:14:52 wiz Exp $");
 #endif
 #endif /* not lint */
 
@@ -119,6 +120,7 @@ __RCSID("$NetBSD: xinstall.c,v 1.126 2020/10/30 20:05:00 rillig Exp $");
 static int	dobackup, dodir, dostrip, dolink, dopreserve, dorename, dounpriv;
 static int	haveopt_f, haveopt_g, haveopt_m, haveopt_o;
 static int	numberedbackup;
+static int	verbose;
 static int	mode = S_IRWXU|S_IRGRP|S_IXGRP|S_IROTH|S_IXOTH;
 static char	pathbuf[MAXPATHLEN];
 static uid_t	uid = -1;
@@ -185,7 +187,7 @@ main(int argc, char *argv[])
 	setprogname(argv[0]);
 
 	iflags = 0;
-	while ((ch = getopt(argc, argv, "a:cbB:dD:f:g:h:l:m:M:N:o:prsS:T:U"))
+	while ((ch = getopt(argc, argv, "a:cbB:dD:f:g:h:l:m:M:N:o:prsS:T:Uv"))
 	    != -1)
 		switch((char)ch) {
 		case 'a':
@@ -305,6 +307,9 @@ main(int argc, char *argv[])
 			break;
 		case 'U':
 			dounpriv = 1;
+			break;
+		case 'v':
+			verbose = 1;
 			break;
 		case '?':
 		default:
@@ -476,9 +481,12 @@ do_link(char *from_name, char *to_name)
 			 */
 			(void)unlink(tmpl);
 		}
-		return (ret);
-	} else
-		return (link(from_name, to_name));
+        } else {
+		ret = link(from_name, to_name);
+	}
+	if (ret == 0 && verbose)
+		(void)printf("install: link %s -> %s\n", from_name, to_name);
+	return ret;
 }
 
 /*
@@ -508,6 +516,8 @@ do_symlink(char *from_name, char *to_name)
 		if (symlink(from_name, to_name) == -1)
 			err(EXIT_FAILURE, "symlink %s -> %s", from_name, to_name);
 	}
+	if (verbose)
+		(void)printf("install: symlink %s -> %s\n", from_name, to_name);
 }
 
 /*
@@ -640,7 +650,7 @@ makelink(char *from_name, char *to_name)
 	}
 
 	/*
-	 * If absolute or relative was not specified, 
+	 * If absolute or relative was not specified,
 	 * try the names the user provided
 	 */
 	do_symlink(from_name, to_name);
@@ -820,6 +830,8 @@ install(char *from_name, char *to_name, u_int flags)
 			err(EXIT_FAILURE, "%s: rename", to_name);
 		to_name = oto_name;
 	}
+	if (verbose)
+		(void)printf("install: %s -> %s\n", from_name, to_name);
 
 	/*
 	 * If provided a set of flags, set them, otherwise, preserve the
@@ -1115,12 +1127,12 @@ static void
 backup(const char *to_name)
 {
 	char	bname[FILENAME_MAX];
-	
+
 	if (numberedbackup) {
 		/* Do numbered backup */
 		int cnt;
 		char suffix_expanded[FILENAME_MAX];
-		
+
 		cnt=0;
 		do {
 			(void)snprintf(suffix_expanded, FILENAME_MAX, suffix,
@@ -1128,13 +1140,16 @@ backup(const char *to_name)
 			(void)snprintf(bname, FILENAME_MAX, "%s%s", to_name,
 			    suffix_expanded);
 			cnt++;
-		} while (access(bname, F_OK) == 0); 
+		} while (access(bname, F_OK) == 0);
 	} else {
 		/* Do simple backup */
 		(void)snprintf(bname, FILENAME_MAX, "%s%s", to_name, suffix);
 	}
-	
-	(void)rename(to_name, bname);
+
+	if (rename(to_name, bname) == 0) {
+		if (verbose)
+			(void)printf("install: %s -> %s\n", to_name, bname);
+        }
 }
 
 /*
@@ -1170,6 +1185,8 @@ install_dir(char *path, u_int flags)
 					    path);
 				}
 			}
+			if (verbose)
+				(void)printf("install: mkdir %s\n", path);
 			if (!(*p = ch))
 				break;
 		}
@@ -1201,7 +1218,7 @@ metadata_log(const char *path, const char *type, struct timeval *tv,
 	size_t		destlen;
 	struct flock	metalog_lock;
 
-	if (!metafp)	
+	if (!metafp)
 		return;
 	buf = malloc(4 * strlen(path) + 1);	/* buf for strsvis(3) */
 	if (buf == NULL) {
@@ -1304,13 +1321,13 @@ usage(void)
 	prog = getprogname();
 
 	(void)fprintf(stderr,
-"usage: %s [-Ubcprs] [-M log] [-D dest] [-T tags] [-B suffix]\n"
+"usage: %s [-bcprsUv] [-M log] [-D dest] [-T tags] [-B suffix]\n"
 "           [-a aftercmd] [-f flags] [-m mode] [-N dbdir] [-o owner] [-g group] \n"
 "           [-l linkflags] [-h hash] [-S stripflags] file1 file2\n"
-"       %s [-Ubcprs] [-M log] [-D dest] [-T tags] [-B suffix]\n"
+"       %s [-bcprsUv] [-M log] [-D dest] [-T tags] [-B suffix]\n"
 "           [-a aftercmd] [-f flags] [-m mode] [-N dbdir] [-o owner] [-g group]\n"
 "           [-l linkflags] [-h hash] [-S stripflags] file1 ... fileN directory\n"
-"       %s -d [-Up] [-M log] [-D dest] [-T tags] [-a aftercmd] [-m mode]\n"
+"       %s -d [-pUv] [-M log] [-D dest] [-T tags] [-a aftercmd] [-m mode]\n"
 "           [-N dbdir] [-o owner] [-g group] directory ...\n",
 	    prog, prog, prog);
 	exit(1);

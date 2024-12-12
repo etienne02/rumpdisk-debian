@@ -1,4 +1,4 @@
-/*	$NetBSD: aacreg.h,v 1.13 2008/10/02 08:21:57 sborrill Exp $	*/
+/*	$NetBSD: aacreg.h,v 1.15 2024/02/02 22:19:13 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2007 The NetBSD Foundation, Inc.
@@ -576,7 +576,7 @@ struct aac_ctcfg_resp {
 } __packed;
 
 /*
- * 'Ioctl' commads
+ * 'Ioctl' commands
  */
 #define AAC_SCSI_MAX_PORTS	10
 #define AAC_BUS_NO_EXIST	0
@@ -1118,7 +1118,7 @@ struct aac_fib {
 /*
  *  Adapter Status Register
  *
- *  Phase Staus mailbox is 32bits:
+ *  Phase Status mailbox is 32bits:
  *  <31:16> = Phase Status
  *  <15:0>  = Phase
  *
@@ -1325,7 +1325,7 @@ typedef enum {
 	AifEnSMARTEvent, 	       	/* SMART Event */
 	AifEnBatteryNeedsRecond,	/* The battery needs reconditioning */
 	AifEnClusterEvent,		/* Some cluster event */
-	AifEnDiskSetEvent,		/* A disk set event occured. */
+	AifEnDiskSetEvent,		/* A disk set event occurred. */
 	AifDriverNotifyStart=199,	/* Notifies for host driver go here */
 	/* Host driver notifications start here */
 	AifDenMorphComplete, 		/* A morph operation completed */

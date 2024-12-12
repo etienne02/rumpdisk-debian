@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -206,6 +206,11 @@ AcpiInfo (
 {
     va_list                 ArgList;
 
+#if defined(ACPI_QUIET_BOOT)
+    if (ACPI_QUIET_BOOT) {
+        return;
+    }
+#endif
 
     ACPI_MSG_REDIRECT_BEGIN;
     AcpiOsPrintf (ACPI_MSG_INFO);

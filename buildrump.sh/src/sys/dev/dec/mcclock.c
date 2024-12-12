@@ -1,4 +1,4 @@
-/* $NetBSD: mcclock.c,v 1.28 2014/11/17 02:15:49 christos Exp $ */
+/* $NetBSD: mcclock.c,v 1.30 2024/02/02 15:44:43 tsutsui Exp $ */
 
 /*
  * Copyright (c) 1994, 1995, 1996 Carnegie-Mellon University.
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mcclock.c,v 1.28 2014/11/17 02:15:49 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mcclock.c,v 1.30 2024/02/02 15:44:43 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -44,7 +44,7 @@ __KERNEL_RCSID(0, "$NetBSD: mcclock.c,v 1.28 2014/11/17 02:15:49 christos Exp $"
  * XXX default rate is machine-dependent.
  */
 #ifdef __alpha__
-#define MC_DFEAULTHZ	1024
+#define MC_DEFAULTHZ	1024
 #endif
 #ifdef pmax
 #define MC_DEFAULTHZ	256
@@ -68,7 +68,7 @@ void
 mcclock_attach(struct mcclock_softc *sc, const struct mcclock_busfns *busfns)
 {
 
-	printf(": mc146818 or compatible");
+	aprint_normal(": mc146818 or compatible");
 
 	sc->sc_busfns = busfns;
 

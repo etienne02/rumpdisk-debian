@@ -1,4 +1,4 @@
-/*	$NetBSD: linux32_types.h,v 1.15 2011/11/18 04:08:56 christos Exp $ */
+/*	$NetBSD: linux32_types.h,v 1.18 2021/11/27 21:15:07 ryo Exp $ */
 
 /*-
  * Copyright (c) 2006 Emmanuel Dreyfus, all rights reserved.
@@ -34,8 +34,12 @@
 #ifndef _LINUX32_TYPES_H
 #define _LINUX32_TYPES_H
 
-#ifdef __amd64__
+#if defined(__aarch64__)
+#include <compat/linux32/arch/aarch64/linux32_types.h>
+#elif defined(__amd64__)
 #include <compat/linux32/arch/amd64/linux32_types.h>
+#else
+#error Undefined linux32_types.h machine type.
 #endif
 
 typedef uint16_t linux32_gid16_t;
@@ -47,8 +51,10 @@ typedef netbsd32_pointer_t linux32_stat64p;
 typedef netbsd32_pointer_t linux32_statp;
 typedef netbsd32_pointer_t linux32_statfsp;
 typedef netbsd32_pointer_t linux32_statfs64p;
+typedef netbsd32_pointer_t linux32_statxp;
 typedef netbsd32_pointer_t linux32_sigactionp_t;
 typedef netbsd32_pointer_t linux32_sigsetp_t;
+typedef netbsd32_pointer_t linux32_sized_sigsetp_t;
 typedef netbsd32_pointer_t linux32___sysctlp_t;
 typedef netbsd32_pointer_t linux32_direntp_t;
 typedef netbsd32_pointer_t linux32_dirent64p_t;

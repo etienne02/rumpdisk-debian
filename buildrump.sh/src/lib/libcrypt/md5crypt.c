@@ -1,4 +1,4 @@
-/*	$NetBSD: md5crypt.c,v 1.14 2013/08/28 17:47:07 riastradh Exp $	*/
+/*	$NetBSD: md5crypt.c,v 1.16 2024/07/23 22:37:11 riastradh Exp $	*/
 
 /*
  * ----------------------------------------------------------------------------
@@ -15,7 +15,7 @@
 
 #include <sys/cdefs.h>
 #if !defined(lint)
-__RCSID("$NetBSD: md5crypt.c,v 1.14 2013/08/28 17:47:07 riastradh Exp $");
+__RCSID("$NetBSD: md5crypt.c,v 1.16 2024/07/23 22:37:11 riastradh Exp $");
 #endif /* not lint */
 
 #include <unistd.h>
@@ -36,7 +36,7 @@ __RCSID("$NetBSD: md5crypt.c,v 1.14 2013/08/28 17:47:07 riastradh Exp $");
 /*
  * MD5 password encryption.
  */
-char *
+crypt_private char *
 __md5crypt(const char *pw, const char *salt)
 {
 	static char passwd[120], *p;
@@ -46,9 +46,9 @@ __md5crypt(const char *pw, const char *salt)
 	MD5_CTX	ctx, ctx1;
 	u_int32_t l;
 	int pl;
-	
+
 	pwl = strlen(pw);
-	
+
 	/* Refine the salt first */
 	sp = salt;
 

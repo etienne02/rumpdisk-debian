@@ -1,4 +1,4 @@
-/*	$NetBSD: processor.h,v 1.4 2021/05/31 10:33:04 riastradh Exp $	*/
+/*	$NetBSD: processor.h,v 1.6 2021/12/19 01:46:08 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -34,6 +34,17 @@
 
 #include <sys/param.h>
 
-#define	cpu_relax()	DELAY(1)	/* XXX */
+#include <sys/lock.h>
+
+#define	cpu_relax()	SPINLOCK_BACKOFF_HOOK
+
+#if defined(__i386__) || defined(__x86_64__)
+static inline void
+clflushopt(void *p)
+{
+	/* XXX Test CPUID bit, use CLFLUSHOPT...  */
+	asm volatile ("clflush %0" : : "m" (*(const char *)p));
+}
+#endif
 
 #endif  /* _ASM_PROCESSOR_H_ */

@@ -1,4 +1,4 @@
-/*	$NetBSD: if_gif.c,v 1.155 2021/06/16 00:21:19 riastradh Exp $	*/
+/*	$NetBSD: if_gif.c,v 1.159 2024/09/15 09:46:45 skrll Exp $	*/
 /*	$KAME: if_gif.c,v 1.76 2001/08/20 02:01:02 kjc Exp $	*/
 
 /*
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_gif.c,v 1.155 2021/06/16 00:21:19 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_gif.c,v 1.159 2024/09/15 09:46:45 skrll Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -64,7 +64,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_gif.c,v 1.155 2021/06/16 00:21:19 riastradh Exp $
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
 
@@ -104,6 +103,8 @@ static struct {
 } gif_softcs __cacheline_aligned;
 
 struct psref_class *gv_psref_class __read_mostly;
+
+static pktq_rps_hash_func_t gif_pktq_rps_hash_p;
 
 static int	gifattach0(struct gif_softc *);
 static int	gif_output(struct ifnet *, struct mbuf *,
@@ -198,6 +199,8 @@ sysctl_gif_pmtu_perif(SYSCTLFN_ARGS)
 static void
 gif_sysctl_setup(void)
 {
+	const struct sysctlnode *node = NULL;
+
 	gif_sysctl = NULL;
 
 #ifdef INET
@@ -258,6 +261,21 @@ gif_sysctl_setup(void)
 		       CTL_NET, PF_INET6, IPPROTO_IPV6,
 		       IPV6CTL_GIF_PMTU, CTL_EOL);
 #endif
+
+	sysctl_createv(&gif_sysctl, 0, NULL, &node,
+		       CTLFLAG_PERMANENT,
+		       CTLTYPE_NODE, "gif",
+		       SYSCTL_DESCR("gif global control"),
+		       NULL, 0, NULL, 0,
+		       CTL_NET, CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(&gif_sysctl, 0, &node, NULL,
+		       CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+		       CTLTYPE_STRING, "rps_hash",
+		       SYSCTL_DESCR("Interface rps hash function control"),
+		       sysctl_pktq_rps_hash_handler, 0, (void *)&gif_pktq_rps_hash_p,
+		       PKTQ_RPS_HASH_NAME_LEN,
+		       CTL_CREATE, CTL_EOL);
 }
 
 static void
@@ -318,6 +336,7 @@ gifinit(void)
 
 	gv_psref_class = psref_class_create("gifvar", IPL_SOFTNET);
 
+	gif_pktq_rps_hash_p = pktq_rps_hash_default;
 	gif_sysctl_setup();
 }
 
@@ -703,11 +722,7 @@ gif_input(struct mbuf *m, int af, struct ifnet *ifp)
 		return;
 	}
 
-#ifdef GIF_MPSAFE
-	const u_int h = curcpu()->ci_index;
-#else
-	const uint32_t h = pktq_rps_hash(m);
-#endif
+	const uint32_t h = pktq_rps_hash(&gif_pktq_rps_hash_p, m);
 	if (__predict_true(pktq_enqueue(pktq, m, h))) {
 		if_statadd2(ifp, if_ibytes, pktlen, if_ipackets, 1);
 	} else {
@@ -848,7 +863,7 @@ gif_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 
 		/*
 		 * calls gif_getref_variant() for other softcs to check
-		 * address pair duplicattion
+		 * address pair duplication
 		 */
 		bound = curlwp_bind();
 		error = gif_set_tunnel(&sc->gif_if, src, dst);
@@ -1145,12 +1160,13 @@ gif_set_tunnel(struct ifnet *ifp, struct sockaddr *src, struct sockaddr *dst)
 	return 0;
 
  out:
+	mutex_exit(&sc->gif_lock);
+	encap_lock_exit();
+
 	sockaddr_free(nsrc);
 	sockaddr_free(ndst);
 	kmem_free(nvar, sizeof(*nvar));
 
-	mutex_exit(&sc->gif_lock);
-	encap_lock_exit();
 #ifndef GIF_MPSAFE
 	splx(s);
 #endif

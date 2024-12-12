@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.235 2021/03/04 20:17:00 palle Exp $
+# $NetBSD: GENERIC,v 1.241 2024/07/16 12:01:19 riastradh Exp $
 #
 # GENERIC machine description file
 #
@@ -22,7 +22,7 @@ include 	"arch/sparc64/conf/std.sparc64"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident		"GENERIC-$Revision: 1.235 $"
+#ident		"GENERIC-$Revision: 1.241 $"
 
 maxusers	64
 
@@ -145,18 +145,20 @@ options 	DKWEDGE_METHOD_GPT	# Supports GPT partitions as wedges
 #options 	DKWEDGE_METHOD_MBR	# Support MBR partitions as wedges
 #options 	DKWEDGE_METHOD_APPLE	# Support Apple partitions as wedges
 #options 	DKWEDGE_METHOD_RDB	# Support RDB partitions as wedges
+#options 	DKWEDGE_METHOD_TOS	# Support Atari "TOS" partitions as wedges
 
 ## File systems.
 include "conf/filesystems.config"
 
 ## File system options.
-options 	NFSSERVER	# Sun NFS-compatible filesystem server
+options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
+options 	WAPBL		# File system journaling support
+options 	NFSSERVER	# Network File System server
 
 ## Network protocol support.  In most environments, INET is required.
 options 	INET		# IP (Internet Protocol) v4
@@ -407,6 +409,7 @@ virtio* at pci? dev ? function ?	# Virtio PCI device
 # the baloon driver can not work on machines with non-4k pages
 #viomb*	at virtio?			# Virtio memory balloon device
 ld*	at virtio?			# Virtio disk device
+viocon*	at virtio?			# Virtio serial device
 vioif*	at virtio?			# Virtio network device
 viornd* at virtio?			# Virtio entropy device
 vioscsi* at virtio?			# Virtio SCSI device
@@ -419,9 +422,6 @@ vioscsi* at virtio?			# Virtio SCSI device
 fdc0	at sbus? slot ? offset ?		# SUNW,fdtwo
 #fdc0	at ebus?				# fdthree, EXPERIMENTAL
 fd*	at fdc0					# the drive itself
-
-# Pull in optional local configuration
-cinclude "arch/sparc64/conf/GENERIC.local"
 
 #
 # accept filters
@@ -854,6 +854,7 @@ pseudo-device	fss			# file system snapshot device
 #pseudo-device	bcsp			# BlueCore Serial Protocol
 #pseudo-device	btuart			# Bluetooth HCI UART (H4)
 pseudo-device	lockstat		# lock profiling
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 # drvctl - needed to show device dictionary via drvctl(8)
 pseudo-device	drvctl
@@ -867,3 +868,6 @@ options 	PAX_SEGVGUARD=0		# PaX Segmentation fault guard
 # options 	PAX_MPROTECT=0		# PaX mprotect(2) restrictions
 # options 	PAX_MPROTECT_DEBUG=1	# PaX mprotect debug
 options 	PAX_ASLR=1		# PaX Address Space Layout Randomization
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/sparc64/conf/GENERIC.local"

@@ -1,4 +1,4 @@
-/*	$NetBSD: sign.c,v 1.7 2018/02/06 21:36:46 christos Exp $	*/
+/*	$NetBSD: sign.c,v 1.9 2022/11/08 01:03:27 uwe Exp $	*/
 
 /*-
  * Copyright (c) 2008 The NetBSD Foundation, Inc.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: sign.c,v 1.7 2018/02/06 21:36:46 christos Exp $");
+__RCSID("$NetBSD: sign.c,v 1.9 2022/11/08 01:03:27 uwe Exp $");
 
 #ifndef DISABLE_SIGN
 #include "syslogd.h"
@@ -313,14 +313,14 @@ sign_sg_init(struct filed *Files)
 		logerror("Unable to allocate memory");	\
 		return false;				\
 	}						\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define ALLOC_SG(x) do {				\
 	ALLOC_OR_FALSE(x);				\
 	(x)->last_msg_num = 1; /* cf. section 4.2.5 */	\
 	STAILQ_INIT(&(x)->hashes);			\
 	STAILQ_INIT(&(x)->files);			\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 /* alloc(fq) and add to SGs file queue */
 #define ASSIGN_FQ() do {				\
@@ -329,7 +329,7 @@ sign_sg_init(struct filed *Files)
 	f->f_sg = newsg;				\
 	DPRINTF(D_SIGN, "SG@%p <--> f@%p\n", newsg, f); \
 	STAILQ_INSERT_TAIL(&newsg->files, fq, entries); \
-} while (/*CONSTCOND*/0)
+} while (0)
 
 	switch (GlobalSign.sg) {
 	case 0:
@@ -514,7 +514,7 @@ sign_send_certificate_block(struct signature_group_t *sg)
 	char *tstamp;
 	char payload[SIGN_MAX_PAYLOAD_LENGTH];
 	char sd[SIGN_MAX_SD_LENGTH];
-	size_t payload_len, sd_len, fragment_len;
+	size_t payload_len, fragment_len;
 	size_t payload_index = 0;
 
 	/* do nothing if CBs already sent or if there was no message in SG */
@@ -540,6 +540,7 @@ sign_send_certificate_block(struct signature_group_t *sg)
 			fragment_len = SIGN_MAX_FRAG_LENGTH;
 
 		/* format SD */
+		size_t sd_len __diagused;
 		sd_len = snprintf(sd, sizeof(sd), "[ssign-cert "
 		    "VER=\"%s\" RSID=\"%" PRIuFAST64 "\" SG=\"%d\" "
 		    "SPRI=\"%d\" TBPL=\"%zu\" INDEX=\"%zu\" "

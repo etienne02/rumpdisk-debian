@@ -1,4 +1,4 @@
-#	$NetBSD: NetBSD.dist.base,v 1.237 2021/08/16 06:56:28 mrg Exp $
+#	$NetBSD: NetBSD.dist.base,v 1.259 2024/04/08 12:38:59 christos Exp $
 #	@(#)4.4BSD.dist	8.1 (Berkeley) 6/13/93
 
 # Do not customize this file as it may be overwritten on upgrades.
@@ -13,7 +13,7 @@
 ./dev
 ./dev/altq
 ./dev/fd
-./dev/pts
+./dev/pts			mode=0555
 ./etc
 ./etc/X11
 ./etc/X11/fs
@@ -66,6 +66,7 @@
 ./lib/npf
 ./libdata
 ./libdata/firmware
+./libdata/firmware/amdgpu
 ./libdata/firmware/if_athn
 ./libdata/firmware/if_bwfm
 ./libdata/firmware/if_ipw
@@ -78,7 +79,82 @@
 ./libdata/firmware/if_wpi
 ./libdata/firmware/nouveau
 ./libdata/firmware/nouveau/nvidia
+./libdata/firmware/nouveau/nvidia/gk20a
+./libdata/firmware/nouveau/nvidia/gm200
+./libdata/firmware/nouveau/nvidia/gm200/acr
+./libdata/firmware/nouveau/nvidia/gm200/gr
+./libdata/firmware/nouveau/nvidia/gm204
+./libdata/firmware/nouveau/nvidia/gm204/acr
+./libdata/firmware/nouveau/nvidia/gm204/gr
 ./libdata/firmware/nouveau/nvidia/gm206
+./libdata/firmware/nouveau/nvidia/gm206/acr
+./libdata/firmware/nouveau/nvidia/gm206/gr
+./libdata/firmware/nouveau/nvidia/gm20b
+./libdata/firmware/nouveau/nvidia/gm20b/acr
+./libdata/firmware/nouveau/nvidia/gm20b/gr
+./libdata/firmware/nouveau/nvidia/gm20b/pmu
+./libdata/firmware/nouveau/nvidia/gp100
+./libdata/firmware/nouveau/nvidia/gp100/acr
+./libdata/firmware/nouveau/nvidia/gp100/gr
+./libdata/firmware/nouveau/nvidia/gp102
+./libdata/firmware/nouveau/nvidia/gp102/acr
+./libdata/firmware/nouveau/nvidia/gp102/gr
+./libdata/firmware/nouveau/nvidia/gp102/nvdec
+./libdata/firmware/nouveau/nvidia/gp102/sec2
+./libdata/firmware/nouveau/nvidia/gp104
+./libdata/firmware/nouveau/nvidia/gp104/acr
+./libdata/firmware/nouveau/nvidia/gp104/gr
+./libdata/firmware/nouveau/nvidia/gp104/nvdec
+./libdata/firmware/nouveau/nvidia/gp104/sec2
+./libdata/firmware/nouveau/nvidia/gp106
+./libdata/firmware/nouveau/nvidia/gp106/acr
+./libdata/firmware/nouveau/nvidia/gp106/gr
+./libdata/firmware/nouveau/nvidia/gp106/nvdec
+./libdata/firmware/nouveau/nvidia/gp106/sec2
+./libdata/firmware/nouveau/nvidia/gp107
+./libdata/firmware/nouveau/nvidia/gp107/acr
+./libdata/firmware/nouveau/nvidia/gp107/gr
+./libdata/firmware/nouveau/nvidia/gp107/nvdec
+./libdata/firmware/nouveau/nvidia/gp107/sec2
+./libdata/firmware/nouveau/nvidia/gp108
+./libdata/firmware/nouveau/nvidia/gp108/acr
+./libdata/firmware/nouveau/nvidia/gp108/gr
+./libdata/firmware/nouveau/nvidia/gp108/nvdec
+./libdata/firmware/nouveau/nvidia/gp108/sec2
+./libdata/firmware/nouveau/nvidia/gp10b
+./libdata/firmware/nouveau/nvidia/gp10b/acr
+./libdata/firmware/nouveau/nvidia/gp10b/gr
+./libdata/firmware/nouveau/nvidia/gp10b/pmu
+./libdata/firmware/nouveau/nvidia/gv100
+./libdata/firmware/nouveau/nvidia/gv100/acr
+./libdata/firmware/nouveau/nvidia/gv100/gr
+./libdata/firmware/nouveau/nvidia/gv100/nvdec
+./libdata/firmware/nouveau/nvidia/gv100/sec2
+./libdata/firmware/nouveau/nvidia/tu102
+./libdata/firmware/nouveau/nvidia/tu102/acr
+./libdata/firmware/nouveau/nvidia/tu102/gr
+./libdata/firmware/nouveau/nvidia/tu102/nvdec
+./libdata/firmware/nouveau/nvidia/tu102/sec2
+./libdata/firmware/nouveau/nvidia/tu104
+./libdata/firmware/nouveau/nvidia/tu104/acr
+./libdata/firmware/nouveau/nvidia/tu104/gr
+./libdata/firmware/nouveau/nvidia/tu104/nvdec
+./libdata/firmware/nouveau/nvidia/tu104/sec2
+./libdata/firmware/nouveau/nvidia/tu106
+./libdata/firmware/nouveau/nvidia/tu106/acr
+./libdata/firmware/nouveau/nvidia/tu106/gr
+./libdata/firmware/nouveau/nvidia/tu106/nvdec
+./libdata/firmware/nouveau/nvidia/tu106/sec2
+./libdata/firmware/nouveau/nvidia/tu116
+./libdata/firmware/nouveau/nvidia/tu116/acr
+./libdata/firmware/nouveau/nvidia/tu116/gr
+./libdata/firmware/nouveau/nvidia/tu116/nvdec
+./libdata/firmware/nouveau/nvidia/tu116/sec2
+./libdata/firmware/nouveau/nvidia/tu117
+./libdata/firmware/nouveau/nvidia/tu117/acr
+./libdata/firmware/nouveau/nvidia/tu117/gr
+./libdata/firmware/nouveau/nvidia/tu117/nvdec
+./libdata/firmware/nouveau/nvidia/tu117/sec2
 ./libdata/firmware/nvidia
 ./libdata/firmware/nvidia/tegra124
 ./libdata/firmware/nvidia/tegra210
@@ -207,10 +283,10 @@
 ./usr/include/g++/tr1
 ./usr/include/g++/tr1_impl
 ./usr/include/g++/tr2
-./usr/include/gcc-9
-./usr/include/gcc-9/sanitizer
 ./usr/include/gcc-10
 ./usr/include/gcc-10/sanitizer
+./usr/include/gcc-12
+./usr/include/gcc-12/sanitizer
 ./usr/include/gssapi
 ./usr/include/isofs
 ./usr/include/isofs/cd9660
@@ -250,6 +326,7 @@
 ./usr/include/prop
 ./usr/include/protocols
 ./usr/include/readline
+./usr/include/refuse
 ./usr/include/rpc
 ./usr/include/rpcsvc
 ./usr/include/rump
@@ -267,16 +344,20 @@
 ./usr/include/uvm
 ./usr/lib
 ./usr/lib/clang
-./usr/lib/clang/9.0.0
-./usr/lib/clang/9.0.0/include
-./usr/lib/clang/9.0.0/include/sanitizer
-./usr/lib/clang/9.0.0/include/xray
-./usr/lib/clang/9.0.0/lib
-./usr/lib/clang/9.0.0/lib/netbsd
-./usr/lib/clang/9.0.0/share
+./usr/lib/clang/13.0.0
+./usr/lib/clang/13.0.0/include
+./usr/lib/clang/13.0.0/include/sanitizer
+./usr/lib/clang/13.0.0/include/xray
+./usr/lib/clang/13.0.0/lib
+./usr/lib/clang/13.0.0/lib/netbsd
+./usr/lib/clang/13.0.0/share
 ./usr/lib/i18n
 ./usr/lib/lua
-./usr/lib/lua/5.3
+./usr/lib/lua/5.4
+./usr/lib/named
+./usr/lib/openssl
+./usr/lib/openssl/engines
+./usr/lib/openssl/modules
 ./usr/lib/pkgconfig
 ./usr/lib/postfix
 ./usr/lib/security
@@ -293,6 +374,8 @@
 ./usr/libdata/debug/usr/games
 ./usr/libdata/debug/usr/lib
 ./usr/libdata/debug/usr/lib/i18n
+./usr/libdata/debug/usr/lib/named
+./usr/libdata/debug/usr/lib/security
 ./usr/libdata/debug/usr/libexec
 ./usr/libdata/debug/usr/libexec/ching
 ./usr/libdata/debug/usr/libexec/lpr
@@ -301,13 +384,13 @@
 ./usr/libdata/debug/usr/sbin
 ./usr/libdata/firmware
 ./usr/libdata/firmware/bcm43xx
+./usr/libdata/firmware/radeon
 ./usr/libdata/ldscripts
 ./usr/libdata/lint
 ./usr/libdata/lint/strict-bool
 ./usr/libexec
 ./usr/libexec/ching
 ./usr/libexec/lpr
-./usr/libexec/named
 ./usr/libexec/postfix
 ./usr/mdec
 ./usr/pkg			ignore optional
@@ -315,6 +398,12 @@
 ./usr/share
 ./usr/share/atf
 ./usr/share/calendar
+./usr/share/certs
+./usr/share/certs/mozilla
+./usr/share/certs/mozilla/all
+./usr/share/certs/mozilla/code
+./usr/share/certs/mozilla/email
+./usr/share/certs/mozilla/server
 ./usr/share/dhcpd
 ./usr/share/dict
 ./usr/share/dict/papers
@@ -389,6 +478,9 @@
 ./usr/share/examples/asm/hello
 ./usr/share/examples/atf
 ./usr/share/examples/blocklist
+./usr/share/examples/certctl
+./usr/share/examples/devpubd
+./usr/share/examples/devpubd/hooks
 ./usr/share/examples/dhcp
 ./usr/share/examples/dhcpcd
 ./usr/share/examples/dhcpcd/hooks
@@ -891,7 +983,7 @@
 ./usr/share/locale/zh_TW.eucTW/LC_MESSAGES
 ./usr/share/locale/zh_TW/LC_MESSAGES
 ./usr/share/lua
-./usr/share/lua/5.3
+./usr/share/lua/5.4
 ./usr/share/man
 ./usr/share/man/cat1
 ./usr/share/man/cat1/atari
@@ -918,6 +1010,7 @@
 ./usr/share/man/cat4/hpcsh
 ./usr/share/man/cat4/hppa
 ./usr/share/man/cat4/i386
+./usr/share/man/cat4/luna68k
 ./usr/share/man/cat4/mac68k
 ./usr/share/man/cat4/macppc
 ./usr/share/man/cat4/mvme68k
@@ -1027,6 +1120,7 @@
 ./usr/share/man/html4/hpcsh
 ./usr/share/man/html4/hppa
 ./usr/share/man/html4/i386
+./usr/share/man/html4/luna68k
 ./usr/share/man/html4/mac68k
 ./usr/share/man/html4/macppc
 ./usr/share/man/html4/mvme68k
@@ -1136,6 +1230,7 @@
 ./usr/share/man/man4/hpcsh
 ./usr/share/man/man4/hppa
 ./usr/share/man/man4/i386
+./usr/share/man/man4/luna68k
 ./usr/share/man/man4/mac68k
 ./usr/share/man/man4/macppc
 ./usr/share/man/man4/mvme68k
@@ -1356,7 +1451,6 @@
 ./var/preserve
 ./var/quotas			gname=operator mode=0750
 ./var/run
-./var/run/named			mode=0775 uname=named gname=named
 ./var/rwho			uname=_rwhod gname=_rwhod
 ./var/shm			mode=01777
 ./var/spool

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -368,13 +368,13 @@ AdDisassembleOneTable (
         /* This is a "Data Table" (non-AML table) */
 
         AcpiOsPrintf (" * ACPI Data Table [%4.4s]\n *\n",
-            Table->Signature);
+            AcpiGbl_CDAT ? (char *) AcpiGbl_CDAT : Table->Signature);
         AcpiOsPrintf (" * Format: [HexOffset DecimalOffset ByteLength]  "
-            "FieldName : FieldValue\n */\n\n");
+            "FieldName : FieldValue (in hex)\n */\n\n");
 
         AcpiDmDumpDataTable (Table);
         fprintf (stderr, "Acpi Data Table [%4.4s] decoded\n",
-            Table->Signature);
+            AcpiGbl_CDAT ? (char *) AcpiGbl_CDAT : Table->Signature);
 
         if (File)
         {
@@ -681,6 +681,7 @@ AdDoExternalFileList (
             AcpiDmFinishNamespaceLoad (AcpiGbl_ParseOpRoot,
                 AcpiGbl_RootNode, OwnerId);
             AcpiPsDeleteParseTree (AcpiGbl_ParseOpRoot);
+            AcpiGbl_ParseOpRoot = NULL;
 
             ExternalListHead = ExternalListHead->Next;
         }

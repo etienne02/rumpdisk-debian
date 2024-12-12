@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -69,7 +69,8 @@ AcpiDmDumpSlic (
     ACPI_TABLE_HEADER       *Table)
 {
 
-    (void) AcpiDmDumpTable (Table->Length, sizeof (ACPI_TABLE_HEADER), Table,
+    (void) AcpiDmDumpTable (Table->Length, sizeof (ACPI_TABLE_HEADER),
+        (void *) (Table + sizeof (*Table)),
         Table->Length - sizeof (*Table), AcpiDmTableInfoSlic);
 }
 
@@ -228,6 +229,16 @@ AcpiDmDumpSrat (
         case ACPI_SRAT_TYPE_GENERIC_AFFINITY:
 
             InfoTable = AcpiDmTableInfoSrat5;
+            break;
+
+        case ACPI_SRAT_TYPE_GENERIC_PORT_AFFINITY:
+
+            InfoTable = AcpiDmTableInfoSrat6;
+            break;
+
+        case ACPI_SRAT_TYPE_RINTC_AFFINITY:
+
+            InfoTable = AcpiDmTableInfoSrat7;
             break;
 
         default:
@@ -573,7 +584,7 @@ AcpiDmDumpViot (
     ACPI_TABLE_VIOT         *Viot;
     ACPI_VIOT_HEADER        *ViotHeader;
     UINT16                  Length;
-    UINT16                  Offset;
+    UINT32                  Offset;
     ACPI_DMTABLE_INFO       *InfoTable;
 
     /* Main table */
@@ -725,13 +736,12 @@ AcpiDmDumpWpbt (
 {
     ACPI_STATUS             Status;
     ACPI_TABLE_WPBT         *Subtable;
-    UINT32                  Length = Table->Length;
     UINT16                  ArgumentsLength;
 
 
     /* Dump the main table */
 
-    Status = AcpiDmDumpTable (Length, 0, Table, 0, AcpiDmTableInfoWpbt);
+    Status = AcpiDmDumpTable (Table->Length, 0, Table, 0, AcpiDmTableInfoWpbt);
     if (ACPI_FAILURE (Status))
     {
         return;
@@ -742,8 +752,11 @@ AcpiDmDumpWpbt (
     Subtable = ACPI_CAST_PTR (ACPI_TABLE_WPBT, Table);
     ArgumentsLength = Subtable->ArgumentsLength;
 
-    /* Dump the arguments buffer */
+    /* Dump the arguments buffer if present */
 
-    (void) AcpiDmDumpTable (Table->Length, 0, Table, ArgumentsLength,
-        AcpiDmTableInfoWpbt0);
+    if (ArgumentsLength)
+    {
+        (void) AcpiDmDumpTable (Table->Length, 0, Table, ArgumentsLength,
+            AcpiDmTableInfoWpbt0);
+    }
 }

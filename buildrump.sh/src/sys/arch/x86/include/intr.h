@@ -1,4 +1,4 @@
-/*	$NetBSD: intr.h,v 1.62 2020/04/25 15:26:18 bouyer Exp $	*/
+/*	$NetBSD: intr.h,v 1.66 2022/09/07 00:40:18 knakahara Exp $	*/
 
 /*-
  * Copyright (c) 1998, 2001, 2006, 2007, 2008, 2019 The NetBSD Foundation, Inc.
@@ -100,7 +100,7 @@ struct intrsource {
 #endif
 	struct evcnt is_evcnt;		/* interrupt counter per cpu */
 	/*
-	 * is_mask_count requires special handling; it can only be modifed
+	 * is_mask_count requires special handling; it can only be modified
 	 * or examined on the CPU that owns the interrupt source, and such
 	 * references need to be protected by disabling interrupts.  This
 	 * is because intr_mask() can be called from an interrupt handler.
@@ -142,13 +142,12 @@ struct intrhand {
 	int	ih_pin;
 	int	ih_slot;
 #if defined(XEN)
+	int	ih_pending;
 	struct	intrhand *ih_evt_next;
 #endif
 	struct cpu_info *ih_cpu;
+	char	ih_xname[INTRDEVNAMEBUF];
 };
-
-#define IMASK(ci,level) (ci)->ci_imask[(level)]
-#define IUNMASK(ci,level) (ci)->ci_iunmask[(level)]
 
 #ifdef _KERNEL
 

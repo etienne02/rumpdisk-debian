@@ -1,4 +1,4 @@
-/*	$NetBSD: msan.h,v 1.6 2020/11/18 16:13:34 hannken Exp $	*/
+/*	$NetBSD: msan.h,v 1.8 2022/09/13 09:39:49 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2019-2020 Maxime Villard, m00nbsd.net
@@ -28,12 +28,19 @@
  * SUCH DAMAGE.
  */
 
+#ifndef	_AMD64_MSAN_H_
+#define	_AMD64_MSAN_H_
+
 #include <sys/ksyms.h>
 
 #include <uvm/uvm.h>
 
-#include <amd64/pmap.h>
-#include <amd64/vmparam.h>
+#include <machine/pmap.h>
+#include <machine/pmap_private.h>
+#include <machine/pte.h>
+#include <machine/vmparam.h>
+
+#include <x86/bootspace.h>
 
 #ifdef __HAVE_PCPU_AREA
 #error "PCPU area not allowed with KMSAN"
@@ -271,3 +278,5 @@ kmsan_md_unwind(void)
 		}
 	}
 }
+
+#endif	/* _AMD64_MSAN_H_ */

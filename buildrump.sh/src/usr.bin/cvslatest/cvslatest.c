@@ -1,4 +1,4 @@
-/*	$NetBSD: cvslatest.c,v 1.9 2020/11/03 22:21:43 christos Exp $	*/
+/*	$NetBSD: cvslatest.c,v 1.11 2023/03/07 21:24:19 christos Exp $	*/
 
 /*-
  * Copyright (c) 2016 The NetBSD Foundation, Inc.
@@ -38,7 +38,7 @@
 #endif
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: cvslatest.c,v 1.9 2020/11/03 22:21:43 christos Exp $");
+__RCSID("$NetBSD: cvslatest.c,v 1.11 2023/03/07 21:24:19 christos Exp $");
 
 /*
  * Find the latest timestamp in a set of CVS trees, by examining the
@@ -47,6 +47,7 @@ __RCSID("$NetBSD: cvslatest.c,v 1.9 2020/11/03 22:21:43 christos Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -91,6 +92,13 @@ getrepo(const FTSENT *e, char *repo, size_t maxrepo)
 }
 
 static void
+notimestamp(const char *fn, const char *ename, int uncommitted)
+{
+	warnx("Can't get timestamp from %s file `%s' in `%s'",
+	    uncommitted ? "uncommitted" : "locally modified", fn, ename);
+}
+
+static void
 getlatest(const FTSENT *e, const char *repo, struct latest *lat)
 {
 	static const char fmt[] = "%a %b %d %H:%M:%S %Y";
@@ -99,6 +107,7 @@ getlatest(const FTSENT *e, const char *repo, struct latest *lat)
 	char *fn, *dt, *p;
 	time_t t;
 	struct tm tm;
+	struct stat sb;
 	FILE *fp;
 
 	snprintf(name, sizeof(name), "%s/Entries", e->fts_accpath);
@@ -115,9 +124,18 @@ getlatest(const FTSENT *e, const char *repo, struct latest *lat)
 			goto mal;
 		if ((dt = strtok(NULL, "/")) == NULL)
 			goto mal;
-		if (strcmp(dt, "dummy timestamp") == 0) {
-			warnx("Can't get timestamp from uncommitted file `%s'",
-			    ename);
+		if (strncmp(dt, "dummy timestamp", 14) == 0) {
+			notimestamp(fn, ename, 1);
+			if (!ignore)
+				exit(EXIT_FAILURE);
+			continue;
+		}
+		if (strcmp(dt, "Result of merge") == 0) {
+			notimestamp(fn, ename, 0);
+			if (fstat(fileno(fp), &sb) == 0) {
+				t = sb.st_mtime;
+				goto compare;
+			}
 			if (!ignore)
 				exit(EXIT_FAILURE);
 			continue;
@@ -132,6 +150,7 @@ getlatest(const FTSENT *e, const char *repo, struct latest *lat)
 		if ((t = mktime(&tm)) == (time_t)-1)
 			errx(EXIT_FAILURE, "Time conversion `%s' in `%s'",
 			    dt, ename);
+compare:
 		if (lat->time == 0 || lat->time < t) {
 			lat->time = t;
 			snprintf(lat->path, sizeof(lat->path),

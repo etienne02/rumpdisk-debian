@@ -1,4 +1,4 @@
-/* $NetBSD: gicv3.c,v 1.46 2021/08/10 17:12:31 jmcneill Exp $ */
+/* $NetBSD: gicv3.c,v 1.54 2022/06/26 11:14:36 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2018 Jared McNeill <jmcneill@invisible.ca>
@@ -27,12 +27,11 @@
  */
 
 #include "opt_multiprocessor.h"
-#include "opt_gic.h"
 
 #define	_INTR_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gicv3.c,v 1.46 2021/08/10 17:12:31 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gicv3.c,v 1.54 2022/06/26 11:14:36 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -53,17 +52,14 @@ __KERNEL_RCSID(0, "$NetBSD: gicv3.c,v 1.46 2021/08/10 17:12:31 jmcneill Exp $");
 #include <arm/cortex/gicv3.h>
 #include <arm/cortex/gic_reg.h>
 
-#ifdef GIC_SPLFUNCS
-#include <arm/cortex/gic_splfuncs.h>
-#endif
-
 #define	PICTOSOFTC(pic)	\
-	((void *)((uintptr_t)(pic) - offsetof(struct gicv3_softc, sc_pic)))
+	container_of(pic, struct gicv3_softc, sc_pic)
 #define	LPITOSOFTC(lpi) \
-	((void *)((uintptr_t)(lpi) - offsetof(struct gicv3_softc, sc_lpi)))
+	container_of(lpi, struct gicv3_softc, sc_lpi)
 
 #define	IPL_TO_PRIORITY(sc, ipl)	(((0xff - (ipl)) << (sc)->sc_priority_shift) & 0xff)
 #define	IPL_TO_PMR(sc, ipl)		(((0xff - (ipl)) << (sc)->sc_pmr_shift) & 0xff)
+#define	IPL_TO_HWPL(ipl)		((ipl) >= IPL_VM ? (ipl) : IPL_NONE)
 
 #define	GIC_SUPPORTS_1OFN(sc)		(((sc)->sc_gicd_typer & GICD_TYPER_No1N) == 0)
 
@@ -185,8 +181,9 @@ gicv3_establish_irq(struct pic_softc *pic, struct intrsource *is)
 	const u_int icfg_shift = (is->is_irq & 0xf) * 2;
 
 	if (group == 0) {
-		/* SGIs and PPIs are always MP-safe */
+		/* SGIs and PPIs are per-CPU and always MP-safe */
 		is->is_mpsafe = true;
+		is->is_percpu = true;
 
 		/* Update interrupt configuration and priority on all redistributors */
 		for (n = 0; n < sc->sc_bsh_r_count; n++) {
@@ -235,12 +232,16 @@ gicv3_set_priority(struct pic_softc *pic, int ipl)
 {
 	struct gicv3_softc * const sc = PICTOSOFTC(pic);
 	struct cpu_info * const ci = curcpu();
+	const int hwpl = IPL_TO_HWPL(ipl);
 
-	if (ipl < ci->ci_hwpl) {
+	while (hwpl < ci->ci_hwpl) {
 		/* Lowering priority mask */
-		ci->ci_hwpl = ipl;
-		icc_pmr_write(IPL_TO_PMR(sc, ipl));
+		ci->ci_hwpl = hwpl;
+		__insn_barrier();
+		icc_pmr_write(IPL_TO_PMR(sc, hwpl));
 	}
+	__insn_barrier();
+	ci->ci_cpl = ipl;
 }
 
 static void
@@ -402,18 +403,6 @@ gicv3_cpu_init(struct pic_softc *pic, struct cpu_info *ci)
 	ci->ci_gic_redist = gicv3_find_redist(sc);
 	ci->ci_gic_sgir = gicv3_sgir(sc);
 
-	/* Store route to CPU for SPIs */
-	const uint64_t cpu_identity = gicv3_cpu_identity();
-	const u_int aff0 = __SHIFTOUT(cpu_identity, GICR_TYPER_Affinity_Value_Aff0);
-	const u_int aff1 = __SHIFTOUT(cpu_identity, GICR_TYPER_Affinity_Value_Aff1);
-	const u_int aff2 = __SHIFTOUT(cpu_identity, GICR_TYPER_Affinity_Value_Aff2);
-	const u_int aff3 = __SHIFTOUT(cpu_identity, GICR_TYPER_Affinity_Value_Aff3);
-	sc->sc_irouter[cpu_index(ci)] =
-	    __SHIFTIN(aff0, GICD_IROUTER_Aff0) |
-	    __SHIFTIN(aff1, GICD_IROUTER_Aff1) |
-	    __SHIFTIN(aff2, GICD_IROUTER_Aff2) |
-	    __SHIFTIN(aff3, GICD_IROUTER_Aff3);
-
 	/* Enable System register access and disable IRQ/FIQ bypass */
 	icc_sre = ICC_SRE_EL1_SRE | ICC_SRE_EL1_DFB | ICC_SRE_EL1_DIB;
 	icc_sre_write(icc_sre);
@@ -482,8 +471,7 @@ gicv3_get_affinity(struct pic_softc *pic, size_t irq, kcpuset_t *affinity)
 	if (group == 0) {
 		/* All CPUs are targets for group 0 (SGI/PPI) */
 		for (n = 0; n < ncpu; n++) {
-			if (sc->sc_irouter[n] != UINT64_MAX)
-				kcpuset_set(affinity, n);
+			kcpuset_set(affinity, n);
 		}
 	} else {
 		/* Find distributor targets (SPI) */
@@ -742,13 +730,14 @@ gicv3_irq_handler(void *frame)
 	struct gicv3_softc * const sc = gicv3_softc;
 	struct pic_softc *pic;
 	const int oldipl = ci->ci_cpl;
+	const int oldhwpl = IPL_TO_HWPL(oldipl);
 
 	ci->ci_data.cpu_nintr++;
 
-	if (ci->ci_hwpl != oldipl) {
-		ci->ci_hwpl = oldipl;
-		icc_pmr_write(IPL_TO_PMR(sc, oldipl));
-		if (oldipl == IPL_HIGH) {
+	if (ci->ci_hwpl != oldhwpl) {
+		ci->ci_hwpl = oldhwpl;
+		icc_pmr_write(IPL_TO_PMR(sc, oldhwpl));
+		if (oldhwpl == IPL_HIGH) {
 			return;
 		}
 	}
@@ -773,6 +762,7 @@ gicv3_irq_handler(void *frame)
 		if (__predict_false(ipl < ci->ci_cpl)) {
 			pic_do_pending_ints(I32_bit, ipl, frame);
 		} else if (ci->ci_cpl != ipl) {
+			KASSERT(ipl >= IPL_VM);
 			icc_pmr_write(IPL_TO_PMR(sc, ipl));
 			ci->ci_hwpl = ci->ci_cpl = ipl;
 		}
@@ -849,7 +839,7 @@ gicv3_quirk_rockchip_rk3399(struct gicv3_softc *sc)
 	/*
 	 * If we see fewer PMR bits than IPRIORITYRn bits here, it means
 	 * we have a secure view of IPRIORITYRn (this is not supposed to
-	 * happen!). 
+	 * happen!).
 	 */
 	if (pmrbits < pribits) {
 		aprint_verbose_dev(sc->sc_dev,
@@ -861,15 +851,19 @@ gicv3_quirk_rockchip_rk3399(struct gicv3_softc *sc)
 int
 gicv3_init(struct gicv3_softc *sc)
 {
-	int n;
+	CPU_INFO_ITERATOR cii;
+	struct cpu_info *ci;
 
 	KASSERT(CPU_IS_PRIMARY(curcpu()));
 
 	LIST_INIT(&sc->sc_lpi_callbacks);
 
+	/* Store route to CPU for SPIs */
 	sc->sc_irouter = kmem_zalloc(sizeof(*sc->sc_irouter) * ncpu, KM_SLEEP);
-	for (n = 0; n < ncpu; n++)
-		sc->sc_irouter[n] = UINT64_MAX;
+	for (CPU_INFO_FOREACH(cii, ci)) {
+		KASSERT(cpu_index(ci) < ncpu);
+		sc->sc_irouter[cpu_index(ci)] = ci->ci_cpuid;
+	}
 
 	sc->sc_gicd_typer = gicd_read_4(sc, GICD_TYPER);
 
@@ -954,10 +948,6 @@ gicv3_init(struct gicv3_softc *sc)
 #ifdef __HAVE_PREEMPTION
 	intr_establish_xname(IPI_KPREEMPT, IPL_VM, IST_MPSAFE | IST_EDGE, pic_ipi_kpreempt, (void *)-1, "IPI kpreempt");
 #endif
-#endif
-
-#ifdef GIC_SPLFUNCS
-	gic_spl_init();
 #endif
 
 	return 0;

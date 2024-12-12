@@ -1,4 +1,4 @@
-/*	$NetBSD: rtl81x9.c,v 1.111 2020/03/12 03:01:46 thorpej Exp $	*/
+/*	$NetBSD: rtl81x9.c,v 1.115 2024/06/29 12:11:11 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998
@@ -86,7 +86,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtl81x9.c,v 1.111 2020/03/12 03:01:46 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtl81x9.c,v 1.115 2024/06/29 12:11:11 riastradh Exp $");
 
 
 #include <sys/param.h>
@@ -95,7 +95,6 @@ __KERNEL_RCSID(0, "$NetBSD: rtl81x9.c,v 1.111 2020/03/12 03:01:46 thorpej Exp $"
 #include <sys/device.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 
@@ -700,7 +699,7 @@ rtk_attach(struct rtk_softc *sc)
 
 	/*
 	 * From this point forward, the attachment cannot fail. A failure
-	 * before this releases all resources thar may have been
+	 * before this releases all resources that may have been
 	 * allocated.
 	 */
 	sc->sc_flags |= RTK_ATTACHED;
@@ -1119,13 +1118,13 @@ rtk_txeof(struct rtk_softc *sc)
 		txd->txd_mbuf = NULL;
 
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
-		if_statadd_ref(nsr, if_collisions,
+		if_statadd_ref(ifp, nsr, if_collisions,
 		    (txstat & RTK_TXSTAT_COLLCNT) >> 24);
 
 		if (txstat & RTK_TXSTAT_TX_OK)
-			if_statinc_ref(nsr, if_opackets);
+			if_statinc_ref(ifp, nsr, if_opackets);
 		else {
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 
 			/*
 			 * Increase Early TX threshold if underrun occurred.
@@ -1166,7 +1165,7 @@ rtk_intr(void *arg)
 {
 	struct rtk_softc *sc;
 	struct ifnet *ifp;
-	uint16_t status;
+	uint16_t status, rndstatus = 0;
 	int handled;
 
 	sc = arg;
@@ -1186,8 +1185,10 @@ rtk_intr(void *arg)
 		if (status == 0xffff)
 			break; /* Card is gone... */
 
-		if (status)
+		if (status) {
 			CSR_WRITE_2(sc, RTK_ISR, status);
+			rndstatus = status;
+		}
 
 		if ((status & RTK_INTRS) == 0)
 			break;
@@ -1214,7 +1215,7 @@ rtk_intr(void *arg)
 
 	if_schedule_deferred_start(ifp);
 
-	rnd_add_uint32(&sc->rnd_source, status);
+	rnd_add_uint32(&sc->rnd_source, rndstatus);
 
 	return handled;
 }

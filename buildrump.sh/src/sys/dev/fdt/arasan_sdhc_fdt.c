@@ -1,4 +1,4 @@
-/* $NetBSD: arasan_sdhc_fdt.c,v 1.6 2021/01/27 03:10:21 thorpej Exp $ */
+/* $NetBSD: arasan_sdhc_fdt.c,v 1.13 2022/11/02 11:04:02 jmcneill Exp $ */
 
 /*-
  * Copyright (c) 2019 Jared McNeill <jmcneill@invisible.ca>
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arasan_sdhc_fdt.c,v 1.6 2021/01/27 03:10:21 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arasan_sdhc_fdt.c,v 1.13 2022/11/02 11:04:02 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -53,7 +53,8 @@ __KERNEL_RCSID(0, "$NetBSD: arasan_sdhc_fdt.c,v 1.6 2021/01/27 03:10:21 thorpej 
 #define	 RK3399_CORECFG_CLOCKMULTIPLIER		__BITS(7,0)
 
 enum arasan_sdhc_type {
-	AS_TYPE_RK3399 = 1,
+	AS_TYPE_GENERIC,
+	AS_TYPE_RK3399,
 };
 
 struct arasan_sdhc_softc {
@@ -75,6 +76,9 @@ struct arasan_sdhc_softc {
 static const struct device_compatible_entry compat_data[] = {
 	{ .compat = "rockchip,rk3399-sdhci-5.1",
 	  .value = AS_TYPE_RK3399 },
+
+	{ .compat = "arasan,sdhci-8.9a",
+	  .value = AS_TYPE_GENERIC },
 
 	DEVICE_COMPAT_EOL
 };
@@ -230,7 +234,6 @@ arasan_sdhc_attach(device_t parent, device_t self, void *aux)
 	bus_addr_t addr;
 	bus_size_t size;
 	u_int bus_width;
-	int error;
 	void *ih;
 
 	fdtbus_clock_assign(phandle);
@@ -270,9 +273,10 @@ arasan_sdhc_attach(device_t parent, device_t self, void *aux)
 	sc->sc_bsz = size;
 	sc->sc_type = of_compatible_lookup(phandle, compat_data)->value;
 
+#ifdef _LP64
 	const uint32_t caps = bus_space_read_4(sc->sc_bst, sc->sc_bsh, SDHC_CAPABILITIES);
 	if ((caps & (SDHC_ADMA2_SUPP|SDHC_64BIT_SYS_BUS)) == SDHC_ADMA2_SUPP) {
-		error = bus_dmatag_subregion(faa->faa_dmat, 0, 0xffffffff,
+		int error = bus_dmatag_subregion(faa->faa_dmat, 0, __MASK(32),
 		    &sc->sc_base.sc_dmat, BUS_DMA_WAITOK);
 		if (error != 0) {
 			aprint_error(": couldn't create DMA tag: %d\n", error);
@@ -281,6 +285,9 @@ arasan_sdhc_attach(device_t parent, device_t self, void *aux)
 	} else {
 		sc->sc_base.sc_dmat = faa->faa_dmat;
 	}
+#else
+	sc->sc_base.sc_dmat = faa->faa_dmat;
+#endif
 
 	sc->sc_base.sc_dev = self;
 	sc->sc_base.sc_host = sc->sc_host;
@@ -288,10 +295,10 @@ arasan_sdhc_attach(device_t parent, device_t self, void *aux)
 			       SDHC_FLAG_SINGLE_POWER_WRITE |
 			       SDHC_FLAG_32BIT_ACCESS |
 			       SDHC_FLAG_USE_DMA |
-			       SDHC_FLAG_USE_ADMA2 |
 			       SDHC_FLAG_STOP_WITH_TC;
-	if (bus_width == 8)
+	if (bus_width == 8) {
 		sc->sc_base.sc_flags |= SDHC_FLAG_8BIT_MODE;
+	}
 	sc->sc_base.sc_clkbase = clk_get_rate(sc->sc_clk_xin) / 1000;
 	sc->sc_base.sc_vendor_bus_clock = arasan_sdhc_bus_clock_pre;
 	sc->sc_base.sc_vendor_bus_clock_post = arasan_sdhc_bus_clock_post;

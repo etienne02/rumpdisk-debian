@@ -45,6 +45,7 @@
 #include <sys/callout.h>
 
 #include <linux/completion.h>
+#include <linux/types.h>
 #include <asm/barrier.h>
 
 /*
@@ -173,47 +174,6 @@ void
 device_rlprintf(int pps, device_t dev, const char *fmt, ...)
 	__printflike(3, 4);
 
-#define might_sleep()
-
-#define WARN(condition, msg)				\
-({							\
-	int __ret_warn_on = !!(condition);		\
-	if (unlikely(__ret_warn_on))			\
-		printf((msg));				\
-	unlikely(__ret_warn_on);			\
-})
-
-
-
-#define WARN_ON(condition)				\
-({							\
-	int __ret_warn_on = !!(condition);		\
-	if (unlikely(__ret_warn_on))			\
-		printf("WARN_ON: " #condition "\n");	\
-	unlikely(__ret_warn_on);			\
-})
-
-#define WARN_ON_ONCE(condition) ({			\
-	static int __warned;				\
-	int __ret_warn_once = !!(condition);		\
-							\
-	if (unlikely(__ret_warn_once))			\
-		if (WARN_ON(!__warned))			\
-			__warned = 1;			\
-	unlikely(__ret_warn_once);			\
-})
-
-#define BUG_ON(cond)					\
-	do {						\
-		if (cond)				\
-			panic("BUG_ON: " #cond);	\
-	} while (0)
-
-#define BUG()						\
-	do {						\
-		panic("BUG: %s:%d", __FILE__, __LINE__);	\
-	} while (0)
-
 #define vchiq_static_assert(cond) CTASSERT(cond)
 
 /*
@@ -293,11 +253,9 @@ int fatal_signal_pending(VCHIQ_THREAD_T);
 #define __user
 
 #define	current			curlwp
-#define EXPORT_SYMBOL(x)
 #define PAGE_ALIGN(addr)	round_page(addr)
 
 typedef	void	irqreturn_t;
-typedef	off_t	loff_t;
 
 #define BCM2835_MBOX_CHAN_VCHIQ	3
 #define bcm_mbox_write	bcmmbox_write

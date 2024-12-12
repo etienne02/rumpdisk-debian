@@ -1,4 +1,4 @@
-/*	$NetBSD: if_ethersubr.c,v 1.293 2021/05/17 04:07:43 yamaguchi Exp $	*/
+/*	$NetBSD: if_ethersubr.c,v 1.329 2024/09/28 09:03:13 mlelstv Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_ethersubr.c,v 1.293 2021/05/17 04:07:43 yamaguchi Exp $");
+__KERNEL_RCSID(0, "$NetBSD: if_ethersubr.c,v 1.329 2024/09/28 09:03:13 mlelstv Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -78,7 +78,6 @@ __KERNEL_RCSID(0, "$NetBSD: if_ethersubr.c,v 1.293 2021/05/17 04:07:43 yamaguchi
 #include "bridge.h"
 #include "arp.h"
 #include "agr.h"
-#include "lagg.h"
 
 #include <sys/sysctl.h>
 #include <sys/mbuf.h>
@@ -90,9 +89,9 @@ __KERNEL_RCSID(0, "$NetBSD: if_ethersubr.c,v 1.293 2021/05/17 04:07:43 yamaguchi
 #include <sys/rndsource.h>
 #include <sys/cpu.h>
 #include <sys/kmem.h>
+#include <sys/hook.h>
 
 #include <net/if.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/if_llc.h>
 #include <net/if_dl.h>
@@ -120,12 +119,10 @@ __KERNEL_RCSID(0, "$NetBSD: if_ethersubr.c,v 1.293 2021/05/17 04:07:43 yamaguchi
 #endif
 
 #if NAGR > 0
-#include <net/agr/ieee8023_slowprotocols.h>	/* XXX */
+#include <net/ether_slowprotocols.h>
 #include <net/agr/ieee8023ad.h>
 #include <net/agr/if_agrvar.h>
 #endif
-
-#include <net/lagg/if_laggvar.h>
 
 #if NBRIDGE > 0
 #include <net/if_bridgevar.h>
@@ -183,8 +180,7 @@ const uint8_t ethermulticastaddr_slowprotocols[ETHER_ADDR_LEN] =
     { 0x01, 0x80, 0xc2, 0x00, 0x00, 0x02 };
 #define senderr(e) { error = (e); goto bad;}
 
-/* if_lagg(4) support */
-struct mbuf *(*lagg_input_ethernet_p)(struct ifnet *, struct mbuf *);
+static pktq_rps_hash_func_t ether_pktq_rps_hash_p;
 
 static int ether_output(struct ifnet *, struct mbuf *,
     const struct sockaddr *, const struct rtentry *);
@@ -427,7 +423,8 @@ ether_output(struct ifnet * const ifp0, struct mbuf * const m0,
 
 #if NCARP > 0
 	if (ifp0 != ifp && ifp0->if_type == IFT_CARP) {
-	 	memcpy(eh->ether_shost, CLLADDR(ifp0->if_sadl),
+		/* update with virtual MAC */
+		memcpy(eh->ether_shost, CLLADDR(ifp0->if_sadl),
 		    sizeof(eh->ether_shost));
 	}
 #endif
@@ -466,8 +463,7 @@ ether_output(struct ifnet * const ifp0, struct mbuf * const m0,
 
 bad:
 	if_statinc(ifp, if_oerrors);
-	if (m)
-		m_freem(m);
+	m_freem(m);
 	return error;
 }
 
@@ -577,12 +573,11 @@ bad:
 static void
 ether_input_llc(struct ifnet *ifp, struct mbuf *m, struct ether_header *eh)
 {
-	struct ifqueue *inq = NULL;
-	int isr = 0;
+	pktqueue_t *pktq = NULL;
 	struct llc *l;
 
 	if (m->m_len < sizeof(*eh) + sizeof(struct llc))
-		goto drop;
+		goto error;
 
 	l = (struct llc *)(eh+1);
 	switch (l->llc_dsap) {
@@ -591,16 +586,15 @@ ether_input_llc(struct ifnet *ifp, struct mbuf *m, struct ether_header *eh)
 		switch (l->llc_control) {
 		case LLC_UI:
 			if (l->llc_ssap != LLC_SNAP_LSAP)
-				goto drop;
+				goto error;
 
 			if (memcmp(&(l->llc_snap_org_code)[0],
 			    at_org_code, sizeof(at_org_code)) == 0 &&
 			    ntohs(l->llc_snap_ether_type) ==
 			    ETHERTYPE_ATALK) {
-				inq = &atintrq2;
+				pktq = at_pktq2;
 				m_adj(m, sizeof(struct ether_header)
 				    + sizeof(struct llc));
-				isr = NETISR_ATALK;
 				break;
 			}
 
@@ -616,21 +610,27 @@ ether_input_llc(struct ifnet *ifp, struct mbuf *m, struct ether_header *eh)
 			}
 
 		default:
-			goto drop;
+			goto error;
 		}
 		break;
 #endif
 	default:
-		goto drop;
+		goto noproto;
 	}
 
-	KASSERT(inq != NULL);
-	IFQ_ENQUEUE_ISR(inq, m, isr);
+	KASSERT(pktq != NULL);
+	if (__predict_false(!pktq_enqueue(pktq, m, 0))) {
+		m_freem(m);
+	}
 	return;
 
-drop:
+noproto:
 	m_freem(m);
-	if_statinc(ifp, if_ierrors); /* XXX should have a dedicated counter? */
+	if_statinc(ifp, if_noproto);
+	return;
+error:
+	m_freem(m);
+	if_statinc(ifp, if_ierrors);
 	return;
 }
 #endif /* defined (LLC) || defined (NETATALK) */
@@ -643,14 +643,17 @@ drop:
 void
 ether_input(struct ifnet *ifp, struct mbuf *m)
 {
+#if NVLAN > 0 || defined(MBUFTRACE)
 	struct ethercom *ec = (struct ethercom *) ifp;
+#endif
 	pktqueue_t *pktq = NULL;
-	struct ifqueue *inq = NULL;
 	uint16_t etype;
 	struct ether_header *eh;
 	size_t ehlen;
 	static int earlypkts;
-	int isr = 0;
+
+	/* No RPS for not-IP. */
+	pktq_rps_hash_func_t rps_hash = NULL;
 
 	KASSERT(!cpu_intr_p());
 	KASSERT((m->m_flags & M_PKTHDR) != 0);
@@ -663,8 +666,10 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 #endif
 
 	if (__predict_false(m->m_len < sizeof(*eh))) {
-		if ((m = m_pullup(m, sizeof(*eh))) == NULL)
-			goto dropped;
+		if ((m = m_pullup(m, sizeof(*eh))) == NULL) {
+			if_statinc(ifp, if_ierrors);
+			return;
+		}
 	}
 
 	eh = mtod(m, struct ether_header *);
@@ -692,7 +697,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 		}
 		mutex_exit(&bigpktpps_lock);
 #endif
-		goto drop;
+		goto error;
 	}
 
 	if (ETHER_IS_MULTICAST(eh->ether_dhost)) {
@@ -722,18 +727,17 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 
 	if_statadd(ifp, if_ibytes, m->m_pkthdr.len);
 
-#if NCARP > 0
-	if (__predict_false(ifp->if_carp && ifp->if_type != IFT_CARP)) {
-		/*
-		 * Clear M_PROMISC, in case the packet comes from a
-		 * vlan.
-		 */
-		m->m_flags &= ~M_PROMISC;
-		if (carp_input(m, (uint8_t *)&eh->ether_shost,
-		    (uint8_t *)&eh->ether_dhost, eh->ether_type) == 0)
+	if (!vlan_has_tag(m) && etype == ETHERTYPE_VLAN) {
+		m = ether_strip_vlantag(m);
+		if (m == NULL) {
+			if_statinc(ifp, if_ierrors);
 			return;
+		}
+
+		eh = mtod(m, struct ether_header *);
+		etype = ntohs(eh->ether_type);
+		ehlen = sizeof(*eh);
 	}
-#endif
 
 	if ((m->m_flags & (M_BCAST | M_MCAST | M_PROMISC)) == 0 &&
 	    (ifp->if_flags & IFF_PROMISC) != 0 &&
@@ -752,8 +756,12 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 		etype = ntohs(eh->ether_type);
 	}
 
+	/*
+	 * Processing a logical interfaces that are able
+	 * to configure vlan(4).
+	*/
 #if NAGR > 0
-	if (ifp->if_agrprivate &&
+	if (ifp->if_lagg != NULL &&
 	    __predict_true(etype != ETHERTYPE_SLOWPROTOCOLS)) {
 		m->m_flags &= ~M_PROMISC;
 		agr_input(ifp, m);
@@ -761,68 +769,56 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 	}
 #endif
 
-	/* Handle input from a lagg(4) port */
-	if (ifp->if_type == IFT_IEEE8023ADLAG) {
-		KASSERT(lagg_input_ethernet_p != NULL);
-		m = (*lagg_input_ethernet_p)(ifp, m);
-		if (m == NULL)
-			return;
+	/*
+	 * VLAN processing.
+	 *
+	 * VLAN provides service delimiting so the frames are
+	 * processed before other handlings. If a VLAN interface
+	 * does not exist to take those frames, they're returned
+	 * to ether_input().
+	 */
+
+	if (vlan_has_tag(m)) {
+		if (EVL_VLANOFTAG(vlan_get_tag(m)) == 0) {
+			if (etype == ETHERTYPE_VLAN ||
+			     etype == ETHERTYPE_QINQ)
+				goto drop;
+
+			/* XXX we should actually use the prio value? */
+			m->m_flags &= ~M_VLANTAG;
+		} else {
+#if NVLAN > 0
+			if (ec->ec_nvlans > 0) {
+				m = vlan_input(ifp, m);
+
+				/* vlan_input() called ether_input() recursively */
+				if (m == NULL)
+					return;
+			}
+#endif
+			/* drop VLAN frames not for this port. */
+			goto noproto;
+		}
 	}
 
-	/*
-	 * If VLANs are configured on the interface, check to
-	 * see if the device performed the decapsulation and
-	 * provided us with the tag.
-	 */
-	if (ec->ec_nvlans && vlan_has_tag(m)) {
-#if NVLAN > 0
+#if NCARP > 0
+	if (__predict_false(ifp->if_carp && ifp->if_type != IFT_CARP)) {
 		/*
-		 * vlan_input() will either recursively call ether_input()
-		 * or drop the packet.
+		 * Clear M_PROMISC, in case the packet comes from a
+		 * vlan.
 		 */
-		vlan_input(ifp, m);
-		return;
-#else
-		goto drop;
-#endif
+		m->m_flags &= ~M_PROMISC;
+		if (carp_input(m, (uint8_t *)&eh->ether_shost,
+		    (uint8_t *)&eh->ether_dhost, eh->ether_type) == 0)
+			return;
 	}
+#endif
 
 	/*
 	 * Handle protocols that expect to have the Ethernet header
 	 * (and possibly FCS) intact.
 	 */
 	switch (etype) {
-	case ETHERTYPE_VLAN: {
-		struct ether_vlan_header *evl = (void *)eh;
-
-		/*
-		 * If there is a tag of 0, then the VLAN header was probably
-		 * just being used to store the priority.  Extract the ether
-		 * type, and if IP or IPV6, let them deal with it.
-		 */
-		if (m->m_len >= sizeof(*evl) &&
-		    EVL_VLANOFTAG(evl->evl_tag) == 0) {
-			etype = ntohs(evl->evl_proto);
-			ehlen = sizeof(*evl);
-			if ((m->m_flags & M_PROMISC) == 0 &&
-			    (etype == ETHERTYPE_IP ||
-			     etype == ETHERTYPE_IPV6))
-				break;
-		}
-
-#if NVLAN > 0
-		/*
-		 * vlan_input() will either recursively call ether_input()
-		 * or drop the packet.
-		 */
-		if (ec->ec_nvlans != 0) {
-			vlan_input(ifp, m);
-			return;
-		} else
-#endif
-			goto drop;
-	}
-
 #if NPPPOE > 0
 	case ETHERTYPE_PPPOEDISC:
 		pppoedisc_input(ifp, m);
@@ -837,20 +833,20 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 		uint8_t subtype;
 
 		if (m->m_pkthdr.len < sizeof(*eh) + sizeof(subtype))
-			goto drop;
+			goto error;
 
 		m_copydata(m, sizeof(*eh), sizeof(subtype), &subtype);
 		switch (subtype) {
 #if NAGR > 0
 		case SLOWPROTOCOLS_SUBTYPE_LACP:
-			if (ifp->if_agrprivate) {
+			if (ifp->if_lagg != NULL) {
 				ieee8023ad_lacp_input(ifp, m);
 				return;
 			}
 			break;
 
 		case SLOWPROTOCOLS_SUBTYPE_MARKER:
-			if (ifp->if_agrprivate) {
+			if (ifp->if_lagg != NULL) {
 				ieee8023ad_marker_input(ifp, m);
 				return;
 			}
@@ -860,7 +856,7 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 		default:
 			if (subtype == 0 || subtype > 10) {
 				/* illegal value */
-				goto drop;
+				goto noproto;
 			}
 			/* unknown subtype */
 			break;
@@ -885,8 +881,22 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 		ether_input_llc(ifp, m, eh);
 		return;
 #else
-		goto drop;
+		/* ethertype of 0-1500 is regarded as noproto */
+		goto noproto;
 #endif
+	}
+
+	/* For ARP packets, store the source address so that
+	 * ARP DAD probes can be validated. */
+	if (etype == ETHERTYPE_ARP) {
+		struct m_tag *mtag;
+
+		mtag = m_tag_get(PACKET_TAG_ETHERNET_SRC, ETHER_ADDR_LEN,
+		    M_NOWAIT);
+		if (mtag != NULL) {
+			memcpy(mtag + 1, &eh->ether_shost, ETHER_ADDR_LEN);
+			m_tag_prepend(m, mtag);
+		}
 	}
 
 	/* Strip off the Ethernet header. */
@@ -900,11 +910,11 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 			return;
 #endif
 		pktq = ip_pktq;
+		rps_hash = atomic_load_relaxed(&ether_pktq_rps_hash_p);
 		break;
 
 	case ETHERTYPE_ARP:
-		isr = NETISR_ARP;
-		inq = &arpintrq;
+		pktq = arp_pktq;
 		break;
 
 	case ETHERTYPE_REVARP:
@@ -915,19 +925,19 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 #ifdef INET6
 	case ETHERTYPE_IPV6:
 		if (__predict_false(!in6_present))
-			goto drop;
+			goto noproto;
 #ifdef GATEWAY
 		if (ip6flow_fastforward(&m))
 			return;
 #endif
 		pktq = ip6_pktq;
+		rps_hash = atomic_load_relaxed(&ether_pktq_rps_hash_p);
 		break;
 #endif
 
 #ifdef NETATALK
 	case ETHERTYPE_ATALK:
-		isr = NETISR_ATALK;
-		inq = &atintrq1;
+		pktq = at_pktq1;
 		break;
 
 	case ETHERTYPE_AARP:
@@ -937,39 +947,64 @@ ether_input(struct ifnet *ifp, struct mbuf *m)
 
 #ifdef MPLS
 	case ETHERTYPE_MPLS:
-		isr = NETISR_MPLS;
-		inq = &mplsintrq;
+		pktq = mpls_pktq;
 		break;
 #endif
 
 	default:
-		goto drop;
+		goto noproto;
 	}
 
-	if (__predict_true(pktq)) {
-#ifdef NET_MPSAFE
-		const u_int h = curcpu()->ci_index;
-#else
-		const uint32_t h = pktq_rps_hash(m);
-#endif
-		if (__predict_false(!pktq_enqueue(pktq, m, h))) {
-			m_freem(m);
-		}
-		return;
+	KASSERT(pktq != NULL);
+	const uint32_t h = rps_hash ? pktq_rps_hash(&rps_hash, m) : 0;
+	if (__predict_false(!pktq_enqueue(pktq, m, h))) {
+		m_freem(m);
 	}
-
-	if (__predict_false(!inq)) {
-		/* Should not happen. */
-		goto drop;
-	}
-
-	IFQ_ENQUEUE_ISR(inq, m, isr);
 	return;
 
 drop:
 	m_freem(m);
-dropped:
-	if_statinc(ifp, if_ierrors); /* XXX should have a dedicated counter? */
+	if_statinc(ifp, if_iqdrops);
+	return;
+noproto:
+	m_freem(m);
+	if_statinc(ifp, if_noproto);
+	return;
+error:
+	m_freem(m);
+	if_statinc(ifp, if_ierrors);
+	return;
+}
+
+static void
+ether_bpf_mtap(struct bpf_if *bp, struct mbuf *m, u_int direction)
+{
+	struct ether_vlan_header evl;
+	struct m_hdr mh, md;
+
+	KASSERT(bp != NULL);
+
+	if (!vlan_has_tag(m)) {
+		bpf_mtap3(bp, m, direction);
+		return;
+	}
+
+	memcpy(&evl, mtod(m, char *), ETHER_HDR_LEN);
+	evl.evl_proto = evl.evl_encap_proto;
+	evl.evl_encap_proto = htons(ETHERTYPE_VLAN);
+	evl.evl_tag = htons(vlan_get_tag(m));
+
+	md.mh_flags = 0;
+	md.mh_data = m->m_data + ETHER_HDR_LEN;
+	md.mh_len = m->m_len - ETHER_HDR_LEN;
+	md.mh_next = m->m_next;
+
+	mh.mh_flags = 0;
+	mh.mh_data = (char *)&evl;
+	mh.mh_len = sizeof(evl);
+	mh.mh_next = (struct mbuf *)&md;
+
+	bpf_mtap3(bp, (struct mbuf *)&mh, direction);
 }
 
 /*
@@ -997,17 +1032,6 @@ ether_snprintf(char *buf, size_t len, const u_char *ap)
 	return buf;
 }
 
-static void
-ether_link_state_changed(struct ifnet *ifp, int link_state)
-{
-#if NVLAN > 0
-	struct ethercom *ec = (void *)ifp;
-
-	if (ec->ec_nvlans)
-		vlan_link_state_changed(ifp, link_state);
-#endif
-}
-
 /*
  * Perform common duties while attaching to interface list
  */
@@ -1015,14 +1039,20 @@ void
 ether_ifattach(struct ifnet *ifp, const uint8_t *lla)
 {
 	struct ethercom *ec = (struct ethercom *)ifp;
+	char xnamebuf[HOOKNAMSIZ];
 
+	if (lla != NULL && ETHER_IS_MULTICAST(lla))
+		aprint_error("The multicast bit is set in the MAC address. "
+			"It's wrong.\n");
+	
 	ifp->if_type = IFT_ETHER;
 	ifp->if_hdrlen = ETHER_HDR_LEN;
 	ifp->if_dlt = DLT_EN10MB;
 	ifp->if_mtu = ETHERMTU;
 	ifp->if_output = ether_output;
 	ifp->_if_input = ether_input;
-	ifp->if_link_state_changed = ether_link_state_changed;
+	if (ec->ec_capabilities & ETHERCAP_VLAN_HWTAGGING)
+		ifp->if_bpf_mtap = ether_bpf_mtap;
 	if (ifp->if_baudrate == 0)
 		ifp->if_baudrate = IF_Mbps(10);		/* just a default */
 
@@ -1035,6 +1065,9 @@ ether_ifattach(struct ifnet *ifp, const uint8_t *lla)
 	ec->ec_flags = 0;
 	ifp->if_broadcastaddr = etherbroadcastaddr;
 	bpf_attach(ifp, DLT_EN10MB, sizeof(struct ether_header));
+	snprintf(xnamebuf, sizeof(xnamebuf),
+	    "%s-ether_ifdetachhooks", ifp->if_xname);
+	ec->ec_ifdetach_hooks = simplehook_create(IPL_NET, xnamebuf);
 #ifdef MBUFTRACE
 	mowner_init_owner(&ec->ec_tx_mowner, ifp->if_xname, "tx");
 	mowner_init_owner(&ec->ec_rx_mowner, ifp->if_xname, "rx");
@@ -1061,20 +1094,11 @@ ether_ifdetach(struct ifnet *ifp)
 	ifp->if_ioctl = __FPTRCAST(int (*)(struct ifnet *, u_long, void *),
 	    enxio);
 
-#if NBRIDGE > 0
-	if (ifp->if_bridge)
-		bridge_ifdetach(ifp);
-#endif
-	bpf_detach(ifp);
-#if NVLAN > 0
-	if (ec->ec_nvlans)
-		vlan_ifdetach(ifp);
-#endif
+	simplehook_dohooks(ec->ec_ifdetach_hooks);
+	KASSERT(!simplehook_has_hooks(ec->ec_ifdetach_hooks));
+	simplehook_destroy(ec->ec_ifdetach_hooks);
 
-#if NLAGG > 0
-	if (ifp->if_lagg)
-		lagg_ifdetach(ifp);
-#endif
+	bpf_detach(ifp);
 
 	ETHER_LOCK(ec);
 	KASSERT(ec->ec_nvlans == 0);
@@ -1091,6 +1115,36 @@ ether_ifdetach(struct ifnet *ifp)
 	ifp->if_mowner = NULL;
 	MOWNER_DETACH(&ec->ec_rx_mowner);
 	MOWNER_DETACH(&ec->ec_tx_mowner);
+}
+
+void *
+ether_ifdetachhook_establish(struct ifnet *ifp,
+    void (*fn)(void *), void *arg)
+{
+	struct ethercom *ec;
+	khook_t *hk;
+
+	if (ifp->if_type != IFT_ETHER)
+		return NULL;
+
+	ec = (struct ethercom *)ifp;
+	hk = simplehook_establish(ec->ec_ifdetach_hooks,
+	    fn, arg);
+
+	return (void *)hk;
+}
+
+void
+ether_ifdetachhook_disestablish(struct ifnet *ifp,
+    void *vhook, kmutex_t *lock)
+{
+	struct ethercom *ec;
+
+	if (vhook == NULL)
+		return;
+
+	ec = (struct ethercom *)ifp;
+	simplehook_disestablish(ec->ec_ifdetach_hooks, vhook, lock);
 }
 
 #if 0
@@ -1421,20 +1475,22 @@ ether_ioctl_reinit(struct ethercom *ec)
 	struct ifnet *ifp = &ec->ec_if;
 	int error;
 
+	KASSERTMSG(IFNET_LOCKED(ifp), "%s", ifp->if_xname);
+
 	switch (ifp->if_flags & (IFF_UP | IFF_RUNNING)) {
 	case IFF_RUNNING:
 		/*
 		 * If interface is marked down and it is running,
 		 * then stop and disable it.
 		 */
-		(*ifp->if_stop)(ifp, 1);
+		if_stop(ifp, 1);
 		break;
 	case IFF_UP:
 		/*
 		 * If interface is marked up and it is stopped, then
 		 * start it.
 		 */
-		return (*ifp->if_init)(ifp);
+		return if_init(ifp);
 	case IFF_UP | IFF_RUNNING:
 		error = 0;
 		if (ec->ec_ifflags_cb != NULL) {
@@ -1445,10 +1501,10 @@ ether_ioctl_reinit(struct ethercom *ec)
 				 * changes in any other flags that
 				 * affect the hardware state.
 				 */
-				return (*ifp->if_init)(ifp);
+				return if_init(ifp);
 			}
 		} else
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		return error;
 	case 0:
 		break;
@@ -1480,7 +1536,7 @@ ether_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		    && (ifp->if_flags & (IFF_UP | IFF_RUNNING)) !=
 		       (IFF_UP | IFF_RUNNING)) {
 			ifp->if_flags |= IFF_UP;
-			if ((error = (*ifp->if_init)(ifp)) != 0)
+			if ((error = if_init(ifp)) != 0)
 				return error;
 		}
 #ifdef INET
@@ -1505,7 +1561,7 @@ ether_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 			return error;
 		else if (ifp->if_flags & IFF_UP) {
 			/* Make sure the device notices the MTU change. */
-			return (*ifp->if_init)(ifp);
+			return if_init(ifp);
 		} else
 			return 0;
 	    }
@@ -1634,6 +1690,206 @@ ether_disable_vlan_mtu(struct ifnet *ifp)
 	return error;
 }
 
+/*
+ * Add and delete VLAN TAG
+ */
+int
+ether_add_vlantag(struct ifnet *ifp, uint16_t vtag, bool *vlanmtu_status)
+{
+	struct ethercom *ec = (void *)ifp;
+	struct vlanid_list *vidp;
+	bool vlanmtu_enabled;
+	uint16_t vid = EVL_VLANOFTAG(vtag);
+	int error;
+
+	vlanmtu_enabled = false;
+
+	/* Add a vid to the list */
+	vidp = kmem_alloc(sizeof(*vidp), KM_SLEEP);
+	vidp->vid = vid;
+
+	ETHER_LOCK(ec);
+	ec->ec_nvlans++;
+	SIMPLEQ_INSERT_TAIL(&ec->ec_vids, vidp, vid_list);
+	ETHER_UNLOCK(ec);
+
+	if (ec->ec_nvlans == 1) {
+		IFNET_LOCK(ifp);
+		error = ether_enable_vlan_mtu(ifp);
+		IFNET_UNLOCK(ifp);
+
+		if (error == 0) {
+			vlanmtu_enabled = true;
+		} else if (error != -1) {
+			goto fail;
+		}
+	}
+
+	if (ec->ec_vlan_cb != NULL) {
+		error = (*ec->ec_vlan_cb)(ec, vid, true);
+		if (error != 0)
+			goto fail;
+	}
+
+	if (vlanmtu_status != NULL)
+		*vlanmtu_status = vlanmtu_enabled;
+
+	return 0;
+fail:
+	ETHER_LOCK(ec);
+	ec->ec_nvlans--;
+	SIMPLEQ_REMOVE(&ec->ec_vids, vidp, vlanid_list, vid_list);
+	ETHER_UNLOCK(ec);
+
+	if (vlanmtu_enabled) {
+		IFNET_LOCK(ifp);
+		(void)ether_disable_vlan_mtu(ifp);
+		IFNET_UNLOCK(ifp);
+	}
+
+	kmem_free(vidp, sizeof(*vidp));
+
+	return error;
+}
+
+int
+ether_del_vlantag(struct ifnet *ifp, uint16_t vtag)
+{
+	struct ethercom *ec = (void *)ifp;
+	struct vlanid_list *vidp;
+	uint16_t vid = EVL_VLANOFTAG(vtag);
+
+	ETHER_LOCK(ec);
+	SIMPLEQ_FOREACH(vidp, &ec->ec_vids, vid_list) {
+		if (vidp->vid == vid) {
+			SIMPLEQ_REMOVE(&ec->ec_vids, vidp,
+			    vlanid_list, vid_list);
+			ec->ec_nvlans--;
+			break;
+		}
+	}
+	ETHER_UNLOCK(ec);
+
+	if (vidp == NULL)
+		return ENOENT;
+
+	if (ec->ec_vlan_cb != NULL) {
+		(void)(*ec->ec_vlan_cb)(ec, vidp->vid, false);
+	}
+
+	if (ec->ec_nvlans == 0) {
+		IFNET_LOCK(ifp);
+		(void)ether_disable_vlan_mtu(ifp);
+		IFNET_UNLOCK(ifp);
+	}
+
+	kmem_free(vidp, sizeof(*vidp));
+
+	return 0;
+}
+
+int
+ether_inject_vlantag(struct mbuf **mp, uint16_t etype, uint16_t tag)
+{
+	static const size_t min_data_len =
+	    ETHER_MIN_LEN - ETHER_CRC_LEN + ETHER_VLAN_ENCAP_LEN;
+	/* Used to pad ethernet frames with < ETHER_MIN_LEN bytes */
+	static const char vlan_zero_pad_buff[ETHER_MIN_LEN] = { 0 };
+
+	struct ether_vlan_header *evl;
+	struct mbuf *m = *mp;
+	int error;
+
+	error = 0;
+
+	M_PREPEND(m, ETHER_VLAN_ENCAP_LEN, M_DONTWAIT);
+	if (m == NULL) {
+		error = ENOBUFS;
+		goto out;
+	}
+
+	if (m->m_len < sizeof(*evl)) {
+		m = m_pullup(m, sizeof(*evl));
+		if (m == NULL) {
+			error = ENOBUFS;
+			goto out;
+		}
+	}
+
+	/*
+	 * Transform the Ethernet header into an
+	 * Ethernet header with 802.1Q encapsulation.
+	 */
+	memmove(mtod(m, void *),
+	    mtod(m, char *) + ETHER_VLAN_ENCAP_LEN,
+	    sizeof(struct ether_header));
+	evl = mtod(m, struct ether_vlan_header *);
+	evl->evl_proto = evl->evl_encap_proto;
+	evl->evl_encap_proto = htons(etype);
+	evl->evl_tag = htons(tag);
+
+	/*
+	 * To cater for VLAN-aware layer 2 ethernet
+	 * switches which may need to strip the tag
+	 * before forwarding the packet, make sure
+	 * the packet+tag is at least 68 bytes long.
+	 * This is necessary because our parent will
+	 * only pad to 64 bytes (ETHER_MIN_LEN) and
+	 * some switches will not pad by themselves
+	 * after deleting a tag.
+	 */
+	if (m->m_pkthdr.len < min_data_len) {
+		m_copyback(m, m->m_pkthdr.len,
+		    min_data_len - m->m_pkthdr.len,
+		    vlan_zero_pad_buff);
+	}
+
+	m->m_flags &= ~M_VLANTAG;
+
+out:
+	*mp = m;
+	return error;
+}
+
+struct mbuf *
+ether_strip_vlantag(struct mbuf *m)
+{
+	struct ether_vlan_header *evl;
+
+	if (m->m_len < sizeof(*evl) &&
+	    (m = m_pullup(m, sizeof(*evl))) == NULL) {
+		return NULL;
+	}
+
+	if (m_makewritable(&m, 0, sizeof(*evl), M_DONTWAIT)) {
+		m_freem(m);
+		return NULL;
+	}
+
+	evl = mtod(m, struct ether_vlan_header *);
+	KASSERT(ntohs(evl->evl_encap_proto) == ETHERTYPE_VLAN);
+
+	vlan_set_tag(m, ntohs(evl->evl_tag));
+
+	/*
+	 * Restore the original ethertype.  We'll remove
+	 * the encapsulation after we've found the vlan
+	 * interface corresponding to the tag.
+	 */
+	evl->evl_encap_proto = evl->evl_proto;
+
+	/*
+	 * Remove the encapsulation header and append tag.
+	 * The original header has already been fixed up above.
+	 */
+	vlan_set_tag(m, ntohs(evl->evl_tag));
+	memmove((char *)evl + ETHER_VLAN_ENCAP_LEN, evl,
+	    offsetof(struct ether_vlan_header, evl_encap_proto));
+	m_adj(m, ETHER_VLAN_ENCAP_LEN);
+
+	return m;
+}
+
 static int
 ether_multicast_sysctl(SYSCTLFN_ARGS)
 {
@@ -1745,6 +2001,14 @@ ether_sysctl_setup(struct sysctllog **clog)
 		       SYSCTL_DESCR("multicast addresses"),
 		       ether_multicast_sysctl, 0, NULL, 0,
 		       CTL_CREATE, CTL_EOL);
+
+	sysctl_createv(clog, 0, &rnode, NULL,
+		       CTLFLAG_PERMANENT | CTLFLAG_READWRITE,
+		       CTLTYPE_STRING, "rps_hash",
+		       SYSCTL_DESCR("Interface rps hash function control"),
+		       sysctl_pktq_rps_hash_handler, 0, (void *)&ether_pktq_rps_hash_p,
+		       PKTQ_RPS_HASH_NAME_LEN,
+		       CTL_CREATE, CTL_EOL);
 }
 
 void
@@ -1754,5 +2018,6 @@ etherinit(void)
 #ifdef DIAGNOSTIC
 	mutex_init(&bigpktpps_lock, MUTEX_DEFAULT, IPL_NET);
 #endif
+	ether_pktq_rps_hash_p = pktq_rps_hash_default;
 	ether_sysctl_setup(NULL);
 }

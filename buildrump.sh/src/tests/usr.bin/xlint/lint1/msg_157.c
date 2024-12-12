@@ -1,10 +1,13 @@
-/*	$NetBSD: msg_157.c,v 1.3 2021/03/16 23:39:41 rillig Exp $	*/
+/*	$NetBSD: msg_157.c,v 1.6 2023/08/26 10:43:53 rillig Exp $	*/
 # 3 "msg_157.c"
 
-// Test for message: ANSI C treats constant as unsigned [157]
+/* Test for message: C90 treats constant as unsigned [157] */
+
+/* lint1-flags: -w -X 351 */
 
 /*
  * A rather strange definition for an ARGB color.
  * Luckily, 'double' has more than 32 significant binary digits.
  */
-double white = 0xFFFFFFFF;	/* expect: 157 */
+/* expect+1: warning: C90 treats constant as unsigned [157] */
+double white = 0xFFFFFFFF;

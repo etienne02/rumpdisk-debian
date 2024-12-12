@@ -1,5 +1,5 @@
 %{
-/* $NetBSD: scan.l,v 1.135 2021/07/11 18:03:47 rillig Exp $ */
+/* $NetBSD: scan.l,v 1.143 2024/12/08 17:12:01 rillig Exp $ */
 
 /*
  * Copyright (c) 1996 Christopher G. Demetriou.  All Rights Reserved.
@@ -16,8 +16,8 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *      This product includes software developed by Jochen Pohl for
- *      The NetBSD Project.
+ *	This product includes software developed by Jochen Pohl for
+ *	The NetBSD Project.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
  *
@@ -34,8 +34,8 @@
  */
 
 #include <sys/cdefs.h>
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: scan.l,v 1.135 2021/07/11 18:03:47 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: scan.l,v 1.143 2024/12/08 17:12:01 rillig Exp $");
 #endif
 
 #include "lint1.h"
@@ -44,30 +44,37 @@ __RCSID("$NetBSD: scan.l,v 1.135 2021/07/11 18:03:47 rillig Exp $");
 %}
 
 
-L	[_A-Za-z]
-D	[0-9]
-NZD	[1-9]
-BD	[0-1]
-OD	[0-7]
-HD	[0-9A-Fa-f]
-EX	([eE][+-]?[0-9]+)
-HX	(p[+-]?[0-9A-Fa-f]+)
-TL	([fFlL]?[i]?)
+HEX	[0-9A-Fa-f]
+EXP	([eE][+-]?[0-9]+)
+PEXP	(p[+-]?[0-9A-Fa-f]+)
+FSUF	([fFlL]?[i]?)
 
+punctuator_1	[\[\](){}.]|->
+punctuator_2	{punctuator_1}|\+\+|--|[&*+\-~!]
+punctuator_3	{punctuator_2}|\/|%|<<|>>|<|>|<=|>=|==|!=|\^|\||&&|\|\|
+punctuator_4	{punctuator_3}|\?|:|::|;|\.\.\.
+punctuator_5	{punctuator_4}|=|\*=|\/=|%=|\+=|-=|<<=|>>=|&=|\^=|\|=
+punctuator_6	{punctuator_5}|,|#|##
+punctuator_7	{punctuator_6}|<:|:>|<%|%>|%:|%:%:
+punctuator	{punctuator_7}|@
+
+%pointer
 %option nounput
+
+%x preprocessing
 
 %%
 
-{L}({L}|{D})*			return lex_name(yytext, yyleng);
-0[bB]{BD}+[lLuU]*		return lex_integer_constant(yytext, yyleng, 2);
-0{OD}*[lLuU]*			return lex_integer_constant(yytext, yyleng, 8);
-{NZD}{D}*[lLuU]*		return lex_integer_constant(yytext, yyleng, 10);
-0[xX]{HD}+[lLuU]*		return lex_integer_constant(yytext, yyleng, 16);
-{D}+\.{D}*{EX}?{TL}		|
-{D}+{EX}{TL}			|
-0[xX]{HD}+\.{HD}*{HX}{TL}	|
-0[xX]{HD}+{HX}{TL}		|
-\.{D}+{EX}?{TL}			return lex_floating_constant(yytext, yyleng);
+[_A-Za-z][_A-Za-z0-9]*		return lex_name(yytext, yyleng);
+0[bB][01]+[lLuU]*		return lex_integer_constant(yytext, yyleng, 2);
+0[0-7]*[lLuU]*			return lex_integer_constant(yytext, yyleng, 8);
+[1-9][0-9]*[lLuU]*		return lex_integer_constant(yytext, yyleng, 10);
+0[xX]{HEX}+[lLuU]*		return lex_integer_constant(yytext, yyleng, 16);
+[0-9]+\.[0-9]*{EXP}?{FSUF}	|
+[0-9]+{EXP}{FSUF}		|
+0[xX]{HEX}+\.{HEX}*{PEXP}{FSUF}	|
+0[xX]{HEX}+{PEXP}{FSUF}		|
+\.[0-9]+{EXP}?{FSUF}		return lex_floating_constant(yytext, yyleng);
 "="				return T_ASSIGN;
 "*="				return lex_operator(T_OPASSIGN, MULASS);
 "/="				return lex_operator(T_OPASSIGN, DIVASS);
@@ -92,8 +99,8 @@ TL	([fFlL]?[i]?)
 ">="				return lex_operator(T_RELATIONAL, GE);
 "<<"				return lex_operator(T_SHIFT, SHL);
 ">>"				return lex_operator(T_SHIFT, SHR);
-"++"				return lex_operator(T_INCDEC, INC);
-"--"				return lex_operator(T_INCDEC, DEC);
+"++"				return yylval.y_inc = true, T_INCDEC;
+"--"				return yylval.y_inc = false, T_INCDEC;
 "->"				return T_ARROW;
 "."				return T_POINT;
 "+"				return lex_operator(T_ADDITIVE, PLUS);
@@ -116,17 +123,42 @@ TL	([fFlL]?[i]?)
 "("				return T_LPAREN;
 ")"				return T_RPAREN;
 "..."				return T_ELLIPSIS;
+"::"				return T_DCOLON;
 "'"				return lex_character_constant();
 "L'"				return lex_wide_character_constant();
-^#.*$				lex_directive(yytext);
 \n				lex_next_line();
 \t|" "|\f|\v			;
 "/*"				lex_comment();
 "//"				lex_slash_slash_comment();
+
+^#				{
+					BEGIN preprocessing;
+					lex_pp_begin();
+				}
+<preprocessing>[_A-Za-z][_A-Za-z0-9]*	lex_pp_identifier(yytext);
+<preprocessing>\.?[0-9]('?[_A-Za-z0-9]|[EePp][-+][0-9]+|\.)*	lex_pp_number(yytext);
+<preprocessing>\'		lex_pp_character_constant();
+<preprocessing>\"		lex_pp_string_literal();
+<preprocessing>{punctuator}	lex_pp_punctuator(yytext);
+<preprocessing>\/\*		lex_pp_comment();
+<preprocessing>[ \f\t\v]+	lex_pp_whitespace();
+<preprocessing>.		lex_unknown_character(yytext[0]);
+<preprocessing>\n		{
+					lex_pp_end();
+					lex_next_line();
+					BEGIN INITIAL;
+				}
+
 .				lex_unknown_character(yytext[0]);
 
 %%
 
+/*
+ * In the above list of regular expressions, the tokens for character
+ * constants, string literals and comments are incomplete; they only match
+ * a prefix.  The remainder of these tokens is scanned by reading bytes
+ * directly from the input stream.
+ */
 int
 lex_input(void)
 {

@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_commonsubs.c,v 1.4 2018/09/03 16:29:34 riastradh Exp $	*/
+/*	$NetBSD: nfs_commonsubs.c,v 1.7 2024/07/05 04:31:52 rin Exp $	*/
 /*-
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -34,7 +34,7 @@
 
 #include <sys/cdefs.h>
 /* __FBSDID("FreeBSD: head/sys/fs/nfs/nfs_commonsubs.c 308708 2016-11-16 01:11:49Z cperciva "); */
-__RCSID("$NetBSD: nfs_commonsubs.c,v 1.4 2018/09/03 16:29:34 riastradh Exp $");
+__RCSID("$NetBSD: nfs_commonsubs.c,v 1.7 2024/07/05 04:31:52 rin Exp $");
 
 /*
  * These functions support the macros and help fiddle mbuf chains for
@@ -1793,7 +1793,7 @@ nfsv4_loadattr(struct nfsrv_descript *nd, vnode_t vp,
 				*retcmpp = NFSERR_ATTRNOTSUPP;
 			/*
 			 * and get out of the loop, since we can't parse
-			 * the unknown attrbute data.
+			 * the unknown attribute data.
 			 */
 			bitpos = NFSATTRBIT_MAX;
 			break;
@@ -2772,7 +2772,7 @@ tryagain:
 		/*
 		 * If an '@' is found and the domain name matches, search for
 		 * the name with dns stripped off.
-		 * Mixed case alpahbetics will match for the domain name, but
+		 * Mixed case alphabetics will match for the domain name, but
 		 * all upper case will not.
 		 */
 		if (cnt == 0 && i < len && i > 0 &&
@@ -4091,8 +4091,7 @@ nfsv4_seqsession(uint32_t seqid, uint32_t slotid, uint32_t highslot,
 			/* No reply cached, so just do it. */
 			slots[slotid].nfssl_inprog = 1;
 	} else if ((slots[slotid].nfssl_seq + 1) == seqid) {
-		if (slots[slotid].nfssl_reply != NULL)
-			m_freem(slots[slotid].nfssl_reply);
+		m_freem(slots[slotid].nfssl_reply);
 		slots[slotid].nfssl_reply = NULL;
 		slots[slotid].nfssl_inprog = 1;
 		slots[slotid].nfssl_seq++;
@@ -4115,8 +4114,7 @@ nfsv4_seqsess_cacherep(uint32_t slotid, struct nfsslot *slots, int repstat,
 		*rep = slots[slotid].nfssl_reply;
 		slots[slotid].nfssl_reply = NULL;
 	} else {
-		if (slots[slotid].nfssl_reply != NULL)
-			m_freem(slots[slotid].nfssl_reply);
+		m_freem(slots[slotid].nfssl_reply);
 		slots[slotid].nfssl_reply = *rep;
 	}
 	slots[slotid].nfssl_inprog = 0;

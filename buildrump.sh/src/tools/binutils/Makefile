@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.32 2021/05/07 23:00:04 christos Exp $
+#	$NetBSD: Makefile,v 1.39 2024/07/04 01:19:44 christos Exp $
 
 .include <bsd.hostinit.mk>
 
@@ -11,17 +11,16 @@ BRANDING?=	\
 	--with-bugurl="http://www.NetBSD.org/support/send-pr.html" \
 	--with-lib-path="=/usr/lib" --with-sysroot
 
-CONFIGURE_ARGS=	--target=${MACHINE_GNU_PLATFORM} --disable-nls \
+BASE_CONFIGURE_ARGS= \
+	--target=${MACHINE_GNU_PLATFORM} \
+	--enable-initfini-array=yes \
+	--enable-default-execstack=no \
+	${BRANDING}
+
+CONFIGURE_ARGS=	--disable-nls --disable-werror \
+		--with-zstd=no \
 		--program-transform-name="s,^,${MACHINE_GNU_PLATFORM}-," \
-		--disable-werror --enable-initfini-array=yes \
-		${BRANDING}
-
-build/gas/m68k-parse.c: ${GNUHOSTDIST}/gas/m68k-parse.c
-	@mkdir build 2>/dev/null || true
-	@mkdir build/gas 2>/dev/null || true
-	cat ${GNUHOSTDIST}/gas/m68k-parse.c > ${.TARGET}
-
-.configure_done: build/gas/m68k-parse.c
+		${BASE_CONFIGURE_ARGS}
 
 MAKE_ARGS=	MACHINE= MAKEINFO=${TOOL_MAKEINFO:Q}
 
@@ -36,12 +35,16 @@ INSTALL_TARGET+=install-gprof
 
 CCADDFLAGS=	-I${GNUHOSTDIST}/include  -I${DESTDIR}/usr/include
 CCADDFLAGS+=	-B${DESTDIR}/usr/lib/
+CCADDFLAGS+=	${HOST_CPPFLAGS}
 LDADDFLAGS=	-L${DESTDIR}/lib -L${DESTDIR}/usr/lib
 
 # Force avoiding possibly non-executable install-sh.
 CONFIGURE_ENV+= ac_cv_path_mkdir="${TOOLDIR}/bin/${MACHINE_GNU_PLATFORM}-install -d"
 
 NEWCONFIGDIR?=	${.CURDIR}/../..
+.if ${EXTERNAL_BINUTILS_SUBDIR} == "binutils.old"
+MKNATIVE=	${.CURDIR}/mknative-binutils.old
+.endif
 MKNATIVE?=	${.CURDIR}/mknative-binutils
 
 native-binutils: .native/.configure_done
@@ -67,9 +70,7 @@ native-binutils: .native/.configure_done
 			${HOST_SH} ${GNUHOSTDIST}/configure \
 			--build=`${GNUHOSTDIST}/config.guess` \
 			--host=${MACHINE_GNU_PLATFORM} \
-			--target=${MACHINE_GNU_PLATFORM} \
-			--enable-initfini-array=yes \
-			${BRANDING} \
+			${BASE_CONFIGURE_ARGS} \
 		)
 	PATH=${TOOLDIR}/bin:$$PATH; export PATH; \
 		(cd .native && ${MAKE} configure-host)

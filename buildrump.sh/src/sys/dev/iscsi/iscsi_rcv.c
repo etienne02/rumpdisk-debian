@@ -1,4 +1,4 @@
-/*	$NetBSD: iscsi_rcv.c,v 1.25 2018/03/04 07:37:43 mlelstv Exp $	*/
+/*	$NetBSD: iscsi_rcv.c,v 1.27 2024/11/03 10:50:21 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 2004,2005,2006,2011 The NetBSD Foundation, Inc.
@@ -51,7 +51,7 @@
 STATIC int
 my_soo_read(connection_t *conn, struct uio *u, int flags)
 {
-	struct socket *so = conn->c_sock->f_socket;
+	struct socket *so;
 	int ret;
 #ifdef ISCSI_DEBUG
 	size_t resid = u->uio_resid;
@@ -59,22 +59,34 @@ my_soo_read(connection_t *conn, struct uio *u, int flags)
 
 	DEBC(conn, 99, ("soo_read req: %zu\n", resid));
 
-	if (flags & MSG_WAITALL) {
-		flags &= ~MSG_WAITALL;
-		do {
-			int oresid = u->uio_resid;
-			ret = (*so->so_receive)(so, NULL, u, NULL, NULL, &flags);
-			if (!ret && u->uio_resid == oresid)
-				break;
-		} while (!ret && u->uio_resid > 0);
-	} else
-		ret = (*so->so_receive)(so, NULL, u, NULL, NULL, &flags);
+	rw_enter(&conn->c_sock_rw, RW_READER);
+	if (conn->c_sock == NULL) {
+		ret = EIO;
+	} else {
+		so = conn->c_sock->f_socket;
+		if (flags & MSG_WAITALL) {
+			flags &= ~MSG_WAITALL;
+			do {
+				int oresid = u->uio_resid;
+				ret = (*so->so_receive)(so, NULL, u,
+				   NULL, NULL, &flags);
+				if (!ret && u->uio_resid == oresid)
+					break;
+			} while (!ret && u->uio_resid > 0);
+		} else {
+			ret = (*so->so_receive)(so, NULL, u,
+			   NULL, NULL, &flags);
+		}
+	}
+
+	rw_exit(&conn->c_sock_rw);
 
 	if (ret || (flags != MSG_DONTWAIT && u->uio_resid)) {
 		DEBC(conn, 1, ("Read failed (ret: %d, req: %zu, out: %zu)\n",
 		               ret, resid, u->uio_resid));
-		handle_connection_error(conn, ISCSI_STATUS_SOCKET_ERROR,
-		                        RECOVER_CONNECTION);
+		if (ret)
+			handle_connection_error(conn, ISCSI_STATUS_SOCKET_ERROR,
+						RECOVER_CONNECTION);
 		return 1;
 	}
 	return 0;
@@ -570,18 +582,20 @@ receive_logout_pdu(connection_t *conn, pdu_t *pdu, ccb_t *req_ccb)
 
 	wake_ccb(req_ccb, status);
 
+	mutex_enter(&conn->c_lock);
 	if (!otherconn && conn->c_state == ST_LOGOUT_SENT) {
 		conn->c_terminating = ISCSI_STATUS_LOGOUT;
 		conn->c_state = ST_SETTLING;
 		conn->c_loggedout = (response) ? LOGOUT_FAILED : LOGOUT_SUCCESS;
+		mutex_exit(&conn->c_lock);
 
 		connection_timeout_stop(conn);
 
 		/* let send thread take over next step of cleanup */
 		mutex_enter(&conn->c_lock);
 		cv_broadcast(&conn->c_conn_cv);
-		mutex_exit(&conn->c_lock);
 	}
+	mutex_exit(&conn->c_lock);
 
 	return !otherconn;
 }
@@ -810,34 +824,41 @@ receive_asynch_pdu(connection_t *conn, pdu_t *pdu)
 	case 0:		   		/* SCSI Asynch event. Don't know what to do with it... */
 		break;
 
-	case 1:		   		/* Target requests logout. */
+	case 1:	 	/* Target requests logout. */
 		if (conn->c_session->s_active_connections > 1) {
 			kill_connection(conn, ISCSI_STATUS_TARGET_LOGOUT,
 						LOGOUT_CONNECTION, FALSE);
 		} else {
-			kill_session(conn->c_session, ISCSI_STATUS_TARGET_LOGOUT,
-						 LOGOUT_SESSION, FALSE);
+			kill_session(conn->c_session->s_id,
+				ISCSI_STATUS_TARGET_LOGOUT, LOGOUT_SESSION,
+				FALSE);
 		}
 		break;
 
-	case 2:				/* Target is dropping connection */
+	case 2:		/* Target is dropping connection */
 		conn = find_connection(conn->c_session,
-					ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter1));
+		    ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter1));
 		if (conn != NULL) {
-			conn->c_Time2Wait = ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter2);
-			conn->c_Time2Retain = ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter3);
+			conn->c_Time2Wait =
+			    ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter2);
+			conn->c_Time2Retain =
+			    ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter3);
 			kill_connection(conn, ISCSI_STATUS_TARGET_DROP,
 					NO_LOGOUT, TRUE);
 		}
 		break;
 
-	case 3:				/* Target is dropping all connections of session */
-		conn->c_session->s_DefaultTime2Wait = ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter2);
-		conn->c_session->s_DefaultTime2Retain = ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter3);
-		kill_session(conn->c_session, ISCSI_STATUS_TARGET_DROP, NO_LOGOUT, TRUE);
+	case 3:		/* Target is dropping all connections of session */
+		conn->c_session->s_DefaultTime2Wait =
+		    ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter2);
+		conn->c_session->s_DefaultTime2Retain =
+		    ntohs(pdu->pdu_hdr.pduh_p.asynch.Parameter3);
+		kill_session(conn->c_session->s_id,
+			ISCSI_STATUS_TARGET_DROP, NO_LOGOUT,
+			TRUE);
 		break;
 
-	case 4:				/* Target requests parameter negotiation */
+	case 4:		/* Target requests parameter negotiation */
 		start_text_negotiation(conn);
 		break;
 
@@ -1144,12 +1165,12 @@ receive_pdu(connection_t *conn, pdu_t *pdu)
 	MaxCmdSN = ntohl(pdu->pdu_hdr.pduh_p.nop_in.MaxCmdSN);
 
 	/* received a valid frame, reset timeout */
+	conn->c_num_timeouts = 0;
 	if ((pdu->pdu_hdr.pduh_Opcode & OPCODE_MASK) == TOP_NOP_In &&
 	    TAILQ_EMPTY(&conn->c_ccbs_waiting))
 		connection_timeout_start(conn, conn->c_idle_timeout_val);
 	else
 		connection_timeout_start(conn, CONNECTION_TIMEOUT);
-	conn->c_num_timeouts = 0;
 
 	/* Update session window */
 	mutex_enter(&sess->s_lock);

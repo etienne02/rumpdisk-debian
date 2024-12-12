@@ -1,4 +1,4 @@
-/*	$NetBSD: xhcivar.h,v 1.19 2021/05/23 21:12:28 riastradh Exp $	*/
+/*	$NetBSD: xhcivar.h,v 1.24 2023/04/09 20:41:29 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2013 Jonathan A. Kollasch
@@ -29,7 +29,16 @@
 #ifndef _DEV_USB_XHCIVAR_H_
 #define _DEV_USB_XHCIVAR_H_
 
+#include <sys/types.h>
+
+#include <sys/condvar.h>
+#include <sys/device.h>
+#include <sys/mutex.h>
+#include <sys/pmf.h>
 #include <sys/pool.h>
+
+#include <dev/usb/usbdi.h>
+#include <dev/usb/usbdivar.h>
 
 #define XHCI_MAX_DCI	31
 
@@ -87,6 +96,7 @@ struct xhci_softc {
 	struct usbd_bus sc_bus;		/* USB 3 bus */
 	struct usbd_bus sc_bus2;	/* USB 2 bus */
 
+	kmutex_t sc_rhlock;
 	kmutex_t sc_lock;
 	kmutex_t sc_intr_lock;
 
@@ -102,6 +112,8 @@ struct xhci_softc {
 	 * Port routing and root hub - xHCI 4.19.7
 	 */
 	int sc_maxports;		/* number of controller ports */
+	int sc_usb3nports;
+	int sc_usb2nports;
 
 	uint8_t *sc_ctlrportbus;	/* a bus bit per port */
 
@@ -109,7 +121,7 @@ struct xhci_softc {
 	int *sc_rhportmap[2];
 	int sc_rhportcount[2];
 	struct usbd_xfer *sc_intrxfer[2];
-
+	bool sc_intrxfer_deferred[2];
 
 	struct xhci_slot * sc_slots;
 
@@ -128,6 +140,7 @@ struct xhci_softc {
 	bool sc_resultpending;
 
 	bool sc_dying;
+	bool sc_suspendresume_failed;
 	struct lwp *sc_suspender;
 
 	void (*sc_vendor_init)(struct xhci_softc *);

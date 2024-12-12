@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.122 2019/02/06 21:42:46 mrg Exp $	*/
+/*	$NetBSD: machdep.c,v 1.124 2024/03/05 14:15:29 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2006 Izumi Tsutsui.  All rights reserved.
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.122 2019/02/06 21:42:46 mrg Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.124 2024/03/05 14:15:29 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -352,12 +352,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && (waittime < 0)) {
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	splhigh();
@@ -397,7 +391,7 @@ decode_bootstring(void)
 	char *equ;
 	int i;
 
-	/* break apart bootstring on ' ' boundries and itterate */
+	/* break apart bootstring on ' ' boundaries and iterate */
 	work = strtok_light(bootstring, ' ');
 	while (work != NULL) {
 		/* if starts with '-', we got options, walk its decode */

@@ -1,4 +1,4 @@
-/*	$NetBSD: db_interface.c,v 1.63 2020/12/03 07:45:52 skrll Exp $	*/
+/*	$NetBSD: db_interface.c,v 1.65 2023/08/02 14:36:39 skrll Exp $	*/
 
 /*
  * Copyright (c) 1996 Scott K. Stevens
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.63 2020/12/03 07:45:52 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.65 2023/08/02 14:36:39 skrll Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -54,13 +54,16 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.63 2020/12/03 07:45:52 skrll Exp 
 
 #include <arm/arm32/db_machdep.h>
 #include <arm/undefined.h>
+
 #include <ddb/db_access.h>
+#include <ddb/db_active.h>
 #include <ddb/db_command.h>
 #include <ddb/db_output.h>
 #include <ddb/db_variables.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_extern.h>
 #include <ddb/db_interface.h>
+
 #include <dev/cons.h>
 
 #if defined(KGDB) || !defined(DDB)
@@ -273,10 +276,10 @@ db_write_bytes(vaddr_t addr, size_t size, const char *data)
 	}
 
 	if (size == 4 && (addr & 3) == 0 && ((uintptr_t)data & 3) == 0)
-		*((int*)dst) = *((const int *)data);
+		*((int *)dst) = *((const int *)data);
 	else
 	if (size == 2 && (addr & 1) == 0 && ((uintptr_t)data & 1) == 0)
-		*((short*)dst) = *((const short *)data);
+		*((short *)dst) = *((const short *)data);
 	else {
 		loop = size;
 		while (loop-- > 0) {

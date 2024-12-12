@@ -1,4 +1,4 @@
-/*	$NetBSD: sunos_machdep.c,v 1.38 2011/02/08 20:20:16 rmind Exp $	*/
+/*	$NetBSD: sunos_machdep.c,v 1.40 2023/12/20 00:40:43 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1988 University of Utah.
@@ -39,7 +39,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunos_machdep.c,v 1.38 2011/02/08 20:20:16 rmind Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunos_machdep.c,v 1.40 2023/12/20 00:40:43 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -51,7 +51,6 @@ __KERNEL_RCSID(0, "$NetBSD: sunos_machdep.c,v 1.38 2011/02/08 20:20:16 rmind Exp
 #include <sys/kernel.h>
 #include <sys/signal.h>
 #include <sys/signalvar.h>
-#include <sys/malloc.h>
 #include <sys/buf.h>
 
 #include <sys/syscallargs.h>
@@ -73,7 +72,7 @@ extern int sigpid;
 /* sigh.. I guess it's too late to change now, but "our" sigcontext
    is plain vax, not very 68000 (ap, for example..) */
 struct sunos_sigcontext {
-	int 	sc_onstack;		/* sigstack state to restore */
+	int	sc_onstack;		/* sigstack state to restore */
 	int	sc_mask;		/* signal mask to restore */
 	int	sc_sp;			/* sp to restore */
 	int	sc_pc;			/* pc to restore */

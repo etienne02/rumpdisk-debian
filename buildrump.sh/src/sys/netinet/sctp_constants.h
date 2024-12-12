@@ -1,5 +1,5 @@
 /*	$KAME: sctp_constants.h,v 1.17 2005/03/06 16:04:17 itojun Exp $	*/
-/*	$NetBSD: sctp_constants.h,v 1.2 2019/12/27 09:25:58 msaitoh Exp $ */
+/*	$NetBSD: sctp_constants.h,v 1.5 2024/02/02 22:00:34 andvar Exp $ */
 
 #ifndef __SCTP_CONSTANTS_H__
 #define __SCTP_CONSTANTS_H__
@@ -404,7 +404,7 @@
  * of decerning taste. However we do count them, if we get too
  * many before the association comes up.. we give up. Below is
  * the constant that dictates when we give it up...this is a
- * implemenation dependent treatment. In ours we do not ask for
+ * implementation dependent treatment. In ours we do not ask for
  * a extension of time, but just retry this many times...
  */
 #define SCTP_MAX_STALE_COOKIES_I_COLLECT 10
@@ -496,7 +496,7 @@
 
 #define SCTP_MAX_OUTSTANDING_DG	10000
 
-/* How many streams I request initally by default */
+/* How many streams I request initially by default */
 #define SCTP_OSTREAM_INITIAL 10
 
 #define SCTP_SEG_TO_RWND_UPD 32 /* How many smallest_mtu's need to increase before
@@ -755,7 +755,7 @@
  * course the overhead of the next pointer as well). Using 15 as
  * an example will yield * ((8 * 15) + 8) or 128 bytes of overhead
  * for each timewait block that gets initialized. Increasing it to
- * 31 would yeild 256 bytes per block.
+ * 31 would yield 256 bytes per block.
  */
 /* Undef the following turns on per EP behavior */
 #define SCTP_VTAG_TIMEWAIT_PER_STACK 1

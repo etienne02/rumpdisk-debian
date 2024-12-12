@@ -1,4 +1,4 @@
-/*	$NetBSD: utilities.c,v 1.66 2020/04/17 09:42:27 jdolecek Exp $	*/
+/*	$NetBSD: utilities.c,v 1.71 2023/07/05 10:59:08 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)utilities.c	8.6 (Berkeley) 5/19/95";
 #else
-__RCSID("$NetBSD: utilities.c,v 1.66 2020/04/17 09:42:27 jdolecek Exp $");
+__RCSID("$NetBSD: utilities.c,v 1.71 2023/07/05 10:59:08 riastradh Exp $");
 #endif
 #endif /* not lint */
 
@@ -324,6 +324,18 @@ ckfini(int noint)
 				    "\n***** FILE SYSTEM MARKED CLEAN *****\n");
 		}
 	}
+	if (doing2ea) {
+		printf("ENABLING EXTATTR SUPPORT\n");
+		is_ufs2ea = 1;
+		sbdirty();
+		flush(fswritefd, &sblk);
+	}
+	if (doing2noea) {
+		printf("DISABLING EXTATTR SUPPORT\n");
+		is_ufs2ea = 0;
+		sbdirty();
+		flush(fswritefd, &sblk);
+	}
 	if (debug)
 		printf("cache missed %ld of %ld (%d%%)\n", diskreads,
 		    totalreads, (int)(diskreads * 100 / totalreads));
@@ -578,7 +590,7 @@ inoinfo(ino_t inum)
 {
 	static struct inostat unallocated = { USTATE, 0, 0 };
 	struct inostatlist *ilp;
-	int iloff;
+	size_t iloff;
 
 	if (inum > maxino)
 		errexit("inoinfo: inumber %llu out of range",
@@ -654,7 +666,7 @@ sb_oldfscompat_read(struct fs *fs, struct fs **fssave)
 	    fs->fs_old_cstotal.cs_nifree;
 	fs->fs_cstotal.cs_nffree =
 	    fs->fs_old_cstotal.cs_nffree;
-	
+
 	fs->fs_maxbsize = fs->fs_bsize;
 	fs->fs_time = fs->fs_old_time;
 	fs->fs_size = fs->fs_old_size;
@@ -739,17 +751,17 @@ update_uquot(ino_t inum, uid_t uid, gid_t gid, int64_t bchange, int64_t ichange)
 		return;
 	if (is_quota_inode(inum))
 		return;
-	
+
 	if (uquot_user_hash == NULL)
 		return;
-		
+
 	if (uq_u == NULL || uq_u->uq_uid != uid)
 		uq_u = find_uquot(uquot_user_hash, uid, 1);
 	uq_u->uq_b += bchange;
 	uq_u->uq_i += ichange;
 	if (uq_g == NULL || uq_g->uq_uid != gid)
 		uq_g = find_uquot(uquot_group_hash, gid, 1);
-	uq_g->uq_b += bchange;    
+	uq_g->uq_b += bchange;
 	uq_g->uq_i += ichange;
 }
 
@@ -762,11 +774,11 @@ is_quota_inode(ino_t inum)
 
 	if (sblock->fs_quota_magic != Q2_HEAD_MAGIC)
 		return 0;
-	
+
 	if (sblock->fs_quotafile[USRQUOTA] == inum)
 		return 1;
 
-	if (sblock->fs_quotafile[GRPQUOTA] == inum) 
+	if (sblock->fs_quotafile[GRPQUOTA] == inum)
 		return 1;
 
 	return 0;

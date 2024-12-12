@@ -1,4 +1,4 @@
-/*	$NetBSD: octeon_xhci.c,v 1.6 2021/08/07 16:18:59 thorpej Exp $ */
+/*	$NetBSD: octeon_xhci.c,v 1.9 2022/09/29 07:00:46 skrll Exp $ */
 /*	$OpenBSD: octxhci.c,v 1.4 2019/09/29 04:32:23 visa Exp $	*/
 
 /*
@@ -25,7 +25,6 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 
 #include <mips/cavium/octeonvar.h>
 
@@ -327,7 +326,7 @@ octxhci_uctl_init(struct octxhci_softc *sc, uint64_t clock_freq,
 	XCTL_WR_8(sc, XCTL_CTL, val);
 	(void)XCTL_RD_8(sc, XCTL_CTL);
 
-	/* Fix endianess. */
+	/* Fix endianness. */
 	val = XCTL_RD_8(sc, XCTL_SHIM_CFG);
 	val &= ~XCTL_SHIM_CFG_CSR_BYTE_SWAP;
 	val &= ~XCTL_SHIM_CFG_DMA_BYTE_SWAP;
@@ -380,7 +379,7 @@ octxhci_dwc3_init(struct xhci_softc *sc)
 }
 
 /* ---- bus_space(9) */
-#define CHIP			octxhci 
+#define CHIP			octxhci
 #define CHIP_IO
 #define	CHIP_LITTLE_ENDIAN
 

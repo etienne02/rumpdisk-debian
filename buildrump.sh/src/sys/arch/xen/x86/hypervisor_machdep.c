@@ -1,4 +1,4 @@
-/*	$NetBSD: hypervisor_machdep.c,v 1.39 2020/05/02 16:44:36 bouyer Exp $	*/
+/*	$NetBSD: hypervisor_machdep.c,v 1.46 2023/03/01 08:13:44 riastradh Exp $	*/
 
 /*
  *
@@ -54,7 +54,7 @@
 
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hypervisor_machdep.c,v 1.39 2020/05/02 16:44:36 bouyer Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hypervisor_machdep.c,v 1.46 2023/03/01 08:13:44 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -66,6 +66,7 @@ __KERNEL_RCSID(0, "$NetBSD: hypervisor_machdep.c,v 1.39 2020/05/02 16:44:36 bouy
 
 #include <machine/vmparam.h>
 #include <machine/pmap.h>
+#include <machine/pmap_private.h>
 
 #include <x86/machdep.h>
 #include <x86/cpuvar.h>
@@ -159,10 +160,17 @@ evt_set_pending(unsigned int port, unsigned int l1i,
 	KASSERT(args != NULL);
 
 	int *ret = args;
+	struct intrhand *ih;
 
 	if (evtsource[port]) {
 		hypervisor_set_ipending(evtsource[port]->ev_imask, l1i, l2i);
 		evtsource[port]->ev_evcnt.ev_count++;
+		ih = evtsource[port]->ev_handlers;
+		while (ih != NULL) {
+			ih->ih_pending++;
+			ih = ih->ih_evt_next;
+		}
+
 		if (*ret == 0 && curcpu()->ci_ilevel <
 		    evtsource[port]->ev_maxlevel)
 			*ret = 1;
@@ -183,6 +191,8 @@ stipending(void)
 	struct cpu_info *ci;
 	volatile struct vcpu_info *vci;
 	int ret;
+
+	kpreempt_disable();
 
 	ret = 0;
 	ci = curcpu();
@@ -218,6 +228,8 @@ stipending(void)
 
 		x86_enable_intr();
 	}
+
+	kpreempt_enable();
 
 	return (ret);
 }
@@ -266,7 +278,7 @@ do_hypervisor_callback(struct intrframe *regs)
 	volatile shared_info_t *s = HYPERVISOR_shared_info;
 	struct cpu_info *ci;
 	volatile struct vcpu_info *vci;
-	int level __diagused;
+	uint64_t level __diagused;
 
 	ci = curcpu();
 	vci = ci->ci_vcpu;
@@ -296,9 +308,9 @@ do_hypervisor_callback(struct intrframe *regs)
 
 #ifdef DIAGNOSTIC
 	if (level != ci->ci_ilevel)
-		printf("hypervisor done %08x level %d/%d ipending %08x\n",
+		printf("hypervisor done %08x level %" PRIu64 "/%" PRIu64 " ipending %0" PRIx64 "\n",
 		    (uint)vci->evtchn_pending_sel,
-		    level, ci->ci_ilevel, ci->ci_ipending);
+		    level, (uint64_t)ci->ci_ilevel, (uint64_t)ci->ci_ipending);
 #endif
 }
 
@@ -388,6 +400,9 @@ evt_enable_event(unsigned int port, unsigned int l1i,
 {
 	KASSERT(args == NULL);
 	hypervisor_unmask_event(port);
+#if defined(XENPV) && (NPCI > 0 || NISA > 0)
+	hypervisor_ack_pirq_event(port);
+#endif /* NPCI > 0 || NISA > 0 */
 }
 
 void
@@ -408,7 +423,7 @@ hypervisor_enable_sir(unsigned int sir)
 }
 
 void
-hypervisor_set_ipending(uint32_t imask, int l1, int l2)
+hypervisor_set_ipending(uint64_t imask, int l1, int l2)
 {
 
 	/* This function is not re-entrant */

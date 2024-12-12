@@ -1,4 +1,4 @@
-/*	$NetBSD: arm32_machdep.c,v 1.139 2020/12/01 02:43:14 rin Exp $	*/
+/*	$NetBSD: arm32_machdep.c,v 1.147 2024/03/05 14:15:29 thorpej Exp $	*/
 
 /*
  * Copyright (c) 1994-1998 Mark Brinicombe.
@@ -42,7 +42,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.139 2020/12/01 02:43:14 rin Exp $");
+__KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.147 2024/03/05 14:15:29 thorpej Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_arm_start.h"
@@ -85,6 +85,8 @@ __KERNEL_RCSID(0, "$NetBSD: arm32_machdep.c,v 1.139 2020/12/01 02:43:14 rin Exp 
 #include <machine/pcb.h>
 
 #if defined(FDT)
+#include <dev/fdt/fdtvar.h>
+
 #include <arm/fdt/arm_fdtvar.h>
 #include <arch/evbarm/fdt/platform.h>
 #endif
@@ -268,8 +270,6 @@ bootsync(void)
 	}
 
 	vfs_shutdown();
-
-	resettodr();
 }
 
 /*
@@ -301,8 +301,9 @@ cpu_startup(void)
 	pmap_postinit();
 
 #ifdef FDT
-	if (arm_fdt_platform()->ap_startup != NULL)
-		arm_fdt_platform()->ap_startup();
+	const struct fdt_platform * const plat = fdt_platform_find();
+	if (plat->fp_startup != NULL)
+		plat->fp_startup();
 #endif
 
 	/*
@@ -558,6 +559,9 @@ parse_mi_bootargs(char *args)
 {
 	int integer;
 
+	if (get_bootconf_option(args, "-1", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= RB_MD1;
 	if (get_bootconf_option(args, "single", BOOTOPT_TYPE_BOOLEAN, &integer)
 	    || get_bootconf_option(args, "-s", BOOTOPT_TYPE_BOOLEAN, &integer))
 		if (integer)
@@ -571,6 +575,26 @@ parse_mi_bootargs(char *args)
 	    || get_bootconf_option(args, "-a", BOOTOPT_TYPE_BOOLEAN, &integer))
 		if (integer)
 			boothowto |= RB_ASKNAME;
+	if (get_bootconf_option(args, "userconf", BOOTOPT_TYPE_BOOLEAN, &integer)
+	    || get_bootconf_option(args, "-c", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= RB_USERCONF;
+	if (get_bootconf_option(args, "halt", BOOTOPT_TYPE_BOOLEAN, &integer)
+	    || get_bootconf_option(args, "-b", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= RB_HALT;
+	if (get_bootconf_option(args, "-1", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= RB_MD1;
+	if (get_bootconf_option(args, "-2", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= RB_MD2;
+	if (get_bootconf_option(args, "-3", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= RB_MD3;
+	if (get_bootconf_option(args, "-4", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= RB_MD4;
 
 /*	if (get_bootconf_option(args, "nbuf", BOOTOPT_TYPE_INT, &integer))
 		bufpages = integer;*/
@@ -599,6 +623,10 @@ parse_mi_bootargs(char *args)
 	    || get_bootconf_option(args, "-x", BOOTOPT_TYPE_BOOLEAN, &integer))
 		if (integer)
 			boothowto |= AB_DEBUG;
+	if (get_bootconf_option(args, "silent", BOOTOPT_TYPE_BOOLEAN, &integer)
+	    || get_bootconf_option(args, "-z", BOOTOPT_TYPE_BOOLEAN, &integer))
+		if (integer)
+			boothowto |= AB_SILENT;
 }
 
 #ifdef __HAVE_FAST_SOFTINTS
@@ -659,15 +687,16 @@ dosoftints(void)
 	struct cpu_info * const ci = curcpu();
 	const int opl = ci->ci_cpl;
 	const uint32_t softiplmask = SOFTIPLMASK(opl);
+	int s;
 
-	splhigh();
+	s = splhigh();
+	KASSERT(s == opl);
 	for (;;) {
 		u_int softints = ci->ci_softints & softiplmask;
 		KASSERT((softints != 0) == ((ci->ci_softints >> opl) != 0));
 		KASSERT(opl == IPL_NONE || (softints & (1 << (opl - IPL_SOFTCLOCK))) == 0);
 		if (softints == 0) {
-			splx(opl);
-			return;
+			break;
 		}
 #define	DOSOFTINT(n) \
 		if (ci->ci_softints & (1 << (IPL_SOFT ## n - IPL_SOFTCLOCK))) { \
@@ -683,6 +712,7 @@ dosoftints(void)
 		DOSOFTINT(CLOCK);
 		panic("dosoftints wtf (softints=%u?, ipl=%d)", softints, opl);
 	}
+	splx(s);
 }
 #endif /* !__HAVE_PIC_FAST_SOFTINTS */
 #endif /* __HAVE_FAST_SOFTINTS */
@@ -727,7 +757,7 @@ cpu_uarea_alloc_idlelwp(struct cpu_info *ci)
  * printf isn't available to us for a number of reasons.
  *
  * -  kprint_init has been called and printf will try to take locks which we
- *    can't  do just yet because bootstrap translation tables do not allowing
+ *    can't do just yet because bootstrap translation tables do not allowing
  *    caching.
  *
  * -  kmutex(9) relies on curcpu which isn't setup yet.
@@ -783,12 +813,22 @@ cpu_init_secondary_processor(int cpuindex)
 	VPRINTS(" ci = ");
 	VPRINTX((int)ci);
 
+	ci->ci_ctrl = armreg_sctlr_read();
+	ci->ci_arm_cpuid = cpu_idnum();
+	ci->ci_arm_cputype = ci->ci_arm_cpuid & CPU_ID_CPU_MASK;
+	ci->ci_arm_cpurev = ci->ci_arm_cpuid & CPU_ID_REVISION_MASK;
+
 	ci->ci_midr = armreg_midr_read();
+	ci->ci_actlr = armreg_auxctl_read();
+	ci->ci_revidr = armreg_revidr_read();
 	ci->ci_mpidr = armreg_mpidr_read();
 
 	arm_cpu_topology_set(ci, ci->ci_mpidr);
 
-	VPRINTS(" hatched|=");
+	VPRINTS(" vfp");
+	vfp_detect(ci);
+
+	VPRINTS(" hatched |=");
 	VPRINTX(__BIT(cpuindex));
 	VPRINTS("\n\r");
 
@@ -853,7 +893,7 @@ extern char KERNEL_BASE_phys[];
 void
 cpu_kernel_vm_init(paddr_t memory_start, psize_t memory_size)
 {
-	const struct arm_platform *plat = arm_fdt_platform();
+	const struct fdt_platform *plat = fdt_platform_find();
 
 #ifdef __HAVE_MM_MD_DIRECT_MAPPED_PHYS
 	const bool mapallmem_p = true;
@@ -874,7 +914,7 @@ cpu_kernel_vm_init(paddr_t memory_start, psize_t memory_size)
 
 	arm32_bootmem_init(memory_start, memory_size, KERNEL_BASE_PHYS);
 	arm32_kernel_vm_init(KERNEL_VM_BASE, ARM_VECTORS_HIGH, 0,
-	    plat->ap_devmap(), mapallmem_p);
+	    plat->fp_devmap(), mapallmem_p);
 }
 #endif
 

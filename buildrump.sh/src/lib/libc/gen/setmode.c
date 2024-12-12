@@ -1,4 +1,4 @@
-/*	$NetBSD: setmode.c,v 1.34 2012/06/25 22:32:43 abs Exp $	*/
+/*	$NetBSD: setmode.c,v 1.38 2022/04/19 20:32:15 rillig Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993, 1994
@@ -37,7 +37,7 @@
 #if 0
 static char sccsid[] = "@(#)setmode.c	8.2 (Berkeley) 3/25/94";
 #else
-__RCSID("$NetBSD: setmode.c,v 1.34 2012/06/25 22:32:43 abs Exp $");
+__RCSID("$NetBSD: setmode.c,v 1.38 2022/04/19 20:32:15 rillig Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -163,15 +163,16 @@ common:			if (set->cmd2 & CMD2_CLR) {
 	if (set >= endset) {						\
 		BITCMD *newset;						\
 		setlen += SET_LEN_INCR;					\
-		newset = realloc(saveset, sizeof(BITCMD) * setlen);	\
-		if (newset == NULL)					\
+		newset = saveset;					\
+		errno = reallocarr(&newset, setlen, sizeof(*newset));	\
+		if (errno)						\
 			goto out;					\
 		set = newset + (set - saveset);				\
 		saveset = newset;					\
 		endset = newset + (setlen - 2);				\
 	}								\
 	set = addcmd(set, (mode_t)(a), (mode_t)(b), (mode_t)(c), (d));	\
-} while (/*CONSTCOND*/0)
+} while (0)
 
 #define	STANDARD_BITS	(S_ISUID|S_ISGID|S_IRWXU|S_IRWXG|S_IRWXO)
 
@@ -205,9 +206,10 @@ setmode(const char *p)
 	(void)sigprocmask(SIG_SETMASK, &sigoset, NULL);
 
 	setlen = SET_LEN + 2;
-	
-	if ((set = malloc((u_int)(sizeof(BITCMD) * setlen))) == NULL)
-		return (NULL);
+	set = NULL;
+	errno = reallocarr(&set, setlen, sizeof(*set));
+	if (errno)
+		return NULL;
 	saveset = set;
 	endset = set + (setlen - 2);
 

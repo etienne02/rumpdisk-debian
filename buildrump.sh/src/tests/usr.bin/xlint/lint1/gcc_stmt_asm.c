@@ -1,9 +1,11 @@
-/*	$NetBSD: gcc_stmt_asm.c,v 1.3 2021/07/21 21:04:00 rillig Exp $	*/
+/*	$NetBSD: gcc_stmt_asm.c,v 1.5 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "gcc_stmt_asm.c"
 
 /*
  * Tests for the GCC 'asm' statement.
  */
+
+/* lint1-extra-flags: -X 351 */
 
 void
 function(void)
@@ -33,7 +35,7 @@ __asm__();
 void
 syntax_error(void)
 {
-	/* expect+1: syntax error '__asm__' [249] */
+	/* expect+1: error: syntax error '__asm__' [249] */
 	int i = __asm__();
 }
 

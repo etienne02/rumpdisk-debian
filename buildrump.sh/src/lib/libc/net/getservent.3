@@ -1,4 +1,4 @@
-.\"	$NetBSD: getservent.3,v 1.14 2003/08/07 16:43:10 agc Exp $
+.\"	$NetBSD: getservent.3,v 1.17 2024/09/07 21:04:43 rillig Exp $
 .\"
 .\" Copyright (c) 1983, 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -29,7 +29,7 @@
 .\"
 .\"     @(#)getservent.3      8.4 (Berkeley) 5/25/95
 .\"
-.Dd May 25, 1995
+.Dd December 3, 2022
 .Dt GETSERVENT 3
 .Os
 .Sh NAME
@@ -127,15 +127,16 @@ searches must also match the protocol.
 .Sh FILES
 .Bl -tag -width /etc/services -compact
 .It Pa /etc/services
+.It Pa /var/db/services.cdb
 .El
-.Sh DIAGNOSTICS
-Null pointer
-(0) returned on
+.Sh RETURN VALUES
+Null pointer is returned on
 .Dv EOF
 or error.
 .Sh SEE ALSO
 .Xr getprotoent 3 ,
-.Xr services 5
+.Xr services 5 ,
+.Xr services_mkdb 8
 .Sh HISTORY
 The
 .Fn getservent ,

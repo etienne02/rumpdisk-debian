@@ -1,4 +1,4 @@
-/*	$NetBSD: vmem_impl.h,v 1.5 2020/07/07 03:23:33 thorpej Exp $	*/
+/*	$NetBSD: vmem_impl.h,v 1.8 2023/12/03 19:34:08 thorpej Exp $	*/
 
 /*-
  * Copyright (c)2006 YAMAMOTO Takashi,
@@ -128,7 +128,8 @@ struct vmem_btag {
 #define	bt_freelist	bt_u.u_freelist
 	vmem_addr_t bt_start;
 	vmem_size_t bt_size;
-	int bt_type;
+	short bt_type;
+	short bt_flags;
 };
 
 #define	BT_TYPE_SPAN		1
@@ -137,6 +138,22 @@ struct vmem_btag {
 #define	BT_TYPE_BUSY		4
 #define	BT_ISSPAN_P(bt)	((bt)->bt_type <= BT_TYPE_SPAN_STATIC)
 
+#define	BT_F_PRIVATE		0x0001
+
 #define	BT_END(bt)	((bt)->bt_start + (bt)->bt_size - 1)
+
+/*
+ * Provide an estimated number of boundary tags needed for a given
+ * number of allocations from the vmem arena.  This estimate is
+ * based on 2 boundary tags per allocation (see vmem_xalloc()) and
+ * 2 boundary tags per added span (one to describe the span, one to
+ * describe the span's free space; see vmem_add1()).
+ */
+#define	VMEM_EST_BTCOUNT(ns, na)	(((ns) * 2) + ((na) * 2))
+
+vmem_t *	vmem_init(vmem_t *, const char *, vmem_addr_t, vmem_size_t,
+		    vmem_size_t, vmem_import_t *, vmem_release_t *, vmem_t *,
+		    vmem_size_t, vm_flag_t, int);
+void		vmem_add_bts(vmem_t *, struct vmem_btag *, unsigned int);
 
 #endif /* !_SYS_VMEM_IMPL_H_ */

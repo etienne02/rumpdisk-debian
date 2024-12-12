@@ -1,4 +1,4 @@
-/*	$NetBSD: sbc.c,v 1.57 2018/09/03 16:29:25 riastradh Exp $	*/
+/*	$NetBSD: sbc.c,v 1.67 2024/11/22 07:27:17 nat Exp $	*/
 
 /*
  * Copyright (C) 1996 Scott Reynolds.  All rights reserved.
@@ -45,7 +45,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sbc.c,v 1.57 2018/09/03 16:29:25 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sbc.c,v 1.67 2024/11/22 07:27:17 nat Exp $");
 
 #include "opt_ddb.h"
 
@@ -249,7 +249,9 @@ sbc_pdma_in(struct ncr5380_softc *ncr_sc, int phase, int datalen, u_char *data)
 	int resid, s;
 
 	if (datalen < ncr_sc->sc_min_dma_len ||
-	    (sc->sc_options & SBC_PDMA) == 0)
+	    (sc->sc_options & SBC_PDMA) == 0 ||
+	    (ncr_sc->sc_current != NULL &&
+	    (ncr_sc->sc_current->sr_xs->xs_control & XS_CTL_POLL)))
 		return ncr5380_pio_in(ncr_sc, phase, datalen, data);
 
 	s = splbio();
@@ -315,7 +317,10 @@ sbc_pdma_out(struct ncr5380_softc *ncr_sc, int phase, int datalen, u_char *data)
 #endif
 
 	if (datalen < ncr_sc->sc_min_dma_len ||
-	    (sc->sc_options & SBC_PDMA) == 0)
+	    (sc->sc_options & SBC_PDMA) == 0 ||
+	    (sc->sc_options & SBC_PDMA_NO_WRITE) ||
+	    (ncr_sc->sc_current != NULL &&
+	    (ncr_sc->sc_current->sr_xs->xs_control & XS_CTL_POLL)))
 		return ncr5380_pio_out(ncr_sc, phase, datalen, data);
 
 	s = splbio();
@@ -425,12 +430,12 @@ sbc_drq_intr(void *p)
 	u_int32_t *long_data;
 	volatile u_int8_t *drq = 0;	/* XXX gcc4 -Wuninitialized */
 	u_int8_t *data;
-	int count, dcount, resid;
+	int count, dcount, s;
 
 	/*
 	 * If we're not ready to xfer data, or have no more, just return.
 	 */
-	if ((*ncr_sc->sci_csr & SCI_CSR_DREQ) == 0 || dh->dh_len == 0)
+	if (sbc_ready(ncr_sc) || dh->dh_len == 0)
 		return;
 
 #ifdef SBC_DEBUG
@@ -438,6 +443,8 @@ sbc_drq_intr(void *p)
 		printf("%s: drq intr, dh_len=0x%x, dh_flags=0x%x\n",
 		    device_xname(ncr_sc->sc_dev), dh->dh_len, dh->dh_flags);
 #endif
+	mutex_enter(&sc->sc_drq_lock);
+	s = splbio();
 
 	/*
 	 * Setup for a possible bus error caused by SCSI controller
@@ -446,6 +453,7 @@ sbc_drq_intr(void *p)
 	 */
 	nofault = &faultbuf;
 
+	m68k_fault_addr = 0;
 	if (setjmp(nofault)) {
 		nofault = (label_t *)0;
 		if ((dh->dh_flags & SBC_DH_DONE) == 0) {
@@ -471,8 +479,19 @@ sbc_drq_intr(void *p)
 #endif
 		m68k_fault_addr = 0;
 
+		splx(s);
+
+		mutex_exit(&sc->sc_drq_lock);
+
 		return;
 	}
+
+#define CHECKMORE	if ((*ncr_sc->sci_csr & SCI_CSR_DREQ) == 0) {	\
+				dh->dh_len -= dcount - count;		\
+				dh->dh_addr += dcount - count;		\
+				if (dh->dh_len)				\
+					goto no_more;			\
+			}
 
 	if (dh->dh_flags & SBC_DH_OUT) { /* Data Out */
 		dcount = 0;
@@ -480,43 +499,43 @@ sbc_drq_intr(void *p)
 		/*
 		 * Get the source address aligned.
 		 */
-		resid =
+		dcount =
 		    count = uimin(dh->dh_len, 4 - (((int)dh->dh_addr) & 0x3));
 		if (count && count < 4) {
 			drq = (volatile u_int8_t *)sc->sc_drq_addr;
 			data = (u_int8_t *)dh->dh_addr;
 
-#define W1		*drq++ = *data++
+#define W1		CHECKMORE *drq++ = *data++
 			while (count) {
 				W1; count--;
 			}
 #undef W1
-			dh->dh_addr += resid;
-			dh->dh_len -= resid;
+			dh->dh_addr += dcount;
+			dh->dh_len -= dcount;
 		}
 
 		/*
 		 * Start the transfer.
 		 */
 		while (dh->dh_len) {
+#define W4		CHECKMORE *long_drq++ = *long_data++; count -= 4
+
 			dcount = count = uimin(dh->dh_len, MAX_DMA_LEN);
 			long_drq = (volatile u_int32_t *)sc->sc_drq_addr;
 			long_data = (u_int32_t *)dh->dh_addr;
 
-#define W4		*long_drq++ = *long_data++
 			while (count >= 64) {
 				W4; W4; W4; W4; W4; W4; W4; W4;
 				W4; W4; W4; W4; W4; W4; W4; W4; /*  64 */
-				count -= 64;
 			}
 			while (count >= 4) {
-				W4; count -= 4;
+				W4;
 			}
 #undef W4
 			data = (u_int8_t *)long_data;
 			drq = (volatile u_int8_t *)long_drq;
 
-#define W1		*drq++ = *data++
+#define W1		CHECKMORE *drq++ = *data++
 			while (count) {
 				W1; count--;
 			}
@@ -525,30 +544,37 @@ sbc_drq_intr(void *p)
 			dh->dh_addr += dcount;
 		}
 		dh->dh_flags |= SBC_DH_DONE;
+		if (dcount >= MAX_DMA_LEN)
+			drq = (volatile u_int8_t *)sc->sc_drq_addr;
+		/*
+		 * Write an extra byte to handle last ack.
+		 * From NCR5380 Interface manual.
+		 */
+		if (*ncr_sc->sci_csr & SCI_CSR_ACK)
+			*drq = 0;
 
 		/*
 		 * XXX -- Read a byte from the SBC to trigger a /BERR.
 		 * This seems to be necessary for us to notice that
 		 * the target has disconnected.  Ick.  06 jun 1996 (sr)
+		 * Unsure if this is still necessary - See comment above.
 		 */
-		if (dcount >= MAX_DMA_LEN)
-			drq = (volatile u_int8_t *)sc->sc_drq_addr;
 		(void)*drq;
 	} else {	/* Data In */
 		/*
 		 * Get the dest address aligned.
 		 */
-		resid =
+		dcount =
 		    count = uimin(dh->dh_len, 4 - (((int)dh->dh_addr) & 0x3));
 		if (count && count < 4) {
 			data = (u_int8_t *)dh->dh_addr;
 			drq = (volatile u_int8_t *)sc->sc_drq_addr;
 			while (count) {
-				*data++ = *drq++;
+				CHECKMORE *data++ = *drq++;
 				count--;
 			}
-			dh->dh_addr += resid;
-			dh->dh_len -= resid;
+			dh->dh_addr += dcount;
+			dh->dh_len -= dcount;
 		}
 
 		/*
@@ -559,20 +585,19 @@ sbc_drq_intr(void *p)
 			long_data = (u_int32_t *)dh->dh_addr;
 			long_drq = (volatile u_int32_t *)sc->sc_drq_addr;
 
-#define R4		*long_data++ = *long_drq++
+#define R4		CHECKMORE *long_data++ = *long_drq++; count -= 4
 			while (count >= 64) {
 				R4; R4; R4; R4; R4; R4; R4; R4;
 				R4; R4; R4; R4; R4; R4; R4; R4;	/* 64 */
-				count -= 64;
 			}
 			while (count >= 4) {
-				R4; count -= 4;
+				R4;
 			}
 #undef R4
 			data = (u_int8_t *)long_data;
 			drq = (volatile u_int8_t *)long_drq;
 			while (count) {
-				*data++ = *drq++;
+				CHECKMORE *data++ = *drq++;
 				count--;
 			}
 			dh->dh_len -= dcount;
@@ -580,12 +605,18 @@ sbc_drq_intr(void *p)
 		}
 		dh->dh_flags |= SBC_DH_DONE;
 	}
+#undef CHECKMORE
 
+no_more:
 	/*
 	 * OK.  No bus error occurred above.  Clear the nofault flag
 	 * so we no longer short-circuit bus errors.
 	 */
 	nofault = (label_t *)0;
+
+	splx(s);
+
+	mutex_exit(&sc->sc_drq_lock);
 
 #ifdef SBC_DEBUG
 	if (sbc_debug & (SBC_DB_REG | SBC_DB_INTR))

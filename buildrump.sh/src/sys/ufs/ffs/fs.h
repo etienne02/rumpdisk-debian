@@ -1,4 +1,4 @@
-/*	$NetBSD: fs.h,v 1.68 2020/05/16 18:31:53 christos Exp $	*/
+/*	$NetBSD: fs.h,v 1.72 2024/05/13 00:01:54 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -150,7 +150,7 @@
 /*
  * The volume name for this filesystem is maintained in fs_volname.
  * MAXVOLLEN defines the length of the buffer allocated.
- * This space used to be part of of fs_fsmnt.
+ * This space used to be part of fs_fsmnt.
  */
 #define	MAXVOLLEN	32
 
@@ -265,7 +265,7 @@ struct fs {
 	int32_t	 fs_old_time;		/* last time written */
 	int32_t	 fs_old_size;		/* number of blocks in fs */
 	int32_t	 fs_old_dsize;		/* number of data blocks in fs */
-	int32_t	 fs_ncg;		/* number of cylinder groups */
+	u_int32_t fs_ncg;		/* number of cylinder groups */
 	int32_t	 fs_bsize;		/* size of basic blocks in fs */
 	int32_t	 fs_fsize;		/* size of frag blocks in fs */
 	int32_t	 fs_frag;		/* number of frags in a block in fs */
@@ -288,7 +288,7 @@ struct fs {
 	int32_t	 fs_spare1[2];		/* old fs_csmask */
 					/* old fs_csshift */
 	int32_t	 fs_nindir;		/* value of FFS_NINDIR */
-	int32_t	 fs_inopb;		/* value of FFS_INOPB */
+	u_int32_t fs_inopb;		/* value of FFS_INOPB */
 	int32_t	 fs_old_nspf;		/* value of NSPF */
 /* yet another configuration parameter */
 	int32_t	 fs_optim;		/* optimization preference, see below */
@@ -308,7 +308,7 @@ struct fs {
 	int32_t	 fs_old_spc;		/* sectors per cylinder */
 	int32_t	 fs_old_ncyl;		/* cylinders in file system */
 	int32_t	 fs_old_cpg;		/* cylinders per group */
-	int32_t	 fs_ipg;		/* inodes per group */
+	u_int32_t fs_ipg;		/* inodes per group */
 	int32_t	 fs_fpg;		/* blocks per group * fs_frag */
 /* this data must be re-computed after crashes */
 	struct	csum fs_old_cstotal;	/* cylinder summary information */
@@ -348,11 +348,11 @@ struct fs {
 	int64_t	 fs_dsize;		/* number of data blocks in fs */
 	int64_t  fs_csaddr;		/* blk addr of cyl grp summary area */
 	int64_t	 fs_pendingblocks;	/* blocks in process of being freed */
-	int32_t	 fs_pendinginodes;	/* inodes in process of being freed */
-	int32_t	 fs_snapinum[FSMAXSNAP];/* list of snapshot inode numbers */
+	u_int32_t fs_pendinginodes;	/* inodes in process of being freed */
+	uint32_t fs_snapinum[FSMAXSNAP];/* list of snapshot inode numbers */
 /* back to stuff that has been around a while */
-	int32_t	 fs_avgfilesize;	/* expected average file size */
-	int32_t	 fs_avgfpdir;		/* expected # of files per directory */
+	u_int32_t fs_avgfilesize;	/* expected average file size */
+	u_int32_t fs_avgfpdir;		/* expected # of files per directory */
 	int32_t	 fs_save_cgsize;	/* save real cg size to use fs_bsize */
 	int32_t	 fs_sparecon32[26];	/* reserved for future constants */
 	uint32_t fs_flags;		/* see FS_ flags below */
@@ -398,8 +398,10 @@ struct fs {
  */
 #define	FS_UFS1_MAGIC	0x011954	/* UFS1 fast file system magic number */
 #define	FS_UFS2_MAGIC	0x19540119	/* UFS2 fast file system magic number */
+#define	FS_UFS2EA_MAGIC	0x19012038	/* UFS2 with extattrs */
 #define	FS_UFS1_MAGIC_SWAPPED	0x54190100
 #define	FS_UFS2_MAGIC_SWAPPED	0x19015419
+#define	FS_UFS2EA_MAGIC_SWAPPED	0x38200119
 #define	FS_OKAY		0x7c269d38	/* superblock checksum */
 #define	FS_42INODEFMT	-1		/* 4.2BSD inode format */
 #define	FS_44INODEFMT	2		/* 4.4BSD inode format */
@@ -422,7 +424,7 @@ struct fs {
  * FS_POSIX1EACLS indicates that POSIX.1e ACLs are administratively enabled
  * for the file system, so they should be loaded from extended attributes,
  * observed for access control purposes, and be administered by object
- * owners.  FS_ACLS indicates that NFSv4 ACLs are administratively
+ * owners.  FS_NFS4ACLS indicates that NFSv4 ACLs are administratively
  * enabled.  This flag is mutually exclusive with FS_POSIX1EACLS.
  */
 #define	FS_UNCLEAN	0x001	/* file system not clean at mount (unused) */
@@ -430,6 +432,7 @@ struct fs {
 #define	FS_NEEDSFSCK	0x004	/* needs sync fsck (FreeBSD compat, unused) */
 #define	FS_SUJ		0x008	/* file system using journaled softupdates */
 #define	FS_POSIX1EACLS	0x010	/* file system has POSIX.1e ACLs enabled */
+#define	FS_ACLS		FS_POSIX1EACLS	/* alias */
 #define	FS_MULTILABEL	0x020	/* file system is MAC multi-label */
 #define	FS_GJOURNAL	0x40	/* gjournaled file system */
 #define	FS_FLAGS_UPDATED 0x80	/* flags have been moved to new location */
@@ -438,11 +441,11 @@ struct fs {
 #define	FS_DOQUOTA2	0x200	/* in-filesystem quotas */
 /*     	FS_INDEXDIRS	0x200	   kernel supports indexed directories (FBSD)*/
 #define	FS_TRIM		0x400	/* discard deleted blocks in storage layer */
-#define FS_ACLS		0x800	/* file system has NFSv4 ACLs enabled */
+#define	FS_NFS4ACLS	0x800	/* file system has NFSv4 ACLs enabled */
 
 /* File system flags that are ok for NetBSD if set in fs_flags */
 #define	FS_KNOWN_FLAGS	(FS_DOSOFTDEP | FS_DOWAPBL | FS_DOQUOTA2 | \
-	FS_POSIX1EACLS | FS_ACLS)
+	FS_POSIX1EACLS | FS_NFS4ACLS)
 
 /*
  * File system internal flags, also in fs_flags.
@@ -504,25 +507,25 @@ struct cg {
 	int32_t	 cg_firstfield;		/* historic cyl groups linked list */
 	int32_t	 cg_magic;		/* magic number */
 	int32_t	 cg_old_time;		/* time last written */
-	int32_t	 cg_cgx;		/* we are the cgx'th cylinder group */
+	u_int32_t cg_cgx;		/* we are the cgx'th cylinder group */
 	int16_t	 cg_old_ncyl;		/* number of cyl's this cg */
 	int16_t	 cg_old_niblk;		/* number of inode blocks this cg */
-	int32_t	 cg_ndblk;		/* number of data blocks this cg */
-	struct	csum cg_cs;		/* cylinder summary information */
-	int32_t	 cg_rotor;		/* position of last used block */
-	int32_t	 cg_frotor;		/* position of last used frag */
-	int32_t	 cg_irotor;		/* position of last used inode */
-	int32_t	 cg_frsum[MAXFRAG];	/* counts of available frags */
+	u_int32_t cg_ndblk;		/* number of data blocks this cg */
+	struct	 csum cg_cs;		/* cylinder summary information */
+	u_int32_t cg_rotor;		/* position of last used block */
+	u_int32_t cg_frotor;		/* position of last used frag */
+	u_int32_t cg_irotor;		/* position of last used inode */
+	u_int32_t cg_frsum[MAXFRAG];	/* counts of available frags */
 	int32_t	 cg_old_btotoff;	/* (int32) block totals per cylinder */
 	int32_t	 cg_old_boff;		/* (u_int16) free block positions */
-	int32_t	 cg_iusedoff;		/* (u_int8) used inode map */
-	int32_t	 cg_freeoff;		/* (u_int8) free block map */
-	int32_t	 cg_nextfreeoff;	/* (u_int8) next available space */
-	int32_t	 cg_clustersumoff;	/* (u_int32) counts of avail clusters */
-	int32_t	 cg_clusteroff;		/* (u_int8) free cluster map */
-	int32_t	 cg_nclusterblks;	/* number of clusters this cg */
-	int32_t  cg_niblk;		/* number of inode blocks this cg */
-	int32_t  cg_initediblk;		/* last initialized inode */
+	u_int32_t cg_iusedoff;		/* (u_int8) used inode map */
+	u_int32_t cg_freeoff;		/* (u_int8) free block map */
+	u_int32_t cg_nextfreeoff;	/* (u_int8) next available space */
+	u_int32_t cg_clustersumoff;	/* (u_int32) counts of avail clusters */
+	u_int32_t cg_clusteroff;		/* (u_int8) free cluster map */
+	u_int32_t cg_nclusterblks;	/* number of clusters this cg */
+	u_int32_t cg_niblk;		/* number of inode blocks this cg */
+	u_int32_t cg_initediblk;		/* last initialized inode */
 	int32_t	 cg_sparecon32[3];	/* reserved for future use */
 	int64_t  cg_time;		/* time last written */
 	int64_t  cg_sparecon64[3];	/* reserved for future use */
@@ -644,11 +647,11 @@ struct ocg {
  *     inode number to cylinder group number.
  *     inode number to file system block address.
  */
-#define	ino_to_cg(fs, x)	((x) / (fs)->fs_ipg)
+#define	ino_to_cg(fs, x)	(((ino_t)(x)) / (fs)->fs_ipg)
 #define	ino_to_fsba(fs, x)						\
-	((daddr_t)(cgimin(fs, ino_to_cg(fs, x)) +			\
-	    (ffs_blkstofrags((fs), (((x) % (fs)->fs_ipg) / FFS_INOPB(fs))))))
-#define	ino_to_fsbo(fs, x)	((x) % FFS_INOPB(fs))
+	((daddr_t)(cgimin(fs, ino_to_cg(fs, (ino_t)(x))) +		\
+	    (ffs_blkstofrags((fs), ((((ino_t)(x)) % (fs)->fs_ipg) / FFS_INOPB(fs))))))
+#define	ino_to_fsbo(fs, x)	(((ino_t)(x)) % FFS_INOPB(fs))
 
 /*
  * Give cylinder group number for a file system block.

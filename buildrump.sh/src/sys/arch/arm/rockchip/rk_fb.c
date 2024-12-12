@@ -1,4 +1,4 @@
-/* $NetBSD: rk_fb.c,v 1.2 2021/05/21 09:33:27 jmcneill Exp $ */
+/* $NetBSD: rk_fb.c,v 1.7 2022/09/25 07:50:15 riastradh Exp $ */
 
 /*-
  * Copyright (c) 2015-2019 Jared McNeill <jmcneill@invisible.ca>
@@ -29,7 +29,7 @@
 #include "opt_wsdisplay_compat.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rk_fb.c,v 1.2 2021/05/21 09:33:27 jmcneill Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rk_fb.c,v 1.7 2022/09/25 07:50:15 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -37,13 +37,15 @@ __KERNEL_RCSID(0, "$NetBSD: rk_fb.c,v 1.2 2021/05/21 09:33:27 jmcneill Exp $");
 
 #include <dev/fdt/fdtvar.h>
 
-#include <drm/drmP.h>
-#include <drm/drmfb.h>
-
 #include <arm/rockchip/rk_drm.h>
+
+#include <drm/drm_drv.h>
+#include <drm/drmfb.h>
 
 static int	rk_fb_match(device_t, cfdata_t, void *);
 static void	rk_fb_attach(device_t, device_t, void *);
+
+static void	rk_fb_init(struct rk_drm_task *);
 
 static bool	rk_fb_shutdown(device_t, int);
 
@@ -52,6 +54,7 @@ struct rk_fb_softc {
 	device_t		sc_dev;
 	struct rk_drm_framebuffer *sc_fb;
 	struct rk_drmfb_attach_args sc_sfa;
+	struct rk_drm_task	sc_attach_task;
 };
 
 static paddr_t	rk_fb_mmapfb(struct drmfb_softc *, off_t, int);
@@ -77,7 +80,6 @@ rk_fb_attach(device_t parent, device_t self, void *aux)
 {
 	struct rk_fb_softc * const sc = device_private(self);
 	struct rk_drmfb_attach_args * const sfa = aux;
-	int error;
 
 	sc->sc_dev = self;
 	sc->sc_sfa = *sfa;
@@ -86,11 +88,37 @@ rk_fb_attach(device_t parent, device_t self, void *aux)
 	aprint_naive("\n");
 	aprint_normal("\n");
 
-#ifdef WSDISPLAY_MULTICONS
-	prop_dictionary_t dict = device_properties(self);
-	const bool is_console = true;
-	prop_dictionary_set_bool(dict, "is_console", is_console);
-#endif
+	rk_task_init(&sc->sc_attach_task, &rk_fb_init);
+	rk_task_schedule(parent, &sc->sc_attach_task);
+}
+
+static void
+rk_fb_turnoffandbackonagain(device_t self)
+{
+	struct rk_fb_softc *sc = device_private(self);
+	struct rk_drmfb_attach_args * const sfa = &sc->sc_sfa;
+
+	/*
+	 * This is a grody kludge to turn the display off and back on
+	 * again at boot; otherwise the initial modeset doesn't take.
+	 * This is surely a bug somewhere in rk_vop.c or nearby, but I
+	 * haven't been able to find it, and this gives us almost the
+	 * same effect.
+	 */
+	mutex_lock(&sfa->sfa_fb_helper->lock);
+	drm_client_modeset_dpms(&sfa->sfa_fb_helper->client, DRM_MODE_DPMS_OFF);
+	drm_client_modeset_dpms(&sfa->sfa_fb_helper->client, DRM_MODE_DPMS_ON);
+	mutex_unlock(&sfa->sfa_fb_helper->lock);
+}
+
+static void
+rk_fb_init(struct rk_drm_task *task)
+{
+	struct rk_fb_softc * const sc =
+	    container_of(task, struct rk_fb_softc, sc_attach_task);
+	device_t self = sc->sc_dev;
+	struct rk_drmfb_attach_args * const sfa = &sc->sc_sfa;
+	int error;
 
 	const struct drmfb_attach_args da = {
 		.da_dev = self,
@@ -108,6 +136,8 @@ rk_fb_attach(device_t parent, device_t self, void *aux)
 	}
 
 	pmf_device_register1(self, NULL, NULL, rk_fb_shutdown);
+
+	config_interrupts(self, rk_fb_turnoffandbackonagain);
 }
 
 static bool

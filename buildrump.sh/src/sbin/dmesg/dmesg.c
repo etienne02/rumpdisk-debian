@@ -1,4 +1,4 @@
-/*	$NetBSD: dmesg.c,v 1.45 2020/01/01 00:24:52 kre Exp $	*/
+/*	$NetBSD: dmesg.c,v 1.51 2022/08/06 10:22:22 rin Exp $	*/
 /*-
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -38,7 +38,7 @@ __COPYRIGHT("@(#) Copyright (c) 1991, 1993\
 #if 0
 static char sccsid[] = "@(#)dmesg.c	8.1 (Berkeley) 6/5/93";
 #else
-__RCSID("$NetBSD: dmesg.c,v 1.45 2020/01/01 00:24:52 kre Exp $");
+__RCSID("$NetBSD: dmesg.c,v 1.51 2022/08/06 10:22:22 rin Exp $");
 #endif
 #endif /* not lint */
 
@@ -145,10 +145,11 @@ main(int argc, char *argv[])
 {
 	struct kern_msgbuf cur;
 	int ch, newl, log, i;
-	size_t tstamp, size;
+	size_t size;
 	char *p, *bufdata;
 	char buf[5];
 #ifndef SMALL
+	size_t tstamp;
 	char tbuf[64];
 	char *memf, *nlistf;
 	struct timespec boottime;
@@ -263,23 +264,36 @@ main(int argc, char *argv[])
 #ifndef SMALL
 	frac = false;
 	postts = false;
+	tstamp = 0;
 	scale = 0;
 #endif
-	for (tstamp = 0, newl = 1, log = i = 0, p = bufdata + cur.msg_bufx;
+	for (newl = 1, log = i = 0, p = bufdata + cur.msg_bufx;
 	    i < cur.msg_bufs; i++, p++) {
 
 #ifndef SMALL
 		if (p == bufdata + cur.msg_bufs)
 			p = bufdata;
-#define ADDC(c)				\
-    do {				\
-	if (tstamp < sizeof(tbuf) - 1)	\
-		tbuf[tstamp++] = (c);	\
-	if (frac)			\
-		scale++;		\
-    } while (/*CONSTCOND*/0)
-#else
-#define ADDC(c)
+#define ADDC(c)								\
+    do {								\
+	if (tstamp < sizeof(tbuf) - 1)					\
+		tbuf[tstamp++] = (c);					\
+	else {								\
+		/* Cannot be a timestamp. */				\
+		tstamp = 0;						\
+		tbuf[sizeof(tbuf) - 1] = '\0';				\
+		goto not_tstamp;					\
+	}								\
+	if (frac)							\
+		scale++;						\
+    } while (0)
+#define	PRTBUF()							\
+    for (char *_p = tbuf; *_p != '\0'; _p++) {				\
+	(void)vis(buf, *_p, VIS_NOSLASH, 0);				\
+	if (buf[1] == 0)						\
+		(void)putchar(buf[0]);					\
+	else								\
+		(void)printf("%s", buf);				\
+    }
 #endif
 		ch = *p;
 		if (ch == '\0')
@@ -307,26 +321,29 @@ main(int argc, char *argv[])
 				continue;
 #ifndef SMALL
 			case ']':
+				if (tstamp == 0)
+					goto prchar;
 				frac = false;
 				ADDC(ch);
 				ADDC('\0');
 				tstamp = 0;
-				postts = true;
 				sec = fsec = 0;
 				switch (sscanf(tbuf, "[%jd.%ld]", &sec, &fsec)){
-				case EOF:
 				case 0:
-					/*???*/
+ not_tstamp:				/* not a timestamp */
+					PRTBUF();
 					continue;
 				case 1:
-					fsec = 0;
+					fsec = 0; /* XXX PRTBUF()? */
 					break;
 				case 2:
 					break;
+				case EOF:
 				default:
 					/* Help */
 					continue;
 				}
+				postts = true;
 
 				for (nsec = fsec, j = 9 - scale; --j >= 0; )
 					nsec *= 10;
@@ -380,20 +397,19 @@ main(int argc, char *argv[])
 #ifndef SMALL
 				if (!tstamp && postts) {
 					postts = false;
-#else
-				if (!tstamp) {
-#endif
 					continue;
 				}
+#endif
 				/*FALLTHROUGH*/
 			default:
 #ifndef SMALL
 				if (tstamp) {
-				    ADDC(ch);
-				    if (ch == '.')
-					frac = true;
-				    continue;
+					ADDC(ch);
+					if (ch == '.')
+						frac = true;
+					continue;
 				}
+ prchar:
 #endif
 				if (log)
 					continue;
@@ -409,6 +425,13 @@ main(int argc, char *argv[])
 #endif
 			(void)printf("%s", buf);
 	}
+#ifndef SMALL
+	/* non-terminated [.*] */
+	if (tstamp) {
+		ADDC('\0');
+		PRTBUF();
+	}
+#endif
 	if (!newl)
 		(void)putchar('\n');
 	return EXIT_SUCCESS;

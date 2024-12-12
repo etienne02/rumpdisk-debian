@@ -1,7 +1,7 @@
-/*	$NetBSD: i915_trace.h,v 1.14 2018/08/27 15:25:28 riastradh Exp $	*/
+/*	$NetBSD: i915_trace.h,v 1.23 2021/12/19 12:42:06 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 2013 The NetBSD Foundation, Inc.
+ * Copyright (c) 2013, 2018 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -35,58 +35,80 @@
 #include <sys/types.h>
 #include <sys/sdt.h>
 
-#include "intel_drv.h"
+#include "i915_drv.h"
+#include "i915_request.h"
+
+#include "display/intel_display_types.h"
 
 /* Must come last.  */
 #include <drm/drm_trace_netbsd.h>
 
-DEFINE_TRACE2(i915,, flip__request,
-    "enum plane"/*plane*/, "struct drm_i915_gem_object *"/*obj*/);
+DEFINE_TRACE3(i915,, cpu__fifo__underrun,
+    "enum pipe_drmhack"/*pipe*/,
+    "uint32_t"/*frame*/,
+    "uint32_t"/*scanline*/);
 static inline void
-trace_i915_flip_request(enum plane plane, struct drm_i915_gem_object *obj)
+trace_intel_cpu_fifo_underrun(struct drm_i915_private *dev_priv,
+    enum pipe pipe)
 {
-	TRACE2(i915,, flip__request,  plane, obj);
+	TRACE3(i915,, cpu__fifo__underrun,
+	    pipe,
+	    dev_priv->drm.driver->get_vblank_counter(&dev_priv->drm, pipe),
+	    intel_get_crtc_scanline(intel_get_crtc_for_pipe(dev_priv, pipe)));
 }
 
-DEFINE_TRACE2(i915,, flip__complete,
-    "enum plane"/*plane*/, "struct drm_i915_gem_object *"/*obj*/);
+DEFINE_TRACE3(i915,, pch__fifo__underrun,
+    "enum pipe_drmhack"/*pipe*/,
+    "uint32_t"/*frame*/,
+    "uint32_t"/*scanline*/);
 static inline void
-trace_i915_flip_complete(enum plane plane, struct drm_i915_gem_object *obj)
+trace_intel_pch_fifo_underrun(struct drm_i915_private *dev_priv,
+    enum pipe pipe)
 {
-	TRACE2(i915,, flip__complete,  plane, obj);
+	TRACE3(i915,, pch__fifo__underrun,
+	    pipe,
+	    dev_priv->drm.driver->get_vblank_counter(&dev_priv->drm, pipe),
+	    intel_get_crtc_scanline(intel_get_crtc_for_pipe(dev_priv, pipe)));
 }
 
-DEFINE_TRACE4(i915,, gem__evict,
+DEFINE_TRACE5(i915,, gem__evict,
     "int"/*devno*/,
-    "int"/*min_size*/, "unsigned"/*alignment*/, "unsigned"/*flags*/);
+    "struct i915_address_space *"/*vm*/,
+    "uint64_t"/*size*/,
+    "uint64_t"/*align*/,
+    "unsigned"/*flags*/);
 static inline void
-trace_i915_gem_evict(struct drm_device *dev, int min_size, unsigned alignment,
-    unsigned flags)
+trace_i915_gem_evict(struct i915_address_space *vm,
+    uint64_t size, uint64_t align, unsigned flags)
 {
-	TRACE4(i915,, gem__evict,
-	    dev->primary->index, min_size, alignment, flags);
+	TRACE5(i915,, gem__evict,
+	    vm->i915->drm.primary->index, vm, size, align, flags);
+}
+
+DEFINE_TRACE6(i915,, gem__evict__node,
+    "int"/*devno*/,
+    "struct i915_address_space *"/*vm*/,
+    "uint64_t"/*start*/,
+    "uint64_t"/*size*/,
+    "unsigned long"/*color*/,
+    "unsigned"/*flags*/);
+static inline void
+trace_i915_gem_evict_node(struct i915_address_space *vm,
+    struct drm_mm_node *node, unsigned flags)
+{
+	TRACE6(i915,, gem__evict__node,
+	    vm->i915->drm.primary->index, vm,
+	    node->start, node->size, node->color,
+	    flags);
 }
 
 DEFINE_TRACE2(i915,, gem__evict__vm,
-    "int"/*devno*/, "struct i915_address_space *"/*vm*/);
+    "int"/*devno*/,
+    "struct i915_address_space *"/*vm*/);
 static inline void
 trace_i915_gem_evict_vm(struct i915_address_space *vm)
 {
-	TRACE2(i915,, gem__evict__vm,  vm->dev->primary->index, vm);
-}
-
-DEFINE_TRACE3(i915,, gem__object__change__domain,
-    "struct drm_i915_gem_object *"/*obj*/,
-    "uint32_t"/*read_domains*/,
-    "uint32_t"/*write_domain*/);
-static inline void
-trace_i915_gem_object_change_domain(struct drm_i915_gem_object *obj,
-    uint32_t old_read_domains, uint32_t old_write_domain)
-{
-	TRACE3(i915,, gem__object__change__domain,
-	    obj,
-	    obj->base.read_domains | (old_read_domains << 16),
-	    obj->base.write_domain | (old_write_domain << 16));
+	TRACE2(i915,, gem__evict__vm,  vm->i915->drm.primary->index, vm);
 }
 
 DEFINE_TRACE1(i915,, gem__object__clflush,
@@ -149,104 +171,87 @@ trace_i915_gem_object_pwrite(struct drm_i915_gem_object *obj, off_t offset,
 	TRACE3(i915,, gem__object__write,  obj, offset, size);
 }
 
-DEFINE_TRACE3(i915,, gem__request__add,
-    "int"/*devno*/, "int"/*ringid*/, "uint32_t"/*seqno*/);
+#define	I915_DEFINE_TRACE_REQ(M, F, N)					      \
+	DEFINE_TRACE6(M, F, N,						      \
+	    "uint32_t"/*devno*/,					      \
+	    "uint64_t"/*ctx*/,						      \
+	    "uint16_t"/*class*/,					      \
+	    "uint16_t"/*instance*/,					      \
+	    "uint32_t"/*seqno*/,					      \
+	    "uint32_t"/*flags*/)
+
+#define	I915_TRACE_REQ(M, F, N, R, FLAGS)				      \
+	TRACE6(M, F, N,							      \
+	    (R)->i915->drm.primary->index,				      \
+	    (R)->fence.context,						      \
+	    (R)->engine->uabi_class,					      \
+	    (R)->engine->uabi_instance,					      \
+	    (R)->fence.seqno,						      \
+	    (FLAGS))
+
+I915_DEFINE_TRACE_REQ(i915,, request__queue);
 static inline void
-trace_i915_gem_request_add(struct drm_i915_gem_request *request)
+trace_i915_request_queue(struct i915_request *request, uint32_t flags)
 {
-	TRACE3(i915,, gem__request__add,
-	    request->ring->dev->primary->index,
-	    request->ring->id,
-	    request->seqno);
+	I915_TRACE_REQ(i915,, request__queue,  request, flags);
 }
 
-DEFINE_TRACE3(i915,, gem__request__retire,
-    "int"/*devno*/, "int"/*ringid*/, "uint32_t"/*seqno*/);
+I915_DEFINE_TRACE_REQ(i915,, request__add);
 static inline void
-trace_i915_gem_request_retire(struct drm_i915_gem_request *request)
+trace_i915_request_add(struct i915_request *request)
 {
-	TRACE3(i915,, gem__request__retire,
-	    request->ring->dev->primary->index,
-	    request->ring->id,
-	    request->seqno);
+	I915_TRACE_REQ(i915,, request__add,  request, 0);
 }
 
-DEFINE_TRACE3(i915,, gem__request__wait__begin,
-    "int"/*devno*/, "int"/*ringid*/, "uint32_t"/*seqno*/);
+I915_DEFINE_TRACE_REQ(i915,, request__submit);
 static inline void
-trace_i915_gem_request_wait_begin(struct drm_i915_gem_request *request)
+trace_i915_request_submit(struct i915_request *request)
 {
-	TRACE3(i915,, gem__request__wait__begin,
-	    request->ring->dev->primary->index,
-	    request->ring->id,
-	    request->seqno);
+	I915_TRACE_REQ(i915,, request__submit,  request, 0);
 }
 
-DEFINE_TRACE3(i915,, gem__request__wait__end,
-    "int"/*devno*/, "int"/*ringid*/, "uint32_t"/*seqno*/);
+I915_DEFINE_TRACE_REQ(i915,, request__execute);
 static inline void
-trace_i915_gem_request_wait_end(struct drm_i915_gem_request *request)
+trace_i915_request_execute(struct i915_request *request)
 {
-	TRACE3(i915,, gem__request__wait__end,
-	    request->ring->dev->primary->index,
-	    request->ring->id,
-	    request->seqno);
+	I915_TRACE_REQ(i915,, request__execute,  request, 0);
 }
 
-DEFINE_TRACE3(i915,, gem__request__notify,
-    "int"/*devno*/, "int"/*ringid*/, "uint32_t"/*seqno*/);
+I915_DEFINE_TRACE_REQ(i915,, request__in);
 static inline void
-trace_i915_gem_request_notify(struct intel_engine_cs *ring)
+trace_i915_request_in(struct i915_request *request, unsigned port)
 {
-	TRACE3(i915,, gem__request__notify,
-	    ring->dev->primary->index, ring->id, ring->get_seqno(ring, false));
+	/* XXX prio */
+	I915_TRACE_REQ(i915,, request__in,  request, port);
 }
 
-/* XXX Why no request in the trace upstream?  */
-DEFINE_TRACE4(i915,, gem__ring__dispatch,
-    "int"/*devno*/, "int"/*ringid*/, "uint32_t"/*seqno*/, "uint32_t"/*flags*/);
+I915_DEFINE_TRACE_REQ(i915,, request__out);
 static inline void
-trace_i915_gem_ring_dispatch(struct drm_i915_gem_request *request,
-    uint32_t flags)
+trace_i915_request_out(struct i915_request *request)
 {
-	TRACE4(i915,, gem__ring__dispatch,
-	    request->ring->dev->primary->index,
-	    request->ring->id,
-	    request->seqno,
-	    flags);
-	/* XXX i915_trace_irq_get?  Doesn't seem to be used.  */
+	I915_TRACE_REQ(i915,, request__out,
+	    request, i915_request_completed(request));
 }
 
-DEFINE_TRACE4(i915,, gem__ring__flush,
-    "int"/*devno*/,
-    "int"/*ringid*/,
-    "uint32_t"/*invalidate*/,
-    "uint32_t"/*flags*/);
+I915_DEFINE_TRACE_REQ(i915,, request__retire);
 static inline void
-trace_i915_gem_ring_flush(struct drm_i915_gem_request *request,
-    uint32_t invalidate, uint32_t flags)
+trace_i915_request_retire(struct i915_request *request)
 {
-	TRACE4(i915,, gem__ring__flush,
-	    request->ring->dev->primary->index,
-	    request->ring->id,
-	    invalidate,
-	    flags);
+	I915_TRACE_REQ(i915,, request__retire, request, 0);
 }
 
-DEFINE_TRACE4(i915,, gem__ring__sync__to,
-    "int"/*devno*/,
-    "int"/*from_ringid*/,
-    "int"/*to_ringid*/,
-    "uint32_t"/*seqno*/);
+I915_DEFINE_TRACE_REQ(i915,, request__wait__begin);
 static inline void
-trace_i915_gem_ring_sync_to(struct drm_i915_gem_request *to_req,
-    struct intel_engine_cs *from, struct drm_i915_gem_request *from_req)
+trace_i915_request_wait_begin(struct i915_request *request, unsigned int flags)
 {
-	TRACE4(i915,, gem__ring__sync__to,
-	    from->dev->primary->index,
-	    from->id,
-	    to_req->ring->id,
-	    i915_gem_request_get_seqno(from_req));
+	I915_TRACE_REQ(i915,, request__wait__begin, request, flags);
+}
+
+I915_DEFINE_TRACE_REQ(i915,, request__wait__end);
+static inline void
+trace_i915_request_wait_end(struct i915_request *request)
+{
+	I915_TRACE_REQ(i915,, request__wait__end, request, 0);
 }
 
 DEFINE_TRACE3(i915,, register__read,
@@ -254,15 +259,17 @@ DEFINE_TRACE3(i915,, register__read,
 DEFINE_TRACE3(i915,, register__write,
     "uint32_t"/*reg*/, "uint64_t"/*value*/, "size_t"/*len*/);
 static inline void
-trace_i915_reg_rw(bool write, uint32_t reg, uint64_t value, size_t len,
+trace_i915_reg_rw(bool write, i915_reg_t reg, uint64_t value, size_t len,
     bool trace)
 {
+	uint32_t regoff __trace_used = i915_mmio_reg_offset(reg);
+
 	if (!trace)
 		return;
 	if (write) {
-		TRACE3(i915,, register__read,  reg, value, len);
+		TRACE3(i915,, register__read,  regoff, value, len);
 	} else {
-		TRACE3(i915,, register__write,  reg, value, len);
+		TRACE3(i915,, register__write,  regoff, value, len);
 	}
 }
 
@@ -301,28 +308,28 @@ trace_intel_gpu_freq_change(int freq)
 
 DEFINE_TRACE3(i915,, context__create,
     "int"/*devno*/,
-    "struct intel_context *"/*ctx*/,
+    "struct i915_gem_context *"/*ctx*/,
     "struct i915_address_space *"/*vm*/);
 static inline void
-trace_i915_context_create(struct intel_context *ctx)
+trace_i915_context_create(struct i915_gem_context *ctx)
 {
 	TRACE3(i915,, context__create,
-	    ctx->i915->dev->primary->index,
+	    ctx->i915->drm.primary->index,
 	    ctx,
-	    (ctx->ppgtt ? &ctx->ppgtt->base : NULL));
+	    rcu_access_pointer(ctx->vm));
 }
 
 DEFINE_TRACE3(i915,, context__free,
     "int"/*devno*/,
-    "struct intel_context *"/*ctx*/,
+    "struct i915_gem_context *"/*ctx*/,
     "struct i915_address_space *"/*vm*/);
 static inline void
-trace_i915_context_free(struct intel_context *ctx)
+trace_i915_context_free(struct i915_gem_context *ctx)
 {
 	TRACE3(i915,, context__free,
-	    ctx->i915->dev->primary->index,
+	    ctx->i915->drm.primary->index,
 	    ctx,
-	    (ctx->ppgtt ? &ctx->ppgtt->base : NULL));
+	    rcu_access_pointer(ctx->vm));
 }
 
 DEFINE_TRACE4(i915,, page_directory_entry_alloc,
@@ -382,7 +389,7 @@ DEFINE_TRACE2(i915,, ppgtt__create,
 static inline void
 trace_i915_ppgtt_create(struct i915_address_space *vm)
 {
-	TRACE2(i915,, ppgtt__create,  vm->dev->primary->index, vm);
+	TRACE2(i915,, ppgtt__create,  vm->i915->drm.primary->index, vm);
 }
 
 DEFINE_TRACE2(i915,, ppgtt__release,
@@ -391,7 +398,7 @@ DEFINE_TRACE2(i915,, ppgtt__release,
 static inline void
 trace_i915_ppgtt_release(struct i915_address_space *vm)
 {
-	TRACE2(i915,, ppgtt__release,  vm->dev->primary->index, vm);
+	TRACE2(i915,, ppgtt__release,  vm->i915->drm.primary->index, vm);
 }
 
 #define	VM_TO_TRACE_NAME(vm)	(i915_is_ggtt(vm) ? "G" : "P")
@@ -418,17 +425,17 @@ trace_i915_gem_shrink(struct drm_i915_private *dev_priv, unsigned long target,
     unsigned flags)
 {
 	TRACE3(i915,, gem__shrink,
-	    dev_priv->dev->primary->index, target, flags);
+	    dev_priv->drm.primary->index, target, flags);
 }
 
 DEFINE_TRACE5(i915,, pipe__update__start,
-    "enum i915_pipe"/*pipe*/,
+    "enum pipe_drmhack"/*pipe*/,
     "uint32_t"/*frame*/,
     "int"/*scanline*/,
     "uint32_t"/*min*/,
     "uint32_t"/*max*/);
 static inline void
-trace_i915_pipe_update_start(struct intel_crtc *crtc)
+trace_intel_pipe_update_start(struct intel_crtc *crtc)
 {
 	TRACE5(i915,, pipe__update__start,
 	    crtc->pipe,
@@ -440,13 +447,13 @@ trace_i915_pipe_update_start(struct intel_crtc *crtc)
 }
 
 DEFINE_TRACE5(i915,, pipe__update__vblank__evaded,
-    "enum i915_pipe"/*pipe*/,
+    "enum pipe_drmhack"/*pipe*/,
     "uint32_t"/*frame*/,
     "int"/*scanline*/,
     "uint32_t"/*min*/,
     "uint32_t"/*max*/);
 static inline void
-trace_i915_pipe_update_vblank_evaded(struct intel_crtc *crtc)
+trace_intel_pipe_update_vblank_evaded(struct intel_crtc *crtc)
 {
 	TRACE5(i915,, pipe__update__vblank__evaded,
 	    crtc->pipe,
@@ -457,29 +464,94 @@ trace_i915_pipe_update_vblank_evaded(struct intel_crtc *crtc)
 }
 
 DEFINE_TRACE3(i915,, pipe__update__end,
-    "enum i915_pipe"/*pipe*/,
+    "enum pipe_drmhack"/*pipe*/,
     "uint32_t"/*frame*/,
     "int"/*scanline*/);
 static inline void
-trace_i915_pipe_update_end(struct intel_crtc *crtc, uint32_t frame,
+trace_intel_pipe_update_end(struct intel_crtc *crtc, uint32_t frame,
     int scanline)
 {
 	TRACE3(i915,, pipe__update__end,  crtc->pipe, frame, scanline);
 }
 
-DEFINE_TRACE4(i915,, switch__mm,
-    "int"/*devno*/,
-    "int"/*ringid*/,
-    "struct intel_context *"/*to*/,
-    "struct i915_address_space *"/*vm*/);
+DEFINE_TRACE2(i915,, update__plane,
+    "struct drm_plane *"/*plane*/,
+    "struct intel_crtc *"/*crtc*/);
+
 static inline void
-trace_switch_mm(struct intel_engine_cs *ring, struct intel_context *to)
+trace_intel_update_plane(struct drm_plane *plane, struct intel_crtc *crtc)
 {
-	TRACE4(i915,, switch__mm,
-	    ring->dev->primary->index,
-	    ring->id,
-	    to,
-	    to->ppgtt ? &to->ppgtt->base : NULL);
+	TRACE2(i915,, update__plane,  plane, crtc);
+}
+
+DEFINE_TRACE2(i915,, disable__plane,
+    "struct drm_plane *"/*plane*/,
+    "struct intel_crtc *"/*crtc*/);
+
+static inline void
+trace_intel_disable_plane(struct drm_plane *plane, struct intel_crtc *crtc)
+{
+	TRACE2(i915,, disable__plane,  plane, crtc);
+}
+
+DEFINE_TRACE1(i915,, pipe__enable,
+    "struct intel_crtc *"/*crtc*/);
+
+static inline void
+trace_intel_pipe_enable(struct intel_crtc *crtc)
+{
+	TRACE1(i915,, pipe__enable,  crtc);
+}
+
+DEFINE_TRACE1(i915,, pipe__disable,
+    "struct intel_crtc *"/*crtc*/);
+
+static inline void
+trace_intel_pipe_disable(struct intel_crtc *crtc)
+{
+	TRACE1(i915,, pipe__disable,  crtc);
+}
+
+DEFINE_TRACE3(i915,, memory_cxsr,
+    "struct drm_i915_private *"/*dev_priv*/,
+    "bool"/*was_enabled*/,
+    "bool"/*enable*/);
+static inline void
+trace_intel_memory_cxsr(struct drm_i915_private *dev_priv, bool was_enabled,
+    bool enable)
+{
+	TRACE3(i915,, memory_cxsr,  dev_priv, was_enabled, enable);
+}
+
+DEFINE_TRACE2(i915,, g4x_wm,
+    "struct intel_crtc *"/*crtc*/,
+    "struct g4x_wm_values *"/*wm*/);
+static inline void
+trace_g4x_wm(struct intel_crtc *crtc, const struct g4x_wm_values *wm)
+{
+	TRACE2(i915,, g4x_wm,  crtc, wm);
+}
+
+DEFINE_TRACE2(i915,, vlv_wm,
+    "struct intel_crtc *"/*crtc*/,
+    "struct vlv_wm_values *"/*wm*/);
+static inline void
+trace_vlv_wm(struct intel_crtc *crtc, const struct vlv_wm_values *wm)
+{
+	TRACE2(i915,, vlv_wm,  crtc, wm);
+}
+
+DEFINE_TRACE4(i915,, vlv_fifo_size,
+    "struct intel_crtc *"/*crtc*/,
+    "int"/*sprite0_start*/,
+    "int"/*sprite1_start*/,
+    "int"/*fifo_size*/);
+static inline void
+trace_vlv_fifo_size(struct intel_crtc *crtc, int sprite0_start,
+    int sprite1_start, int fifo_size)
+{
+	TRACE4(i915,, vlv_fifo_size,  crtc, sprite0_start, sprite1_start,
+	    fifo_size);
 }
 
 #endif  /* _I915_TRACE_H_ */

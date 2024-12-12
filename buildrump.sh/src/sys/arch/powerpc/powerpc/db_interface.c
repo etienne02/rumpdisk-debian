@@ -1,8 +1,8 @@
-/*	$NetBSD: db_interface.c,v 1.57 2021/07/24 21:31:34 andvar Exp $ */
+/*	$NetBSD: db_interface.c,v 1.61 2024/09/08 10:09:48 andvar Exp $ */
 /*	$OpenBSD: db_interface.c,v 1.2 1996/12/28 06:21:50 rahnds Exp $	*/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.57 2021/07/24 21:31:34 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.61 2024/09/08 10:09:48 andvar Exp $");
 
 #define USERACC
 
@@ -46,6 +46,7 @@ __KERNEL_RCSID(0, "$NetBSD: db_interface.c,v 1.57 2021/07/24 21:31:34 andvar Exp
 #endif
 
 #ifdef DDB
+#include <ddb/db_active.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_command.h>
 #include <ddb/db_extern.h>
@@ -72,6 +73,7 @@ db_regs_t ddb_regs;
 
 void ddb_trap(void);				/* Call into trap_subr.S */
 int ddb_trap_glue(struct trapframe *);		/* Called from trap_subr.S */
+#ifdef DDB
 #if defined (PPC_OEA) || defined(PPC_OEA64) || defined (PPC_OEA64_BRIDGE)
 static void db_show_bat(db_expr_t, bool, db_expr_t, const char *);
 static void db_show_mmu(db_expr_t, bool, db_expr_t, const char *);
@@ -101,7 +103,6 @@ static void db_ppcbooke_dumptlb(db_expr_t, bool, db_expr_t, const char *);
 static void db_mach_cpu(db_expr_t, bool, db_expr_t, const char *);
 #endif	/* MULTIPROCESSOR */
 
-#ifdef DDB
 const struct db_command db_machine_command_table[] = {
 #if defined (PPC_OEA) || defined(PPC_OEA64) || defined (PPC_OEA64_BRIDGE)
 	{ DDB_ADD_CMD("bat",	db_show_bat,		0,
@@ -251,7 +252,8 @@ kdb_trap(int type, void *v)
 	db_trap(type, 0);
 	cnpollc(0);
 	db_active--;
-#elif defined(KGDB)
+#endif
+#ifdef KGDB
 	if (!kgdb_trap(type, DDB_REGS)) {
 		rv = 0;
 		goto out;
@@ -303,6 +305,7 @@ kdb_trap(int type, void *v)
 	return rv;
 }
 
+#ifdef DDB
 #if defined (PPC_OEA) || defined(PPC_OEA64) || defined (PPC_OEA64_BRIDGE)
 static void
 print_battranslation(struct bat *bat, unsigned int blidx)
@@ -491,6 +494,7 @@ db_show_mmu(db_expr_t addr, bool have_addr, db_expr_t count, const char *modif)
 #endif
 }
 #endif /* PPC_OEA || PPC_OEA64 || PPC_OEA64_BRIDGE */
+#endif /* DDB */
 
 #if defined(PPC_IBM4XX) || defined(PPC_BOOKE)
 db_addr_t
@@ -521,9 +525,8 @@ branch_taken(int inst, db_addr_t pc, db_regs_t *regs)
 }
 #endif /* PPC_IBM4XX || PPC_BOOKE */
 
-
-#ifdef PPC_IBM4XX
 #ifdef DDB
+#ifdef PPC_IBM4XX
 static void
 db_ppc4xx_ctx(db_expr_t addr, bool have_addr, db_expr_t count, const char *modif)
 {
@@ -641,14 +644,14 @@ db_ppc4xx_dumptlb(db_expr_t addr, bool have_addr, db_expr_t count,
 	zpr = mfspr(SPR_ZPR);
 	for (i = 0; i < NTLB; i++) {
 		__asm volatile("mfmsr %3;"
-			"mfpid %4;"
+			MFPID(%4)
 			"li %0,0;"
 			"mtmsr %0;"
 			"sync; isync;"
 			"tlbrelo %0,%5;"
 			"tlbrehi %1,%5;"
-			"mfpid %2;"
-			"mtpid %4;"
+			MFPID(%2)
+			MTPID(%4)
 			"mtmsr %3;"
 			"sync; isync"
 			: "=&r" (tlblo), "=&r" (tlbhi), "=r" (pid),
@@ -805,8 +808,6 @@ db_ppc4xx_useracc(db_expr_t addr, bool have_addr, db_expr_t count,
 }
 #endif
 
-#endif /* DDB */
-
 #endif /* PPC_IBM4XX */
 
 #ifdef PPC_BOOKE
@@ -814,7 +815,7 @@ static void
 db_ppcbooke_reset(db_expr_t addr, bool have_addr, db_expr_t count,
     const char *modif)
 {
-	printf("Reseting...\n");
+	printf("Resetting...\n");
 	(*cpu_md_ops.md_cpu_reset)();
 }
 
@@ -903,3 +904,4 @@ db_mach_cpu(db_expr_t addr, bool have_addr, db_expr_t count, const char *modif)
 	}
 }
 #endif	/* MULTIPROCESSOR */
+#endif /* DDB */

@@ -1,4 +1,4 @@
-/* $NetBSD: vidcvideo.c,v 1.48 2021/08/20 20:25:27 andvar Exp $ */
+/* $NetBSD: vidcvideo.c,v 1.50 2022/09/27 06:36:42 skrll Exp $ */
 
 /*
  * Copyright (c) 2001 Reinoud Zandijk
@@ -30,13 +30,12 @@
 
 #include <sys/cdefs.h>			/* RCS ID & Copyright macro defns */
 
-__KERNEL_RCSID(0, "$NetBSD: vidcvideo.c,v 1.48 2021/08/20 20:25:27 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vidcvideo.c,v 1.50 2022/09/27 06:36:42 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/buf.h>
 #include <sys/ioctl.h>
 
@@ -56,7 +55,7 @@ __KERNEL_RCSID(0, "$NetBSD: vidcvideo.c,v 1.48 2021/08/20 20:25:27 andvar Exp $"
 #include <arm/arm32/pmap.h>
 #include <arm/cpufunc.h>
 
-/* for vidc_mode ... needs to be MI indepenent one day */
+/* for vidc_mode ... needs to be MI independent one day */
 #include <arm/iomd/vidc.h>
 #include <arm/iomd/vidc20config.h>
 #include <arm/iomd/vidcvideo.h>

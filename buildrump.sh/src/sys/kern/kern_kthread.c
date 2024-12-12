@@ -1,7 +1,8 @@
-/*	$NetBSD: kern_kthread.c,v 1.46 2020/08/01 02:04:55 riastradh Exp $	*/
+/*	$NetBSD: kern_kthread.c,v 1.49 2023/09/23 14:40:42 ad Exp $	*/
 
 /*-
- * Copyright (c) 1998, 1999, 2007, 2009, 2019 The NetBSD Foundation, Inc.
+ * Copyright (c) 1998, 1999, 2007, 2009, 2019, 2023
+ *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -31,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_kthread.c,v 1.46 2020/08/01 02:04:55 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_kthread.c,v 1.49 2023/09/23 14:40:42 ad Exp $");
 
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -41,10 +42,10 @@ __KERNEL_RCSID(0, "$NetBSD: kern_kthread.c,v 1.46 2020/08/01 02:04:55 riastradh 
 #include <sys/mutex.h>
 #include <sys/sched.h>
 #include <sys/kmem.h>
+#include <sys/msan.h>
 
 #include <uvm/uvm_extern.h>
 
-static lwp_t *		kthread_jtarget;
 static kmutex_t		kthread_lock;
 static kcondvar_t	kthread_cv;
 
@@ -54,7 +55,6 @@ kthread_sysinit(void)
 
 	mutex_init(&kthread_lock, MUTEX_DEFAULT, IPL_NONE);
 	cv_init(&kthread_cv, "kthrwait");
-	kthread_jtarget = NULL;
 }
 
 /*
@@ -76,6 +76,7 @@ kthread_create(pri_t pri, int flag, struct cpu_info *ci,
 	if (uaddr == 0) {
 		return ENOMEM;
 	}
+	kmsan_orig((void *)uaddr, USPACE, KMSAN_TYPE_POOL, __RET_ADDR);
 	if ((flag & KTHREAD_TS) != 0) {
 		lc = SCHED_OTHER;
 	} else {
@@ -114,9 +115,9 @@ kthread_create(pri_t pri, int flag, struct cpu_info *ci,
 		if (ci != l->l_cpu) {
 			lwp_unlock_to(l, ci->ci_schedstate.spc_lwplock);
 			lwp_lock(l);
+			l->l_cpu = ci;
 		}
 		l->l_pflag |= LP_BOUND;
-		l->l_cpu = ci;
 	}
 
 	if ((flag & KTHREAD_MUSTJOIN) != 0) {
@@ -160,6 +161,11 @@ kthread_exit(int ecode)
 	const char *name;
 	lwp_t *l = curlwp;
 
+	/* If the kernel lock is held, we need to drop it now. */
+	if ((l->l_pflag & LP_MPSAFE) == 0) {
+		KERNEL_UNLOCK_LAST(l);
+	}
+
 	/* We can't do much with the exit code, so just report it. */
 	if (ecode != 0) {
 		if ((name = l->l_name) == NULL)
@@ -170,18 +176,16 @@ kthread_exit(int ecode)
 
 	/* Barrier for joining. */
 	if (l->l_pflag & LP_MUSTJOIN) {
+		bool *exitedp;
+
 		mutex_enter(&kthread_lock);
-		while (kthread_jtarget != l) {
+		while ((exitedp = l->l_private) == NULL) {
 			cv_wait(&kthread_cv, &kthread_lock);
 		}
-		kthread_jtarget = NULL;
+		KASSERT(!*exitedp);
+		*exitedp = true;
 		cv_broadcast(&kthread_cv);
 		mutex_exit(&kthread_lock);
-	}
-
-	/* If the kernel lock is held, we need to drop it now. */
-	if ((l->l_pflag & LP_MPSAFE) == 0) {
-		KERNEL_UNLOCK_LAST(l);
 	}
 
 	/* And exit.. */
@@ -195,22 +199,21 @@ kthread_exit(int ecode)
 int
 kthread_join(lwp_t *l)
 {
+	bool exited = false;
 
 	KASSERT((l->l_flag & LW_SYSTEM) != 0);
 	KASSERT((l->l_pflag & LP_MUSTJOIN) != 0);
 
 	/*
-	 * - Wait if some other thread has occupied the target.
-	 * - Specify our kthread as a target and notify it.
-	 * - Wait for the target kthread to notify us.
+	 * - Ask the kthread to write to `exited'.
+	 * - After this, touching l is forbidden -- it may be freed.
+	 * - Wait until the kthread has written to `exited'.
 	 */
 	mutex_enter(&kthread_lock);
-	while (kthread_jtarget) {
-		cv_wait(&kthread_cv, &kthread_lock);
-	}
-	kthread_jtarget = l;
+	KASSERT(l->l_private == NULL);
+	l->l_private = &exited;
 	cv_broadcast(&kthread_cv);
-	while (kthread_jtarget == l) {
+	while (!exited) {
 		cv_wait(&kthread_cv, &kthread_lock);
 	}
 	mutex_exit(&kthread_lock);

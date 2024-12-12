@@ -1,4 +1,4 @@
-/*	$NetBSD: mbr.c,v 1.39 2021/05/09 10:37:49 martin Exp $ */
+/*	$NetBSD: mbr.c,v 1.48 2024/04/11 06:42:18 andvar Exp $ */
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -97,7 +97,6 @@
 /* A list of predefined partition types */
 const struct {
 	unsigned int ptype;
-	char short_desc[12];
 	const char *desc;
 } mbr_part_types_src[] = {
 	{ .ptype=MBR_PTYPE_NETBSD, .desc="NetBSD" },
@@ -118,7 +117,7 @@ const struct {
 	{ .ptype=MBR_PTYPE_FAT16B, .desc="DOS FAT16, >32M" },
 	{ .ptype=MBR_PTYPE_FAT16L, .desc="Windows FAT16, LBA" },
 	{ .ptype=MBR_PTYPE_FAT32, .desc="Windows FAT32" },
-	{ .ptype=MBR_PTYPE_EFI, .desc="(U)EFI Boot" },
+	{ .ptype=MBR_PTYPE_EFI, .desc="(U)EFI system partition" },
 };
 
 /* bookeeping of available partition types (including custom ones) */
@@ -184,10 +183,10 @@ static size_t mbr_type_from_gen_desc(const struct part_type_desc *desc);
  *           b      100     1000	extended LBA (type 15)
  *
  *    100 -> a       63       37        user
- *           b      100      200	extended partiton (type 5)
+ *           b      100      200	extended partition (type 5)
  *
  *    200 -> a       63       37        user
- *           b      200      300	extended partiton (type 5)
+ *           b      200      300	extended partition (type 5)
  *
  *    300 -> a       63       37	user
  *           b        0        0        0 (end of chain)
@@ -427,7 +426,7 @@ find_mbr_space(const struct mbr_info_t *mbrs, uint *start, uint *size,
 		}
 		if (s <= from && e > from && is_extended) {
 			/*
-			 * if we start in the extended partiton,
+			 * if we start in the extended partition,
 			 * we must end before its end
 			 */
 			sz = e - from;
@@ -500,7 +499,7 @@ validate_and_set_names(mbr_info_t *mbri, const struct mbr_bootsel *src,
 
 	for (i = 0; i < MBR_PART_COUNT; i++) {
 		/*
-		 * Make sure the name does not contain controll chars
+		 * Make sure the name does not contain control chars
 		 * (not using iscntrl due to minimalistic locale support
 		 * in miniroot environments) and is properly 0-terminated.
 		 */
@@ -618,7 +617,8 @@ read_mbr(const char *disk, size_t secsize, mbr_info_t *mbri,
 				    mbrp->mbrp_type == MBR_PTYPE_FAT16B ||
 				    mbrp->mbrp_type == MBR_PTYPE_FAT32 ||
 				    mbrp->mbrp_type == MBR_PTYPE_FAT32L ||
-				    mbrp->mbrp_type == MBR_PTYPE_FAT16L)
+				    mbrp->mbrp_type == MBR_PTYPE_FAT16L ||
+				    mbrp->mbrp_type == MBR_PTYPE_EFI)
 					flags |= GLM_MAYBE_FAT32;
 				else if (mbrp->mbrp_type == MBR_PTYPE_NTFS)
 					flags |= GLM_MAYBE_NTFS;
@@ -891,7 +891,7 @@ mbr_init_default_alignments(struct mbr_disk_partitions *parts, uint track)
 
 	parts->ptn_0_offset = parts->geo_sec;
 
-	/* Use 1MB offset/alignemnt for large (>128GB) disks */
+	/* Use 1MB offset/alignment for large (>128GB) disks */
 	if (parts->dp.disk_size > HUGE_DISK_SIZE) {
 		parts->ptn_alignment = 2048;
 	} else if (parts->dp.disk_size > TINY_DISK_SIZE) {
@@ -1086,7 +1086,7 @@ mbr_change_disk_geom(struct disk_partitions *arg, int ncyl, int nhead,
 				/*
 				 * If ptn_base is a power of 2, use it.
 				 * Also use it if the first partition
-				 * already is close to the begining
+				 * already is close to the beginning
 				 * of the disk and we can't enforce
 				 * better alignment.
 				 */
@@ -1188,6 +1188,8 @@ mbr_get_fs_part_type(enum part_type pt, unsigned fs_type, unsigned sub_type)
 			return &mbr_gen_type_desc[sub_type].gen;
 		}
 		break;
+	case FS_EFI_SP:
+		return &mbr_gen_type_desc[MBR_PTYPE_EFI].gen;
 	}
 
 	return NULL;
@@ -2046,7 +2048,7 @@ mbr_do_delete_part(const struct disk_partitions *arg, part_id id,
 		/*
 		 * If we are in an extended partition chain, unlink this MBR,
 		 * unless it is the very first one at the start of the extended
-		 * partition (we would have no previos ext mbr to fix up
+		 * partition (we would have no previous ext mbr to fix up
 		 * the chain in that case)
 		 */
 		if (marg->parts->mbr.extended == mb) {
@@ -2827,7 +2829,7 @@ struct part_attr_set_data {
 };
 
 static bool
-part_attr_fornat_str(const struct disk_partitions *arg, part_id id,
+part_attr_format_str(const struct disk_partitions *arg, part_id id,
     const mbr_info_t *mb, int i, bool primary,
     const struct mbr_partition *mp, void *cookie)
 {
@@ -2940,7 +2942,7 @@ mbr_custom_attribute_format(const struct disk_partitions *arg,
 	data.parts = parts;
 	data.info = info;
 
-	return mbr_part_apply(arg, id, part_attr_fornat_str, &data);
+	return mbr_part_apply(arg, id, part_attr_format_str, &data);
 }
 
 static bool

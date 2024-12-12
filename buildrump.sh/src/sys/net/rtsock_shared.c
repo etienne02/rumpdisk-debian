@@ -1,4 +1,4 @@
-/*	$NetBSD: rtsock_shared.c,v 1.19 2020/06/26 15:53:59 roy Exp $	*/
+/*	$NetBSD: rtsock_shared.c,v 1.23 2022/10/04 07:06:31 msaitoh Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtsock_shared.c,v 1.19 2020/06/26 15:53:59 roy Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtsock_shared.c,v 1.23 2022/10/04 07:06:31 msaitoh Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_inet.h"
@@ -124,7 +124,7 @@ CTASSERT(sizeof(struct ifa_xmsghdr) == 20);
 DOMAIN_DEFINE(compat_50_routedomain); /* forward declare and add to link set */
 #else /* COMPAT_RTSOCK */
 /*
- * These are used when #include-d from compat/common/rtsock_50.c
+ * These are used normally, when not #include-d from compat/common/rtsock_50.c
  */
 #define	RTM_XVERSION	RTM_VERSION
 #define	RTM_XNEWADDR	RTM_NEWADDR
@@ -213,7 +213,7 @@ COMPATNAME(route_filter)(struct mbuf *m, struct sockproto *proto,
     struct rawcb *rp)
 {
 	struct routecb *rop = (struct routecb *)rp;
-	struct rt_xmsghdr *rtm;
+	struct rt_xmsghdr rtm;
 
 	KASSERT(m != NULL);
 	KASSERT(proto != NULL);
@@ -229,18 +229,19 @@ COMPATNAME(route_filter)(struct mbuf *m, struct sockproto *proto,
 
 	/* Ensure we can access rtm_type */
 	if (m->m_len <
-	    offsetof(struct rt_xmsghdr, rtm_type) + sizeof(rtm->rtm_type))
+	    offsetof(struct rt_xmsghdr, rtm_type) + sizeof(rtm.rtm_type))
 		return EINVAL;
 
-	rtm = mtod(m, struct rt_xmsghdr *);
-	if (rtm->rtm_type >= sizeof(rop->rocb_msgfilter) * CHAR_BIT)
+	m_copydata(m, offsetof(struct rt_xmsghdr, rtm_type),
+	    sizeof(rtm.rtm_type), &rtm.rtm_type);
+	if (rtm.rtm_type >= sizeof(rop->rocb_msgfilter) * CHAR_BIT)
 		return EINVAL;
 	/* If the rtm type is filtered out, return a positive. */
 	if (rop->rocb_msgfilter != 0 &&
-	    !(rop->rocb_msgfilter & RTMSGFILTER(rtm->rtm_type)))
+	    !(rop->rocb_msgfilter & RTMSGFILTER(rtm.rtm_type)))
 		return EEXIST;
 
-	if (rop->rocb_missfilterlen != 0 && rtm->rtm_type == RTM_MISS) {
+	if (rop->rocb_missfilterlen != 0 && rtm.rtm_type == RTM_MISS) {
 		__CTASSERT(RTAX_DST == 0);
 		struct sockaddr_storage ss;
 		struct sockaddr *dst = (struct sockaddr *)&ss, *sa;
@@ -248,16 +249,16 @@ COMPATNAME(route_filter)(struct mbuf *m, struct sockproto *proto,
 		char *ep = cp + rop->rocb_missfilterlen;
 
 		/* Ensure we can access sa_len */
-		if (m->m_pkthdr.len < sizeof(*rtm) + _SA_MINSIZE)
+		if (m->m_pkthdr.len < sizeof(rtm) + _SA_MINSIZE)
 			return EINVAL;
-		m_copydata(m, sizeof(*rtm) + offsetof(struct sockaddr, sa_len),
+		m_copydata(m, sizeof(rtm) + offsetof(struct sockaddr, sa_len),
 		    sizeof(ss.ss_len), &ss.ss_len);
 		if (ss.ss_len < _SA_MINSIZE ||
 		    ss.ss_len > sizeof(ss) ||
-		    m->m_pkthdr.len < sizeof(*rtm) + ss.ss_len)
+		    m->m_pkthdr.len < sizeof(rtm) + ss.ss_len)
 			return EINVAL;
 		/* Copy out the destination sockaddr */
-		m_copydata(m, sizeof(*rtm), ss.ss_len, &ss);
+		m_copydata(m, sizeof(rtm), ss.ss_len, &ss);
 
 		/* Find a matching sockaddr in the filter */
 		while (cp < ep) {
@@ -647,6 +648,7 @@ int
 COMPATNAME(route_output)(struct mbuf *m, struct socket *so)
 {
 	struct sockproto proto = { .sp_family = PF_XROUTE, };
+	struct rt_xmsghdr hdr;
 	struct rt_xmsghdr *rtm = NULL;
 	struct rt_xmsghdr *old_rtm = NULL, *new_rtm = NULL;
 	struct rtentry *rt = NULL;
@@ -668,8 +670,12 @@ COMPATNAME(route_output)(struct mbuf *m, struct socket *so)
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("%s", __func__);
 	len = m->m_pkthdr.len;
-	if (len < sizeof(*rtm) ||
-	    len != mtod(m, struct rt_xmsghdr *)->rtm_msglen) {
+	if (len < sizeof(*rtm)) {
+		info.rti_info[RTAX_DST] = NULL;
+		senderr(EINVAL);
+	}
+	m_copydata(m, 0, sizeof(hdr), &hdr);
+	if (len != hdr.rtm_msglen) {
 		info.rti_info[RTAX_DST] = NULL;
 		senderr(EINVAL);
 	}

@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_sig_16.c,v 1.6 2020/05/23 23:42:41 ad Exp $	*/
+/*	$NetBSD: kern_sig_16.c,v 1.10 2024/12/10 10:52:05 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 2006, 2007, 2008 The NetBSD Foundation, Inc.
@@ -66,13 +66,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_sig_16.c,v 1.6 2020/05/23 23:42:41 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_sig_16.c,v 1.10 2024/12/10 10:52:05 mlelstv Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_compat_netbsd.h"
 #endif
 
 #include <sys/param.h>
+#include <sys/exec.h>
 #include <sys/kernel.h>
 #include <sys/rwlock.h>
 #include <sys/signalvar.h>
@@ -92,10 +93,17 @@ __KERNEL_RCSID(0, "$NetBSD: kern_sig_16.c,v 1.6 2020/05/23 23:42:41 ad Exp $");
 
 #include <compat/common/compat_mod.h>
 
-extern krwlock_t exec_lock;
+#ifdef COMPAT_NETBSD32
+# ifndef __aarch64__
+#  define COMPAT_SIGCONTEXT
+# endif
+#else /* COMPAT_NETBSD32 */
+# if !defined(__amd64__) && !defined(__aarch64__)
+#  define COMPAT_SIGCONTEXT
+# endif
+#endif /* COMPAT_NETBSD32 */
 
-#if !defined(__amd64__) || defined(COMPAT_NETBSD32)
-#define COMPAT_SIGCONTEXT
+#ifdef COMPAT_SIGCONTEXT
 extern char sigcode[], esigcode[];
 struct uvm_object *emul_netbsd_object;
 #endif
@@ -155,7 +163,15 @@ kern_sig_16_init(void)
 	emul_netbsd.e_sigcode = sigcode;
 	emul_netbsd.e_esigcode = esigcode;
 	emul_netbsd.e_sigobject = &emul_netbsd_object;
+	error = exec_sigcode_alloc(&emul_netbsd);
+	if (error) {
+		emul_netbsd.e_sigcode = NULL;
+		emul_netbsd.e_esigcode = NULL;
+		emul_netbsd.e_sigobject = NULL;
+	}
 	rw_exit(&exec_lock);
+	if (error)
+		return error;
 	MODULE_HOOK_SET(sendsig_sigcontext_16_hook, sendsig_sigcontext);
 #endif
 
@@ -195,9 +211,7 @@ kern_sig_16_fini(void)
 	 * is reference counted so will die eventually.
 	 */
 	rw_enter(&exec_lock, RW_WRITER);
-	if (emul_netbsd_object != NULL) {
-		(*emul_netbsd_object->pgops->pgo_detach)(emul_netbsd_object);
-	}
+	exec_sigcode_free(&emul_netbsd);
 	emul_netbsd_object = NULL;
 	emul_netbsd.e_sigcode = NULL;
 	emul_netbsd.e_esigcode = NULL;

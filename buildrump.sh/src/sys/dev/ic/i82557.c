@@ -1,4 +1,4 @@
-/*	$NetBSD: i82557.c,v 1.159 2020/02/07 00:56:48 thorpej Exp $	*/
+/*	$NetBSD: i82557.c,v 1.162 2024/06/29 12:11:11 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998, 1999, 2001, 2002 The NetBSD Foundation, Inc.
@@ -66,7 +66,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i82557.c,v 1.159 2020/02/07 00:56:48 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i82557.c,v 1.162 2024/06/29 12:11:11 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -114,7 +114,7 @@ __KERNEL_RCSID(0, "$NetBSD: i82557.c,v 1.159 2020/02/07 00:56:48 thorpej Exp $")
  * the first thing in the packet is a 14-byte Ethernet header.
  * This means that the packet is misaligned.  To compensate,
  * we actually offset the RFA 2 bytes into the cluster.  This
- * alignes the packet after the Ethernet header at a 32-bit
+ * aligns the packet after the Ethernet header at a 32-bit
  * boundary.  HOWEVER!  This means that the RFA is misaligned!
  */
 #define	RFA_ALIGNMENT_FUDGE	2
@@ -1074,7 +1074,7 @@ fxp_intr(void *arg)
 	struct ifnet *ifp = &sc->sc_ethercom.ec_if;
 	bus_dmamap_t rxmap;
 	int claimed = 0, rnr;
-	uint8_t statack;
+	uint8_t statack, rndstat = 0;
 
 	if (!device_is_active(sc->sc_dev) || sc->sc_enabled == 0)
 		return (0);
@@ -1092,6 +1092,7 @@ fxp_intr(void *arg)
 	}
 
 	while ((statack = CSR_READ_1(sc, FXP_CSR_SCB_STATACK)) != 0) {
+		rndstat = statack;
 		claimed = 1;
 
 		/*
@@ -1146,7 +1147,7 @@ fxp_intr(void *arg)
 	}
 
 	if (claimed)
-		rnd_add_uint32(&sc->rnd_source, statack);
+		rnd_add_uint32(&sc->rnd_source, rndstat);
 	return (claimed);
 }
 
@@ -1479,14 +1480,15 @@ fxp_tick(void *arg)
 
 	FXP_CDSTATSSYNC(sc, BUS_DMASYNC_POSTREAD);
 
-	if_statadd_ref(nsr, if_opackets, le32toh(sp->tx_good));
-	if_statadd_ref(nsr, if_collisions, le32toh(sp->tx_total_collisions));
+	if_statadd_ref(ifp, nsr, if_opackets, le32toh(sp->tx_good));
+	if_statadd_ref(ifp, nsr, if_collisions,
+	    le32toh(sp->tx_total_collisions));
 	if (sp->rx_good) {
 		sc->sc_rxidle = 0;
 	} else if (sc->sc_flags & FXPF_RECV_WORKAROUND) {
 		sc->sc_rxidle++;
 	}
-	if_statadd_ref(nsr, if_ierrors,
+	if_statadd_ref(ifp, nsr, if_ierrors,
 	    le32toh(sp->rx_crc_errors) +
 	    le32toh(sp->rx_alignment_errors) +
 	    le32toh(sp->rx_rnr_errors) +
@@ -1496,7 +1498,8 @@ fxp_tick(void *arg)
 	 * threshold by another 512 bytes (64 * 8).
 	 */
 	if (sp->tx_underruns) {
-		if_statadd_ref(nsr, if_oerrors, le32toh(sp->tx_underruns));
+		if_statadd_ref(ifp, nsr, if_oerrors,
+		    le32toh(sp->tx_underruns));
 		if (tx_threshold < 192)
 			tx_threshold += 64;
 	}

@@ -1,4 +1,4 @@
-/*	$NetBSD: pi.c,v 1.19 2016/06/30 15:34:30 dholland Exp $	*/
+/*	$NetBSD: pi.c,v 1.24 2023/08/26 15:18:27 rillig Exp $	*/
 
 /*
  * Copyright (c) 1980, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)pi.c	8.1 (Berkeley) 6/6/93";
 #endif
-__RCSID("$NetBSD: pi.c,v 1.19 2016/06/30 15:34:30 dholland Exp $");
+__RCSID("$NetBSD: pi.c,v 1.24 2023/08/26 15:18:27 rillig Exp $");
 #endif /* not lint */
 
 #include <stdio.h>
@@ -52,10 +52,10 @@ DECL_STRINGS_3(static, unk_hdr, "In", "program", "???");
 static char *c_linenumber;
 static char **c_header = &unk_hdr[0];
 
-static boolean alldigits(const char *);
-static boolean isdateformat(int, char **);
-static boolean instringset(const char *, const char **);
-static boolean piptr(const char *);
+static bool alldigits(const char *);
+static bool isdateformat(int, char **);
+static bool instringset(const char *, const char **);
+static bool piptr(const char *);
 
 
 /*
@@ -144,23 +144,23 @@ static boolean piptr(const char *);
 static const char *Months[] = {
 	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
 	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-	0
+	NULL
 };
 static const char *Days[] = {
-	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", 0
+	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", NULL
 };
 static const char *Piroutines[] = {
-	"program", "function", "procedure", 0
+	"program", "function", "procedure", NULL
 };
 
 
-static boolean structured, multiple;
+static bool structured, multiple;
 
 #if 0 /* not const-correct */
 static char *pi_Endmatched[] = {"End", "matched"};
 static char *pi_Inserted[] = {"Inserted", "keyword", "end", "matching"};
 
-static char *pi_multiple[] = {"Mutiply", "defined", "label", "in", "case,", "line"};
+static char *pi_multiple[] = {"Multiply", "defined", "label", "in", "case,", "line"};
 static char *pi_structured[] = {"is", "into", "a", "structured", "statement"};
 
 static char *pi_und1[] = {"undefined", "on", "line"};
@@ -173,7 +173,7 @@ DECL_STRINGS_2(static, pi_Endmatched, "End", "matched");
 DECL_STRINGS_4(static, pi_Inserted, "Inserted", "keyword", "end", "matching");
 
 DECL_STRINGS_6(static, pi_multiple,
-	       "Mutiply", "defined", "label", "in", "case,", "line");
+	       "Multiply", "defined", "label", "in", "case,", "line");
 DECL_STRINGS_5(static, pi_structured,
 	       "is", "into", "a", "structured", "statement");
 
@@ -184,36 +184,34 @@ DECL_STRINGS_4(static, pi_imp2, "improperly", "used", "on", "lines");
 
 #endif
 
-static boolean
+static bool
 alldigits(const char *string)
 {
-	for (; *string && isdigit((unsigned char)*string); string++)
+	for (; *string != '\0' && isdigit((unsigned char)*string); string++)
 		continue;
-	return (*string == '\0');
+	return *string == '\0';
 }
 
-static boolean
+static bool
 instringset(const char *member, const char **set)
 {
-	for (; *set; set++) {
+	for (; *set != NULL; set++)
 		if (strcmp(*set, member) == 0)
 			return true;
-	}
 	return false;
 }
 
-static boolean
+static bool
 isdateformat(int wordc, char **wordv)
 {
-	return (
-	        (wordc == 5)
-	     && (instringset(wordv[0], Days))
-	     && (instringset(wordv[1], Months))
-	     && (alldigits(wordv[2]))
-	     && (alldigits(wordv[4])));
+	return  wordc == 5
+	     && instringset(wordv[0], Days)
+	     && instringset(wordv[1], Months)
+	     && alldigits(wordv[2])
+	     && alldigits(wordv[4]);
 }
 
-static boolean
+static bool
 piptr(const char *string)
 {
 	if (*string != '-')
@@ -225,7 +223,7 @@ piptr(const char *string)
 	string++;
 	while (*string == '-')
 		string++;
-	return (*string == '\0');
+	return *string == '\0';
 }
 
 Errorclass
@@ -235,12 +233,12 @@ pi(void)
 
 	nwordv = NULL;
 	if (cur_wordc < 2)
-		return (C_UNKNOWN);
+		return C_UNKNOWN;
 	if (strlen(cur_wordv[1]) == 1
 	    && ( cur_wordv[1][0] == 'e' || cur_wordv[1][0] == 'E')
 	    && piptr(cur_wordv[2])
 	) {
-		boolean longpiptr = 0;
+		bool longpiptr = false;
 
 		/*
 		 *	We have recognized a first pass error of the form:
@@ -279,7 +277,7 @@ pi(void)
 		}
 		cur_wordv = nwordv - 1;		/* convert to 1 based */
 		cur_wordc += longpiptr ? 2 : 4;
-		return (C_TRUE);
+		return C_TRUE;
 	}
 	if (cur_wordc >= 4
 	    && strlen(cur_wordv[1]) == 1
@@ -300,7 +298,7 @@ pi(void)
 		c_linenumber = cur_wordv[2];
 		cur_wordc += 1;
 		cur_wordv = nwordv - 1;
-		return (C_TRUE);
+		return C_TRUE;
 	}
 	if (cur_wordc >= 3
 	    && strlen(cur_wordv[1]) == 1
@@ -327,19 +325,19 @@ pi(void)
  		 *      %s undefined on line%s
  		 *      %s improperly used on line%s
 		 */
-		boolean undefined = 0;
+		bool undefined = false;
 		int wordindex;
 
 		language = INPI;
-		if ((undefined = (wordvcmp(cur_wordv+2, 3, pi_und1) == 0))
-		     || (undefined = (wordvcmp(cur_wordv+2, 3, pi_und2) == 0))
-		     || wordvcmp(cur_wordv+2, 4, pi_imp1) == 0
-		     || wordvcmp(cur_wordv+2, 4, pi_imp2) == 0
+		if ((undefined = wordv_eq(cur_wordv+2, 3, pi_und1))
+		     || (undefined = wordv_eq(cur_wordv+2, 3, pi_und2))
+		     || wordv_eq(cur_wordv+2, 4, pi_imp1)
+		     || wordv_eq(cur_wordv+2, 4, pi_imp2)
 		) {
 			for (wordindex = undefined ? 5 : 6;
 			     wordindex <= cur_wordc;
 			     wordindex++) {
-				if (nwordv) {
+				if (nwordv != NULL) {
 					free(nwordv[0]);
 					free(nwordv);
 				}
@@ -352,7 +350,7 @@ pi(void)
 			}
 			cur_wordc = undefined ? 4 : 5;
 			cur_wordv = nwordv - 1;
-			return (C_TRUE);
+			return C_TRUE;
 		}
 
 		nwordv = wordvsplice(1+3, cur_wordc, cur_wordv+1);
@@ -362,9 +360,9 @@ pi(void)
 		nwordv[3] = strdup(c_header[2]);
 		cur_wordv = nwordv - 1;
 		cur_wordc += 1 + 3;
-		return (C_THISFILE);
+		return C_THISFILE;
 	}
-	if (strcmp(cur_wordv[1], "...") == 0 && c_linenumber &&
+	if (strcmp(cur_wordv[1], "...") == 0 && c_linenumber != NULL &&
 	    currentfilename != default_currentfilename) {
 		/*
 		 * have a continuation error message
@@ -377,7 +375,7 @@ pi(void)
 		nwordv[1] = strdup(c_linenumber);
 		cur_wordv = nwordv - 1;
 		cur_wordc += 1;
-		return (C_TRUE);
+		return C_TRUE;
 	}
 	if (cur_wordc == 6
 	   && lastchar(cur_wordv[6]) == ':'
@@ -389,7 +387,7 @@ pi(void)
 		language = INPI;
 		currentfilename = strdup(cur_wordv[6]);
 		clob_last(currentfilename, '\0');
-		return (C_SYNC);
+		return C_SYNC;
 	}
 	if (cur_wordc == 3
 	   && strcmp(cur_wordv[1], "In") == 0
@@ -398,7 +396,7 @@ pi(void)
 	) {
 		language = INPI;
 		c_header = wordvsplice(0, cur_wordc, cur_wordv+1);
-		return (C_SYNC);
+		return C_SYNC;
 	}
 
 	/*
@@ -407,7 +405,7 @@ pi(void)
 	if (alldigits(cur_wordv[1])) {
 		language = INPI;
 		c_linenumber = cur_wordv[1];
-		return (C_IGNORE);
+		return C_IGNORE;
 	}
 
 	/*
@@ -418,12 +416,13 @@ pi(void)
 	 * End matched %s on line %d
 	 * Inserted keyword end matching %s on line %d
 	 */
-	multiple = structured = 0;
+	structured = false;
+	multiple = false;
 	if (
-	       (cur_wordc == 6 && wordvcmp(cur_wordv+1, 2, pi_Endmatched) == 0)
-	    || (cur_wordc == 8 && wordvcmp(cur_wordv+1, 4, pi_Inserted) == 0)
-	    || (multiple = (cur_wordc == 9 && wordvcmp(cur_wordv+1,6, pi_multiple) == 0))
-	    || (structured = (cur_wordc == 10 && wordvcmp(cur_wordv+6,5, pi_structured) == 0))
+	       (cur_wordc == 6 && wordv_eq(cur_wordv+1, 2, pi_Endmatched))
+	    || (cur_wordc == 8 && wordv_eq(cur_wordv+1, 4, pi_Inserted))
+	    || (multiple = (cur_wordc == 9 && wordv_eq(cur_wordv+1,6, pi_multiple)))
+	    || (structured = (cur_wordc == 10 && wordv_eq(cur_wordv+6,5, pi_structured)))
 	) {
 		language = INPI;
 		nwordv = wordvsplice(2, cur_wordc, cur_wordv+1);
@@ -432,11 +431,11 @@ pi(void)
 		cur_wordc += 2;
 		cur_wordv = nwordv - 1;
 		if (!multiple)
-			return (C_TRUE);
+			return C_TRUE;
 		erroradd(cur_wordc, nwordv, C_TRUE, C_UNKNOWN);
 		nwordv = wordvsplice(0, cur_wordc, nwordv);
 		nwordv[1] = cur_wordv[cur_wordc - 2];
-		return (C_TRUE);
+		return C_TRUE;
 	}
-	return (C_UNKNOWN);
+	return C_UNKNOWN;
 }

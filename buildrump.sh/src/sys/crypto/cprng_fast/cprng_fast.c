@@ -1,4 +1,4 @@
-/*	$NetBSD: cprng_fast.c,v 1.16 2020/07/28 20:15:07 riastradh Exp $	*/
+/*	$NetBSD: cprng_fast.c,v 1.20 2024/10/15 17:34:06 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cprng_fast.c,v 1.16 2020/07/28 20:15:07 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cprng_fast.c,v 1.20 2024/10/15 17:34:06 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>

@@ -1,4 +1,4 @@
-/*	$NetBSD: fwohci.c,v 1.148 2021/08/21 11:55:25 andvar Exp $	*/
+/*	$NetBSD: fwohci.c,v 1.152 2023/08/10 20:49:20 mrg Exp $	*/
 
 /*-
  * Copyright (c) 2003 Hidetoshi Shimokawa
@@ -37,7 +37,7 @@
  *
  */
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: fwohci.c,v 1.148 2021/08/21 11:55:25 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: fwohci.c,v 1.152 2023/08/10 20:49:20 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -1419,7 +1419,7 @@ txloop:
 	    OHCI_OUTPUT_MORE | OHCI_KEY_ST2 | hdr_len);
  	FWOHCI_DMA_WRITE(db->db.desc.addr, 0);
  	FWOHCI_DMA_WRITE(db->db.desc.res, 0);
-/* Specify bound timer of asy. responce */
+/* Specify bound timer of asy. response */
 	if (dbch->off != OHCI_ATSOFF)
  		FWOHCI_DMA_WRITE(db->db.desc.res,
 		     (OREAD(sc, OHCI_CYCLETIMER) >> 12) + (1 << 13));
@@ -1670,7 +1670,7 @@ fwohci_txd(struct fwohci_softc *sc, struct fwohci_dbch *dbch)
 			mutex_enter(&dbch->xferq.q_mtx);
 			/*
 			 * The watchdog timer takes care of split
-			 * transcation timeout for ACKPEND case.
+			 * transaction timeout for ACKPEND case.
 			 */
 		} else
 			aprint_error_dev(fc->dev, "this shouldn't happen\n");
@@ -1733,7 +1733,7 @@ fwohci_db_init(struct fwohci_softc *sc, struct fwohci_dbch *dbch)
 		goto out;
 
 	/* allocate DB entries and attach one to each DMA channels */
-	/* DB entry must start at 16 bytes bounary. */
+	/* DB entry must start at 16 bytes boundary. */
 	STAILQ_INIT(&dbch->db_trq);
 	db_tr = (struct fwohcidb_tr *)malloc(db_tr_sz, M_FW, M_WAITOK | M_ZERO);
 	if (db_tr == NULL) {
@@ -2643,17 +2643,20 @@ static int
 fwohci_arcv_swap(struct fw_pkt *fp, int len)
 {
 	struct fw_pkt *fp0;
-	uint32_t ld0;
+	union {
+		uint32_t ld0;
+		struct fw_pkt pkt;
+	} pktu;
 	int hlen;
 #if BYTE_ORDER == BIG_ENDIAN
 	int slen, i;
 #endif
 
-	ld0 = FWOHCI_DMA_READ(fp->mode.ld[0]);
+	pktu.ld0 = FWOHCI_DMA_READ(fp->mode.ld[0]);
 #if 0
-	printf("ld0: x%08x\n", ld0);
+	printf("ld0: x%08x\n", pktu.ld0);
 #endif
-	fp0 = (struct fw_pkt *)&ld0;
+	fp0 = (struct fw_pkt *)&pktu;
 	/* determine length to swap */
 	switch (fp0->mode.common.tcode) {
 	case FWTCODE_WRES:

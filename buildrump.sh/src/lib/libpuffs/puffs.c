@@ -1,4 +1,4 @@
-/*	$NetBSD: puffs.c,v 1.124 2018/06/30 16:05:44 christos Exp $	*/
+/*	$NetBSD: puffs.c,v 1.129 2022/04/19 20:32:17 rillig Exp $	*/
 
 /*
  * Copyright (c) 2005, 2006, 2007  Antti Kantee.  All Rights Reserved.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if !defined(lint)
-__RCSID("$NetBSD: puffs.c,v 1.124 2018/06/30 16:05:44 christos Exp $");
+__RCSID("$NetBSD: puffs.c,v 1.129 2022/04/19 20:32:17 rillig Exp $");
 #endif /* !lint */
 
 #include <sys/param.h>
@@ -66,7 +66,7 @@ pthread_mutex_t pu_lock = PTHREAD_MUTEX_INITIALIZER;
 do {									\
 	if (pops->puffs_node_##lower)					\
 		opmask[PUFFS_VN_##upper] = 1;				\
-} while (/*CONSTCOND*/0)
+} while (0)
 static void
 fillvnopmask(struct puffs_ops *pops, struct puffs_kargs *pa)
 {
@@ -265,7 +265,7 @@ puffs_getroot(struct puffs_usermount *pu)
 
 void
 puffs_setrootinfo(struct puffs_usermount *pu, enum vtype vt,
-	vsize_t vsize, dev_t rdev)
+	size_t vsize, dev_t rdev)
 {
 	struct puffs_kargs *pargs = pu->pu_kargp;
 
@@ -275,7 +275,7 @@ puffs_setrootinfo(struct puffs_usermount *pu, enum vtype vt,
 	}
 
 	pargs->pa_root_vtype = vt;
-	pargs->pa_root_vsize = vsize;
+	pargs->pa_root_vsize = (voff_t)vsize;
 	pargs->pa_root_rdev = rdev;
 }
 
@@ -440,9 +440,12 @@ puffs_daemon(struct puffs_usermount *pu, int nochdir, int noclose)
 {
 	long int n;
 	int parent, value, fd;
+	bool is_beforemount;
 
-	if (pipe(pu->pu_dpipe) == -1)
-		return -1;
+	is_beforemount = (puffs_getstate(pu) < PUFFS_STATE_RUNNING);
+	if (is_beforemount)
+		if (pipe(pu->pu_dpipe) == -1)
+			return -1;
 
 	switch (fork()) {
 	case -1:
@@ -454,18 +457,21 @@ puffs_daemon(struct puffs_usermount *pu, int nochdir, int noclose)
 		parent = 1;
 		break;
 	}
-	pu->pu_state |= PU_PUFFSDAEMON;
+	if (is_beforemount)
+		PU_SETSFLAG(pu, PU_PUFFSDAEMON);
 
 	if (parent) {
-		close(pu->pu_dpipe[1]);
-		n = read(pu->pu_dpipe[0], &value, sizeof(int));
-		if (n == -1)
-			err(1, "puffs_daemon");
-		if (n != sizeof(value))
-			errx(1, "puffs_daemon got %ld bytes", n);
-		if (value) {
-			errno = value;
-			err(1, "puffs_daemon");
+		if (is_beforemount) {
+			close(pu->pu_dpipe[1]);
+			n = read(pu->pu_dpipe[0], &value, sizeof(int));
+			if (n == -1)
+				err(1, "puffs_daemon");
+			if (n != sizeof(value))
+				errx(1, "puffs_daemon got %ld bytes", n);
+			if (value) {
+				errno = value;
+				err(1, "puffs_daemon");
+			}
 		}
 		exit(0);
 	} else {
@@ -489,8 +495,10 @@ puffs_daemon(struct puffs_usermount *pu, int nochdir, int noclose)
 	}
 
  fail:
-	n = write(pu->pu_dpipe[1], &errno, sizeof(int));
-	assert(n == 4);
+	if (is_beforemount) {
+		n = write(pu->pu_dpipe[1], &errno, sizeof(int));
+		assert(n == 4);
+	}
 	return -1;
 }
 
@@ -555,7 +563,7 @@ do {									\
 		rv = -1;						\
 		goto out;						\
 	}								\
-} while (/*CONSTCOND*/0)
+} while (0)
 		len = strlen(dir)+1;
 		allwrite(&len, sizeof(len));
 		allwrite(dir, len);
@@ -614,7 +622,7 @@ do {									\
 	free(pu->pu_kargp);
 	pu->pu_kargp = NULL;
 
-	if (pu->pu_state & PU_PUFFSDAEMON)
+	if (PU_GETSFLAG(pu, PU_PUFFSDAEMON))
 		shutdaemon(pu, sverrno);
 
 	errno = sverrno;
@@ -706,8 +714,8 @@ puffs_init(struct puffs_ops *pops, const char *mntfromname,
 void
 puffs_cancel(struct puffs_usermount *pu, int error)
 {
-
 	assert(puffs_getstate(pu) < PUFFS_STATE_RUNNING);
+	assert(PU_GETSFLAG(pu, PU_PUFFSDAEMON));
 	shutdaemon(pu, error);
 	free(pu);
 }
@@ -962,11 +970,13 @@ puffs_mainloop(struct puffs_usermount *pu)
 		goto out;
 
 	nevs = pu->pu_nevs + sigcatch;
-	curev = realloc(pu->pu_evs, nevs * sizeof(struct kevent));
-	if (curev == NULL)
+	if (reallocarr(&pu->pu_evs, nevs, sizeof(struct kevent)) != 0) {
+		errno = ENOMEM;
 		goto out;
-	pu->pu_evs = curev;
+	}
 	pu->pu_nevs = nevs;
+
+	curev = pu->pu_evs;
 
 	LIST_FOREACH(fio, &pu->pu_ios, fio_entries) {
 		EV_SET(curev, fio->io_fd, EVFILT_READ, EV_ADD,

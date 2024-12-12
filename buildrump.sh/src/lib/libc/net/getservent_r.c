@@ -1,4 +1,4 @@
-/*	$NetBSD: getservent_r.c,v 1.11 2011/10/15 23:00:02 christos Exp $	*/
+/*	$NetBSD: getservent_r.c,v 1.13 2022/03/12 17:31:39 christos Exp $	*/
 
 /*
  * Copyright (c) 1983, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)getservent.c	8.1 (Berkeley) 6/4/93";
 #else
-__RCSID("$NetBSD: getservent_r.c,v 1.11 2011/10/15 23:00:02 christos Exp $");
+__RCSID("$NetBSD: getservent_r.c,v 1.13 2022/03/12 17:31:39 christos Exp $");
 #endif
 #endif /* LIBC_SCCS and not lint */
 
@@ -291,8 +291,10 @@ _servent_parsedb(struct servent_data *sd, struct servent *sp,
 
 	if (sd->aliases == NULL) {
 		sd->maxaliases = 10;
-		sd->aliases = malloc(sd->maxaliases * sizeof(char *));
-		if (sd->aliases == NULL)
+		sd->aliases = NULL;
+		errno = reallocarr(&sd->aliases,
+		    sd->maxaliases, sizeof(*sd->aliases));
+		if (errno)
 			goto fail;
 	}
 	sp->s_aliases = sd->aliases;
@@ -302,8 +304,9 @@ _servent_parsedb(struct servent_data *sd, struct servent *sp,
 			goto fail;
 		if (i == sd->maxaliases - 2) {
 			sd->maxaliases *= 2;
-			q = realloc(sd->aliases, sd->maxaliases * sizeof(*q));
-			if (q == NULL)
+			q = sd->aliases;
+			errno = reallocarr(&q, sd->maxaliases, sizeof(*q));
+			if (errno)
 				goto fail;
 			sp->s_aliases = sd->aliases = q;
 		}

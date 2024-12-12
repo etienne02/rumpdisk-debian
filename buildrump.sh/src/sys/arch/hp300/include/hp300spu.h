@@ -1,4 +1,4 @@
-/*	$NetBSD: hp300spu.h,v 1.14 2010/06/06 04:50:06 mrg Exp $	*/
+/*	$NetBSD: hp300spu.h,v 1.17 2024/05/13 00:08:49 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1996, 1997 The NetBSD Foundation, Inc.
@@ -78,7 +78,7 @@ extern	int mmuid;		/* MMU id */
 
 /*
  * This section associates hp300 model configurations with certain
- * combindations of CPU, MMU, and cache.
+ * combinations of CPU, MMU, and cache.
  */
 
 /*
@@ -87,34 +87,6 @@ extern	int mmuid;		/* MMU id */
 #if defined(_KERNEL_OPT)
 #include "opt_spuconf.h"
 #include "opt_m68k_arch.h"
-#endif
-
-/*
- * CPU configuration.
- */
-#if defined(HP320) || defined(HP330) || defined(HP350)
-#define M68020
-#endif
-
-#if defined(HP340) || defined(HP345) || defined(HP360) || defined(HP362) || \
-    defined(HP370) || defined(HP375) || defined(HP400)
-#define M68030
-#endif
-
-#if defined(HP380) || defined(HP382) || defined(HP385) || defined(HP425) || \
-    defined(HP433)
-#define M68040
-#endif
-
-/*
- * MMU configuration.
- */
-#if defined(HP320) || defined(HP350)
-#define M68K_MMU_HP
-#endif
-
-#if defined(HP330) || defined(M68030) || defined(M68040)
-#define	M68K_MMU_MOTOROLA
 #endif
 
 /*

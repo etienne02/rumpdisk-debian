@@ -1,4 +1,4 @@
-/*	$NetBSD: zs.c,v 1.79 2021/01/03 17:42:10 thorpej Exp $	*/
+/*	$NetBSD: zs.c,v 1.82 2024/07/06 10:09:15 andvar Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -79,7 +79,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.79 2021/01/03 17:42:10 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.82 2024/07/06 10:09:15 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -228,14 +228,14 @@ CFATTACH_DECL_NEW(zs, sizeof(struct zs_softc),
     zsmatch, zsattach, NULL, NULL);
 
 /* {b,c}devsw[] function prototypes */
-dev_type_open(zsopen);
-dev_type_close(zsclose);
-dev_type_read(zsread);
-dev_type_write(zswrite);
-dev_type_ioctl(zsioctl);
-dev_type_stop(zsstop);
-dev_type_tty(zstty);
-dev_type_poll(zspoll);
+static dev_type_open(zsopen);
+static dev_type_close(zsclose);
+static dev_type_read(zsread);
+static dev_type_write(zswrite);
+static dev_type_ioctl(zsioctl);
+static dev_type_stop(zsstop);
+static dev_type_tty(zstty);
+static dev_type_poll(zspoll);
 
 const struct cdevsw zs_cdevsw = {
 	.d_open = zsopen,
@@ -330,7 +330,7 @@ zsattach(device_t parent, device_t self, void *aux)
 
 	if (machineid & ATARI_TT) {
 		/*
-		 * ininitialise TT-MFP timer C: 307200Hz
+		 * initialise TT-MFP timer C: 307200Hz
 		 * timer C and D share one control register:
 		 *	bits 0-2 control timer D
 		 *	bits 4-6 control timer C
@@ -386,7 +386,7 @@ zsattach(device_t parent, device_t self, void *aux)
 /*
  * Open a zs serial port.
  */
-int
+static int
 zsopen(dev_t dev, int flags, int mode, struct lwp *l)
 {
 	struct tty *tp;
@@ -463,7 +463,7 @@ zsopen(dev_t dev, int flags, int mode, struct lwp *l)
 	error = ttyopen(tp, ZS_DIALOUT(dev), (flags & O_NONBLOCK));
 	if (error)
 		goto bad;
-	
+
 	error = tp->t_linesw->l_open(dev, tp);
 	if (error)
 		goto bad;
@@ -483,7 +483,7 @@ bad:
 /*
  * Close a zs serial port.
  */
-int
+static int
 zsclose(dev_t dev, int flags, int mode, struct lwp *l)
 {
 	struct zs_chanstate *cs;
@@ -512,7 +512,7 @@ zsclose(dev_t dev, int flags, int mode, struct lwp *l)
 /*
  * Read/write zs serial port.
  */
-int
+static int
 zsread(dev_t dev, struct uio *uio, int flags)
 {
 	struct zs_chanstate *cs;
@@ -528,7 +528,7 @@ zsread(dev_t dev, struct uio *uio, int flags)
 	return (*tp->t_linesw->l_read)(tp, uio, flags);
 }
 
-int
+static int
 zswrite(dev_t dev, struct uio *uio, int flags)
 {
 	struct zs_chanstate *cs;
@@ -544,7 +544,7 @@ zswrite(dev_t dev, struct uio *uio, int flags)
 	return (*tp->t_linesw->l_write)(tp, uio, flags);
 }
 
-int
+static int
 zspoll(dev_t dev, int events, struct lwp *l)
 {
 	struct zs_chanstate *cs;
@@ -556,11 +556,11 @@ zspoll(dev_t dev, int events, struct lwp *l)
 	sc   = device_lookup_private(&zs_cd, unit >> 1);
 	cs   = sc->sc_cs[unit & 1];
 	tp   = cs->cs_ttyp;
- 
+
 	return (*tp->t_linesw->l_poll)(tp, events, l);
 }
 
-struct tty *
+static struct tty *
 zstty(dev_t dev)
 {
 	struct zs_chanstate *cs;
@@ -854,7 +854,7 @@ again:
 	return retval;
 }
 
-int
+static int
 zsioctl(dev_t dev, u_long cmd, void * data, int flag, struct lwp *l)
 {
 	int unit = ZS_UNIT(dev);
@@ -926,7 +926,7 @@ zsioctl(dev_t dev, u_long cmd, void * data, int flag, struct lwp *l)
 			cs->cs_creg[15] &= ~ZSWR15_DCD_IE;
 			ZS_WRITE(cs->cs_zc, 15, cs->cs_creg[15]);
 		} else if ((userbits & TIOCFLAG_CLOCAL) != 0) {
-			cs->cs_softcar = 0; 	/* turn off softcar */
+			cs->cs_softcar = 0;	/* turn off softcar */
 			cs->cs_preg[15] |= ZSWR15_DCD_IE; /* turn on dcd */
 			cs->cs_creg[15] |= ZSWR15_DCD_IE;
 			ZS_WRITE(cs->cs_zc, 15, cs->cs_creg[15]);
@@ -1027,7 +1027,7 @@ out:
 /*
  * Stop output, e.g., for ^S or output flush.
  */
-void
+static void
 zsstop(struct tty *tp, int flag)
 {
 	struct zs_chanstate *cs;

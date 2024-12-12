@@ -1,4 +1,4 @@
-/*      $NetBSD: rtc.c,v 1.6 2009/01/12 11:32:44 tsutsui Exp $        */
+/*      $NetBSD: rtc.c,v 1.8 2023/02/12 08:25:09 tsutsui Exp $        */
 /*
  * Copyright (c) 1997 Rolf Grossmann
  * All rights reserved.
@@ -35,12 +35,9 @@
 #include <lib/libsa/stand.h>
 #include <lib/libsa/net.h>
 
+#include "samachdep.h"
+
 u_char rtc_read(u_char);
-void rtc_init(void);
-
-
-/* ### where shall I put this definition? */
-#define	DELAY(n)	{ register int N = (n); while (--N > 0); }
 
 static volatile u_int *scr2 = (u_int *)NEXT_P_SCR2_CON;
 static u_char new_clock;
@@ -51,7 +48,7 @@ rtc_read(u_char reg)
 	int i;
 	u_int tmp;
 	u_char val;
-    
+
 	*scr2 = (*scr2 & ~(SCR2_RTDATA | SCR2_RTCLK)) | SCR2_RTCE;
 	DELAY(1);
 
@@ -74,7 +71,7 @@ rtc_read(u_char reg)
 	val = 0;			/* should be anyway */
 	for (i=0; i<8; i++) {
 		val <<= 1;
-	
+
 		tmp = *scr2 & ~(SCR2_RTDATA | SCR2_RTCLK);
 
 		*scr2 = tmp | SCR2_RTCLK;
@@ -96,7 +93,7 @@ void
 rtc_init(void)
 {
 	u_char val;
-	
+
 	val = rtc_read(RTC_STATUS);
 	new_clock = (val & RTC_NEW_CLOCK) ? 1 : 0;
 }
@@ -105,7 +102,7 @@ satime_t
 getsecs(void)
 {
 	u_int secs;
-	
+
 	if (new_clock) {
 		secs = rtc_read(RTC_CNTR0) << 24 |
 		       rtc_read(RTC_CNTR1) << 16 |
@@ -124,6 +121,6 @@ getsecs(void)
 		       BCD_DECODE(m) * 60 +
 		       BCD_DECODE(s);
 	}
-	
+
 	return secs;
 }

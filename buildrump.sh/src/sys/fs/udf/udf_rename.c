@@ -1,4 +1,4 @@
-/* $NetBSD: udf_rename.c,v 1.13 2020/01/17 20:08:08 ad Exp $ */
+/* $NetBSD: udf_rename.c,v 1.16 2024/05/18 00:04:01 thorpej Exp $ */
 
 /*
  * Copyright (c) 2013 Reinoud Zandijk
@@ -28,7 +28,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: udf_rename.c,v 1.13 2020/01/17 20:08:08 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: udf_rename.c,v 1.16 2024/05/18 00:04:01 thorpej Exp $");
 
 #include <sys/param.h>
 #include <sys/errno.h>
@@ -36,7 +36,6 @@ __KERNEL_RCSID(0, "$NetBSD: udf_rename.c,v 1.13 2020/01/17 20:08:08 ad Exp $");
 #include <sys/mount.h>
 #include <sys/namei.h>
 #include <sys/stat.h>
-#include <sys/malloc.h>
 #include <sys/dirent.h>
 #include <sys/vnode.h>
 #include <sys/vnode_if.h>
@@ -322,7 +321,7 @@ udf_gro_rename(struct mount *mp, kauth_cred_t cred,
     struct vnode *fdvp, struct componentname *fcnp,
     void *fde, struct vnode *fvp,
     struct vnode *tdvp, struct componentname *tcnp,
-    void *tde, struct vnode *tvp)
+    void *tde, struct vnode *tvp, nlink_t *tvp_nlinkp)
 {
 	struct udf_node *fnode, *fdnode, *tnode, *tdnode;
 	struct vattr fvap;
@@ -364,8 +363,15 @@ udf_gro_rename(struct mount *mp, kauth_cred_t cred,
 		return error;
 
 	/* remove existing entry if present */
-	if (tvp) 
+	if (tvp) {
 		udf_dir_detach(tdnode->ump, tdnode, tnode, tcnp);
+		if (tnode->fe) {
+			*tvp_nlinkp = udf_rw16(tnode->fe->link_cnt);
+		} else {
+			KASSERT(tnode->efe != NULL);
+			*tvp_nlinkp = udf_rw16(tnode->efe->link_cnt);
+		}
+	}
 
 	/* create new directory entry for the node */
 	error = udf_dir_attach(tdnode->ump, tdnode, fnode, &fvap, tcnp);
@@ -384,7 +390,6 @@ udf_gro_rename(struct mount *mp, kauth_cred_t cred,
 			goto rollback;
 	}
 
-	VN_KNOTE(fvp, NOTE_RENAME);
 	genfs_rename_cache_purge(fdvp, fvp, tdvp, tvp);
 	return 0;
 
@@ -404,7 +409,8 @@ rollback_attach:
  */
 static int
 udf_gro_remove(struct mount *mp, kauth_cred_t cred,
-    struct vnode *dvp, struct componentname *cnp, void *de, struct vnode *vp)
+    struct vnode *dvp, struct componentname *cnp, void *de, struct vnode *vp,
+    nlink_t *tvp_nlinkp)
 {
 	struct udf_node *dir_node, *udf_node;
 
@@ -425,6 +431,13 @@ udf_gro_remove(struct mount *mp, kauth_cred_t cred,
 	dir_node = VTOI(dvp);
 	udf_node = VTOI(vp);
 	udf_dir_detach(dir_node->ump, dir_node, udf_node, cnp);
+
+	if (udf_node->fe) {
+		*tvp_nlinkp = udf_rw16(udf_node->fe->link_cnt);
+	} else {
+		KASSERT(udf_node->efe != NULL);
+		*tvp_nlinkp = udf_rw16(udf_node->efe->link_cnt);
+	}
 
 	return 0;
 }
@@ -614,7 +627,7 @@ udf_gro_genealogy(struct mount *mp, kauth_cred_t cred,
 		/* sanity check */
 		if (vp->v_type != VDIR) {
 			/* 
-			 * Odd, but can happen if we loose the race and the
+			 * Odd, but can happen if we lose the race and the
 			 * '..' node has been recycled.
 			 */
 			vput(vp);

@@ -1,10 +1,10 @@
-/* $NetBSD: crt0-common.c,v 1.24 2021/04/20 21:42:31 christos Exp $ */
+/* $NetBSD: crt0-common.c,v 1.28 2024/01/19 19:22:17 christos Exp $ */
 
 /*
  * Copyright (c) 1998 Christos Zoulas
  * Copyright (c) 1995 Christopher G. Demetriou
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -20,7 +20,7 @@
  *          information about NetBSD.
  * 4. The name of the author may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
  * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
@@ -31,12 +31,12 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- * 
+ *
  * <<Id: LICENSE,v 1.2 2000/06/14 15:57:33 cgd Exp>>
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: crt0-common.c,v 1.24 2021/04/20 21:42:31 christos Exp $");
+__RCSID("$NetBSD: crt0-common.c,v 1.28 2024/01/19 19:22:17 christos Exp $");
 
 #include <sys/types.h>
 #include <sys/exec.h>
@@ -55,7 +55,6 @@ typedef void (*fptr_t)(void);
 extern void	_init(void);
 extern void	_fini(void);
 #endif
-extern void	_libc_init(void);
 
 /*
  * Arrange for _DYNAMIC to be weak and undefined (and therefore to show up
@@ -126,10 +125,16 @@ _finiarray(void)
 	}
 }
 
-#if defined(__x86_64__) || defined(__powerpc__) || defined(__sparc__)
+#if \
+    defined(__aarch64__) || \
+    defined(__powerpc__) || \
+    defined(__sparc__) || \
+    defined(__x86_64__)
 #define HAS_IPLTA
 static void fix_iplta(void) __noinline;
-#elif defined(__i386__) || defined(__arm__)
+#elif \
+    defined(__arm__) || \
+    defined(__i386__)
 #define HAS_IPLT
 static void fix_iplt(void) __noinline;
 #endif

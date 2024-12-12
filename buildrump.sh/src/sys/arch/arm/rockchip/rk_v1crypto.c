@@ -1,4 +1,4 @@
-/*	$NetBSD: rk_v1crypto.c,v 1.7 2021/01/27 03:10:19 thorpej Exp $	*/
+/*	$NetBSD: rk_v1crypto.c,v 1.11 2023/04/24 05:16:01 mrg Exp $	*/
 
 /*-
  * Copyright (c) 2020 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: rk_v1crypto.c,v 1.7 2021/01/27 03:10:19 thorpej Exp $");
+__KERNEL_RCSID(1, "$NetBSD: rk_v1crypto.c,v 1.11 2023/04/24 05:16:01 mrg Exp $");
 
 #include <sys/types.h>
 
@@ -98,8 +98,24 @@ RKC_CTRL(struct rk_v1crypto_softc *sc, uint16_t m, uint16_t v)
 CFATTACH_DECL_NEW(rk_v1crypto, sizeof(struct rk_v1crypto_softc),
     rk_v1crypto_match, rk_v1crypto_attach, NULL, NULL);
 
+struct rk_v1crypto_data {
+	int num_clks;
+	const char *const clks[];
+};
+
+static const struct rk_v1crypto_data rk3288_crypto_data = {
+	.num_clks = 4,
+	.clks = {"aclk", "hclk", "sclk", "apb_pclk"},
+};
+
+static const struct rk_v1crypto_data rk3328_crypto_data = {
+	.num_clks = 3,
+	.clks = {"hclk_master", "hclk_slave", "sclk"},
+};
+
 static const struct device_compatible_entry compat_data[] = {
-	{ .compat = "rockchip,rk3288-crypto" },
+	{ .compat = "rockchip,rk3288-crypto", .data = &rk3288_crypto_data },
+	{ .compat = "rockchip,rk3328-crypto", .data = &rk3328_crypto_data },
 	DEVICE_COMPAT_EOL
 };
 
@@ -114,7 +130,6 @@ rk_v1crypto_match(device_t parent, cfdata_t cf, void *aux)
 static void
 rk_v1crypto_attach(device_t parent, device_t self, void *aux)
 {
-	static const char *const clks[] = {"aclk", "hclk", "sclk", "apb_pclk"};
 	struct rk_v1crypto_softc *const sc = device_private(self);
 	const struct fdt_attach_args *const faa = aux;
 	bus_addr_t addr;
@@ -123,12 +138,15 @@ rk_v1crypto_attach(device_t parent, device_t self, void *aux)
 	struct fdtbus_reset *rst;
 	unsigned i;
 	uint32_t ctrl;
+	const struct rk_v1crypto_data *config =
+	    of_compatible_lookup(phandle, compat_data)->data;
+	const char *const *clks = config->clks;
 
 	fdtbus_clock_assign(phandle);
 
 	sc->sc_dev = self;
 	sc->sc_bst = faa->faa_bst;
-	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_VM);
+	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_SOFTSERIAL);
 
 	/* Get and map device registers.  */
 	if (fdtbus_get_reg(phandle, 0, &addr, &size) != 0) {
@@ -141,7 +159,7 @@ rk_v1crypto_attach(device_t parent, device_t self, void *aux)
 	}
 
 	/* Enable the clocks.  */
-	for (i = 0; i < __arraycount(clks); i++) {
+	for (i = 0; i < config->num_clks; i++) {
 		if (fdtbus_clock_enable(phandle, clks[i], true) != 0) {
 			aprint_error(": couldn't enable %s clock\n", clks[i]);
 			return;
@@ -268,7 +286,7 @@ rk_v1crypto_rng_get(size_t nbytes, void *cookie)
 			device_printf(self, "timed out\n");
 			break;
 		}
-		if (consttime_memequal(buf, buf + n/2, n/2)) {
+		if (consttime_memequal(buf, buf + n/2, sizeof(buf[0]) * n/2)) {
 			device_printf(self, "failed repeated output test\n");
 			break;
 		}
@@ -300,7 +318,7 @@ rk_v1crypto_sysctl_attach(struct rk_v1crypto_softc *sc)
 	}
 
 	/* hw.rkv1cryptoN.rng (`struct', 32-byte array) */
-	sysctl_createv(&cy->cy_log, 0, &cy->cy_root_node, NULL,
+	error = sysctl_createv(&cy->cy_log, 0, &cy->cy_root_node, NULL,
 	    CTLFLAG_PERMANENT|CTLFLAG_READONLY|CTLFLAG_PRIVATE, CTLTYPE_STRUCT,
 	    "rng", SYSCTL_DESCR("Read up to 32 bytes out of the TRNG"),
 	    &rk_v1crypto_sysctl_rng, 0, sc, 0, CTL_CREATE, CTL_EOL);

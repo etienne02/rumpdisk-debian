@@ -1,4 +1,4 @@
-/*	$NetBSD: md.c,v 1.10 2020/10/12 16:14:35 martin Exp $ */
+/*	$NetBSD: md.c,v 1.12 2022/04/07 19:33:38 andvar Exp $ */
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -528,7 +528,7 @@ md_post_newfs(struct install_partition_desc *install)
 }
 
 int
-md_post_extract(struct install_partition_desc *install)
+md_post_extract(struct install_partition_desc *install, bool upgrade)
 {
 	return 0;
 }
@@ -782,7 +782,7 @@ getName(part, len_name, name)
 }
 
 /*
- * Find the first occurance of a Standard Type partition and
+ * Find the first occurrence of a Standard Type partition and
  *  mark it for use along with the default mount slot.
  */
 static int

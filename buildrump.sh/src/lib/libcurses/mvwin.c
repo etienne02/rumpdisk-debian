@@ -1,4 +1,4 @@
-/*	$NetBSD: mvwin.c,v 1.21 2017/01/11 20:43:03 roy Exp $	*/
+/*	$NetBSD: mvwin.c,v 1.24 2022/04/12 07:03:04 blymn Exp $	*/
 
 /*
  * Copyright (c) 1981, 1993, 1994
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)mvwin.c	8.2 (Berkeley) 5/4/94";
 #else
-__RCSID("$NetBSD: mvwin.c,v 1.21 2017/01/11 20:43:03 roy Exp $");
+__RCSID("$NetBSD: mvwin.c,v 1.24 2022/04/12 07:03:04 blymn Exp $");
 #endif
 #endif				/* not lint */
 
@@ -84,9 +84,9 @@ mvderwin(WINDOW *win, int dy, int dx)
 			*plp->firstchp = x;
 		if (*plp->lastchp < x + win->maxx)
 			*plp->lastchp = x + win->maxx;
-#ifdef DEBUG
-		__CTRACE(__CTRACE_REFRESH, "mvderwin: firstchp = %d, lastchp = %d\n", *plp->firstchp, *plp->lastchp);
-#endif
+		__CTRACE(__CTRACE_REFRESH,
+		    "mvderwin: firstchp = %d, lastchp = %d\n",
+		    *plp->firstchp, *plp->lastchp);
 	}
 
 	return OK;
@@ -126,6 +126,6 @@ mvwin(WINDOW *win, int by, int bx)
 		__swflags(win);
 		__set_subwin(orig, win);
 	}
-	__touchwin(win);
+	__touchwin(win, 0);
 	return OK;
 }

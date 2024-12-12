@@ -1,4 +1,4 @@
-/*	$NetBSD: uvm_pmap.h,v 1.41 2021/03/07 08:16:58 skrll Exp $	*/
+/*	$NetBSD: uvm_pmap.h,v 1.43 2022/08/20 23:08:53 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1991, 1993
@@ -68,7 +68,12 @@
 #ifndef	_PMAP_VM_
 #define	_PMAP_VM_
 
+#include <sys/types.h>
+
+#include <uvm/uvm_prot.h>
+
 struct lwp;		/* for pmap_activate()/pmap_deactivate() proto */
+struct vm_page;
 
 struct pmap;
 typedef struct pmap *pmap_t;
@@ -176,6 +181,7 @@ bool		pmap_is_referenced(struct vm_page *);
 #endif
 
 void		pmap_page_protect(struct vm_page *, vm_prot_t);
+void		pmap_pv_protect(paddr_t, vm_prot_t);
 
 #if !defined(pmap_phys_address)
 paddr_t		pmap_phys_address(paddr_t);

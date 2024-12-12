@@ -1,4 +1,4 @@
-/*	$NetBSD: hdmi.h,v 1.6 2015/11/14 18:04:05 jmcneill Exp $	*/
+/*	$NetBSD: hdmi.h,v 1.21 2022/07/09 18:18:36 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -33,33 +33,57 @@
 #define	_LINUX_HDMI_H_
 
 #include <sys/types.h>
-#include <sys/param.h>
-#include <sys/errno.h>
-#include <sys/systm.h>
+
+struct device;
+
+/* namespace */
+#define	hdmi_audio_infoframe_init	linux_hdmi_audio_infoframe_init
+#define	hdmi_audio_infoframe_pack	linux_hdmi_audio_infoframe_pack
+#define	hdmi_avi_infoframe_check	linux_hdmi_avi_infoframe_check
+#define	hdmi_avi_infoframe_init		linux_hdmi_avi_infoframe_init
+#define	hdmi_avi_infoframe_pack		linux_hdmi_avi_infoframe_pack
+#define	hdmi_drm_infoframe_check	linux_hdmi_drm_infoframe_check
+#define	hdmi_drm_infoframe_init		linux_hdmi_drm_infoframe_init
+#define	hdmi_drm_infoframe_pack		linux_hdmi_drm_infoframe_pack
+#define	hdmi_drm_infoframe_pack_only	linux_hdmi_drm_infoframe_pack_only
+#define	hdmi_infoframe_checksum		linux_hdmi_infoframe_checksum
+#define	hdmi_infoframe_log		linux_hdmi_infoframe_log
+#define	hdmi_infoframe_pack		linux_hdmi_infoframe_pack
+#define	hdmi_infoframe_pack_only	linux_hdmi_infoframe_pack_only
+#define	hdmi_infoframe_set_checksum	linux_hdmi_infoframe_set_checksum
+#define	hdmi_infoframe_unpack		linux_hdmi_infoframe_unpack
+#define	hdmi_spd_infoframe_check	linux_hdmi_spd_infoframe_check
+#define	hdmi_spd_infoframe_init		linux_hdmi_spd_infoframe_init
+#define	hdmi_spd_infoframe_pack		linux_hdmi_spd_infoframe_pack
+#define	hdmi_vendor_infoframe_check	linux_hdmi_vendor_infoframe_check
+#define	hdmi_vendor_infoframe_init	linux_hdmi_vendor_infoframe_init
+#define	hdmi_vendor_infoframe_length	linux_hdmi_vendor_infoframe_length
+#define	hdmi_vendor_infoframe_pack	linux_hdmi_vendor_infoframe_pack
 
 enum hdmi_3d_structure {
-        HDMI_3D_STRUCTURE_INVALID		= -1,
-        HDMI_3D_STRUCTURE_FRAME_PACKING		= 0,
-        HDMI_3D_STRUCTURE_FIELD_ALTERNATIVE	= 1,
-        HDMI_3D_STRUCTURE_LINE_ALTERNATIVE	= 2,
-        HDMI_3D_STRUCTURE_SIDE_BY_SIDE_FULL	= 3,
-        HDMI_3D_STRUCTURE_L_DEPTH		= 4,
-        HDMI_3D_STRUCTURE_L_DEPTH_GFX_GFX_DEPTH	= 5,
-        HDMI_3D_STRUCTURE_TOP_AND_BOTTOM	= 6,
-        HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF	= 8,
+	HDMI_3D_STRUCTURE_INVALID		= -1,
+	HDMI_3D_STRUCTURE_FRAME_PACKING		= 0,
+	HDMI_3D_STRUCTURE_FIELD_ALTERNATIVE	= 1,
+	HDMI_3D_STRUCTURE_LINE_ALTERNATIVE	= 2,
+	HDMI_3D_STRUCTURE_SIDE_BY_SIDE_FULL	= 3,
+	HDMI_3D_STRUCTURE_L_DEPTH		= 4,
+	HDMI_3D_STRUCTURE_L_DEPTH_GFX_GFX_DEPTH	= 5,
+	HDMI_3D_STRUCTURE_TOP_AND_BOTTOM	= 6,
+	HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF	= 8,
 };
 
 enum hdmi_active_aspect {
-        HDMI_ACTIVE_ASPECT_16_9_TOP		= 2,
-        HDMI_ACTIVE_ASPECT_14_9_TOP		= 3,
-        HDMI_ACTIVE_ASPECT_16_9_CENTER		= 4,
-        HDMI_ACTIVE_ASPECT_PICTURE		= 8,
-        HDMI_ACTIVE_ASPECT_4_3			= 9,
-        HDMI_ACTIVE_ASPECT_16_9			= 10,
-        HDMI_ACTIVE_ASPECT_14_9			= 11,
-        HDMI_ACTIVE_ASPECT_4_3_SP_14_9		= 13,
-        HDMI_ACTIVE_ASPECT_16_9_SP_14_9		= 14,
-        HDMI_ACTIVE_ASPECT_16_9_SP_4_3		= 15,
+	HDMI_ACTIVE_ASPECT_NONE			= 0,
+	HDMI_ACTIVE_ASPECT_16_9_TOP		= 2,
+	HDMI_ACTIVE_ASPECT_14_9_TOP		= 3,
+	HDMI_ACTIVE_ASPECT_16_9_CENTER		= 4,
+	HDMI_ACTIVE_ASPECT_PICTURE		= 8,
+	HDMI_ACTIVE_ASPECT_4_3			= 9,
+	HDMI_ACTIVE_ASPECT_16_9			= 10,
+	HDMI_ACTIVE_ASPECT_14_9			= 11,
+	HDMI_ACTIVE_ASPECT_4_3_SP_14_9		= 13,
+	HDMI_ACTIVE_ASPECT_16_9_SP_14_9		= 14,
+	HDMI_ACTIVE_ASPECT_16_9_SP_4_3		= 15,
 };
 
 enum hdmi_audio_coding_type {
@@ -116,10 +140,12 @@ enum hdmi_colorspace {
 	HDMI_COLORSPACE_RGB			= 0,
 	HDMI_COLORSPACE_YUV422			= 1,
 	HDMI_COLORSPACE_YUV444			= 2,
+	HDMI_COLORSPACE_YUV420			= 3,
+	HDMI_COLORSPACE_IDO_DEFINED		= 7,
 };
 
 enum hdmi_content_type {
-	HDMI_CONTENT_TYPE_NONE			= 0,
+	HDMI_CONTENT_TYPE_GRAPHICS		= 0,
 	HDMI_CONTENT_TYPE_PHOTO			= 1,
 	HDMI_CONTENT_TYPE_CINEMA		= 2,
 	HDMI_CONTENT_TYPE_GAME			= 3,
@@ -129,8 +155,8 @@ enum hdmi_extended_colorimetry {
 	HDMI_EXTENDED_COLORIMETRY_XV_YCC_601	= 0,
 	HDMI_EXTENDED_COLORIMETRY_XV_YCC_709	= 1,
 	HDMI_EXTENDED_COLORIMETRY_S_YCC_601	= 2,
-	HDMI_EXTENDED_COLORIMETRY_ADOBE_YCC_601	= 3,
-	HDMI_EXTENDED_COLORIMETRY_ADOBE_RGB	= 4,
+	HDMI_EXTENDED_COLORIMETRY_OPYCC_601	= 3,
+	HDMI_EXTENDED_COLORIMETRY_OPRGB		= 4,
 };
 
 enum hdmi_nups {
@@ -144,6 +170,9 @@ enum hdmi_picture_aspect {
 	HDMI_PICTURE_ASPECT_NONE		= 0,
 	HDMI_PICTURE_ASPECT_4_3			= 1,
 	HDMI_PICTURE_ASPECT_16_9		= 2,
+	HDMI_PICTURE_ASPECT_64_27		= 3,
+	HDMI_PICTURE_ASPECT_256_135		= 4,
+	HDMI_PICTURE_ASPECT_RESERVED		= 5,
 };
 
 enum hdmi_quantization_range {
@@ -163,11 +192,49 @@ enum hdmi_ycc_quantization_range {
 	HDMI_YCC_QUANTIZATION_RANGE_FULL	= 1,
 };
 
+enum hdmi_packet_type {
+        HDMI_PACKET_TYPE_NULL = 0x00,
+        HDMI_PACKET_TYPE_AUDIO_CLOCK_REGEN	= 0x01,
+        HDMI_PACKET_TYPE_AUDIO_SAMPLE		= 0x02,
+        HDMI_PACKET_TYPE_GENERAL_CONTROL	= 0x03,
+        HDMI_PACKET_TYPE_ACP			= 0x04,
+        HDMI_PACKET_TYPE_ISRC1			= 0x05,
+        HDMI_PACKET_TYPE_ISRC2			= 0x06,
+        HDMI_PACKET_TYPE_ONE_BIT_AUDIO_SAMPLE	= 0x07,
+        HDMI_PACKET_TYPE_DST_AUDIO		= 0x08,
+        HDMI_PACKET_TYPE_HBR_AUDIO_STREAM	= 0x09,
+        HDMI_PACKET_TYPE_GAMUT_METADATA		= 0x0a,
+};
+
 enum hdmi_infoframe_type {
 	HDMI_INFOFRAME_TYPE_VENDOR		= 0x81,
 	HDMI_INFOFRAME_TYPE_AVI			= 0x82,
 	HDMI_INFOFRAME_TYPE_SPD			= 0x83,
 	HDMI_INFOFRAME_TYPE_AUDIO		= 0x84,
+	HDMI_INFOFRAME_TYPE_DRM			= 0x87,
+};
+
+enum hdmi_eotf {
+	HDMI_EOTF_TRADITIONAL_GAMMA_SDR		= 0,
+	HDMI_EOTF_TRADITIONAL_GAMMA_HDR		= 1,
+	HDMI_EOTF_SMPTE_ST2084			= 2,
+	HDMI_EOTF_BT_2100_HLG			= 3,
+};
+
+enum hdmi_metadata_type {
+	HDMI_STATIC_METADATA_TYPE1		= 1,
+};
+
+struct hdmi_type1 {
+	enum hdmi_eotf			eotf;
+	enum hdmi_metadata_type		metadata_type;
+	uint16_t			min_cll;
+	uint16_t			max_cll;
+	uint16_t			max_fall;
+};
+
+struct hdr_sink_metadata {
+	struct hdmi_type1		hdmi_type1;
 };
 
 #define	HDMI_INFOFRAME_SIZE(TYPE)					      \
@@ -181,48 +248,6 @@ struct hdmi_infoframe_header {
 	/* checksum */
 };
 
-static inline void
-hdmi_infoframe_header_init(struct hdmi_infoframe_header *header,
-    enum hdmi_infoframe_type type, uint8_t vers, uint8_t length)
-{
-
-	header->type = type;
-	header->version = vers;
-	header->length = length;
-}
-
-static inline int
-hdmi_infoframe_header_pack(const struct hdmi_infoframe_header *header,
-    uint8_t length, void *buf, size_t size)
-{
-	uint8_t *const p = buf;
-
-	if (length < HDMI_INFOFRAME_HEADER_SIZE)
-		return -ENOSPC;
-	if (size < length)
-		return -ENOSPC;
-
-	p[0] = header->type;
-	p[1] = header->version;
-	p[2] = (length - HDMI_INFOFRAME_HEADER_SIZE);
-	p[3] = 0;		/* checksum */
-
-	return HDMI_INFOFRAME_HEADER_SIZE;
-}
-
-static inline void
-hdmi_infoframe_checksum(void *buf, size_t length)
-{
-	uint8_t *p = buf;
-	uint8_t checksum = 0;
-
-	while (length--)
-		checksum += *p++;
-
-	p = buf;
-	p[3] = (256 - checksum);
-}
-
 #define	HDMI_AUDIO_INFOFRAME_SIZE	10
 struct hdmi_audio_infoframe {
 	struct hdmi_infoframe_header	header;
@@ -235,67 +260,6 @@ struct hdmi_audio_infoframe {
 	uint8_t				level_shift_value;
 	bool				downmix_inhibit;
 };
-
-static inline int
-hdmi_audio_infoframe_init(struct hdmi_audio_infoframe *frame)
-{
-	static const struct hdmi_audio_infoframe zero_frame;
-
-	*frame = zero_frame;
-
-	hdmi_infoframe_header_init(&frame->header, HDMI_INFOFRAME_TYPE_AUDIO,
-	    1, HDMI_AUDIO_INFOFRAME_SIZE);
-
-	return 0;
-}
-
-static inline ssize_t
-hdmi_audio_infoframe_pack(const struct hdmi_audio_infoframe *frame, void *buf,
-    size_t size)
-{
-	const size_t length = HDMI_INFOFRAME_HEADER_SIZE +
-	    HDMI_AUDIO_INFOFRAME_SIZE;
-	uint8_t channels = 0;
-	uint8_t *p = buf;
-	int ret;
-
-	KASSERT(frame->header.length == HDMI_AUDIO_INFOFRAME_SIZE);
-
-	ret = hdmi_infoframe_header_pack(&frame->header, length, p, size);
-	if (ret < 0)
-		return ret;
-	KASSERT(ret == HDMI_INFOFRAME_HEADER_SIZE);
-	p += HDMI_INFOFRAME_HEADER_SIZE;
-	size -= HDMI_INFOFRAME_HEADER_SIZE;
-
-	if (frame->channels >= 2)
-		channels = frame->channels - 1;
-
-	p[0] = __SHIFTIN(frame->coding_type, __BITS(7,4));
-	p[0] |= __SHIFTIN(channels, __BITS(2,0));
-
-	p[1] = __SHIFTIN(frame->sample_frequency, __BITS(4,2));
-	p[1] |= __SHIFTIN(frame->sample_size, __BITS(1,0));
-
-	p[2] = __SHIFTIN(frame->coding_type_ext, __BITS(5,0));
-
-	p[3] = __SHIFTIN(frame->level_shift_value, __BITS(6, 3));
-
-	p[4] = __SHIFTIN(frame->downmix_inhibit? 1 : 0, __BIT(7));
-
-	/* PB6 to PB10 are reserved */
-	p[5] = 0;
-	p[6] = 0;
-	p[7] = 0;
-	p[8] = 0;
-	p[9] = 0;
-
-	CTASSERT(HDMI_AUDIO_INFOFRAME_SIZE == 10);
-
-	hdmi_infoframe_checksum(buf, length);
-
-	return length;
-}
 
 #define	HDMI_AVI_INFOFRAME_SIZE		13
 struct hdmi_avi_infoframe {
@@ -319,68 +283,22 @@ struct hdmi_avi_infoframe {
 	uint16_t			right_bar;
 };
 
-static inline int
-hdmi_avi_infoframe_init(struct hdmi_avi_infoframe *frame)
-{
-	static const struct hdmi_avi_infoframe zero_frame;
-
-	*frame = zero_frame;
-
-	hdmi_infoframe_header_init(&frame->header, HDMI_INFOFRAME_TYPE_AVI, 2,
-	    HDMI_AVI_INFOFRAME_SIZE);
-
-	return 0;
-}
-
-static inline ssize_t
-hdmi_avi_infoframe_pack(const struct hdmi_avi_infoframe *frame, void *buf,
-    size_t size)
-{
-	const size_t length = HDMI_INFOFRAME_HEADER_SIZE +
-	    HDMI_AVI_INFOFRAME_SIZE;
-	uint8_t *p = buf;
-	int ret;
-
-	KASSERT(frame->header.length == HDMI_AVI_INFOFRAME_SIZE);
-
-	ret = hdmi_infoframe_header_pack(&frame->header, length, p, size);
-	if (ret < 0)
-		return ret;
-	KASSERT(ret == HDMI_INFOFRAME_HEADER_SIZE);
-	p += HDMI_INFOFRAME_HEADER_SIZE;
-	size -= HDMI_INFOFRAME_HEADER_SIZE;
-
-	p[0] = __SHIFTIN(frame->colorspace, __BITS(6,5));
-	p[0] |= __SHIFTIN(frame->active_aspect & 0xf? 1 : 0, __BIT(4));
-	p[0] |= __SHIFTIN(frame->top_bar || frame->bottom_bar, __BIT(3));
-	p[0] |= __SHIFTIN(frame->left_bar || frame->right_bar, __BIT(2));
-	p[0] |= __SHIFTIN(frame->scan_mode, __BITS(1,0));
-
-	p[1] = __SHIFTIN(frame->colorimetry, __BITS(7,6));
-	p[1] |= __SHIFTIN(frame->picture_aspect, __BITS(5,4));
-	p[1] |= __SHIFTIN(frame->active_aspect, __BITS(3,0));
-
-	p[2] = __SHIFTIN(frame->itc? 1 : 0, __BIT(7));
-	p[2] |= __SHIFTIN(frame->extended_colorimetry, __BITS(6,4));
-	p[2] |= __SHIFTIN(frame->quantization_range, __BITS(3,2));
-	p[2] |= __SHIFTIN(frame->nups, __BITS(1,0));
-
-	p[3] = frame->video_code;
-
-	p[4] = __SHIFTIN(frame->ycc_quantization_range, __BITS(7,6));
-	p[4] |= __SHIFTIN(frame->content_type, __BITS(5,4));
-	p[4] |= __SHIFTIN(frame->pixel_repeat, __BITS(3,0));
-
-	le16enc(&p[5], frame->top_bar);
-	le16enc(&p[7], frame->bottom_bar);
-	le16enc(&p[9], frame->left_bar);
-	le16enc(&p[11], frame->right_bar);
-	CTASSERT(HDMI_AVI_INFOFRAME_SIZE == 13);
-
-	hdmi_infoframe_checksum(buf, length);
-
-	return length;
-}
+#define	HDMI_DRM_INFOFRAME_SIZE		26
+struct hdmi_drm_infoframe {
+	struct hdmi_infoframe_header	header;
+	enum hdmi_eotf			eotf;
+	enum hdmi_metadata_type		metadata_type;
+	struct {
+		uint16_t	x, y;
+	}				display_primaries[3];
+	struct {
+		uint16_t	x, y;
+	}				white_point;
+	uint16_t			max_display_mastering_luminance;
+	uint16_t			min_display_mastering_luminance;
+	uint16_t			max_cll;
+	uint16_t			max_fall;
+};
 
 #define	HDMI_SPD_INFOFRAME_SIZE		25
 struct hdmi_spd_infoframe {
@@ -405,51 +323,8 @@ struct hdmi_spd_infoframe {
 	}				sdi;
 };
 
-static inline int
-hdmi_spd_infoframe_init(struct hdmi_spd_infoframe *frame, const char *vendor,
-    const char *product)
-{
-	static const struct hdmi_spd_infoframe zero_frame;
-
-	*frame = zero_frame;
-
-	hdmi_infoframe_header_init(&frame->header, HDMI_INFOFRAME_TYPE_SPD,
-	    1, HDMI_SPD_INFOFRAME_SIZE);
-
-	(void)strlcpy(frame->vendor, vendor, sizeof(frame->vendor));
-	(void)strlcpy(frame->product, product, sizeof(frame->product));
-
-	return 0;
-}
-
-static inline ssize_t
-hdmi_spd_infoframe_pack(struct hdmi_spd_infoframe *frame, void *buf,
-    size_t size)
-{
-	const size_t length = HDMI_INFOFRAME_HEADER_SIZE +
-	    HDMI_SPD_INFOFRAME_SIZE;
-	uint8_t *p = buf;
-	int ret;
-
-	KASSERT(frame->header.length == HDMI_SPD_INFOFRAME_SIZE);
-
-	ret = hdmi_infoframe_header_pack(&frame->header, length, p, size);
-	if (ret < 0)
-		return ret;
-	KASSERT(ret == HDMI_INFOFRAME_HEADER_SIZE);
-	p += HDMI_INFOFRAME_HEADER_SIZE;
-	size -= HDMI_INFOFRAME_HEADER_SIZE;
-
-	(void)memcpy(&p[0], frame->vendor, 8);
-	(void)memcpy(&p[8], frame->product, 16);
-	p[24] = frame->sdi;
-
-	hdmi_infoframe_checksum(buf, length);
-
-	return length;
-}
-
-#define	HDMI_IEEE_OUI	0x000c03
+#define	HDMI_IEEE_OUI		0x000c03
+#define	HDMI_FORUM_IEEE_OUI	0xc45dd8
 
 struct hdmi_vendor_infoframe {
 	struct hdmi_infoframe_header	header;
@@ -467,87 +342,46 @@ union hdmi_vendor_any_infoframe {
 	struct hdmi_vendor_infoframe	hdmi;
 };
 
-static inline int
-hdmi_vendor_infoframe_init(struct hdmi_vendor_infoframe *frame)
-{
-	static const struct hdmi_vendor_infoframe zero_frame;
-
-	*frame = zero_frame;
-
-	hdmi_infoframe_header_init(&frame->header, HDMI_INFOFRAME_TYPE_VENDOR,
-	    1, 0 /* depends on s3d_struct */);
-
-	frame->oui = HDMI_IEEE_OUI;
-	frame->s3d_struct = HDMI_3D_STRUCTURE_INVALID;
-
-	return 0;
-}
-
-static inline int
-hdmi_vendor_infoframe_pack(const struct hdmi_vendor_infoframe *frame,
-    void *buf, size_t size)
-{
-	uint8_t *p = buf;
-	size_t length;
-	int ret;
-
-	/* Exactly one must be supplied.  */
-	if ((frame->vic == 0) ==
-	    (frame->s3d_struct == HDMI_3D_STRUCTURE_INVALID))
-		return -EINVAL;
-
-	length = HDMI_INFOFRAME_HEADER_SIZE + 6;
-	if (frame->s3d_struct >= HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF)
-		length += 1;
-
-	ret = hdmi_infoframe_header_pack(&frame->header, length, p, size);
-	if (ret < 0)
-		return ret;
-	KASSERT(ret == HDMI_INFOFRAME_HEADER_SIZE);
-	p += HDMI_INFOFRAME_HEADER_SIZE;
-	size -= HDMI_INFOFRAME_HEADER_SIZE;
-
-	p[0] = 0x03;
-	p[1] = 0x0c;
-	p[2] = 0x00;
-
-	if (frame->vic == 0) {
-		p[3] = __SHIFTIN(0x2, __BITS(6,5));
-		p[4] = __SHIFTIN(frame->s3d_struct, __BITS(7,4));
-		if (frame->s3d_struct >= HDMI_3D_STRUCTURE_SIDE_BY_SIDE_HALF)
-			p[9] = __SHIFTIN(frame->s3d_ext_data, __BITS(7,4));
-	} else {
-		p[3] = __SHIFTIN(0x1, __BITS(6,5));
-		p[4] = frame->vic;
-	}
-
-	hdmi_infoframe_checksum(buf, length);
-
-	return length;
-}
-
 union hdmi_infoframe {
 	struct hdmi_infoframe_header	any;
 	struct hdmi_avi_infoframe	avi;
 	struct hdmi_spd_infoframe	spd;
+	struct hdmi_audio_infoframe	audio;
+	struct hdmi_drm_infoframe	drm;
 	union hdmi_vendor_any_infoframe	vendor;
 };
 
-static inline ssize_t
-hdmi_infoframe_pack(union hdmi_infoframe *frame, void *buf, size_t size)
-{
+int hdmi_audio_infoframe_init(struct hdmi_audio_infoframe *);
+ssize_t hdmi_audio_infoframe_pack(const struct hdmi_audio_infoframe *, void *,
+    size_t);
 
-	switch (frame->any.type) {
-	case HDMI_INFOFRAME_TYPE_AVI:
-		return hdmi_avi_infoframe_pack(&frame->avi, buf, size);
-	case HDMI_INFOFRAME_TYPE_SPD:
-		return hdmi_spd_infoframe_pack(&frame->spd, buf, size);
-	case HDMI_INFOFRAME_TYPE_VENDOR:
-		return hdmi_vendor_infoframe_pack(&frame->vendor.hdmi, buf,
-		    size);
-	default:
-		return -EINVAL;
-	}
-}
+int hdmi_avi_infoframe_init(struct hdmi_avi_infoframe *);
+int hdmi_avi_infoframe_check(const struct hdmi_avi_infoframe *);
+ssize_t hdmi_avi_infoframe_pack(const struct hdmi_avi_infoframe *, void *,
+    size_t);
+
+int hdmi_drm_infoframe_init(struct hdmi_drm_infoframe *);
+int hdmi_drm_infoframe_check(const struct hdmi_drm_infoframe *);
+ssize_t hdmi_drm_infoframe_pack(const struct hdmi_drm_infoframe *, void *,
+    size_t);
+int hdmi_drm_infoframe_pack_only(const struct hdmi_drm_infoframe *, void *,
+    size_t);
+
+int hdmi_spd_infoframe_init(struct hdmi_spd_infoframe *, const char *,
+    const char *);
+int hdmi_spd_infoframe_check(const struct hdmi_spd_infoframe *);
+ssize_t hdmi_spd_infoframe_pack(const struct hdmi_spd_infoframe *, void *,
+    size_t);
+
+int hdmi_vendor_infoframe_init(struct hdmi_vendor_infoframe *);
+int hdmi_vendor_infoframe_check(const struct hdmi_vendor_infoframe *);
+ssize_t hdmi_vendor_infoframe_pack(const struct hdmi_vendor_infoframe *,
+    void *, size_t);
+
+ssize_t hdmi_infoframe_pack(const union hdmi_infoframe *, void *, size_t);
+ssize_t hdmi_infoframe_pack_only(const union hdmi_infoframe *, void *, size_t);
+int hdmi_infoframe_unpack(union hdmi_infoframe *, const void *, size_t);
+void hdmi_infoframe_log(const char *, struct device *,
+    const union hdmi_infoframe *);
 
 #endif	/* _LINUX_HDMI_H_ */

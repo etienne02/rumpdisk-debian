@@ -1,4 +1,4 @@
-/*	$NetBSD: bcm2838_pcie.c,v 1.5 2021/08/07 16:18:43 thorpej Exp $ */
+/*	$NetBSD: bcm2838_pcie.c,v 1.7 2024/02/16 15:11:38 skrll Exp $ */
 
 /*-
  * Copyright (c) 2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bcm2838_pcie.c,v 1.5 2021/08/07 16:18:43 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bcm2838_pcie.c,v 1.7 2024/02/16 15:11:38 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -417,7 +417,7 @@ bcmstb_setwin(struct bcmstb_softc *sc, int win, uint64_t pa, uint64_t ca,
 	STBRMW(sc, PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI(win),
 	    PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI_BASE,
 	    __SHIFTIN(base, PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI_BASE));
-	
+
 	STBRMW(sc, PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI(win),
 	    PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI_LIMIT,
 	    __SHIFTIN(base, PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI_LIMIT));
@@ -855,7 +855,7 @@ bcmstb_bus_space_map(void *t, bus_addr_t bpa, bus_size_t size, int flag,
 
 //        if ((bs->flags & PCI_FLAGS_IO_OKAY) != 0) {
                 /* Force strongly ordered mapping for all I/O space */
-                flag = _ARM_BUS_SPACE_MAP_STRONGLY_ORDERED;
+                flag = BUS_SPACE_MAP_NONPOSTED;
 //        }
 
         for (size_t i = 0; i < bs->nranges; i++) {

@@ -1,4 +1,4 @@
-/*	$NetBSD: clock.c,v 1.12 2010/04/24 19:58:13 dbj Exp $	*/
+/*	$NetBSD: clock.c,v 1.14 2023/02/03 23:13:01 tsutsui Exp $	*/
 /*
  * Copyright (c) 1998 Darrin B. Jewell
  * All rights reserved.
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: clock.c,v 1.12 2010/04/24 19:58:13 dbj Exp $");
+__KERNEL_RCSID(0, "$NetBSD: clock.c,v 1.14 2023/02/03 23:13:01 tsutsui Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -48,38 +48,6 @@ __KERNEL_RCSID(0, "$NetBSD: clock.c,v 1.12 2010/04/24 19:58:13 dbj Exp $");
  * -- jewell@mit.edu
  */
 
-/*
- * Note that the value of delay_divisor is roughly
- * 2048 / cpuspeed (where cpuspeed is in MHz) on 68020
- * and 68030 systems.  See clock.c for the delay
- * calibration algorithm.
- */
-int	cpuspeed;		  /* relative cpu speed; XXX skewed on 68040 */
-int	delay_divisor = 2048/25;  /* delay constant */
-
-/*
- * Calibrate the delay constant.
- */
-void
-next68k_calibrate_delay(void)
-{
-	extern int delay_divisor;
-
-	/* @@@ write this once we know how to read
-	 * a real time clock
-	 */
-
-	/*
-	 * Sanity check the delay_divisor value.  If we totally lost,
-	 * assume a 25MHz CPU;
-	 */
-	if (delay_divisor == 0)
-		delay_divisor = 2048 / 25;
-
-	/* Calculate CPU speed. */
-	cpuspeed = 2048 / delay_divisor;
-}
-
 int clock_intr(void *);
 
 int
@@ -89,17 +57,17 @@ clock_intr(void *arg)
 	int whilecount = 0;
 
 	if (!INTR_OCCURRED(NEXT_I_TIMER)) {
-		return(0);
+		return 0;
 	}
 
 	do {
 		static int in_hardclock = 0;
 		int s;
-		
+
 		timer = (volatile struct timer_reg *)IIOV(NEXT_P_TIMER);
 		timer->csr |= TIMER_REG_UPDATE;
 
-		if (! in_hardclock) {
+		if (!in_hardclock) {
 			in_hardclock = 1;
 			s = splclock ();
 			hardclock(arg);
@@ -109,7 +77,7 @@ clock_intr(void *arg)
 		if (whilecount++ > 10)
 			panic ("whilecount");
 	} while (INTR_OCCURRED(NEXT_I_TIMER));
-	return(1);
+	return 1;
 }
 
 /*
@@ -146,7 +114,8 @@ setstatclockrate(int newhz)
 	/* XXX should we do something here? XXX */
 }
 
-/* @@@ update this to use the usec timer 
+/*
+ * @@@ update this to use the usec timer
  * Darrin B Jewell <jewell@mit.edu>  Sun Feb  8 05:01:02 1998
  * XXX: Well, there is no more microtime.  But if there is a hardware
  * timer of any sort, it could be added.   ENODOCS.  gdamore.

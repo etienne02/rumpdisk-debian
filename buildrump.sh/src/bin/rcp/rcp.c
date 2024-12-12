@@ -1,4 +1,4 @@
-/*	$NetBSD: rcp.c,v 1.50 2020/05/06 18:15:40 aymeric Exp $	*/
+/*	$NetBSD: rcp.c,v 1.53 2023/08/01 08:47:24 mrg Exp $	*/
 
 /*
  * Copyright (c) 1983, 1990, 1992, 1993
@@ -39,7 +39,7 @@ __COPYRIGHT("@(#) Copyright (c) 1983, 1990, 1992, 1993\
 #if 0
 static char sccsid[] = "@(#)rcp.c	8.2 (Berkeley) 4/2/94";
 #else
-__RCSID("$NetBSD: rcp.c,v 1.50 2020/05/06 18:15:40 aymeric Exp $");
+__RCSID("$NetBSD: rcp.c,v 1.53 2023/08/01 08:47:24 mrg Exp $");
 #endif
 #endif /* not lint */
 
@@ -58,6 +58,7 @@ __RCSID("$NetBSD: rcp.c,v 1.50 2020/05/06 18:15:40 aymeric Exp $");
 #include <fcntl.h>
 #include <locale.h>
 #include <netdb.h>
+#include <paths.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
@@ -79,6 +80,8 @@ int pflag, iamremote, iamrecursive, targetshouldbedirectory;
 int family = AF_UNSPEC;
 static char dot[] = ".";
 
+static sig_atomic_t print_info = 0;
+
 #define	CMDNEEDS	64
 char cmd[CMDNEEDS];		/* must hold "rcp -r -p -d\0" */
 
@@ -89,6 +92,8 @@ void	 source(int, char *[]);
 void	 tolocal(int, char *[]);
 void	 toremote(char *, int, char *[]);
 void	 usage(void);
+static void	got_siginfo(int);
+static void	progress(const char *, uintmax_t, uintmax_t);
 
 int
 main(int argc, char *argv[])
@@ -173,6 +178,7 @@ main(int argc, char *argv[])
 	    targetshouldbedirectory ? " -d" : "");
 
 	(void)signal(SIGPIPE, lostconn);
+	(void)signal(SIGINFO, got_siginfo);
 
 	if ((targ = colon(argv[argc - 1])) != NULL)/* Dest is remote host. */
 		toremote(targ, argc, argv);
@@ -329,8 +335,10 @@ source(int argc, char *argv[])
 	BUF *bp;
 	off_t i;
 	off_t amt;
-	int fd, haderr, indx, result;
-	char *last, *name, buf[BUFSIZ];
+	size_t resid;
+	ssize_t result;
+	int fd, haderr, indx;
+	char *last, *name, *cp, buf[BUFSIZ];
 
 	for (indx = 0; indx < argc; ++indx) {
 		name = argv[indx];
@@ -385,22 +393,29 @@ next:			(void)close(fd);
 		/* Keep writing after an error so that we stay sync'd up. */
 		haderr = 0;
 		for (i = 0; i < stb.st_size; i += bp->cnt) {
+			if (print_info)
+				progress(name, i, stb.st_size);
 			amt = bp->cnt;
 			if (i + amt > stb.st_size)
 				amt = stb.st_size - i;
-			if (!haderr) {
-				result = read(fd, bp->buf, (size_t)amt);
-				if (result != amt)
-					haderr = result >= 0 ? EIO : errno;
+			for (resid = (size_t)amt, cp = bp->buf; resid > 0;
+			    resid -= result, cp += result) {
+				result = read(fd, cp, resid);
+				if (result == -1) {
+					haderr = errno;
+					goto error;
+				}
 			}
-			if (haderr)
-				(void)write(rem, bp->buf, (size_t)amt);
-			else {
-				result = write(rem, bp->buf, (size_t)amt);
-				if (result != amt)
-					haderr = result >= 0 ? EIO : errno;
+			for (resid = (size_t)amt, cp = bp->buf; resid > 0;
+			    resid -= result, cp += result) {
+				result = write(rem, cp, resid);
+				if (result == -1) {
+					haderr = errno;
+					goto error;
+				}
 			}
 		}
+ error:
 		if (close(fd) && !haderr)
 			haderr = errno;
 		if (!haderr)
@@ -451,11 +466,11 @@ rsource(char *name, struct stat *statp)
 			continue;
 		if (!strcmp(dp->d_name, dot) || !strcmp(dp->d_name, ".."))
 			continue;
-		if (strlen(name) + 1 + strlen(dp->d_name) >= MAXPATHLEN - 1) {
+		if (snprintf(path, sizeof(path), "%s/%s", name, dp->d_name) >=
+		    sizeof(path)) {
 			run_err("%s/%s: name too long", name, dp->d_name);
 			continue;
 		}
-		(void)snprintf(path, sizeof(path), "%s/%s", name, dp->d_name);
 		vect[0] = path;
 		source(1, vect);
 	}
@@ -471,10 +486,10 @@ sink(int argc, char *argv[])
 	struct stat stb;
 	struct timeval tv[2];
 	BUF *bp;
-	ssize_t j;
+	size_t resid;
+	ssize_t result;
 	off_t i;
 	off_t amt;
-	off_t count;
 	int exists, first, ofd;
 	mode_t mask;
 	mode_t mode;
@@ -641,7 +656,6 @@ bad:			run_err("%s: %s", np, strerror(errno));
 			(void)close(ofd);
 			continue;
 		}
-		cp = bp->buf;
 		wrerr = 0;
 
 /*
@@ -656,42 +670,33 @@ bad:			run_err("%s: %s", np, strerror(errno));
 	}								\
 } while(0)
 
-		count = 0;
-		for (i = 0; i < size; i += BUFSIZ) {
-			amt = BUFSIZ;
+		for (i = 0; i < size; i += bp->cnt) {
+			if (print_info)
+				progress(np, i, size);
+			amt = bp->cnt;
 			if (i + amt > size)
 				amt = size - i;
-			count += amt;
-			do {
-				j = read(rem, cp, (size_t)amt);
-				if (j == -1) {
-					run_err("%s", j ? strerror(errno) :
-					    "dropped connection");
+			for (resid = (size_t)amt, cp = bp->buf; resid > 0;
+			    resid -= result, cp += result) {
+				result = read(rem, cp, resid);
+				if (result == -1) {
+					run_err("%s", strerror(errno));
 					exit(1);
 				}
-				amt -= j;
-				cp += j;
-			} while (amt > 0);
-			if (count == bp->cnt) {
+			}
+			for (resid = (size_t)amt, cp = bp->buf; resid > 0;
+			    resid -= result, cp += result) {
 				/* Keep reading so we stay sync'd up. */
 				if (!wrerr) {
-					j = write(ofd, bp->buf, (size_t)count);
-					if (j != count) {
-						if (j >= 0)
-							errno = EIO;
+					result = write(ofd, cp, resid);
+					if (result == -1) {
 						RUN_ERR("write");
+						goto error;
 					}
 				}
-				count = 0;
-				cp = bp->buf;
 			}
 		}
-		if (count != 0 && !wrerr &&
-		    (j = write(ofd, bp->buf, (size_t)count)) != count) {
-			if (j >= 0)
-				errno = EIO;
-			RUN_ERR("write");
-		}
+ error:
 		if (ftruncate(ofd, size))
 			RUN_ERR("truncate");
 
@@ -808,4 +813,37 @@ run_err(const char *fmt, ...)
 		vwarnx(fmt, ap);
 		va_end(ap);
 	}
+}
+
+static void
+got_siginfo(int signo)
+{
+
+	print_info = 1;
+}
+
+static void
+progress(const char *file, uintmax_t done, uintmax_t total)
+{
+	static int ttyfd = -2;
+	const double pcent = (100.0 * done) / total;
+	char buf[2048];
+	int n;
+
+	if (ttyfd == -2)
+		ttyfd = open(_PATH_TTY, O_RDWR | O_CLOEXEC);
+
+	if (ttyfd == -1)
+		return;
+
+	n = snprintf(buf, sizeof(buf),
+	    "%s: %s: %ju/%ju bytes %3.2f%% written\n",
+	    getprogname(), file, done, total, pcent);
+
+	if (n < 0)
+		return;
+
+	write(ttyfd, buf, (size_t)n);
+
+	print_info = 0;
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: netstat.c,v 1.30 2018/05/03 07:13:48 maxv Exp $	*/
+/*	$NetBSD: netstat.c,v 1.32 2022/10/28 05:27:17 ozaki-r Exp $	*/
 
 /*-
  * Copyright (c) 1980, 1992, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)netstat.c	8.1 (Berkeley) 6/6/93";
 #endif
-__RCSID("$NetBSD: netstat.c,v 1.30 2018/05/03 07:13:48 maxv Exp $");
+__RCSID("$NetBSD: netstat.c,v 1.32 2022/10/28 05:27:17 ozaki-r Exp $");
 #endif /* not lint */
 
 /*
@@ -83,7 +83,7 @@ static const char *inetname(struct in_addr);
 static void inetprint(struct in_addr *, int, const char *);
 #ifdef INET6
 static void fetchnetstat6(void *, int);
-static void enter6(struct in6pcb *, struct socket *, int, const char *);
+static void enter6(struct inpcb *, struct socket *, int, const char *);
 static const char *inet6name(struct in6_addr *);
 static void inet6print(struct in6_addr *, int, const char *);
 #endif
@@ -213,9 +213,10 @@ static void
 fetchnetstat4(void *off, int istcp)
 {
 	struct inpcbtable pcbtable;
-	struct inpcb_hdr **pprev, *next;
+	struct inpcb **pprev, *next;
 	struct netinfo *p;
-	struct inpcb inpcb, *inpcbp;
+	struct inpcb *inpcbp, *inp;
+	struct in4pcb in4pcb;
 	struct socket sockb;
 	struct tcpcb tcpcb;
 
@@ -224,30 +225,31 @@ fetchnetstat4(void *off, int istcp)
 	next = TAILQ_FIRST(&pcbtable.inpt_queue);
 	while (next != TAILQ_END(&pcbtable.inpt_queue)) {
 		inpcbp = (struct inpcb *)next;
-		KREAD(inpcbp, &inpcb, sizeof (inpcb));
-		if (inpcb.inp_queue.tqe_prev != pprev) {
+		KREAD(inpcbp, &in4pcb, sizeof (in4pcb));
+		inp = (struct inpcb *)&in4pcb;
+		if (inp->inp_queue.tqe_prev != pprev) {
 			for (p = netcb.ni_forw; p != nhead; p = p->ni_forw)
 				p->ni_seen = 1;
 			error("Kernel state in transition");
 			return;
 		}
-		pprev = &next->inph_queue.tqe_next;
-		next = inpcb.inp_queue.tqe_next;
+		pprev = &next->inp_queue.tqe_next;
+		next = inp->inp_queue.tqe_next;
 
-		if (inpcb.inp_af != AF_INET)
+		if (inp->inp_af != AF_INET)
 			continue;
-		if (!aflag && inet_lnaof(inpcb.inp_laddr) == INADDR_ANY)
+		if (!aflag && inet_lnaof(in4p_laddr(inp)) == INADDR_ANY)
 			continue;
-		if (nhosts && !checkhost(&inpcb))
+		if (nhosts && !checkhost(inp))
 			continue;
-		if (nports && !checkport(&inpcb))
+		if (nports && !checkport(inp))
 			continue;
-		KREAD(inpcb.inp_socket, &sockb, sizeof (sockb));
+		KREAD(inp->inp_socket, &sockb, sizeof (sockb));
 		if (istcp) {
-			KREAD(inpcb.inp_ppcb, &tcpcb, sizeof (tcpcb));
-			enter(&inpcb, &sockb, tcpcb.t_state, "tcp");
+			KREAD(inp->inp_ppcb, &tcpcb, sizeof (tcpcb));
+			enter(inp, &sockb, tcpcb.t_state, "tcp");
 		} else
-			enter(&inpcb, &sockb, 0, "udp");
+			enter(inp, &sockb, 0, "udp");
 	}
 }
 
@@ -256,41 +258,43 @@ static void
 fetchnetstat6(void *off, int istcp)
 {
 	struct inpcbtable pcbtable;
-	struct inpcb_hdr **pprev, *next;
+	struct inpcb **pprev, *next;
 	struct netinfo *p;
 	struct socket sockb;
 	struct tcpcb tcpcb;
-	struct in6pcb in6pcb, *in6pcbp;
+	struct inpcb *inp, *inpcbp;
+	struct in6pcb in6pcb;
 
 	KREAD(off, &pcbtable, sizeof pcbtable);
 	pprev = &((struct inpcbtable *)off)->inpt_queue.tqh_first;
 	next = TAILQ_FIRST(&pcbtable.inpt_queue);
 	while (next != TAILQ_END(&pcbtable.inpt_queue)) {
-		in6pcbp = (struct in6pcb *)next;
-		KREAD(in6pcbp, &in6pcb, sizeof (in6pcb));
-		if (in6pcb.in6p_queue.tqe_prev != pprev) {
+		inpcbp = (struct inpcb *)next;
+		KREAD(inpcbp, &in6pcb, sizeof (in6pcb));
+		inp = (struct inpcb *)&in6pcb;
+		if (inp->inp_queue.tqe_prev != pprev) {
 			for (p = netcb.ni_forw; p != nhead; p = p->ni_forw)
 				p->ni_seen = 1;
 			error("Kernel state in transition");
 			return;
 		}
-		pprev = &next->inph_queue.tqe_next;
-		next = in6pcb.in6p_queue.tqe_next;
+		pprev = &next->inp_queue.tqe_next;
+		next = inp->inp_queue.tqe_next;
 
-		if (in6pcb.in6p_af != AF_INET6)
+		if (inp->inp_af != AF_INET6)
 			continue;
-		if (!aflag && IN6_IS_ADDR_UNSPECIFIED(&in6pcb.in6p_laddr))
+		if (!aflag && IN6_IS_ADDR_UNSPECIFIED(&in6p_laddr(inp)))
 			continue;
-		if (nhosts && !checkhost6(&in6pcb))
+		if (nhosts && !checkhost(inp))
 			continue;
-		if (nports && !checkport6(&in6pcb))
+		if (nports && !checkport(inp))
 			continue;
-		KREAD(in6pcb.in6p_socket, &sockb, sizeof (sockb));
+		KREAD(inp->inp_socket, &sockb, sizeof (sockb));
 		if (istcp) {
-			KREAD(in6pcb.in6p_ppcb, &tcpcb, sizeof (tcpcb));
-			enter6(&in6pcb, &sockb, tcpcb.t_state, "tcp");
+			KREAD(inp->inp_ppcb, &tcpcb, sizeof (tcpcb));
+			enter6(inp, &sockb, tcpcb.t_state, "tcp");
 		} else
-			enter6(&in6pcb, &sockb, 0, "udp");
+			enter6(inp, &sockb, 0, "udp");
 	}
 }
 #endif /*INET6*/
@@ -313,9 +317,9 @@ enter(struct inpcb *inp, struct socket *so, int state, const char *proto)
 		if (!streq(proto, p->ni_proto))
 			continue;
 		if (p->ni_lport != inp->inp_lport ||
-		    p->ni_laddr.s_addr != inp->inp_laddr.s_addr)
+		    p->ni_laddr.s_addr != in4p_laddr(inp).s_addr)
 			continue;
-		if (p->ni_faddr.s_addr == inp->inp_faddr.s_addr &&
+		if (p->ni_faddr.s_addr == in4p_faddr(inp).s_addr &&
 		    p->ni_fport == inp->inp_fport)
 			break;
 	}
@@ -329,9 +333,9 @@ enter(struct inpcb *inp, struct socket *so, int state, const char *proto)
 		netcb.ni_forw->ni_prev = p;
 		netcb.ni_forw = p;
 		p->ni_line = -1;
-		p->ni_laddr = inp->inp_laddr;
+		p->ni_laddr = in4p_laddr(inp);
 		p->ni_lport = inp->inp_lport;
-		p->ni_faddr = inp->inp_faddr;
+		p->ni_faddr = in4p_faddr(inp);
 		p->ni_fport = inp->inp_fport;
 		p->ni_proto = proto;
 		p->ni_flags = NIF_LACHG | NIF_FACHG;
@@ -345,7 +349,7 @@ enter(struct inpcb *inp, struct socket *so, int state, const char *proto)
 
 #ifdef INET6
 static void
-enter6(struct in6pcb *in6p, struct socket *so, int state, const char *proto)
+enter6(struct inpcb *inp, struct socket *so, int state, const char *proto)
 {
 	struct netinfo *p;
 
@@ -361,11 +365,11 @@ enter6(struct in6pcb *in6p, struct socket *so, int state, const char *proto)
 			continue;
 		if (!streq(proto, p->ni_proto))
 			continue;
-		if (p->ni_lport != in6p->in6p_lport ||
-		    !IN6_ARE_ADDR_EQUAL(&p->ni_laddr6, &in6p->in6p_laddr))
+		if (p->ni_lport != inp->inp_lport ||
+		    !IN6_ARE_ADDR_EQUAL(&p->ni_laddr6, &in6p_laddr(inp)))
 			continue;
-		if (IN6_ARE_ADDR_EQUAL(&p->ni_faddr6, &in6p->in6p_faddr) &&
-		    p->ni_fport == in6p->in6p_fport)
+		if (IN6_ARE_ADDR_EQUAL(&p->ni_faddr6, &in6p_faddr(inp)) &&
+		    p->ni_fport == inp->inp_fport)
 			break;
 	}
 	if (p == nhead) {
@@ -378,10 +382,10 @@ enter6(struct in6pcb *in6p, struct socket *so, int state, const char *proto)
 		netcb.ni_forw->ni_prev = p;
 		netcb.ni_forw = p;
 		p->ni_line = -1;
-		p->ni_laddr6 = in6p->in6p_laddr;
-		p->ni_lport = in6p->in6p_lport;
-		p->ni_faddr6 = in6p->in6p_faddr;
-		p->ni_fport = in6p->in6p_fport;
+		p->ni_laddr6 = in6p_laddr(inp);
+		p->ni_lport = inp->inp_lport;
+		p->ni_faddr6 = in6p_faddr(inp);
+		p->ni_fport = inp->inp_fport;
 		p->ni_proto = proto;
 		p->ni_flags = NIF_LACHG | NIF_FACHG;
 		p->ni_family = AF_INET6;

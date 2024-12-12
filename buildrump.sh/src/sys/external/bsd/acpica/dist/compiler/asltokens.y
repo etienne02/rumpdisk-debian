@@ -6,7 +6,7 @@ NoEcho('
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -148,6 +148,7 @@ NoEcho('
 %token <i> PARSEOP_DWORDCONST
 %token <i> PARSEOP_DWORDIO
 %token <i> PARSEOP_DWORDMEMORY
+%token <i> PARSEOP_DWORDPCC
 %token <i> PARSEOP_DWORDSPACE
 %token <i> PARSEOP_EISAID
 %token <i> PARSEOP_ELSE
@@ -291,11 +292,18 @@ NoEcho('
 %token <i> PARSEOP_PIN_PULLDEFAULT
 %token <i> PARSEOP_PIN_PULLDOWN
 %token <i> PARSEOP_PIN_PULLUP
+%token <i> PARSEOP_CLOCKINPUT
+%token <i> PARSEOP_CLOCK_HZ
+%token <i> PARSEOP_CLOCK_KHZ
+%token <i> PARSEOP_CLOCK_MHZ
+%token <i> PARSEOP_CLOCK_FIXED
+%token <i> PARSEOP_CLOCK_VARIABLE
 %token <i> PARSEOP_POWERRESOURCE
 %token <i> PARSEOP_PROCESSOR
 %token <i> PARSEOP_QWORDCONST
 %token <i> PARSEOP_QWORDIO
 %token <i> PARSEOP_QWORDMEMORY
+%token <i> PARSEOP_QWORDPCC
 %token <i> PARSEOP_QWORDSPACE
 %token <i> PARSEOP_RANGETYPE_ENTIRE
 %token <i> PARSEOP_RANGETYPE_ISAONLY
@@ -383,6 +391,7 @@ NoEcho('
 %token <i> PARSEOP_WORDBUSNUMBER
 %token <i> PARSEOP_WORDCONST
 %token <i> PARSEOP_WORDIO
+%token <i> PARSEOP_WORDPCC
 %token <i> PARSEOP_WORDSPACE
 %token <i> PARSEOP_XFERSIZE_8
 %token <i> PARSEOP_XFERSIZE_16

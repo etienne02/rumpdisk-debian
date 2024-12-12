@@ -1,7 +1,7 @@
-/*	$NetBSD: kern_rwlock.c,v 1.65 2020/02/22 21:24:45 ad Exp $	*/
+/*	$NetBSD: kern_rwlock.c,v 1.76 2023/10/15 10:28:48 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 2002, 2006, 2007, 2008, 2009, 2019, 2020
+ * Copyright (c) 2002, 2006, 2007, 2008, 2009, 2019, 2020, 2023
  *     The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -45,23 +45,25 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_rwlock.c,v 1.65 2020/02/22 21:24:45 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_rwlock.c,v 1.76 2023/10/15 10:28:48 riastradh Exp $");
 
 #include "opt_lockdebug.h"
 
 #define	__RWLOCK_PRIVATE
 
 #include <sys/param.h>
+
+#include <sys/atomic.h>
+#include <sys/cpu.h>
+#include <sys/lock.h>
+#include <sys/lockdebug.h>
 #include <sys/proc.h>
+#include <sys/pserialize.h>
 #include <sys/rwlock.h>
 #include <sys/sched.h>
 #include <sys/sleepq.h>
+#include <sys/syncobj.h>
 #include <sys/systm.h>
-#include <sys/lockdebug.h>
-#include <sys/cpu.h>
-#include <sys/atomic.h>
-#include <sys/lock.h>
-#include <sys/pserialize.h>
 
 #include <dev/lockstat.h>
 
@@ -98,19 +100,6 @@ do { \
 #endif	/* DIAGNOSTIC */
 
 /*
- * Memory barriers.
- */
-#ifdef __HAVE_ATOMIC_AS_MEMBAR
-#define	RW_MEMBAR_ENTER()
-#define	RW_MEMBAR_EXIT()
-#define	RW_MEMBAR_PRODUCER()
-#else
-#define	RW_MEMBAR_ENTER()		membar_enter()
-#define	RW_MEMBAR_EXIT()		membar_exit()
-#define	RW_MEMBAR_PRODUCER()		membar_producer()
-#endif
-
-/*
  * For platforms that do not provide stubs, or for the LOCKDEBUG case.
  */
 #ifdef LOCKDEBUG
@@ -133,8 +122,14 @@ lockops_t rwlock_lockops = {
 	.lo_dump = rw_dump,
 };
 
+/*
+ * Give rwlock holders an extra-high priority boost on-blocking due to
+ * direct handoff.  XXX To be revisited.
+ */
 syncobj_t rw_syncobj = {
+	.sobj_name	= "rwlock",
 	.sobj_flag	= SOBJ_SLEEPQ_SORTED,
+	.sobj_boostpri  = PRI_KTHREAD,
 	.sobj_unsleep	= turnstile_unsleep,
 	.sobj_changepri	= turnstile_changepri,
 	.sobj_lendpri	= sleepq_lendpri,
@@ -197,7 +192,7 @@ static void __noinline
 rw_abort(const char *func, size_t line, krwlock_t *rw, const char *msg)
 {
 
-	if (panicstr != NULL)
+	if (__predict_false(panicstr != NULL))
 		return;
 
 	LOCKDEBUG_ABORT(func, line, rw, &rwlock_lockops, msg);
@@ -304,7 +299,7 @@ rw_vector_enter(krwlock_t *rw, const krw_t op)
 	RW_ASSERT(rw, curthread != 0);
 	RW_WANTLOCK(rw, op);
 
-	if (panicstr == NULL) {
+	if (__predict_true(panicstr == NULL)) {
 		KDASSERT(pserialize_not_in_read_section());
 		LOCKDEBUG_BARRIER(&kernel_lock, 1);
 	}
@@ -344,7 +339,7 @@ rw_vector_enter(krwlock_t *rw, const krw_t op)
 			    ~RW_WRITE_WANTED);
 			if (__predict_true(next == owner)) {
 				/* Got it! */
-				RW_MEMBAR_ENTER();
+				membar_acquire();
 				break;
 			}
 
@@ -396,6 +391,7 @@ rw_vector_enter(krwlock_t *rw, const krw_t op)
 			continue;
 		}
 		next = rw_cas(rw, owner, owner | set_wait);
+		/* XXX membar? */
 		if (__predict_false(next != owner)) {
 			turnstile_exit(rw);
 			owner = next;
@@ -471,7 +467,7 @@ rw_vector_exit(krwlock_t *rw)
 	 * proceed to do direct handoff if there are waiters, and if the
 	 * lock would become unowned.
 	 */
-	RW_MEMBAR_EXIT();
+	membar_release();
 	for (;;) {
 		newown = (owner - decr);
 		if ((newown & (RW_THREAD | RW_HAS_WAITERS)) == RW_HAS_WAITERS)
@@ -585,7 +581,7 @@ rw_vector_tryenter(krwlock_t *rw, const krw_t op)
 	RW_ASSERT(rw, (op != RW_READER && RW_OWNER(rw) == curthread) ||
 	    (op == RW_READER && RW_COUNT(rw) != 0));
 
-	RW_MEMBAR_ENTER();
+	membar_acquire();
 	return 1;
 }
 
@@ -597,7 +593,7 @@ rw_vector_tryenter(krwlock_t *rw, const krw_t op)
 void
 rw_downgrade(krwlock_t *rw)
 {
-	uintptr_t owner, curthread, newown, next;
+	uintptr_t owner, newown, next, curthread __diagused;
 	turnstile_t *ts;
 	int rcnt, wcnt;
 	lwp_t *l;
@@ -608,12 +604,8 @@ rw_downgrade(krwlock_t *rw)
 	RW_ASSERT(rw, (rw->rw_owner & RW_WRITE_LOCKED) != 0);
 	RW_ASSERT(rw, RW_OWNER(rw) == curthread);
 	RW_UNLOCKED(rw, RW_WRITER);
-#if !defined(DIAGNOSTIC)
-	__USE(curthread);
-#endif
 
-	RW_MEMBAR_PRODUCER();
-
+	membar_release();
 	for (owner = rw->rw_owner;; owner = next) {
 		/*
 		 * If there are no waiters we can do this the easy way.  Try
@@ -711,7 +703,7 @@ rw_tryupgrade(krwlock_t *rw)
 		newown = curthread | RW_WRITE_LOCKED | (owner & ~RW_THREAD);
 		next = rw_cas(rw, owner, newown);
 		if (__predict_true(next == owner)) {
-			RW_MEMBAR_PRODUCER();
+			membar_acquire();
 			break;
 		}
 		RW_ASSERT(rw, (next & RW_WRITE_LOCKED) == 0);
@@ -812,27 +804,4 @@ rw_owner(wchan_t obj)
 		return NULL;
 
 	return (void *)(owner & RW_THREAD);
-}
-
-/*
- * rw_owner_running:
- *
- *	Return true if a RW lock is unheld, or write held and the owner is
- *	running on a CPU.  For the pagedaemon.
- */
-bool
-rw_owner_running(const krwlock_t *rw)
-{
-#ifdef MULTIPROCESSOR
-	uintptr_t owner;
-	bool rv;
-
-	kpreempt_disable();
-	owner = rw->rw_owner;
-	rv = (owner & RW_THREAD) == 0 || rw_oncpu(owner);
-	kpreempt_enable();
-	return rv;
-#else
-	return rw_owner(rw) == curlwp;
-#endif
 }

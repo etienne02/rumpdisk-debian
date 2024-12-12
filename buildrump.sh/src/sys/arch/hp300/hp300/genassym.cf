@@ -1,4 +1,4 @@
-#	$NetBSD: genassym.cf,v 1.47 2020/02/20 08:27:38 skrll Exp $
+#	$NetBSD: genassym.cf,v 1.51 2024/01/16 03:44:44 thorpej Exp $
 
 #
 # Copyright (c) 1982, 1990, 1993
@@ -42,6 +42,7 @@ include <uvm/uvm.h>
 
 include <machine/hp300spu.h>
 include <machine/cpu.h>
+include <machine/fcode.h>
 include <machine/frame.h>
 include <machine/intr.h>
 include <machine/psl.h>
@@ -140,6 +141,12 @@ define	PGSHIFT			PGSHIFT
 define	USRSTACK		USRSTACK
 define	MAXADDR			MAXADDR
 
+# MMU configuration constants (from pmap.h)
+export	MMU51_SRP_BITS
+export	MMU51_CRP_BITS
+export	MMU51_TCR_BITS
+export	MMU40_TCR_BITS
+
 # lwp & proc fields and values
 define	L_PCB			offsetof(struct lwp, l_addr)
 define	L_PROC			offsetof(struct lwp, l_proc)
@@ -150,8 +157,8 @@ define	P_RASLIST		offsetof(struct proc, p_raslist)
 define	P_VMSPACE		offsetof(struct proc, p_vmspace)
 
 # interrupt event counters
-define	HI_EVCNT		offsetof(struct hp300_intr, hi_evcnt)
-define	SIZEOF_HI		sizeof(struct hp300_intr)
+define	SIZEOF_EVCNT		sizeof(struct evcnt)
+define	EV_COUNT		offsetof(struct evcnt, ev_count)
 
 # interrupt/fault metering
 define	CI_NINTR		offsetof(struct cpu_info, ci_data.cpu_nintr)
@@ -172,7 +179,6 @@ define	SPL6			PSL_S | PSL_IPL6
 
 # magic
 define	FC_USERD		FC_USERD
-define	FC_PURGE		FC_PURGE
 define	INTIOBASE		INTIOBASE
 define	MMUBASE			MMUBASE
 define	MMUSTAT			MMUSTAT

@@ -1,4 +1,4 @@
-/*	$NetBSD: aic79xx.c,v 1.57 2021/07/24 21:31:37 andvar Exp $	*/
+/*	$NetBSD: aic79xx.c,v 1.70 2024/02/02 22:39:10 andvar Exp $	*/
 
 /*
  * Core routines and tables shareable across OS platforms.
@@ -49,7 +49,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: aic79xx.c,v 1.57 2021/07/24 21:31:37 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: aic79xx.c,v 1.70 2024/02/02 22:39:10 andvar Exp $");
 
 #include <dev/ic/aic79xx_osm.h>
 #include <dev/ic/aic79xx_inline.h>
@@ -104,7 +104,7 @@ static struct ahd_phase_table_entry ahd_phase_table[] =
 };
 
 /*
- * In most cases we only wish to itterate over real phases, so
+ * In most cases we only wish to iterate over real phases, so
  * exclude the last element from the count.
  */
 static const u_int num_phases = NUM_ELEMENTS(ahd_phase_table) - 1;
@@ -404,7 +404,7 @@ ahd_flush_qoutfifo(struct ahd_softc *ahd)
 	ahd_run_qoutfifo(ahd);
 
 	/*
-	 * Flush the good status FIFO for compelted packetized commands.
+	 * Flush the good status FIFO for completed packetized commands.
 	 */
 	ahd_set_modes(ahd, AHD_MODE_SCSI, AHD_MODE_SCSI);
 	saved_scbptr = ahd_get_scbptr(ahd);
@@ -653,7 +653,7 @@ ahd_run_data_fifo(struct ahd_softc *ahd, struct scb *scb)
 			ahd_outb(ahd, SG_STATE, 0);
 
 			/*
-			 * Flush the data FIFO.  Strickly only
+			 * Flush the data FIFO.  Strictly only
 			 * necessary for Rev A parts.
 			 */
 			ahd_outb(ahd, DFCNTRL,
@@ -1837,7 +1837,7 @@ ahd_handle_transmission_error(struct ahd_softc *ahd)
 		 * through any phases that occur after we release
 		 * this last ack until the LQI manager sees a
 		 * packet phase.  This implies we may have to
-		 * ignore a perfectly valid "unexected busfree"
+		 * ignore a perfectly valid "unexpected busfree"
 		 * after our "initiator detected error" message is
 		 * sent.  A busfree is the expected response after
 		 * we tell the target that its L_Q was corrupted.
@@ -1871,7 +1871,7 @@ ahd_handle_transmission_error(struct ahd_softc *ahd)
 		 * If we raise ATN and the target completes the entire
 		 * stream (P0 asserted during the last packet), the
 		 * hardware will ack all data and return to the ISTART
-		 * state.  When the target reponds to our ATN condition,
+		 * state.  When the target responds to our ATN condition,
 		 * LQIPHASE_LQ will be asserted.  We should respond to
 		 * this with an LQIRETRY to prepare for any future
 		 * packets.  NONPACKREQ will not be asserted again
@@ -2579,7 +2579,7 @@ ahd_clear_critical_section(struct ahd_softc *ahd)
 		ahd_outb(ahd, SEQCTL0, ahd_inb(ahd, SEQCTL0) & ~STEP);
 		ahd_outb(ahd, SIMODE1, simode1);
 		/*
-		 * SCSIINT seems to glitch occassionally when
+		 * SCSIINT seems to glitch occasionally when
 		 * the interrupt masks are restored.  Clear SCSIINT
 		 * one more time so that only persistent errors
 		 * are seen as a real interrupt.
@@ -4798,7 +4798,7 @@ ahd_handle_ign_wide_residue(struct ahd_softc *ahd,
 				/*
 				 * The residual data count is not updated
 				 * for the command run to completion case.
-				 * Explcitly zero the count.
+				 * Explicitly zero the count.
 				 */
 				data_cnt &= ~AHD_SG_LEN_MASK;
 			}
@@ -5243,7 +5243,7 @@ ahd_shutdown(void *arg)
  * that is only available just after a reset.  If "reinit" is
  * non-zero, this reset occurred after initial configuration
  * and the caller requests that the chip be fully reinitialized
- * to a runable state.  Chip interrupts are *not* enabled after
+ * to a runnable state.  Chip interrupts are *not* enabled after
  * a reinitialization.  The caller must enable interrupts via
  * ahd_intr_enable().
  */
@@ -5276,7 +5276,7 @@ ahd_reset(struct ahd_softc *ahd, int reinit)
 		 * does not disable its parity logic prior to
 		 * the start of the reset.  This may cause a
 		 * parity error to be detected and thus a
-		 * spurious SERR or PERR assertion.  Disble
+		 * spurious SERR or PERR assertion.  Disable
 		 * PERR and SERR responses during the CHIPRST.
 		 */
 		mod_cmd = cmd &
@@ -5446,7 +5446,7 @@ ahd_init_scbdata(struct ahd_softc *ahd)
 	}
 
 	/*
-	 * Note that we were successfull
+	 * Note that we were successful
 	 */
 	return (0);
 
@@ -6019,7 +6019,7 @@ ahd_init(struct ahd_softc *ahd)
 				  M_DEVBUF, M_WAITOK | M_ZERO);
 
 	/*
-	 * Verify that the compiler hasn't over-agressively
+	 * Verify that the compiler hasn't over-aggressively
 	 * padded important structures.
 	 */
 	if (sizeof(struct hardware_scb) != 64)
@@ -6153,7 +6153,7 @@ ahd_init(struct ahd_softc *ahd)
 		goto init_done;
 	}
 
-	/* Diable current sensing. */
+	/* Disable current sensing. */
 	ahd_write_flexport(ahd, FLXADDR_ROMSTAT_CURSENSECTL, 0);
 
 #ifdef AHD_DEBUG
@@ -6908,7 +6908,7 @@ ahd_resume(struct ahd_softc *ahd)
  * table entry for TCL.  Return the offset into
  * the SCB that contains the entry for TCL.
  * saved_scbid is dereferenced and set to the
- * scbid that should be restored once manipualtion
+ * scbid that should be restored once manipulation
  * of the TCL entry is complete.
  */
 static inline u_int
@@ -7620,7 +7620,7 @@ ahd_reset_channel(struct ahd_softc *ahd, char channel, int initiate_reset)
 	 */
 	next_fifo = fifo = ahd_inb(ahd, DFFSTAT) & CURRFIFO;
 	if (next_fifo > CURRFIFO_1)
-		/* If disconneced, arbitrarily start with FIFO1. */
+		/* If disconnected, arbitrarily start with FIFO1. */
 		next_fifo = fifo = 0;
 	do {
 		next_fifo ^= CURRFIFO_1;
@@ -7900,7 +7900,7 @@ ahd_handle_scsi_status(struct ahd_softc *ahd, struct scb *scb)
 					printf("Invalid Command IU Field\n");
 					break;
 				case SIU_PFC_TMF_NOT_SUPPORTED:
-					printf("TMF not supportd\n");
+					printf("TMF not supported\n");
 					break;
 				case SIU_PFC_TMF_FAILED:
 					printf("TMF failed\n");
@@ -8255,9 +8255,9 @@ ahd_dumpseq(struct ahd_softc* ahd)
 static void __noinline
 ahd_loadseq(struct ahd_softc *ahd)
 {
-	struct	cs cs_table[num_critical_sections];
-	u_int	begin_set[num_critical_sections];
-	u_int	end_set[num_critical_sections];
+	struct	cs cs_table[NUM_CRITICAL_SECTIONS];
+	u_int	begin_set[NUM_CRITICAL_SECTIONS];
+	u_int	end_set[NUM_CRITICAL_SECTIONS];
 	const struct patch *cur_patch;
 	u_int	cs_count;
 	u_int	cur_cs;
@@ -8962,7 +8962,7 @@ ahd_read_seeprom(struct ahd_softc *ahd, uint16_t *tbuf,
 }
 
 /*
- * Write count 16bit words from tbuf, into SEEPROM attache to the
+ * Write count 16bit words from tbuf, into SEEPROM attached to the
  * controller starting at 16bit word address start_addr, using the
  * controller's SEEPROM writing state machine.
  */
@@ -8986,7 +8986,7 @@ ahd_write_seeprom(struct ahd_softc *ahd, uint16_t *tbuf,
 		return (error);
 
 	/*
-	 * Write the data.  If we don't get throught the loop at
+	 * Write the data.  If we don't get through the loop at
 	 * least once, the arguments were invalid.
 	 */
 	retval = EINVAL;
@@ -9090,7 +9090,7 @@ ahd_acquire_seeprom(struct ahd_softc *ahd)
 	 * We should be able to determine the SEEPROM type
 	 * from the flexport logic, but unfortunately not
 	 * all implementations have this logic and there is
-	 * no programatic method for determining if the logic
+	 * no programmatic method for determining if the logic
 	 * is present.
 	 */
 

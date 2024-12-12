@@ -1,4 +1,4 @@
-/*	$NetBSD: kgdb_machdep.c,v 1.18 2016/07/11 16:15:36 matt Exp $	*/
+/*	$NetBSD: kgdb_machdep.c,v 1.22 2023/10/25 06:02:14 skrll Exp $	*/
 
 /*-
  * Copyright (c) 1997 The NetBSD Foundation, Inc.
@@ -56,7 +56,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kgdb_machdep.c,v 1.18 2016/07/11 16:15:36 matt Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kgdb_machdep.c,v 1.22 2023/10/25 06:02:14 skrll Exp $");
 
 #include "opt_ddb.h"
 
@@ -81,9 +81,9 @@ __KERNEL_RCSID(0, "$NetBSD: kgdb_machdep.c,v 1.18 2016/07/11 16:15:36 matt Exp $
 
 #include <uvm/uvm_extern.h>
 
+#include <mips/locore.h>
 #include <mips/pte.h>
 #include <mips/cpu.h>
-#include <mips/locore.h>
 #include <mips/mips_opcode.h>
 #include <mips/reg.h>
 #include <mips/trap.h>
@@ -100,12 +100,12 @@ kvacc(vaddr_t kva)
 {
 	if (pmap_md_direct_mapped_vaddr_p(kva))
 		return 1;
-	
+
 	if (kva < VM_MIN_KERNEL_ADDRESS || kva >= VM_MAX_KERNEL_ADDRESS)
 		return 0;
 
 	const pt_entry_t * const ptep = pmap_pte_lookup(pmap_kernel(), kva);
-	return ptep != NULL && pte_valid_p(*pte);
+	return ptep != NULL && pte_valid_p(*ptep);
 }
 
 /*
@@ -132,7 +132,7 @@ kgdb_acc(vaddr_t va, size_t len)
  * Translate a trap number into a unix compatible signal value.
  * (gdb only understands unix signal numbers).
  */
-int 
+int
 kgdb_signal(int type)
 {
 	switch (type) {
@@ -162,7 +162,7 @@ kgdb_signal(int type)
 	case T_FPE+T_USER:
 	case T_OVFLOW+T_USER:
 		return (SIGFPE);
-		
+
 	default:
 		return (SIGEMT);
 	}
@@ -185,6 +185,16 @@ kgdb_getregs(db_regs_t *regs, kgdb_reg_t *gdb_regs)
 	gdb_regs[ 5] = regs->r_regs[_R_A1];	/* A1 */
 	gdb_regs[ 6] = regs->r_regs[_R_A2];	/* A2 */
 	gdb_regs[ 7] = regs->r_regs[_R_A3];	/* A3 */
+#if defined(__mips_n32) || defined(__mips_n64)
+	gdb_regs[ 8] = regs->r_regs[_R_A4];	/* A4 */
+	gdb_regs[ 9] = regs->r_regs[_R_A5];	/* A5 */
+	gdb_regs[10] = regs->r_regs[_R_A6];	/* A6 */
+	gdb_regs[11] = regs->r_regs[_R_A7];	/* A7 */
+	gdb_regs[12] = regs->r_regs[_R_T0];	/* T0 */
+	gdb_regs[13] = regs->r_regs[_R_T1];	/* T1 */
+	gdb_regs[14] = regs->r_regs[_R_T2];	/* T2 */
+	gdb_regs[15] = regs->r_regs[_R_T3];	/* T3 */
+#else
 	gdb_regs[ 8] = regs->r_regs[_R_T0];	/* T0 */
 	gdb_regs[ 9] = regs->r_regs[_R_T1];	/* T1 */
 	gdb_regs[10] = regs->r_regs[_R_T2];	/* T2 */
@@ -193,6 +203,7 @@ kgdb_getregs(db_regs_t *regs, kgdb_reg_t *gdb_regs)
 	gdb_regs[13] = regs->r_regs[_R_T5];	/* T5 */
 	gdb_regs[14] = regs->r_regs[_R_T6];	/* T6 */
 	gdb_regs[15] = regs->r_regs[_R_T7];	/* T7 */
+#endif /* __mips_n32 || __mips_n64 */
 	gdb_regs[16] = regs->r_regs[_R_S0];	/* S0 */
 	gdb_regs[17] = regs->r_regs[_R_S1];	/* S1 */
 	gdb_regs[18] = regs->r_regs[_R_S2];	/* S2 */
@@ -222,7 +233,7 @@ void
 kgdb_setregs(db_regs_t *regs, kgdb_reg_t *gdb_regs)
 {
 	regs->r_regs[_R_PC] = gdb_regs[37];   /* PC */
-}	
+}
 
 /*
  * Trap into kgdb to wait for debugger to connect,

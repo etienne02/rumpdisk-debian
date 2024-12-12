@@ -1,4 +1,4 @@
-/*	$NetBSD: subr_psref.c,v 1.15 2021/07/21 06:35:45 skrll Exp $	*/
+/*	$NetBSD: subr_psref.c,v 1.18 2022/02/12 16:31:06 macallan Exp $	*/
 
 /*-
  * Copyright (c) 2016 The NetBSD Foundation, Inc.
@@ -64,7 +64,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_psref.c,v 1.15 2021/07/21 06:35:45 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_psref.c,v 1.18 2022/02/12 16:31:06 macallan Exp $");
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -170,8 +170,7 @@ psref_class_create(const char *name, int ipl)
 	return class;
 }
 
-#ifdef DIAGNOSTIC
-static void
+static void __diagused
 psref_cpu_drained_p(void *p, void *cookie, struct cpu_info *ci __unused)
 {
 	const struct psref_cpu *pcpu = p;
@@ -181,7 +180,7 @@ psref_cpu_drained_p(void *p, void *cookie, struct cpu_info *ci __unused)
 		*retp = false;
 }
 
-static bool
+static bool __diagused
 psref_class_drained_p(const struct psref_class *prc)
 {
 	bool ret = true;
@@ -190,7 +189,6 @@ psref_class_drained_p(const struct psref_class *prc)
 
 	return ret;
 }
-#endif	/* DIAGNOSTIC */
 
 /*
  * psref_class_destroy(class)

@@ -1,4 +1,4 @@
-/*	$NetBSD: altq_cbq.c,v 1.37 2021/08/17 22:00:26 andvar Exp $	*/
+/*	$NetBSD: altq_cbq.c,v 1.41 2024/09/26 02:39:09 ozaki-r Exp $	*/
 /*	$KAME: altq_cbq.c,v 1.21 2005/04/13 03:44:24 suz Exp $	*/
 
 /*
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: altq_cbq.c,v 1.37 2021/08/17 22:00:26 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: altq_cbq.c,v 1.41 2024/09/26 02:39:09 ozaki-r Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_altq.h"
@@ -306,7 +306,7 @@ cbq_remove_altq(struct pf_altq *a)
 	return (0);
 }
 
-#define NSEC_TO_PSEC(s)	((uint64_t)(s) * 1000 * 1000)
+#define NSEC_TO_PSEC(s)	((uint64_t)(s) * 1000)
 int
 cbq_add_queue(struct pf_altq *a)
 {
@@ -696,8 +696,8 @@ cbq_modify_class(struct cbq_modify_class *acp)
  *		struct rm_class *parent, struct rm_class *borrow)
  *
  * This function create a new traffic class in the CBQ class hierarchy of
- * given paramters.  The class that created is either the root, default,
- * or a new dynamic class.  If CBQ is not initilaized, the root class
+ * given parameters.  The class that created is either the root, default,
+ * or a new dynamic class.  If CBQ is not initialized, the root class
  * will be created.
  */
 static int
@@ -750,7 +750,7 @@ cbq_class_create(cbq_state_t *cbqp, struct cbq_add_class *acp,
 	/* save the allocated class */
 	cbqp->cbq_class_tbl[i] = cl;
 
-	if ((spec->flags & CBQCLF_CLASSMASK) != 0)
+	if ((spec->flags & CBQCLF_DEFCLASS) != 0)
 		cbqp->ifnp.default_ = cl;
 	if ((spec->flags & CBQCLF_CTLCLASS) != 0)
 		cbqp->ifnp.ctl_ = cl;
@@ -1011,12 +1011,9 @@ cbqioctl(dev_t dev, ioctlcmd_t cmd, void *addr, int flag,
 		/* currently only command that an ordinary user can call */
 		break;
 	default:
-#if (__FreeBSD_version > 400000)
-		error = suser(p);
-#else
-		error = kauth_authorize_network(l->l_cred, KAUTH_NETWORK_ALTQ,
-		    KAUTH_REQ_NETWORK_ALTQ_CBQ, NULL, NULL, NULL);
-#endif
+		error = kauth_authorize_network(l->l_cred,
+		    KAUTH_NETWORK_ALTQ, KAUTH_REQ_NETWORK_ALTQ_CBQ, NULL, NULL,
+		    NULL);
 		if (error)
 			return (error);
 		break;

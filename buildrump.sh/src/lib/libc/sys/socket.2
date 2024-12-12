@@ -1,4 +1,4 @@
-.\"	$NetBSD: socket.2,v 1.42 2017/05/27 21:02:55 bouyer Exp $
+.\"	$NetBSD: socket.2,v 1.51 2023/07/28 23:41:02 wiz Exp $
 .\"
 .\" Copyright (c) 1983, 1991, 1993
 .\"	The Regents of the University of California.  All rights reserved.
@@ -29,7 +29,7 @@
 .\"
 .\"     @(#)socket.2	8.1 (Berkeley) 6/4/93
 .\"
-.Dd April 27, 2017
+.Dd June 28, 2022
 .Dt SOCKET 2
 .Os
 .Sh NAME
@@ -53,72 +53,53 @@ which should be used.
 These families are defined in the include file
 .Ao Pa sys/socket.h Ac .
 The currently understood formats are:
-.Pp
-.Bd -literal -offset indent -compact
-PF_LOCAL	local (previously UNIX) domain protocols
-PF_INET		ARPA Internet protocols
-PF_INET6	IPv6 (Internet Protocol version 6) protocols
-PF_NS		Xerox Network Systems protocols
-PF_APPLETALK	AppleTalk protocols
-PF_BLUETOOTH	Bluetooth protocols
-PF_CAN		CAN bus protocols
-.Ed
+.Bl -column -offset indent ".Dv PF_APPLETALK"
+.It Dv PF_LOCAL Ta local domain Po previously Tn UNIX domain Pc protocols
+.It Dv PF_INET Ta Tn ARPA Internet protocols
+.It Dv PF_INET6 Ta Tn IPv6 (Internet Protocol version 6) protocols
+.It Dv PF_NS Ta Xerox Network Systems protocols
+.It Dv PF_APPLETALK Ta AppleTalk protocols
+.It Dv PF_BLUETOOTH Ta Bluetooth protocols
+.It Dv PF_CAN Ta Tn CAN bus protocols
+.El
 .Pp
 The socket has the indicated
 .Fa type ,
 which specifies the semantics of communication.
 Currently defined types are:
+.Bl -tag -offset indent -width Dv
+.It Dv SOCK_STREAM
+Provides sequenced, reliable, two-way connection based byte streams.
+An out-of-band data transmission mechanism may be supported.
+.It Dv SOCK_DGRAM
+Supports datagrams: connectionless, unreliable messages of a
+fixed\(emtypically small\(emmaximum length.
+.It Dv SOCK_RAW
+Provides access to internal network protocols and interfaces.
+Available only to the super-user.
+Not described here.
+.It Dv SOCK_SEQPACKET
+Provides a sequenced, reliable, two-way connection-based data
+transmission path for datagrams of fixed maximum length.
+A consumer may be required to read an entire packet with each read
+system call.
+.It Dv SOCK_RDM
+Not implemented.
+.El
 .Pp
-.Bd -literal -offset indent -compact
-SOCK_STREAM
-SOCK_DGRAM
-SOCK_RAW
-SOCK_SEQPACKET
-SOCK_RDM
-.Ed
-.Pp
-The following flags can be or'ed to the type to condition the returned
-file descriptor:
-The following flags are valid:
-.Bl -column SOCK_NONBLOCK -offset indent
+The following flags can be or'ed to the socket type to add conditions to
+the returned file descriptor:
+.Bl -tag -offset indent -width Dv
 .It Dv SOCK_CLOEXEC
 Set the close on exec property.
 .It Dv SOCK_NONBLOCK
-Sets non-blocking I/O.
+Set non-blocking I/O.
 .It Dv SOCK_NOSIGPIPE
 Return
 .Er EPIPE
 instead of raising
 .Dv SIGPIPE .
 .El
-.Pp
-A
-.Dv SOCK_STREAM
-type provides sequenced, reliable,
-two-way connection based byte streams.
-An out-of-band data transmission mechanism may be supported.
-A
-.Dv SOCK_DGRAM
-socket supports
-datagrams (connectionless, unreliable messages of
-a fixed (typically small) maximum length).
-A
-.Dv SOCK_SEQPACKET
-socket may provide a sequenced, reliable,
-two-way connection-based data transmission path for datagrams
-of fixed maximum length; a consumer may be required to read
-an entire packet with each read system call.
-This facility is protocol specific, and presently implemented
-only for
-.Dv PF_NS .
-.Dv SOCK_RAW
-sockets provide access to internal network protocols and interfaces.
-The types
-.Dv SOCK_RAW ,
-which is available only to the super-user, and
-.Dv SOCK_RDM ,
-which is planned,
-but not yet implemented, are not described here.
 .Pp
 The
 .Fa protocol
@@ -276,7 +257,7 @@ The socket type is not supported by the protocol.
 .%T "An Introductory 4.4BSD Interprocess Communication Tutorial"
 .%A Stuart Sechrest
 .Re
-.Pq see Pa /usr/share/doc/psd/20.ipctut
+.Pq see Pa /usr/share/doc/reference/ref3/sockets
 .Rs
 .%T "Advanced 4.4BSD IPC Tutorial"
 .%A Samuel J. Leffler
@@ -286,7 +267,7 @@ The socket type is not supported by the protocol.
 .%A Steve Miller
 .%A Chris Torek
 .Re
-.Pq see Pa /usr/share/doc/psd/21.ipc
+.Pq see Pa /usr/share/doc/reference/ref3/sockets-advanced
 .Sh HISTORY
 The
 .Fn socket

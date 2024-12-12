@@ -1,4 +1,4 @@
-/*	$NetBSD: sunxi_can.c,v 1.8 2021/01/27 03:10:20 thorpej Exp $	*/
+/*	$NetBSD: sunxi_can.c,v 1.13 2022/11/19 09:05:42 yamt Exp $	*/
 
 /*-
  * Copyright (c) 2017,2018 The NetBSD Foundation, Inc.
@@ -36,13 +36,14 @@
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(1, "$NetBSD: sunxi_can.c,v 1.8 2021/01/27 03:10:20 thorpej Exp $");
+__KERNEL_RCSID(1, "$NetBSD: sunxi_can.c,v 1.13 2022/11/19 09:05:42 yamt Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/intr.h>
 #include <sys/ioctl.h>
+#include <sys/kmem.h>
 #include <sys/mutex.h>
 #include <sys/rndsource.h>
 #include <sys/mbuf.h>
@@ -101,6 +102,8 @@ static void sunxi_can_ifwatchdog(struct ifnet *);
 
 static void sunxi_can_enter_reset(struct sunxi_can_softc *);
 static void sunxi_can_exit_reset(struct sunxi_can_softc *);
+static void sunxi_can_ifdown(struct sunxi_can_softc * const);
+static int sunxi_can_ifup(struct sunxi_can_softc * const);
 
 CFATTACH_DECL_NEW(sunxi_can, sizeof(struct sunxi_can_softc),
 	sunxi_can_match, sunxi_can_attach, NULL, NULL);
@@ -230,8 +233,7 @@ sunxi_can_attach(device_t parent, device_t self, void *aux)
 	rnd_attach_source(&sc->sc_rnd_source, device_xname(self),
 	    RND_TYPE_NET, RND_FLAG_DEFAULT);
 #ifdef MBUFTRACE
-	ifp->if_mowner = malloc(sizeof(struct mowner), M_DEVBUF,
-	    M_WAITOK | M_ZERO);
+	ifp->if_mowner = kmem_zalloc(sizeof(*ifp->if_mowner), KM_SLEEP);
 	strlcpy(ifp->if_mowner->mo_name, ifp->if_xname,
 		sizeof(ifp->if_mowner->mo_name));
 	MOWNER_ATTACH(ifp->if_mowner);
@@ -313,7 +315,6 @@ sunxi_can_tx_intr(struct sunxi_can_softc *sc)
 		sc->sc_m_transmit = NULL;
 		ifp->if_timer = 0;
 	}
-	ifp->if_flags &= ~IFF_OACTIVE;
 	if_schedule_deferred_start(ifp);
 }
 
@@ -327,8 +328,7 @@ sunxi_can_tx_abort(struct sunxi_can_softc *sc)
 		sc->sc_ifp->if_timer = 0;
 		/*
 		 * the transmit abort will trigger a TX interrupt
-		 * which will restart the queue or cleae OACTIVE,
-		 * as appropriate
+		 * which will restart the queue as appropriate.
 		 */
 		sunxi_can_write(sc, SUNXI_CAN_CMD_REG, SUNXI_CAN_CMD_ABT_REQ);
 		return 1;
@@ -346,7 +346,9 @@ sunxi_can_err_intr(struct sunxi_can_softc *sc, uint32_t irq, uint32_t sts)
 
 	if (irq & SUNXI_CAN_INT_DATA_OR) {
 		if_statinc(ifp, if_ierrors);
+		sunxi_can_ifdown(sc);
 		sunxi_can_write(sc, SUNXI_CAN_CMD_REG, SUNXI_CAN_CMD_CLR_OR);
+		sunxi_can_ifup(sc);
 	}
 	if (irq & SUNXI_CAN_INT_ERR) {
 		reg = sunxi_can_read(sc, SUNXI_CAN_REC_REG);
@@ -385,22 +387,31 @@ sunxi_can_intr(void *arg)
 	while ((irq = sunxi_can_read(sc, SUNXI_CAN_INT_REG)) != 0) {
 		uint32_t sts = sunxi_can_read(sc, SUNXI_CAN_STA_REG);
 		rv = 1;
+                rnd_add_uint32(&sc->sc_rnd_source, irq);
 
-		if (irq & SUNXI_CAN_INT_TX_FLAG) {
-			sunxi_can_tx_intr(sc);
-		}
-		if (irq & SUNXI_CAN_INT_RX_FLAG) {
+		if ((irq & (SUNXI_CAN_INT_RX_FLAG | SUNXI_CAN_INT_DATA_OR)) ==
+		    SUNXI_CAN_INT_RX_FLAG) {
 			while (sts & SUNXI_CAN_STA_RX_RDY) {
 				sunxi_can_rx_intr(sc);
 				sts = sunxi_can_read(sc, SUNXI_CAN_STA_REG);
 			}
+			/*
+			 * Don't write SUNXI_CAN_INT_RX_FLAG to the interrupt
+			 * register, this may clear the RX pending flag
+			 * while there is indeed a packet pending.
+			 * Reading packets should have cleared the RX interrupt,
+			 * so just restart the loop and re-read the interrupt
+			 * register. In the common case irq will now be 0.
+			 */
+			continue;
+		}
+		if (irq & SUNXI_CAN_INT_TX_FLAG) {
+			sunxi_can_tx_intr(sc);
 		}
 		if (irq & SUNXI_CAN_INT_ALLERRS) {
 			sunxi_can_err_intr(sc, irq, sts);
 		}
 		sunxi_can_write(sc, SUNXI_CAN_INT_REG, irq);
-                rnd_add_uint32(&sc->sc_rnd_source, irq);
-
 	}
 	mutex_exit(&sc->sc_intr_lock);
 
@@ -418,7 +429,7 @@ sunxi_can_ifstart(struct ifnet *ifp)
 	int i;
 
 	mutex_enter(&sc->sc_intr_lock);
-	if (ifp->if_flags & IFF_OACTIVE)
+	if (sc->sc_m_transmit != NULL)
 		goto out;
 
 	IF_DEQUEUE(&ifp->if_snd, m);
@@ -467,7 +478,6 @@ sunxi_can_ifstart(struct ifnet *ifp)
 	} else {
 		sunxi_can_write(sc, SUNXI_CAN_CMD_REG, SUNXI_CAN_CMD_TANS_REQ);
 	}
-	ifp->if_flags |= IFF_OACTIVE;
 	ifp->if_timer = 5;
 	can_bpf_mtap(ifp, m, 0);
 out:
@@ -536,7 +546,7 @@ sunxi_can_ifup(struct sunxi_can_softc * const sc)
 static void
 sunxi_can_ifdown(struct sunxi_can_softc * const sc)
 {
-	sc->sc_ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	sc->sc_ifp->if_flags &= ~IFF_RUNNING;
 	sc->sc_ifp->if_timer = 0;
 	sunxi_can_enter_reset(sc);
 	sunxi_can_write(sc, SUNXI_CAN_INTE_REG, 0);

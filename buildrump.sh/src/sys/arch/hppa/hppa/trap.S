@@ -1,4 +1,4 @@
-/*	$NetBSD: trap.S,v 1.73 2020/09/14 16:11:00 skrll Exp $	*/
+/*	$NetBSD: trap.S,v 1.75 2023/07/23 10:09:36 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -373,13 +373,17 @@ syscall_entry:
 	ldil	L%$global$,%dp
 	ldo	R%$global$(%dp),%dp
 
-	/* do a syscall */
-	.import	syscall,code
-	CALL(syscall, %r1)
+	GET_CURLWP(%r3)
+	ldw	L_PROC(%r3), %r1
+	ldw	P_MD_SYSCALL(%r1), %r1
+
+	.call
+ 	blr	%r0, %rp
+ 	bv,n	%r0(%r1)
+ 	nop
 
 	/* load curlwp's trapframe pointer */
-	GET_CURLWP(%r1)
-	ldw	L_MD(%r1), %t3
+	ldw	L_MD(%r3), %t3
 
 	.exit
 	.procend
@@ -662,7 +666,7 @@ os_hpmc:
 	STRAP(tlbd,T_TLB_DIRTY,DTLBPRE)	/* 20. TLB dirty bit trap */
 	ATRAP(pgref,T_PAGEREF)		/* 21. page reference trap */
 	CTRAP(emu,T_EMULATION,)		/* 22. assist emulation trap */
-	ATRAP(hpl,T_HIGHERPL)		/* 23. higher-privelege transfer trap*/
+	ATRAP(hpl,T_HIGHERPL)		/* 23. higher-privilege transfer trap*/
 	ATRAP(lpl,T_LOWERPL)		/* 24. lower-privilege transfer trap */
 	ATRAP(tknbr,T_TAKENBR)		/* 25. taken branch trap */
 	ATRAP(dacc,T_DATACC)		/* 26. data access rights trap */

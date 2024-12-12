@@ -1,4 +1,4 @@
-/*	$NetBSD: scsi_spc.h,v 1.6 2019/03/28 10:44:29 kardel Exp $	*/
+/*	$NetBSD: scsi_spc.h,v 1.8 2024/02/09 22:08:36 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
@@ -404,6 +404,30 @@ struct scsi_reserve_release_10_idparam {
 /*
  * REPORT LUNS
  */
+#define SCSI_REPORT_LUNS		0xa0
+
+struct scsi_report_luns {
+	uint8_t opcode;
+	uint8_t reserved1;
+	uint8_t selectreport;
+#define SELECTREPORT_NORMAL		0x00
+#define SELECTREPORT_WELLKNOWN		0x01
+#define SELECTREPORT_ALL		0x02
+	uint8_t reserved3[3];
+	uint8_t alloclen[4];
+	uint8_t reserved10;
+	uint8_t control;
+};
+
+struct scsi_report_luns_header {
+	uint8_t	length[4];		/* in bytes, not including header */
+	uint8_t _res4[4];
+					/* followed by array of: */
+};
+
+struct scsi_report_luns_lun {
+	uint8_t lun[8];
+};
 
 /*
  * MAINTENANCE_IN[REPORT SUPPORTED OPERATION CODES]
@@ -419,7 +443,7 @@ struct scsi_repsuppopcode {
 #define RSOC_ALL           0x00 /* report all */
 #define RSOC_ONE           0x01 /* report one */
 #define RSOC_ONESACD       0x02 /* report one or CHECK CONDITION */
-#define RSOC_ONESA         0x03 /* report one mark presense in data */
+#define RSOC_ONESA         0x03 /* report one mark presence in data */
 #define RSOC_RCTD          0x80 /* report timeouts */
 
 	u_int8_t reqopcode;

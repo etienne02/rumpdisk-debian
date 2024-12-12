@@ -1,9 +1,9 @@
-/*	$NetBSD: vmwgfx_fifo.c,v 1.2 2018/08/27 04:58:37 riastradh Exp $	*/
+/*	$NetBSD: vmwgfx_fifo.c,v 1.4 2022/10/25 23:34:06 riastradh Exp $	*/
 
+// SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright © 2009-2015 VMware, Inc., Palo Alto, CA., USA
- * All Rights Reserved.
+ * Copyright 2009-2015 VMware, Inc., Palo Alto, CA., USA
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -28,11 +28,15 @@
  **************************************************************************/
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vmwgfx_fifo.c,v 1.2 2018/08/27 04:58:37 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vmwgfx_fifo.c,v 1.4 2022/10/25 23:34:06 riastradh Exp $");
+
+#include <linux/sched/signal.h>
+
+#include <drm/ttm/ttm_placement.h>
 
 #include "vmwgfx_drv.h"
-#include <drm/drmP.h>
-#include <drm/ttm/ttm_placement.h>
+
+#include <linux/nbsd-namespace.h>
 
 struct vmw_temp_set_context {
 	SVGA3dCmdHeader header;
@@ -225,14 +229,20 @@ static int vmw_fifo_wait_noirq(struct vmw_private *dev_priv,
 {
 	int ret = 0;
 	unsigned long end_jiffies = jiffies + timeout;
+#ifdef __NetBSD__
+	assert_spin_locked(&dev_priv->fifo_lock);
+#else
 	DEFINE_WAIT(__wait);
+#endif
 
 	DRM_INFO("Fifo wait noirq.\n");
 
 	for (;;) {
+#ifndef __NetBSD__
 		prepare_to_wait(&dev_priv->fifo_queue, &__wait,
 				(interruptible) ?
 				TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE);
+#endif
 		if (!vmw_fifo_is_full(dev_priv, bytes))
 			break;
 		if (time_after_eq(jiffies, end_jiffies)) {
@@ -240,14 +250,40 @@ static int vmw_fifo_wait_noirq(struct vmw_private *dev_priv,
 			DRM_ERROR("SVGA device lockup.\n");
 			break;
 		}
+#ifdef __NetBSD__
+		if (interruptible) {
+			DRM_SPIN_TIMED_WAIT_UNTIL(ret, &dev_priv->fifo_queue,
+			    &dev_priv->fifo_lock, 1,
+			    !vmw_fifo_is_full(dev_priv, bytes));
+		} else {
+			DRM_SPIN_TIMED_WAIT_NOINTR_UNTIL(ret,
+			    &dev_priv->fifo_queue,
+			    &dev_priv->fifo_lock, 1,
+			    !vmw_fifo_is_full(dev_priv, bytes));
+		}
+		if (ret) {
+			if (ret > 0) /* success */
+				ret = 0;
+			break;
+		}
+		/*
+		 * ret=0 means the wait timed out after one tick, so
+		 * try again
+		 */
+#else
 		schedule_timeout(1);
 		if (interruptible && signal_pending(current)) {
 			ret = -ERESTARTSYS;
 			break;
 		}
+#endif
 	}
+#ifdef __NetBSD__
+	DRM_SPIN_WAKEUP_ALL(&dev_priv->fifo_queue, &dev_priv->fifo_lock);
+#else
 	finish_wait(&dev_priv->fifo_queue, &__wait);
 	wake_up_all(&dev_priv->fifo_queue);
+#endif
 	DRM_INFO("Fifo noirq exit.\n");
 	return ret;
 }
@@ -258,25 +294,32 @@ static int vmw_fifo_wait(struct vmw_private *dev_priv,
 {
 	long ret = 1L;
 
-	if (likely(!vmw_fifo_is_full(dev_priv, bytes)))
+	spin_lock(&dev_priv->fifo_lock);
+
+	if (likely(!vmw_fifo_is_full(dev_priv, bytes))) {
+		spin_unlock(&dev_priv->fifo_lock);
 		return 0;
+	}
 
 	vmw_fifo_ping_host(dev_priv, SVGA_SYNC_FIFOFULL);
-	if (!(dev_priv->capabilities & SVGA_CAP_IRQMASK))
-		return vmw_fifo_wait_noirq(dev_priv, bytes,
+	if (!(dev_priv->capabilities & SVGA_CAP_IRQMASK)) {
+		ret = vmw_fifo_wait_noirq(dev_priv, bytes,
 					   interruptible, timeout);
+		spin_unlock(&dev_priv->fifo_lock);
+		return ret;
+	}
 
 	vmw_generic_waiter_add(dev_priv, SVGA_IRQFLAG_FIFO_PROGRESS,
 			       &dev_priv->fifo_queue_waiters);
 
 	if (interruptible)
-		ret = wait_event_interruptible_timeout
-		    (dev_priv->fifo_queue,
-		     !vmw_fifo_is_full(dev_priv, bytes), timeout);
+		DRM_SPIN_TIMED_WAIT_UNTIL(ret, &dev_priv->fifo_queue,
+		    &dev_priv->fifo_lock, timeout,
+		    !vmw_fifo_is_full(dev_priv, bytes));
 	else
-		ret = wait_event_timeout
-		    (dev_priv->fifo_queue,
-		     !vmw_fifo_is_full(dev_priv, bytes), timeout);
+		DRM_SPIN_TIMED_WAIT_NOINTR_UNTIL(ret, &dev_priv->fifo_queue,
+		    &dev_priv->fifo_lock, timeout,
+		    !vmw_fifo_is_full(dev_priv, bytes));
 
 	if (unlikely(ret == 0))
 		ret = -EBUSY;
@@ -285,6 +328,8 @@ static int vmw_fifo_wait(struct vmw_private *dev_priv,
 
 	vmw_generic_waiter_remove(dev_priv, SVGA_IRQFLAG_FIFO_PROGRESS,
 				  &dev_priv->fifo_queue_waiters);
+
+	spin_unlock(&dev_priv->fifo_lock);
 
 	return ret;
 }
@@ -400,12 +445,8 @@ void *vmw_fifo_reserve_dx(struct vmw_private *dev_priv, uint32_t bytes,
 		WARN(1, "Command buffer has not been allocated.\n");
 		ret = NULL;
 	}
-	if (IS_ERR_OR_NULL(ret)) {
-		DRM_ERROR("Fifo reserve failure of %u bytes.\n",
-			  (unsigned) bytes);
-		dump_stack();
+	if (IS_ERR_OR_NULL(ret))
 		return NULL;
-	}
 
 	return ret;
 }
@@ -549,7 +590,7 @@ int vmw_fifo_send_fence(struct vmw_private *dev_priv, uint32_t *seqno)
 	int ret = 0;
 	uint32_t bytes = sizeof(u32) + sizeof(*cmd_fence);
 
-	fm = vmw_fifo_reserve(dev_priv, bytes);
+	fm = VMW_FIFO_RESERVE(dev_priv, bytes);
 	if (unlikely(fm == NULL)) {
 		*seqno = atomic_read(&dev_priv->marker_seq);
 		ret = -ENOMEM;
@@ -578,7 +619,9 @@ int vmw_fifo_send_fence(struct vmw_private *dev_priv, uint32_t *seqno)
 	cmd_fence->fence = *seqno;
 	vmw_fifo_commit_flush(dev_priv, bytes);
 	(void) vmw_marker_push(&fifo_state->marker_queue, *seqno);
+	spin_lock(&dev_priv->fence_lock);
 	vmw_update_seqno(dev_priv, fifo_state);
+	spin_unlock(&dev_priv->fence_lock);
 
 out_err:
 	return ret;
@@ -608,12 +651,9 @@ static int vmw_fifo_emit_dummy_legacy_query(struct vmw_private *dev_priv,
 		SVGA3dCmdWaitForQuery body;
 	} *cmd;
 
-	cmd = vmw_fifo_reserve(dev_priv, sizeof(*cmd));
-
-	if (unlikely(cmd == NULL)) {
-		DRM_ERROR("Out of fifo space for dummy query.\n");
+	cmd = VMW_FIFO_RESERVE(dev_priv, sizeof(*cmd));
+	if (unlikely(cmd == NULL))
 		return -ENOMEM;
-	}
 
 	cmd->header.id = SVGA_3D_CMD_WAIT_FOR_QUERY;
 	cmd->header.size = sizeof(cmd->body);
@@ -657,12 +697,9 @@ static int vmw_fifo_emit_dummy_gb_query(struct vmw_private *dev_priv,
 		SVGA3dCmdWaitForGBQuery body;
 	} *cmd;
 
-	cmd = vmw_fifo_reserve(dev_priv, sizeof(*cmd));
-
-	if (unlikely(cmd == NULL)) {
-		DRM_ERROR("Out of fifo space for dummy query.\n");
+	cmd = VMW_FIFO_RESERVE(dev_priv, sizeof(*cmd));
+	if (unlikely(cmd == NULL))
 		return -ENOMEM;
-	}
 
 	cmd->header.id = SVGA_3D_CMD_WAIT_FOR_GB_QUERY;
 	cmd->header.size = sizeof(cmd->body);
@@ -703,9 +740,4 @@ int vmw_fifo_emit_dummy_query(struct vmw_private *dev_priv,
 		return vmw_fifo_emit_dummy_gb_query(dev_priv, cid);
 
 	return vmw_fifo_emit_dummy_legacy_query(dev_priv, cid);
-}
-
-void *vmw_fifo_reserve(struct vmw_private *dev_priv, uint32_t bytes)
-{
-	return vmw_fifo_reserve_dx(dev_priv, bytes, SVGA3D_INVALID_ID);
 }

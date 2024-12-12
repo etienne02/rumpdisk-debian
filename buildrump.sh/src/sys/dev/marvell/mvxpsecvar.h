@@ -1,4 +1,4 @@
-/*	$NetBSD: mvxpsecvar.h,v 1.2 2019/12/27 09:41:51 msaitoh Exp $	*/
+/*	$NetBSD: mvxpsecvar.h,v 1.4 2024/06/02 13:28:45 andvar Exp $	*/
 /*
  * Copyright (c) 2015 Internet Initiative Japan Inc.
  * All rights reserved.
@@ -345,7 +345,7 @@ typedef SLIST_HEAD(mvxpsec_packet_list, mvxpsec_packet) mvxpsec_list_t;
  * Event counters
  */
 struct mvxpsec_evcnt {
-	/* interuprts */
+	/* interrupts */
 	struct evcnt intr_all;
 	struct evcnt intr_auth;
 	struct evcnt intr_des;
@@ -475,7 +475,7 @@ struct mvxpsec_softc {
  */
 extern int mvxpsec_register(struct mvxpsec_softc *);
 extern int mvxpsec_newsession(void *, uint32_t *, struct cryptoini *);
-extern int mvxpsec_freesession(void *, uint64_t);
+extern void mvxpsec_freesession(void *, uint64_t);
 extern int mvxpsec_dispatch(void *, struct cryptop *, int);
 extern void mvxpsec_done(void *);
 

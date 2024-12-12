@@ -1,4 +1,4 @@
-/*	$NetBSD: urlphy.c,v 1.38 2020/08/24 04:49:05 msaitoh Exp $	*/
+/*	$NetBSD: urlphy.c,v 1.40 2023/02/22 08:09:09 msaitoh Exp $	*/
 /*
  * Copyright (c) 2001, 2002
  *     Shingo WATANABE <nabe@nabechan.org>.  All rights reserved.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: urlphy.c,v 1.38 2020/08/24 04:49:05 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: urlphy.c,v 1.40 2023/02/22 08:09:09 msaitoh Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -118,10 +118,15 @@ urlphy_attach(device_t parent, device_t self, void *aux)
 		    "ignoring this PHY, non-zero instance\n");
 		return;
 	}
+
+	mii_lock(mii);
+
 	PHY_RESET(sc);
 
 	PHY_READ(sc, MII_BMSR, &sc->mii_capabilities);
 	sc->mii_capabilities &= ma->mii_capmask;
+
+	mii_unlock(mii);
 
 	mii_phy_add_media(sc);
 }
@@ -194,7 +199,7 @@ urlphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 
 		/* Only retry autonegotiation every N seconds. */
 		KASSERT(sc->mii_anegticks != 0);
-		if (sc->mii_ticks <= sc->mii_anegticks)
+		if (sc->mii_ticks < sc->mii_anegticks)
 			return 0;
 
 		if (mii_phy_auto_restart(sc) == EJUSTRETURN)

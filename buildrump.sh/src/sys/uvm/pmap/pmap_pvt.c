@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap_pvt.c,v 1.11 2021/07/21 06:35:45 skrll Exp $	*/
+/*	$NetBSD: pmap_pvt.c,v 1.15 2022/05/08 22:03:02 rin Exp $	*/
 
 /*-
  * Copyright (c) 2014, 2020 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: pmap_pvt.c,v 1.11 2021/07/21 06:35:45 skrll Exp $");
+__RCSID("$NetBSD: pmap_pvt.c,v 1.15 2022/05/08 22:03:02 rin Exp $");
 
 #include <sys/param.h>
 #include <sys/atomic.h>
@@ -40,6 +40,7 @@ __RCSID("$NetBSD: pmap_pvt.c,v 1.11 2021/07/21 06:35:45 skrll Exp $");
 #include <uvm/uvm.h>
 #include <uvm/pmap/pmap_pvt.h>
 
+#if !defined(PMAP_PV_TRACK_ONLY_STUBS)
 /*
  * unmanaged pv-tracked ranges
  *
@@ -177,3 +178,45 @@ pmap_pv_tracked(paddr_t pa)
 	return &pvt->pvt_pages[pgno];
 }
 
+#else /* PMAP_PV_TRACK_ONLY_STUBS */
+/*
+ * Provide empty stubs just for MODULAR kernels.
+ */
+
+void
+pmap_pv_init(void)
+{
+
+}
+
+struct pmap_page *
+pmap_pv_tracked(paddr_t pa)
+{
+
+	return NULL;
+}
+
+#if notdef
+/*
+ * pmap_pv_{,un}track() are intentionally commented out. If modules
+ * call these functions, the result should be an inconsistent state.
+ *
+ * Such modules require real PV-tracking support. Let us make the
+ * two symbols undefined, and prevent these modules from loaded.
+ */
+void
+pmap_pv_track(paddr_t start, psize_t size)
+{
+
+	panic("PV-tracking not supported");
+}
+
+void
+pmap_pv_untrack(paddr_t start, psize_t size)
+{
+
+	panic("PV-tracking not supported");
+}
+#endif /* notdef */
+
+#endif /* PMAP_PV_TRACK_ONLY_STUBS */

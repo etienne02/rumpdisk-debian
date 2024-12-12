@@ -1,4 +1,4 @@
-# $NetBSD: ALL,v 1.499 2021/06/29 10:22:36 nia Exp $
+# $NetBSD: ALL,v 1.521 2024/08/26 13:38:28 riastradh Exp $
 # From NetBSD: GENERIC,v 1.787 2006/10/01 18:37:54 bouyer Exp
 #
 # ALL machine description file
@@ -17,7 +17,7 @@ include 	"arch/i386/conf/std.i386"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident		"ALL-$Revision: 1.499 $"
+#ident		"ALL-$Revision: 1.521 $"
 
 maxusers	64		# estimated number of users
 
@@ -38,7 +38,7 @@ est0		at cpu0		# Intel Enhanced SpeedStep (non-ACPI)
 odcm0		at cpu0		# On-demand clock modulation
 padlock0	at cpu0		# VIA PadLock
 powernow0	at cpu0		# AMD PowerNow! and Cool'n'Quiet (non-ACPI)
-viac7temp*	at cpu?		# VIA C7 temperature sensor
+viac7temp*	at cpu?		# VIA C7, Nano and Zhaoxin temperature sensor
 vmt0		at cpu0		# VMware Tools
 
 options 	MTRR		# memory-type range register syscall support
@@ -131,6 +131,10 @@ options 	BIOHIST		# kernhist for buff I/O
 makeoptions	KCOV=1
 options		KCOV
 
+# Heartbeat checks
+options 	HEARTBEAT
+options 	HEARTBEAT_MAX_PERIOD_DEFAULT=15
+
 # Compatibility options
 include 	"conf/compat_netbsd09.config"
 options 	COMPAT_NOMID	# NetBSD 0.8, 386BSD, and BSDI
@@ -147,6 +151,7 @@ options 	DKWEDGE_METHOD_GPT	# Supports GPT partitions as wedges
 #options 	DKWEDGE_METHOD_MBR	# Support MBR partitions as wedges
 options 	DKWEDGE_METHOD_APPLE	# Support Apple partitions as wedges
 options 	DKWEDGE_METHOD_RDB	# Support RDB partitions as wedges
+options 	DKWEDGE_METHOD_TOS	# Support Atari "TOS" partitions as wedges
 
 # File systems
 file-system	FFS		# UFS
@@ -179,23 +184,26 @@ file-system	V7FS		# 7th Edition(V7) File System
 file-system	CHFS		# Chip File System
 
 # File system options
+# ffs
+options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-options 	DISKLABEL_EI	# disklabel Endian Independent support
-options 	FFS_EI		# FFS Endian Independent support
+options 	UFS_ACL		# UFS Access Control Lists
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
+options 	UFS_EXTATTR	# Extended attribute support for UFS1
 options 	WAPBL		# File system journaling support
-options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	UFS_EXTATTR
+# lfs
 options 	LFS_KERNEL_RFW
 options 	LFS_EI		# LFS endian-independent support - experimental
-options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH - experimental
 options 	LFS_EXTATTR	# extended attributes for LFS - experimental
+options 	LFS_DIRHASH	# LFS version of UFS_DIRHASH
 options 	LFS_QUOTA	# quotas for LFS - experimental
 options 	LFS_QUOTA2	# new-style quotas for LFS - experimental
+# ext2fs
+# other
+options 	DISKLABEL_EI	# disklabel Endian Independent support
 options 	NFSSERVER	# Network File System server
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
-options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
-				# immutable) behave as system flags.
 options 	V7FS_EI		# V7FS Endian Independent support
 
 # Networking options
@@ -348,7 +356,9 @@ acpibut*	at acpi?		# ACPI Button
 acpidalb*	at acpi?		# ACPI Direct Application Launch Button
 acpiec* 	at acpi?		# ACPI Embedded Controller (late)
 acpiecdt*	at acpi?		# ACPI Embedded Controller (early)
+options 	ACPIEC_DEBUG=-1
 acpifan*	at acpi?		# ACPI Fan
+acpihed*	at acpi?		# ACPI Hardware Error Device
 acpilid*	at acpi?		# ACPI Lid Switch
 acpipmtr*	at acpi?		# ACPI Power Meter (experimental)
 # XXX Do not enable this in a real kernel unless you also disable any
@@ -358,8 +368,10 @@ acpismbus*	at acpi?		# ACPI SMBus CMI (experimental)
 acpitz* 	at acpi?		# ACPI Thermal Zone
 acpivga*	at acpi?		# ACPI Display Adapter
 acpiout*	at acpivga?		# ACPI Display Output Device
+acpivmgenid*	at acpi?		# ACPI Virtual Machine Generation ID
 acpiwdrt*	at acpi?		# ACPI Watchdog Resource Table
 acpiwmi*	at acpi?		# ACPI WMI Mapper
+apei*		at apeibus?		# ACPI Platform Error Interfaces
 
 # Mainboard devices
 aibs*		at acpi?		# ASUSTeK AI Booster hardware monitor
@@ -558,6 +570,13 @@ cardslot*	at cbb?
 cardbus*	at cardslot?
 pcmcia* 	at cardslot?
 
+# VME bridge support
+btvmei*		at pci? dev ? function ?
+btvmeii*	at pci? dev ? function ?
+
+# VME bus support
+vme*		at vmebus?
+
 # Console Devices
 
 # wscons
@@ -605,8 +624,9 @@ intelfb*	at intelfbbus?
 radeon* 	at pci? dev ? function ?
 radeondrmkmsfb* at radeonfbbus?
 
-amdgpu* 	at pci? dev ? function ?
-amdgpufb* 	at amdgpufbbus?
+# XXX disable amdgpu as it uses floating point arithmetics.
+#amdgpu* 	at pci? dev ? function ?
+#amdgpufb* 	at amdgpufbbus?
 
 nouveau*	at pci? dev ? function ?
 nouveaufb*	at nouveaufbbus?
@@ -900,6 +920,7 @@ cd*	at scsibus? target ? lun ?	# SCSI CD-ROM drives
 ch*	at scsibus? target ? lun ?	# SCSI autochangers
 ses*	at scsibus? target ? lun ?	# SCSI Enclosure Services devices
 ss*	at scsibus? target ? lun ?	# SCSI scanners
+dse*	at scsibus? target ? lun ?	# SCSI ethernet (Dayna)
 se*	at scsibus? target ? lun ?	# SCSI ethernet adapters
 uk*	at scsibus? target ? lun ?	# SCSI unknown
 
@@ -1685,7 +1706,11 @@ weasel* at pci?
 virtio*	at pci? dev ? function ?	# Virtio PCI device
 viomb*	at virtio?			# Virtio memory balloon device
 ld*	at virtio?			# Virtio disk device
+viocon* at virtio?			# Virtio serial device
 vioif*	at virtio?			# Virtio network device
+viornd* at virtio?			# Virtio entropy device
+vioscsi* at virtio?			# Virtio SCSI device
+vio9p*	at virtio?			# Virtio 9P device
 
 # Flash subsystem
 flash* at flashbus?
@@ -1693,7 +1718,7 @@ flash* at flashbus?
 # NAND subsystem
 nand* at nandbus?
 
-# Pull in optional local configuration
+# Pull in optional local configuration - always at end
 #include 	"arch/i386/conf/ALL.local"
 
 
@@ -1798,6 +1823,10 @@ pseudo-device	pad
 
 # userland interface to drivers, including autoconf and properties retrieval
 pseudo-device	drvctl
+
+# EFI runtime support
+options 	EFI_RUNTIME
+pseudo-device 	efi			# /dev/efi
 
 # Pass-to-Userspace Transporter
 pseudo-device	putter
@@ -2132,6 +2161,8 @@ options MEC_DEBUG
 options MEDIABAY_DEBUG
 options MEMORY_MAP_DEBUG
 options MESH_DEBUG
+options MFI_DEBUG
+options MFII_DEBUG
 options MIDI_DEBUG
 options MLYDEBUG
 options MMEYEPCMCIADEBUG
@@ -2276,7 +2307,6 @@ options SMB_VNODE_DEBUG
 options SNAPPER_DEBUG
 options SNDEBUG
 options SOCKBUF_DEBUG
-options SONIC_DEBUG
 options SPARC_PCI_DEBUG
 options SPC_DEBUG
 options SPIC_DEBUG
@@ -2315,7 +2345,6 @@ options TROPICDEBUG
 options TRTCMISADEBUG
 options TSDEBUG
 options TSLOT_DEBUG
-options TTY_DEBUG
 options TUDEBUG
 options TULIP_DEBUG
 options TWA_DEBUG

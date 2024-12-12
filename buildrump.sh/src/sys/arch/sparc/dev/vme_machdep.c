@@ -1,4 +1,4 @@
-/*	$NetBSD: vme_machdep.c,v 1.74 2021/08/07 16:19:05 thorpej Exp $	*/
+/*	$NetBSD: vme_machdep.c,v 1.78 2024/05/13 00:01:53 msaitoh Exp $	*/
 
 /*-
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
@@ -30,14 +30,14 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vme_machdep.c,v 1.74 2021/08/07 16:19:05 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vme_machdep.c,v 1.78 2024/05/13 00:01:53 msaitoh Exp $");
 
 #include <sys/param.h>
-#include <sys/extent.h>
 #include <sys/systm.h>
 #include <sys/device.h>
 #include <sys/kmem.h>
 #include <sys/errno.h>
+#include <sys/vmem.h>
 
 #include <sys/proc.h>
 #include <sys/syslog.h>
@@ -190,13 +190,13 @@ struct rom_range vmebus_translations[] = {
  * for DVMA space allocations. The DMA addresses returned by
  * bus_dmamap_load*() must be relocated by -VME4_DVMA_BASE.
  */
-struct extent *vme_dvmamap;
+vmem_t *vme_dvmamap;
 
 /*
  * The VME hardware on the sun4m IOMMU maps the first 8MB of 32-bit
  * VME space to the last 8MB of DVMA space and the first 1MB of
  * 24-bit VME space to the first 1MB of the last 8MB of DVMA space
- * (thus 24-bit VME space overlaps the first 1MB of of 32-bit space).
+ * (thus 24-bit VME space overlaps the first 1MB of 32-bit space).
  * The following constants define subregions in the IOMMU DVMA map
  * for VME DVMA allocations.  The DMA addresses returned by
  * bus_dmamap_load*() must be relocated by -VME_IOMMU_DVMA_BASE.
@@ -314,8 +314,16 @@ vmeattach_mainbus(device_t parent, device_t self, void *aux)
 	sc->sc_nrange =
 		sizeof(vmebus_translations)/sizeof(vmebus_translations[0]);
 
-	vme_dvmamap = extent_create("vmedvma", VME4_DVMA_BASE, VME4_DVMA_END,
-				    0, 0, EX_WAITOK);
+	vme_dvmamap = vmem_create("vmedvma",
+				  VME4_DVMA_BASE,
+				  VME4_DVMA_END - VME4_DVMA_BASE,
+				  PAGE_SIZE,		/* quantum */
+				  NULL,			/* importfn */
+				  NULL,			/* releasefn */
+				  NULL,			/* source */
+				  0,			/* qcache_max */
+				  VM_SLEEP,
+				  IPL_VM);
 
 	printf("\n");
 	(void)config_found(self, &vba, 0, CFARGS_NONE);
@@ -432,7 +440,7 @@ vmeattach_iommu(device_t parent, device_t self, void *aux)
 	       sc->sc_reg->vmebus_cr & VMEBUS_CR_IMPL);
 
 	(void)config_found(self, &vba, 0,
-	    CFARGS(.devhandle = prom_node_to_devhandle(node)));
+	    CFARGS(.devhandle = device_handle(self)));
 #endif /* SUN4M */
 }
 
@@ -828,7 +836,7 @@ sparc_vme4_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map,
 {
 	bus_addr_t dva;
 	bus_size_t sgsize;
-	u_long ldva;
+	vmem_addr_t ldva;
 	vaddr_t va, voff;
 	pmap_t pmap;
 	int pagesz = PAGE_SIZE;
@@ -845,12 +853,18 @@ sparc_vme4_dmamap_load(bus_dma_tag_t t, bus_dmamap_t map,
 	 * covering the passed buffer.
 	 */
 	sgsize = (buflen + voff + pagesz - 1) & -pagesz;
-	error = extent_alloc(vme_dvmamap, sgsize, pagesz,
-			     map->_dm_boundary,
-			     (flags & BUS_DMA_NOWAIT) == 0
-					? EX_WAITOK
-					: EX_NOWAIT,
-			     &ldva);
+
+	const vm_flag_t vmflags = VM_BESTFIT |
+	    ((flags & BUS_DMA_NOWAIT) ? VM_NOSLEEP : VM_SLEEP);
+
+	error = vmem_xalloc(vme_dvmamap, sgsize,
+			    0,			/* alignment */
+			    0,			/* phase */
+			    map->_dm_boundary,	/* nocross */
+			    VMEM_ADDR_MIN,	/* minaddr */
+			    VMEM_ADDR_MAX,	/* maxaddr */
+			    vmflags,
+			    &ldva);
 	if (error != 0)
 		return (error);
 	dva = (bus_addr_t)ldva;
@@ -895,7 +909,7 @@ sparc_vme4_dmamap_unload(bus_dma_tag_t t, bus_dmamap_t map)
 	int nsegs = map->dm_nsegs;
 	bus_addr_t dva;
 	bus_size_t len;
-	int i, s, error;
+	int i;
 
 	for (i = 0; i < nsegs; i++) {
 		/* Go from VME to CPU view */
@@ -907,11 +921,7 @@ sparc_vme4_dmamap_unload(bus_dma_tag_t t, bus_dmamap_t map)
 		pmap_remove(pmap_kernel(), dva, dva + len);
 
 		/* Release DVMA space */
-		s = splhigh();
-		error = extent_free(vme_dvmamap, dva, len, EX_NOWAIT);
-		splx(s);
-		if (error != 0)
-			printf("warning: %ld of DVMA space lost\n", len);
+		vmem_xfree(vme_dvmamap, dva, len);
 	}
 	pmap_update(pmap_kernel());
 
@@ -963,7 +973,7 @@ sparc_vct_iommu_dmamap_create(void *cookie, vme_size_t size, vme_am_t am,
 
 	/*
 	 * Each I/O cache line maps to a 8K section of VME DVMA space, so
-	 * we must ensure that DVMA alloctions are always 8K aligned.
+	 * we must ensure that DVMA allocations are always 8K aligned.
 	 */
 	map->_dm_align = VME_IOC_PAGESZ;
 

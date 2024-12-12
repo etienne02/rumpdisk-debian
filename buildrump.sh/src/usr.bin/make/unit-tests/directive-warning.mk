@@ -1,4 +1,4 @@
-# $NetBSD: directive-warning.mk,v 1.6 2020/12/19 22:33:11 rillig Exp $
+# $NetBSD: directive-warning.mk,v 1.9 2023/12/17 09:44:00 rillig Exp $
 #
 # Tests for the .warning directive.
 #
@@ -6,16 +6,20 @@
 # produced the wrong error message "Unknown directive".  Since parse.c 1.503
 # from 2020-12-19, the correct "Missing argument" is produced.
 
-# TODO: Implementation
-
+# expect+1: Unknown directive "warn"
 .warn				# misspelled
+# expect+1: Unknown directive "warn"
 .warn message			# misspelled
+# expect+1: Unknown directive "warnin"
 .warnin				# misspelled
+# expect+1: Unknown directive "warnin"
 .warnin	message			# misspelled
+# expect+1: Missing argument for ".warning"
 .warning			# "Missing argument"
-.warning message		# ok
+.warning message		# expect+0: warning: message
+# expect+1: Unknown directive "warnings"
 .warnings			# misspelled
+# expect+1: Unknown directive "warnings"
 .warnings messages		# Accepted before 2020-12-13 01:07:54.
 
-all:
-	@:;
+all: .PHONY

@@ -1,4 +1,4 @@
-/* $NetBSD: idle_machdep.S,v 1.10 2021/08/30 22:28:50 jmcneill Exp $ */
+/* $NetBSD: idle_machdep.S,v 1.12 2022/05/29 23:39:59 ryo Exp $ */
 
 /*-
  * Copyright (c) 2014 The NetBSD Foundation, Inc.
@@ -36,7 +36,7 @@
 #include <aarch64/locore.h>
 #include "assym.h"
 
-RCSID("$NetBSD: idle_machdep.S,v 1.10 2021/08/30 22:28:50 jmcneill Exp $");
+RCSID("$NetBSD: idle_machdep.S,v 1.12 2022/05/29 23:39:59 ryo Exp $");
 
 #ifdef ARM_INTR_IMPL
 #include ARM_INTR_IMPL
@@ -55,7 +55,7 @@ ENTRY(cpu_idle)
 	/*
 	 * hardware interrupt -> trap handler -> interrupt handler
 	 */
-	dsb sy
+	dsb	sy
 	wfi
 
 #else /* LAZY_CPUIDLE */
@@ -68,6 +68,9 @@ ENTRY(cpu_idle)
 	stp	x29, x30, [sp, #TF_X29]		/* save x29,x30 */
 #ifdef DDB
 	add	x29, sp, #TF_X29		/* link frame for backtrace */
+	mov	x0, #-1
+	str	x0, [sp, #TF_ESR]
+	str	xzr, [sp, #TF_FAR]
 #endif
 
 	/* fill the minimum required trapframe */
@@ -94,7 +97,7 @@ ENTRY(cpu_idle)
 	 */
 	str	w2, [x28, #CI_INTR_DEPTH]	/* ci->ci_intr_depth = 1 */
 
-	dsb sy
+	dsb	sy
 	wfi
 	bl	ARM_IRQ_HANDLER			/* irqhandler(trapframe) */
 1:

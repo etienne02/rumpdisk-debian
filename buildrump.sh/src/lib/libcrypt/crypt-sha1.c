@@ -1,21 +1,21 @@
-/* $NetBSD: crypt-sha1.c,v 1.8 2013/08/28 17:47:07 riastradh Exp $ */
+/* $NetBSD: crypt-sha1.c,v 1.11 2024/07/23 22:37:11 riastradh Exp $ */
 
 /*
  * Copyright (c) 2004, Juniper Networks, Inc.
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions 
- * are met: 
+ * modification, are permitted provided that the following conditions
+ * are met:
  * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer. 
+ *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.  
+ *    documentation and/or other materials provided with the distribution.
  * 3. Neither the name of the copyright holders nor the names of its
  *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission. 
- * 
+ *    from this software without specific prior written permission.
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
  * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
@@ -26,12 +26,12 @@
  * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <sys/cdefs.h>
 #if !defined(lint)
-__RCSID("$NetBSD: crypt-sha1.c,v 1.8 2013/08/28 17:47:07 riastradh Exp $");
+__RCSID("$NetBSD: crypt-sha1.c,v 1.11 2024/07/23 22:37:11 riastradh Exp $");
 #endif /* not lint */
 
 #include <stdlib.h>
@@ -68,27 +68,18 @@ __RCSID("$NetBSD: crypt-sha1.c,v 1.8 2013/08/28 17:47:07 riastradh Exp $");
  * The number is varied to frustrate those attempting to generate a
  * dictionary of pre-computed hashes.
  */
-unsigned int
+crypt_private unsigned int
 __crypt_sha1_iterations (unsigned int hint)
 {
-    static int once = 1;
-
     /*
      * We treat CRYPT_SHA1_ITERATIONS as a hint.
      * Make it harder for someone to pre-compute hashes for a
      * dictionary attack by not using the same iteration count for
      * every entry.
      */
-
-    if (once) {
-	int pid = getpid();
-	
-	srandom(time(NULL) ^ (pid * pid));
-	once = 0;
-    }
-    if (hint == 0)
+    if (hint < 4)
 	hint = CRYPT_SHA1_ITERATIONS;
-    return hint - (random() % (hint / 4));
+    return hint - arc4random_uniform(hint / 4);
 }
 
 /*
@@ -112,10 +103,10 @@ __crypt_sha1_iterations (unsigned int hint)
  * NOTE:
  * To be FIPS 140 compliant, the password which is used as a hmac key,
  * should be between 10 and 20 characters to provide at least 80bits
- * strength, and avoid the need to hash it before using as the 
+ * strength, and avoid the need to hash it before using as the
  * hmac key.
  */
-char *
+crypt_private char *
 __crypt_sha1 (const char *pw, const char *salt)
 {
     static const char *magic = SHA1_MAGIC;
@@ -163,7 +154,7 @@ __crypt_sha1 (const char *pw, const char *salt)
      * Now get to work...
      * Prime the pump with <salt><magic><iterations>
      */
-    dl = snprintf(passwd, sizeof (passwd), "%.*s%s%u", 
+    dl = snprintf(passwd, sizeof (passwd), "%.*s%s%u",
 		  sl, salt, magic, iterations);
     /*
      * Then hmac using <pw> as key, and repeat...
@@ -195,4 +186,4 @@ __crypt_sha1 (const char *pw, const char *salt)
     explicit_memset(hmac_buf, 0, sizeof hmac_buf);
 
     return passwd;
-}	
+}

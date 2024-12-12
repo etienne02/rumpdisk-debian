@@ -1,4 +1,4 @@
-/* $NetBSD: acpi_pci.c,v 1.31 2021/05/12 23:22:33 thorpej Exp $ */
+/* $NetBSD: acpi_pci.c,v 1.37 2022/10/14 22:10:15 jmcneill Exp $ */
 
 /*
  * Copyright (c) 2009, 2010 The NetBSD Foundation, Inc.
@@ -29,7 +29,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: acpi_pci.c,v 1.31 2021/05/12 23:22:33 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: acpi_pci.c,v 1.37 2022/10/14 22:10:15 jmcneill Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -40,6 +40,8 @@ __KERNEL_RCSID(0, "$NetBSD: acpi_pci.c,v 1.31 2021/05/12 23:22:33 thorpej Exp $"
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcidevs.h>
 #include <dev/pci/ppbreg.h>
+
+#include <dev/pci/pci_calls.h>
 
 #include <dev/acpi/acpireg.h>
 #include <dev/acpi/acpivar.h>
@@ -55,14 +57,6 @@ ACPI_MODULE_NAME	  ("acpi_pci")
 
 static ACPI_STATUS	  acpi_pcidev_pciroot_bus_callback(ACPI_RESOURCE *,
 							   void *);
-
-/*
- * UUID for _DSM control method, from PCI Firmware Specification.
- */
-static UINT8 acpi_pci_dsm_uuid[ACPI_UUID_LENGTH] = {
-	0xd0, 0x37, 0xc9, 0xe5, 0x53, 0x35, 0x7a, 0x4d,
-	0x91, 0x17, 0xea, 0x4d, 0x19, 0xc3, 0x43, 0x4d
-};
 
 /*
  * Regarding PCI Segment Groups (ACPI 4.0, p. 277):
@@ -377,7 +371,7 @@ acpi_pcidev_find(uint16_t segment, uint16_t bus,
 	if (sc == NULL)
 		return NULL;
 
-	SIMPLEQ_FOREACH(ad, &sc->ad_head, ad_list) {
+	SIMPLEQ_FOREACH(ad, &sc->sc_head, ad_list) {
 
 		if (ad->ad_pciinfo != NULL &&
 		    (ad->ad_pciinfo->ap_flags & ACPI_PCI_INFO_DEVICE) &&
@@ -425,7 +419,7 @@ acpi_pciroot_find(uint16_t segment, uint16_t bus)
 	if (sc == NULL)
 		return NULL;
 
-	SIMPLEQ_FOREACH(ad, &sc->ad_head, ad_list) {
+	SIMPLEQ_FOREACH(ad, &sc->sc_head, ad_list) {
 
 		if (ad->ad_pciinfo != NULL &&
 		    (ad->ad_pciinfo->ap_flags & ACPI_PCI_INFO_BRIDGE) &&
@@ -470,9 +464,6 @@ acpi_pcidev_find_dev(struct acpi_devnode *ad)
 		if (pr == NULL || device_is_a(pr, "pci") != true)
 			continue;
 
-		if (dv->dv_locators == NULL)	/* This should not happen. */
-			continue;
-
 		pci = device_private(pr);
 
 		if (pci->sc_bus == ap->ap_bus &&
@@ -484,63 +475,6 @@ acpi_pcidev_find_dev(struct acpi_devnode *ad)
 	deviter_release(&di);
 
 	return dv;
-}
-
-/*
- * acpi_pci_ignore_boot_config:
- *
- *	Returns 1 if the operating system may ignore the boot configuration
- *	of PCI resources.
- */
-ACPI_INTEGER
-acpi_pci_ignore_boot_config(ACPI_HANDLE handle)
-{
-	ACPI_OBJECT *pobj = NULL;
-	ACPI_INTEGER ret;
-
-	/*
-	 * This one is a little confusing, but the result of
-	 * evaluating _DSM #5 is:
-	 *
-	 * 0: The operating system may not ignore the boot configuration
-	 *    of PCI resources.
-	 *
-	 * 1: The operating system may ignore the boot configuration of
-	 *    PCI resources, and reconfigure or rebalance these resources
-	 *    in the hierarchy as required.
-	 */
-
-	if (ACPI_FAILURE(acpi_dsm(handle, acpi_pci_dsm_uuid,
-				  1, 5, NULL, &pobj))) {
-		/*
-		 * In the absence of _DSM #5, we may assume that the
-		 * boot config can be ignored.
-		 */
-		return 1;
-	}
-
-	/*
-	 * ...and we default to "may ignore" in the event that the
-	 * method returns nonsense.
-	 */
-	ret = 1;
-
-	if (pobj != NULL) {
-		switch (pobj->Type) {
-		case ACPI_TYPE_INTEGER:
-			ret = pobj->Integer.Value;
-			break;
-
-		case ACPI_TYPE_PACKAGE:
-			if (pobj->Package.Count == 1 &&
-			    pobj->Package.Elements[0].Type == ACPI_TYPE_INTEGER)
-				ret = pobj->Package.Elements[0].Integer.Value;
-			break;
-		}
-		ACPI_FREE(pobj);
-	}
-
-	return ret;
 }
 
 /*
@@ -558,11 +492,7 @@ acpi_pci_bus_get_child_devhandle(device_t dev, devhandle_t call_handle, void *v)
 	int b, d, f;
 	u_int segment;
 
-#ifdef __HAVE_PCI_GET_SEGMENT
 	segment = pci_get_segment(args->pc);
-#else
-	segment = 0;
-#endif /* __HAVE_PCI_GET_SEGMENT */
 
 	pci_decompose_tag(args->pc, args->tag, &b, &d, &f);
 
@@ -570,11 +500,11 @@ acpi_pci_bus_get_child_devhandle(device_t dev, devhandle_t call_handle, void *v)
 
 	if (ad != NULL && (hdl = ad->ad_handle) != NULL) {
 		/* Found it! */
-		args->devhandle = devhandle_from_acpi(hdl);
+		args->devhandle = devhandle_from_acpi(call_handle, hdl);
 		return 0;
 	}
 
 	return ENODEV;
 }
-ACPI_DEVICE_CALL_REGISTER("pci-bus-get-child-devhandle",
+ACPI_DEVICE_CALL_REGISTER(PCI_BUS_GET_CHILD_DEVHANDLE_STR,
 			  acpi_pci_bus_get_child_devhandle)

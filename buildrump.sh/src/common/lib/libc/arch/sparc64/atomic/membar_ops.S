@@ -1,4 +1,4 @@
-/*	$NetBSD: membar_ops.S,v 1.5 2008/05/25 15:56:12 chs Exp $	*/
+/*	$NetBSD: membar_ops.S,v 1.9 2022/04/09 23:32:52 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
@@ -15,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- *      
+ *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
  * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
@@ -33,22 +33,57 @@
 
 	.text
 
-/* These assume Total Store Order (TSO) */
+/*
+ * These assume Total Store Order (TSO), which may reorder
+ * store-before-load but nothing else.  Hence, only membar_sync (and
+ * its deprecated alias membar_enter) must issue anything -- namely,
+ * membar #StoreLoad.
+ *
+ * If we ran with Partial Store Order (PSO), we would also need to
+ * issue membar #StoreStore for membar_exit (load/store-before-store)
+ * and membar_producer (store-before-store).
+ */
 
-ENTRY(_membar_producer)
+ENTRY(_membar_acquire)
 	retl
 	 nop
+END(_membar_acquire)
+ATOMIC_OP_ALIAS(membar_acquire,_membar_acquire)
 
-ENTRY(_membar_consumer)
-	membar	#LoadLoad
+ENTRY(_membar_release)
 	retl
 	 nop
+END(_membar_release)
+ATOMIC_OP_ALIAS(membar_release,_membar_release)
 
-ATOMIC_OP_ALIAS(membar_producer,_membar_producer)
-ATOMIC_OP_ALIAS(membar_consumer,_membar_consumer)
-ATOMIC_OP_ALIAS(membar_enter,_membar_consumer)
-STRONG_ALIAS(_membar_enter,_membar_consumer)
-ATOMIC_OP_ALIAS(membar_exit,_membar_consumer)
-STRONG_ALIAS(_membar_exit,_membar_consumer)
-ATOMIC_OP_ALIAS(membar_sync,_membar_consumer)
-STRONG_ALIAS(_membar_sync,_membar_consumer)
+ENTRY(_membar_sync)
+	/*
+	 * Some SPARC CPUs have errata with MEMBAR in the delay slot of
+	 * a branch, such as the UltraSPARC-IIi:
+	 *
+	 *	`Apparently, the deadlock is most easily caused if the
+	 *	 delay slot of the JMPL is a MEMBAR #Sync, or any
+	 *	 instruction that synchronizes on the load or store
+	 *	 buffers being empty.'
+	 *
+	 *	UltraSPARC-IIi User's Manual, Part No. 805-0087-01, Sun
+	 *	Microsystems, October 1997, Appendix K.2 `Errata
+	 *	Created by UltraSPARC-I', Erratum 51, p. 476.
+	 *	https://www.oracle.com/technetwork/server-storage/sun-sparc-enterprise/documentation/sparc-2i-usersmanual-2516677.pdf#page=518
+	 *
+	 * So let's avoid doing that.
+	 */
+	membar	#StoreLoad
+	retl
+	 nop
+END(_membar_sync)
+ATOMIC_OP_ALIAS(membar_sync,_membar_sync)
+
+ATOMIC_OP_ALIAS(membar_producer,_membar_release)
+STRONG_ALIAS(_membar_producer,_membar_release)
+ATOMIC_OP_ALIAS(membar_consumer,_membar_acquire)
+STRONG_ALIAS(_membar_consumer,_membar_acquire)
+ATOMIC_OP_ALIAS(membar_enter,_membar_sync)
+STRONG_ALIAS(_membar_enter,_membar_sync)
+ATOMIC_OP_ALIAS(membar_exit,_membar_release)
+STRONG_ALIAS(_membar_exit,_membar_release)

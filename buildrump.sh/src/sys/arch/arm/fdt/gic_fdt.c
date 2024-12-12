@@ -1,4 +1,4 @@
-/* $NetBSD: gic_fdt.c,v 1.23 2021/08/07 16:18:43 thorpej Exp $ */
+/* $NetBSD: gic_fdt.c,v 1.26 2024/12/02 12:53:07 skrll Exp $ */
 
 /*-
  * Copyright (c) 2015-2017 Jared McNeill <jmcneill@invisible.ca>
@@ -29,7 +29,7 @@
 #include "pci.h"
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: gic_fdt.c,v 1.23 2021/08/07 16:18:43 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: gic_fdt.c,v 1.26 2024/12/02 12:53:07 skrll Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -117,10 +117,12 @@ static const struct device_compatible_entry compat_data[] = {
 	DEVICE_COMPAT_EOL
 };
 
+#if NPCI > 0 && defined(__HAVE_PCI_MSI_MSIX)
 static const struct device_compatible_entry v2m_compat_data[] = {
 	{ .compat = "arm,gic-v2m-frame" },
 	DEVICE_COMPAT_EOL
 };
+#endif
 
 static int
 gic_fdt_match(device_t parent, cfdata_t cf, void *aux)
@@ -163,8 +165,8 @@ gic_fdt_attach(device_t parent, device_t self, void *aux)
 		return;
 	}
 
-	const bus_addr_t addr = uimin(addr_d, addr_c);
-	const bus_size_t end = uimax(addr_d + size_d, addr_c + size_c);
+	const bus_addr_t addr = ulmin(addr_d, addr_c);
+	const bus_size_t end = ulmax(addr_d + size_d, addr_c + size_c);
 	const bus_size_t size = end - addr;
 
 	error = bus_space_map(faa->faa_bst, addr, size, 0, &bsh);
@@ -326,7 +328,7 @@ gic_fdt_disestablish(device_t dev, void *ih)
 
 	for (n = 0; n < GIC_MAXIRQ; n++) {
 		firq = sc->sc_irq[n];
-		if (firq->intr_ih != ih)
+		if (firq == NULL || firq->intr_ih != ih)
 			continue;
 
 		KASSERT(firq->intr_refcnt > 0);

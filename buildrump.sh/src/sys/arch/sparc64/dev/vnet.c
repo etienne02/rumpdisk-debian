@@ -1,4 +1,4 @@
-/*	$NetBSD: vnet.c,v 1.5 2021/03/15 18:44:04 palle Exp $	*/
+/*	$NetBSD: vnet.c,v 1.10 2023/12/14 20:17:18 andvar Exp $	*/
 /*	$OpenBSD: vnet.c,v 1.62 2020/07/10 13:26:36 patrick Exp $	*/
 /*
  * Copyright (c) 2009, 2015 Mark Kettenis
@@ -128,7 +128,7 @@ struct vnet_soft_desc {
 };
 
 struct vnet_softc {
-	struct device	sc_dv;
+	device_t	sc_dv;
 	bus_space_tag_t	sc_bustag;
 	bus_dma_tag_t	sc_dmatag;
 
@@ -247,6 +247,7 @@ vnet_attach(struct device *parent, struct device *self, void *aux)
 	struct ldc_conn *lc;
 	struct ifnet *ifp;
 
+	sc->sc_dv = self;
 	sc->sc_bustag = ca->ca_bustag;
 	sc->sc_dmatag = ca->ca_dmatag;
 	sc->sc_tx_ino = ca->ca_tx_ino;
@@ -304,8 +305,10 @@ vnet_attach(struct device *parent, struct device *self, void *aux)
 	/*
 	 * Each interface gets its own pool.
 	 */
-	pool_init(&sc->sc_pool, 2048, 0, 0, 0, sc->sc_dv.dv_xname, NULL, IPL_NET);
- 
+	pool_init(&sc->sc_pool, /*size*/2048, /*align*/0, /*align_offset*/0,
+	    /*flags*/0, /*wchan*/device_xname(sc->sc_dv), /*palloc*/NULL,
+	    IPL_NET);
+
 	ifp = &sc->sc_ethercom.ec_if;
 	ifp->if_softc = sc;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
@@ -438,7 +441,7 @@ vnet_rx_intr(void *arg)
 	default:
 		DPRINTF(("%s: unhandled type %0x02/%0x02/%0x02\n",
 				 __func__, lp->type, lp->stype, lp->ctrl));
-		Debugger();
+		console_debugger();
 		ldc_reset(lc);
 		break;
 	}
@@ -692,7 +695,6 @@ vnet_rx_vio_rdx(struct vnet_softc *sc, struct vio_msg_tag *tag)
 		vnet_setmulti(sc, 1);
 
 		KERNEL_LOCK(1, curlwp);
-		ifp->if_flags &= ~IFF_OACTIVE;
 		vnet_start(ifp);
 		KERNEL_UNLOCK_ONE(curlwp);
 	}
@@ -948,8 +950,6 @@ vnet_rx_vio_dring_data(struct vnet_softc *sc, struct vio_msg_tag *tag)
 			vnet_send_dring_data(sc, cons);
 
 		KERNEL_LOCK(1, curlwp);
-		if (count < (sc->sc_vd->vd_nentries - 1))
-			ifp->if_flags &= ~IFF_OACTIVE;
 		if (count == 0)
 			ifp->if_timer = 0;
 
@@ -1135,11 +1135,6 @@ vnet_start(struct ifnet *ifp)
 		DPRINTF(("%s: not in RUNNING state\n", __func__));
 		return;
 	}
-	if (ifp->if_flags & IFF_OACTIVE)
-	{
-		DPRINTF(("%s: already active\n", __func__));
-		return;
-	}
 
 	if (IFQ_IS_EMPTY(&ifp->if_snd))
 	{
@@ -1172,7 +1167,6 @@ vnet_start(struct ifnet *ifp)
 	tx_tail += sizeof(struct ldc_pkt);
 	tx_tail &= ((lc->lc_txq->lq_nentries * sizeof(struct ldc_pkt)) - 1);
 	if (tx_tail == tx_head) {
-		ifp->if_flags |= IFF_OACTIVE;
 		{
 			DPRINTF(("%s: tail equals head\n", __func__));
 			return;
@@ -1191,14 +1185,12 @@ vnet_start(struct ifnet *ifp)
 		if (count >= (sc->sc_vd->vd_nentries - 1) ||
 		    map->lm_count >= map->lm_nentries) {
 			DPRINTF(("%s: count issue\n", __func__));
-			ifp->if_flags |= IFF_OACTIVE;
 			break;
 		}
 
 		buf = pool_get(&sc->sc_pool, PR_NOWAIT|PR_ZERO);
 		if (buf == NULL) {
 			DPRINTF(("%s: buff is NULL\n", __func__));
-			ifp->if_flags |= IFF_OACTIVE;
 			break;
 		}
 		IFQ_DEQUEUE(&ifp->if_snd, m);
@@ -1214,12 +1206,9 @@ vnet_start(struct ifnet *ifp)
 		 * If BPF is listening on this interface, let it see the
 		 * packet before we commit it to the wire.
 		 */
-		if (ifp->if_bpf)
-		{
-			DPRINTF(("%s: before bpf\n", __func__));
-			bpf_mtap(ifp->if_bpf, m, BPF_DIRECTION_OUT);
-			DPRINTF(("%s: after bpf\n", __func__));
-		}
+		DPRINTF(("%s: before bpf\n", __func__));
+		bpf_mtap(ifp, m, BPF_D_OUT);
+		DPRINTF(("%s: after bpf\n", __func__));
 #endif
 
 		pmap_extract(pmap_kernel(), (vaddr_t)buf, &pa);
@@ -1272,13 +1261,11 @@ vnet_start_desc(struct ifnet *ifp)
 		count = sc->sc_tx_prod - sc->sc_tx_cons;
 		if (count >= (sc->sc_vd->vd_nentries - 1) ||
 		    map->lm_count >= map->lm_nentries) {
-			ifp->if_flags |= IFF_OACTIVE;
 			return;
 		}
 
 		buf = pool_get(&sc->sc_pool, PR_NOWAIT|PR_ZERO);
 		if (buf == NULL) {
-			ifp->if_flags |= IFF_OACTIVE;
 			return;
 		}
 
@@ -1296,8 +1283,7 @@ vnet_start_desc(struct ifnet *ifp)
 		 * If BPF is listening on this interface, let it see the
 		 * packet before we commit it to the wire.
 		 */
-		if (ifp->if_bpf)
-			bpf_mtap(ifp->if_bpf, m, BPF_DIRECTION_OUT);
+		bpf_mtap(ifp, m, BPF_D_OUT);
 #endif
 
 		pmap_extract(pmap_kernel(), (vaddr_t)buf, &pa);
@@ -1392,7 +1378,7 @@ vnet_watchdog(struct ifnet *ifp)
 
 	struct vnet_softc *sc = ifp->if_softc;
 
-	printf("%s: watchdog timeout\n", sc->sc_dv.dv_xname);
+	printf("%s: watchdog timeout\n", device_xname(sc->sc_dv));
 }
 
 int
@@ -1545,7 +1531,6 @@ vnet_stop(struct ifnet *ifp, int disable)
 	struct ldc_conn *lc = &sc->sc_lc;
 
 	ifp->if_flags &= ~IFF_RUNNING;
-	ifp->if_flags &= ~IFF_OACTIVE;
 	ifp->if_timer = 0;
 
 	cbus_intr_setenabled(sc->sc_bustag, sc->sc_tx_ino, INTR_DISABLED);

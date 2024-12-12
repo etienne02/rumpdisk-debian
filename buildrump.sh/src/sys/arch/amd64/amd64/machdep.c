@@ -1,4 +1,4 @@
-/*	$NetBSD: machdep.c,v 1.358 2021/01/24 14:17:10 simonb Exp $	*/
+/*	$NetBSD: machdep.c,v 1.370 2024/12/02 13:31:32 bouyer Exp $	*/
 
 /*
  * Copyright (c) 1996, 1997, 1998, 2000, 2006, 2007, 2008, 2011
@@ -110,7 +110,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.358 2021/01/24 14:17:10 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.370 2024/12/02 13:31:32 bouyer Exp $");
 
 #include "opt_modular.h"
 #include "opt_user_ldt.h"
@@ -153,6 +153,8 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.358 2021/01/24 14:17:10 simonb Exp $")
 #include <sys/asan.h>
 #include <sys/csan.h>
 #include <sys/msan.h>
+#include <sys/module.h>
+#include <sys/timevar.h>
 
 #ifdef KGDB
 #include <sys/kgdb.h>
@@ -182,11 +184,12 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.358 2021/01/24 14:17:10 simonb Exp $")
 #include <x86/dbregs.h>
 #include <machine/mtrr.h>
 #include <machine/mpbiosvar.h>
+#include <machine/pmap_private.h>
 
+#include <x86/bootspace.h>
 #include <x86/cputypes.h>
 #include <x86/cpuvar.h>
 #include <x86/machdep.h>
-
 #include <x86/x86/tsc.h>
 
 #include <dev/isa/isareg.h>
@@ -200,6 +203,8 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.358 2021/01/24 14:17:10 simonb Exp $")
 #include <xen/include/public/version.h>
 #include <xen/include/public/vcpu.h>
 #endif /* XEN */
+
+#include <ddb/db_active.h>
 
 #ifdef DDB
 #include <machine/db_machdep.h>
@@ -267,7 +272,6 @@ vaddr_t ldt_vaddr;
 paddr_t ldt_paddr;
 
 static struct vm_map module_map_store;
-extern struct vm_map *module_map;
 extern struct bootspace bootspace;
 extern struct slotspace slotspace;
 
@@ -301,8 +305,6 @@ void dodumpsys(void);
 void dumpsys(void);
 
 static void x86_64_proc0_pcb_ldt_init(void);
-
-extern int time_adjusted;	/* XXX no common header */
 
 void dump_misc_init(void);
 void dump_seg_prep(void);
@@ -685,23 +687,16 @@ cpu_reboot(int howto, char *bootstr)
 			syncdone = true;
 			/* XXX used to force unmount as well, here */
 			vfs_sync_all(curlwp);
-			/*
-			 * If we've been adjusting the clock, the todr
-			 * will be out of synch; adjust it now.
-			 *
-			 * XXX used to do this after unmounting all
-			 * filesystems with vfs_shutdown().
-			 */
-			if (time_adjusted != 0)
-				resettodr();
 		}
 
 		while (vfs_unmountall1(curlwp, false, false) ||
 		       config_detach_all(boothowto) ||
 		       vfs_unmount_forceone(curlwp))
 			;	/* do nothing */
-	} else
-		suspendsched();
+	} else {
+		if (!db_active)
+			suspendsched();
+	}
 
 	pmf_system_shutdown(boothowto);
 
@@ -1521,8 +1516,10 @@ init_x86_64_ksyms(void)
 	} else {
 		uintptr_t endp = (uintptr_t)(void *)&end;
 
-		ksyms_addsyms_elf(*(long *)endp,
-		    ((long *)endp) + 1, esym);
+		if (vm_guest == VM_GUEST_GENPVH)
+			ksyms_addsyms_elf(0, ((long *)endp) + 1, esym);
+		else
+			ksyms_addsyms_elf(*(long *)endp, ((long *)endp) + 1, esym);
 	}
 #endif
 }
@@ -1706,7 +1703,7 @@ init_x86_64(paddr_t first_avail)
 #endif
 
 #ifdef XEN
-	if (vm_guest == VM_GUEST_XENPVH)
+	if (vm_guest == VM_GUEST_XENPVH || vm_guest == VM_GUEST_GENPVH)
 		xen_parse_cmdline(XEN_PARSE_BOOTFLAGS, NULL);
 #endif
 	init_pte();
@@ -1717,8 +1714,26 @@ init_x86_64(paddr_t first_avail)
 #ifdef SVS
 	svs_init();
 #endif
+
+	/*
+	 * Initialize MSRs on cpu0:
+	 *
+	 * - Enables SYSCALL/SYSRET.
+	 *
+	 * - Sets up %fs and %gs so that %gs points to the current
+	 *   struct cpu_info as needed for CPUVAR(...), curcpu(), and
+	 *   curlwp.
+	 *
+	 * - Enables the no-execute bit if supported.
+	 *
+	 * Thus, after this point, CPUVAR(...), curcpu(), and curlwp
+	 * will work on cpu0.
+	 *
+	 * Note: The call to cpu_init_msrs for secondary CPUs happens
+	 * in cpu_hatch.
+	 */
 	cpu_init_msrs(&cpu_info_primary, true);
-	cpu_rng_init();
+
 #ifndef XENPV
 	cpu_speculation_init(&cpu_info_primary);
 #endif
@@ -1780,6 +1795,22 @@ init_x86_64(paddr_t first_avail)
 	 * We must do this before loading pages into the VM system.
 	 */
 	pmap_bootstrap(VM_MIN_KERNEL_ADDRESS);
+
+	/*
+	 * Initialize RNG to get entropy ASAP either from CPU
+	 * RDRAND/RDSEED or from seed on disk.  Constraints:
+	 *
+	 * - Must happen after cpu_init_msrs so that curcpu() and
+	 *   curlwp work.
+	 *
+	 * - Must happen after consinit so we have the opportunity to
+	 *   print useful feedback.
+	 *
+	 * - On KASLR kernels, must happen after pmap_bootstrap because
+	 *   x86_rndseed requires access to the direct map.
+	 */
+	cpu_rng_init();
+	x86_rndseed();
 
 #ifndef XENPV
 	/* Internalize the physical pages into the VM system. */

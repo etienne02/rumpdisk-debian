@@ -1,4 +1,4 @@
-/*	$NetBSD: i915_module.c,v 1.8 2018/08/28 03:35:08 riastradh Exp $	*/
+/*	$NetBSD: i915_module.c,v 1.19 2022/07/17 14:10:43 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: i915_module.c,v 1.8 2018/08/28 03:35:08 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: i915_module.c,v 1.19 2022/07/17 14:10:43 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/module.h>
@@ -39,23 +39,24 @@ __KERNEL_RCSID(0, "$NetBSD: i915_module.c,v 1.8 2018/08/28 03:35:08 riastradh Ex
 #endif
 #include <sys/systm.h>
 
-#include <drm/drmP.h>
+#include <drm/drm_device.h>
 #include <drm/drm_sysctl.h>
 
 #include "i915_drv.h"
+#include "i915_globals.h"
+#include "gt/intel_rps.h"
 
-MODULE(MODULE_CLASS_DRIVER, i915drmkms, "drmkms,drmkms_pci"); /* XXX drmkms_i2c */
+MODULE(MODULE_CLASS_DRIVER, i915drmkms, "acpivga,drmkms,drmkms_pci"); /* XXX drmkms_i2c */
 
 #ifdef _MODULE
 #include "ioconf.c"
 #endif
 
-/* XXX Kludge to get these from i915_drv.c.  */
-extern struct drm_driver *const i915_drm_driver;
-extern const struct pci_device_id *const i915_device_ids;
-extern const size_t i915_n_device_ids;
-
 struct drm_sysctl_def i915_def = DRM_SYSCTL_INIT();
+
+/* XXX use link sets for DEFINE_SPINLOCK */
+extern spinlock_t i915_sw_fence_lock;
+extern spinlock_t *const i915_schedule_lock;
 
 static int
 i915drmkms_init(void)
@@ -66,12 +67,15 @@ i915drmkms_init(void)
 	if (error)
 		return error;
 
-	i915_drm_driver->num_ioctls = i915_max_ioctl;
-	i915_drm_driver->driver_features |= DRIVER_MODESET;
-	i915_drm_driver->driver_features &= ~DRIVER_USE_AGP;
+	/* XXX errno Linux->NetBSD */
+	error = -i915_globals_init();
+	if (error)
+		return error;
 
 	drm_sysctl_init(&i915_def);
 	spin_lock_init(&mchdev_lock);
+	spin_lock_init(&i915_sw_fence_lock);
+	spin_lock_init(i915_schedule_lock);
 
 	return 0;
 }
@@ -93,8 +97,12 @@ static void
 i915drmkms_fini(void)
 {
 
+	spin_lock_destroy(i915_schedule_lock);
+	spin_lock_destroy(&i915_sw_fence_lock);
 	spin_lock_destroy(&mchdev_lock);
 	drm_sysctl_fini(&i915_def);
+
+	i915_globals_exit();
 }
 
 static int

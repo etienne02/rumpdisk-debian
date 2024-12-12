@@ -1,4 +1,4 @@
-/*	$NetBSD: kern_softint.c,v 1.66 2020/05/17 14:11:30 ad Exp $	*/
+/*	$NetBSD: kern_softint.c,v 1.76 2024/03/01 04:32:38 mrg Exp $	*/
 
 /*-
  * Copyright (c) 2007, 2008, 2019, 2020 The NetBSD Foundation, Inc.
@@ -78,7 +78,7 @@
  *	Since software interrupts are a limited resource and run with
  *	higher priority than most other LWPs in the system, all
  *	block-and-resume activity by a software interrupt must be kept
- *	short to allow futher processing at that level to continue.  By
+ *	short to allow further processing at that level to continue.  By
  *	extension, code running with process context must take care to
  *	ensure that any lock that may be taken from a software interrupt
  *	can not be held for more than a short period of time.
@@ -170,7 +170,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: kern_softint.c,v 1.66 2020/05/17 14:11:30 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: kern_softint.c,v 1.76 2024/03/01 04:32:38 mrg Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -183,8 +183,8 @@ __KERNEL_RCSID(0, "$NetBSD: kern_softint.c,v 1.66 2020/05/17 14:11:30 ad Exp $")
 #include <sys/evcnt.h>
 #include <sys/cpu.h>
 #include <sys/xcall.h>
-
-#include <net/netisr.h>
+#include <sys/psref.h>
+#include <sys/sdt.h>
 
 #include <uvm/uvm_extern.h>
 
@@ -223,7 +223,31 @@ u_int		softint_bytes = 32768;
 u_int		softint_timing;
 static u_int	softint_max;
 static kmutex_t	softint_lock;
-static void	*softint_netisrs[NETISR_MAX];
+
+SDT_PROBE_DEFINE4(sdt, kernel, softint, establish,
+    "void *"/*sih*/,
+    "void (*)(void *)"/*func*/,
+    "void *"/*arg*/,
+    "unsigned"/*flags*/);
+
+SDT_PROBE_DEFINE1(sdt, kernel, softint, disestablish,
+    "void *"/*sih*/);
+
+SDT_PROBE_DEFINE2(sdt, kernel, softint, schedule,
+    "void *"/*sih*/,
+    "struct cpu_info *"/*ci*/);
+
+SDT_PROBE_DEFINE4(sdt, kernel, softint, entry,
+    "void *"/*sih*/,
+    "void (*)(void *)"/*func*/,
+    "void *"/*arg*/,
+    "unsigned"/*flags*/);
+
+SDT_PROBE_DEFINE4(sdt, kernel, softint, return,
+    "void *"/*sih*/,
+    "void (*)(void *)"/*func*/,
+    "void *"/*arg*/,
+    "unsigned"/*flags*/);
 
 /*
  * softint_init_isr:
@@ -317,15 +341,6 @@ softint_init(struct cpu_info *ci)
 			    &sc->sc_int[sh->sh_flags & SOFTINT_LVLMASK];
 		}
 		mutex_exit(&softint_lock);
-	} else {
-		/*
-		 * Establish handlers for legacy net interrupts.
-		 * XXX Needs to go away.
-		 */
-#define DONETISR(n, f)							\
-    softint_netisrs[(n)] = softint_establish(SOFTINT_NET|SOFTINT_MPSAFE,\
-        (void (*)(void *))(f), NULL)
-#include <net/netisr_dispatch.h>
 	}
 }
 
@@ -393,6 +408,8 @@ softint_establish(u_int flags, void (*func)(void *), void *arg)
 	}
 	mutex_exit(&softint_lock);
 
+	SDT_PROBE4(sdt, kernel, softint, establish,  sih, func, arg, flags);
+
 	return sih;
 }
 
@@ -416,7 +433,8 @@ softint_disestablish(void *arg)
 	uintptr_t offset;
 
 	offset = (uintptr_t)arg;
-	KASSERTMSG(offset != 0 && offset < softint_bytes, "%"PRIuPTR" %u",
+	KASSERT(offset != 0);
+	KASSERTMSG(offset < softint_bytes, "%"PRIuPTR" %u",
 	    offset, softint_bytes);
 
 	/*
@@ -435,6 +453,12 @@ softint_disestablish(void *arg)
 	 * anywhere.
 	 */
 	xc_barrier(XC_HIGHPRI_IPL(sh->sh_isr->si_ipl));
+
+	/*
+	 * Notify dtrace probe when the old softint can't be running
+	 * any more, but before it can be recycled for a new softint.
+	 */
+	SDT_PROBE1(sdt, kernel, softint, disestablish,  arg);
 
 	/* Clear the handler on each CPU. */
 	mutex_enter(&softint_lock);
@@ -462,6 +486,8 @@ softint_schedule(void *arg)
 	uintptr_t offset;
 	int s;
 
+	SDT_PROBE2(sdt, kernel, softint, schedule,  arg, /*ci*/NULL);
+
 	/*
 	 * If this assert fires, rather than disabling preemption explicitly
 	 * to make it stop, consider that you are probably using a softint
@@ -471,7 +497,8 @@ softint_schedule(void *arg)
 
 	/* Find the handler record for this CPU. */
 	offset = (uintptr_t)arg;
-	KASSERTMSG(offset != 0 && offset < softint_bytes, "%"PRIuPTR" %u",
+	KASSERT(offset != 0);
+	KASSERTMSG(offset < softint_bytes, "%"PRIuPTR" %u",
 	    offset, softint_bytes);
 	sh = (softhand_t *)((uint8_t *)curcpu()->ci_data.cpu_softcpu + offset);
 
@@ -514,6 +541,7 @@ softint_schedule_cpu(void *arg, struct cpu_info *ci)
 		const uintptr_t offset = (uintptr_t)arg;
 		const softhand_t *sh;
 
+		SDT_PROBE2(sdt, kernel, softint, schedule,  arg, ci);
 		sh = (const softhand_t *)((const uint8_t *)sc + offset);
 		KASSERT((sh->sh_flags & SOFTINT_RCPU) != 0);
 		ipi_trigger(sh->sh_ipi_id, ci);
@@ -541,6 +569,8 @@ softint_execute(lwp_t *l, int s)
 	KASSERT(si->si_cpu == curcpu());
 	KASSERT(si->si_lwp->l_wchan == NULL);
 	KASSERT(si->si_active);
+	KASSERTMSG(l->l_nopreempt == 0, "lwp %p nopreempt %d",
+	    l, l->l_nopreempt);
 
 	/*
 	 * Note: due to priority inheritance we may have interrupted a
@@ -561,6 +591,10 @@ softint_execute(lwp_t *l, int s)
 		splx(s);
 
 		/* Run the handler. */
+		SDT_PROBE4(sdt, kernel, softint, entry,
+		    ((const char *)sh -
+			(const char *)curcpu()->ci_data.cpu_softcpu),
+		    sh->sh_func, sh->sh_arg, sh->sh_flags);
 		if (__predict_true((sh->sh_flags & SOFTINT_MPSAFE) != 0)) {
 			(*sh->sh_func)(sh->sh_arg);
 		} else {
@@ -568,6 +602,10 @@ softint_execute(lwp_t *l, int s)
 			(*sh->sh_func)(sh->sh_arg);
 			KERNEL_UNLOCK_ONE(l);
 		}
+		SDT_PROBE4(sdt, kernel, softint, return,
+		    ((const char *)sh -
+			(const char *)curcpu()->ci_data.cpu_softcpu),
+		    sh->sh_func, sh->sh_arg, sh->sh_flags);
 
 		/* Diagnostic: check that spin-locks have not leaked. */
 		KASSERTMSG(curcpu()->ci_mtx_count == 0,
@@ -576,6 +614,14 @@ softint_execute(lwp_t *l, int s)
 		/* Diagnostic: check that psrefs have not leaked. */
 		KASSERTMSG(l->l_psrefs == 0, "%s: l_psrefs=%d, sh_func=%p\n",
 		    __func__, l->l_psrefs, sh->sh_func);
+		/* Diagnostic: check that biglocks have not leaked. */
+		KASSERTMSG(l->l_blcnt == 0,
+		    "%s: sh_func=%p leaked %d biglocks",
+		    __func__, sh->sh_func, curlwp->l_blcnt);
+		/* Diagnostic: check that LWP nopreempt remains zero. */
+		KASSERTMSG(l->l_nopreempt == 0,
+		    "%s: lwp %p nopreempt %d func %p",
+		    __func__, l, l->l_nopreempt, sh->sh_func);
 
 		(void)splhigh();
 	}
@@ -603,18 +649,6 @@ softint_block(lwp_t *l)
 
 	KASSERT((l->l_pflag & LP_INTR) != 0);
 	si->si_evcnt_block.ev_count++;
-}
-
-/*
- * schednetisr:
- *
- *	Trigger a legacy network interrupt.  XXX Needs to go away.
- */
-void
-schednetisr(int isr)
-{
-
-	softint_schedule(softint_netisrs[isr]);
 }
 
 #ifndef __HAVE_FAST_SOFTINTS

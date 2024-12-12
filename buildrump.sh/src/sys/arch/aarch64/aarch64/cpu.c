@@ -1,7 +1,7 @@
-/* $NetBSD: cpu.c,v 1.61 2021/08/30 22:57:33 jmcneill Exp $ */
+/* $NetBSD: cpu.c,v 1.82 2024/12/09 21:52:53 jmcneill Exp $ */
 
 /*
- * Copyright (c) 2017 Ryo Shimizu <ryo@nerv.org>
+ * Copyright (c) 2017 Ryo Shimizu
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(1, "$NetBSD: cpu.c,v 1.61 2021/08/30 22:57:33 jmcneill Exp $");
+__KERNEL_RCSID(1, "$NetBSD: cpu.c,v 1.82 2024/12/09 21:52:53 jmcneill Exp $");
 
 #include "locators.h"
 #include "opt_arm_debug.h"
@@ -42,6 +42,7 @@ __KERNEL_RCSID(1, "$NetBSD: cpu.c,v 1.61 2021/08/30 22:57:33 jmcneill Exp $");
 #include <sys/kmem.h>
 #include <sys/reboot.h>
 #include <sys/rndsource.h>
+#include <sys/sdt.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 
@@ -60,6 +61,7 @@ __KERNEL_RCSID(1, "$NetBSD: cpu.c,v 1.61 2021/08/30 22:57:33 jmcneill Exp $");
 #include <aarch64/machdep.h>
 
 #include <arm/cpufunc.h>
+#include <arm/cpuvar.h>
 #include <arm/cpu_topology.h>
 #ifdef FDT
 #include <arm/fdt/arm_fdtvar.h>
@@ -72,12 +74,13 @@ __KERNEL_RCSID(1, "$NetBSD: cpu.c,v 1.61 2021/08/30 22:57:33 jmcneill Exp $");
 #endif
 
 void cpu_attach(device_t, cpuid_t);
+void cpu_setup_id(struct cpu_info *);
+
 static void identify_aarch64_model(uint32_t, char *, size_t);
 static void cpu_identify(device_t self, struct cpu_info *);
 static void cpu_identify1(device_t self, struct cpu_info *);
 static void cpu_identify2(device_t self, struct cpu_info *);
 static void cpu_init_counter(struct cpu_info *);
-static void cpu_setup_id(struct cpu_info *);
 static void cpu_setup_sysctl(device_t, struct cpu_info *);
 static void cpu_setup_rng(device_t, struct cpu_info *);
 static void cpu_setup_aes(device_t, struct cpu_info *);
@@ -109,7 +112,6 @@ cpu_attach(device_t dv, cpuid_t id)
 	if (unit == 0) {
 		ci = curcpu();
 		ci->ci_cpuid = id;
-		cpu_setup_id(ci);
 	} else {
 #ifdef MULTIPROCESSOR
 		if ((boothowto & RB_MD1) != 0) {
@@ -128,7 +130,7 @@ cpu_attach(device_t dv, cpuid_t id)
 		cpu_info[ncpu] = ci;
 		if (cpu_hatched_p(unit) == 0) {
 			ci->ci_dev = dv;
-			dv->dv_private = ci;
+			device_set_private(dv, ci);
 			ci->ci_index = -1;
 
 			aprint_naive(": disabled\n");
@@ -143,35 +145,67 @@ cpu_attach(device_t dv, cpuid_t id)
 	}
 
 	ci->ci_dev = dv;
-	dv->dv_private = ci;
+	device_set_private(dv, ci);
 
 	ci->ci_kfpu_spl = -1;
 
-	arm_cpu_do_topology(ci);
-	cpu_identify(ci->ci_dev, ci);
+	arm_cpu_do_topology(ci);	// XXXNH move this after mi_cpu_attach
+	cpu_identify(dv, ci);
+
+	cpu_setup_sysctl(dv, ci);
 
 #ifdef MULTIPROCESSOR
 	if (unit != 0) {
 		mi_cpu_attach(ci);
-		return;
+		pmap_tlb_info_attach(&pmap_tlb0_info, ci);
+		aarch64_parsecacheinfo(ci);
 	}
 #endif /* MULTIPROCESSOR */
 
-	set_cpufuncs();
 	fpu_attach(ci);
 
 	cpu_identify1(dv, ci);
-
-	/* aarch64_getcacheinfo(0) was called by locore.S */
-	aarch64_printcacheinfo(dv);
+	aarch64_printcacheinfo(dv, ci);
 	cpu_identify2(dv, ci);
+
+	cpu_setup_rng(dv, ci);
+
+	if (unit != 0) {
+	    return;
+	}
+
+#ifdef DDB
+	db_machdep_init(ci);
+#endif
 
 	cpu_init_counter(ci);
 
-	cpu_setup_sysctl(dv, ci);
-	cpu_setup_rng(dv, ci);
+	/* These currently only check the BP. */
 	cpu_setup_aes(dv, ci);
 	cpu_setup_chacha(dv, ci);
+
+	cpu_rescan(dv, NULL, NULL);
+}
+
+int
+cpu_rescan(device_t dv, const char *ifattr, const int *locators)
+{
+	struct cpu_info *ci = device_private(dv);
+
+	if (ifattr_match(ifattr, "cpufeaturebus")) {
+		struct cpufeature_attach_args cfaa = {
+			.ci = ci,
+		};
+		config_found(dv, &cfaa, NULL, CFARGS(.iattr = "cpufeaturebus"));
+	}
+
+	return 0;
+}
+
+void
+cpu_childdetached(device_t dv, device_t child)
+{
+	/* Nada */
 }
 
 struct cpuidtab {
@@ -195,16 +229,23 @@ const struct cpuidtab cpuids[] = {
 	{ CPU_ID_CORTEXA76R3 & CPU_PARTMASK, "Cortex-A76", "Arm", "v8.2-A+" },
 	{ CPU_ID_CORTEXA76AER1 & CPU_PARTMASK, "Cortex-A76AE", "Arm", "v8.2-A+" },
 	{ CPU_ID_CORTEXA77R0 & CPU_PARTMASK, "Cortex-A77", "Arm", "v8.2-A+" },
+	{ CPU_ID_CORTEXA710R2 & CPU_PARTMASK, "Cortex-A710", "Arm", "v9.0-A" },
 	{ CPU_ID_NVIDIADENVER2 & CPU_PARTMASK, "Denver2", "NVIDIA", "v8-A" },
 	{ CPU_ID_EMAG8180 & CPU_PARTMASK, "eMAG", "Ampere", "v8-A" },
 	{ CPU_ID_NEOVERSEE1R1 & CPU_PARTMASK, "Neoverse E1", "Arm", "v8.2-A+" },
 	{ CPU_ID_NEOVERSEN1R3 & CPU_PARTMASK, "Neoverse N1", "Arm", "v8.2-A+" },
+	{ CPU_ID_NEOVERSEV1R1 & CPU_PARTMASK, "Neoverse V1", "Arm", "v8.4-A+" },
+	{ CPU_ID_NEOVERSEN2R0 & CPU_PARTMASK, "Neoverse N2", "Arm", "v9.0-A" },
 	{ CPU_ID_THUNDERXRX, "ThunderX", "Cavium", "v8-A" },
 	{ CPU_ID_THUNDERX81XXRX, "ThunderX CN81XX", "Cavium", "v8-A" },
 	{ CPU_ID_THUNDERX83XXRX, "ThunderX CN83XX", "Cavium", "v8-A" },
 	{ CPU_ID_THUNDERX2RX, "ThunderX2", "Marvell", "v8.1-A" },
 	{ CPU_ID_APPLE_M1_ICESTORM & CPU_PARTMASK, "M1 Icestorm", "Apple", "Apple Silicon" },
 	{ CPU_ID_APPLE_M1_FIRESTORM & CPU_PARTMASK, "M1 Firestorm", "Apple", "Apple Silicon" },
+	{ CPU_ID_AMPERE1 & CPU_PARTMASK, "Ampere-1", "Ampere", "v8.6-A+" },
+	{ CPU_ID_AMPERE1A & CPU_PARTMASK, "Ampere-1A", "Ampere", "v8.6-A+" },
+	{ CPU_ID_A64FX & CPU_PARTMASK, "A64FX", "Fujitsu", "v8.2-A+" },
+	{ CPU_ID_ORYON & CPU_PARTMASK, "Oryon", "Qualcomm", "v8.7-A+" },
 };
 
 static void
@@ -237,23 +278,30 @@ cpu_identify(device_t self, struct cpu_info *ci)
 	const char *m;
 
 	identify_aarch64_model(ci->ci_id.ac_midr, model, sizeof(model));
+
+	aprint_naive("\n");
+	aprint_normal(": %s, id 0x%lx\n", model, ci->ci_cpuid);
+	aprint_normal_dev(ci->ci_dev, "package %u, core %u, smt %u, numa %u\n",
+	    ci->ci_package_id, ci->ci_core_id, ci->ci_smt_id, ci->ci_numa_id);
+
 	if (ci->ci_index == 0) {
 		m = cpu_getmodel();
 		if (m == NULL || *m == 0)
 			cpu_setmodel("%s", model);
-	}
 
-	aprint_naive("\n");
-	aprint_normal(": %s, id 0x%lx\n", model, ci->ci_cpuid);
+		if (CPU_ID_ERRATA_CAVIUM_THUNDERX_1_1_P(ci->ci_id.ac_midr))
+			aprint_normal("WARNING: ThunderX Pass 1.1 detected.\n"
+			    "This has known hardware bugs that may cause the "
+			    "incorrect operation of atomic operations.\n");
+	}
 }
 
 static void
 cpu_identify1(device_t self, struct cpu_info *ci)
 {
-	uint64_t ctr, clidr, sctlr;	/* for cache */
+	struct aarch64_sysctl_cpu_id *id = &ci->ci_id;
+	uint64_t sctlr = ci->ci_sctlr_el1;
 
-	/* SCTLR - System Control Register */
-	sctlr = reg_sctlr_el1_read();
 	if (sctlr & SCTLR_I)
 		aprint_verbose_dev(self, "IC enabled");
 	else
@@ -287,8 +335,8 @@ cpu_identify1(device_t self, struct cpu_info *ci)
 	/*
 	 * CTR - Cache Type Register
 	 */
-	ctr = reg_ctr_el0_read();
-	clidr = reg_clidr_el1_read();
+	const uint64_t ctr = id->ac_ctr;
+	const uint64_t clidr = id->ac_clidr;
 	aprint_verbose_dev(self, "Cache Writeback Granule %" PRIu64 "B,"
 	    " Exclusives Reservation Granule %" PRIu64 "B\n",
 	    __SHIFTOUT(ctr, CTR_EL0_CWG_LINE) * 4,
@@ -312,22 +360,14 @@ cpu_identify1(device_t self, struct cpu_info *ci)
 static void
 cpu_identify2(device_t self, struct cpu_info *ci)
 {
-	struct aarch64_sysctl_cpu_id *id = &ci->ci_id;
-	uint64_t dfr0;
+	struct aarch64_sysctl_cpu_id * const id = &ci->ci_id;
 
-	if (!CPU_IS_PRIMARY(ci)) {
-		cpu_setup_id(ci);
-		cpu_setup_sysctl(self, ci);
-	}
-
-	dfr0 = reg_id_aa64dfr0_el1_read();
-
-	aprint_debug_dev(self, "midr=0x%" PRIx32 " mpidr=0x%" PRIx32 "\n",
-	    (uint32_t)ci->ci_id.ac_midr, (uint32_t)ci->ci_id.ac_mpidr);
+	aprint_debug_dev(self, "midr=0x%" PRIx64 " mpidr=0x%" PRIx64 "\n",
+	    id->ac_midr, id->ac_mpidr);
 	aprint_verbose_dev(self, "revID=0x%" PRIx64, id->ac_revidr);
 
 	/* ID_AA64DFR0_EL1 */
-	switch (__SHIFTOUT(dfr0, ID_AA64DFR0_EL1_PMUVER)) {
+	switch (__SHIFTOUT(id->ac_aa64dfr0, ID_AA64DFR0_EL1_PMUVER)) {
 	case ID_AA64DFR0_EL1_PMUVER_V3:
 		aprint_verbose(", PMCv3");
 		break;
@@ -362,8 +402,6 @@ cpu_identify2(device_t self, struct cpu_info *ci)
 		break;
 	}
 	aprint_verbose("\n");
-
-
 
 	aprint_verbose_dev(self, "auxID=0x%" PRIx64, ci->ci_id.ac_aa64isar0);
 
@@ -493,7 +531,8 @@ cpu_init_counter(struct cpu_info *ci)
 		return;
 	}
 
-	reg_pmcr_el0_write(PMCR_E | PMCR_C);
+	reg_pmcr_el0_write(PMCR_E | PMCR_C | PMCR_LC);
+	reg_pmintenclr_el1_write(PMINTEN_C | PMINTEN_P);
 	reg_pmcntenset_el0_write(PMCNTEN_C);
 
 	const uint32_t prev = cpu_counter32();
@@ -502,12 +541,15 @@ cpu_init_counter(struct cpu_info *ci)
 }
 
 /*
- * Fill in this CPUs id data.  Must be called from hatched cpus.
+ * Fill in this CPUs id data.  Must be called on all cpus.
  */
-static void
+void __noasan
 cpu_setup_id(struct cpu_info *ci)
 {
 	struct aarch64_sysctl_cpu_id *id = &ci->ci_id;
+
+	/* SCTLR - System Control Register */
+	ci->ci_sctlr_el1 = reg_sctlr_el1_read();
 
 	memset(id, 0, sizeof *id);
 
@@ -573,8 +615,9 @@ rndrrs_get(size_t nbytes, void *cookie)
 	const unsigned bpb = 4;
 	size_t nbits = nbytes*NBBY;
 	uint64_t x;
-	int error;
+	int error, bound;
 
+	bound = curlwp_bind();	/* bind to CPU for rndrrs_fail evcnt */
 	while (nbits) {
 		/*
 		 * x := random 64-bit sample
@@ -594,12 +637,16 @@ rndrrs_get(size_t nbytes, void *cookie)
 		    "mrs	%0, s3_3_c2_c4_1\n"
 		    "cset	%w1, eq"
 		    : "=r"(x), "=r"(error));
-		if (error)
+		if (error) {
+			DTRACE_PROBE(rndrrs_fail);
+			curcpu()->ci_rndrrs_fail.ev_count++;
 			break;
+		}
 		rnd_add_data_sync(&rndrrs_source, &x, sizeof(x),
 		    bpb*sizeof(x));
 		nbits -= MIN(nbits, bpb*sizeof(x));
 	}
+	curlwp_bindx(bound);
 
 	explicit_memset(&x, 0, sizeof x);
 }
@@ -612,10 +659,6 @@ cpu_setup_rng(device_t dv, struct cpu_info *ci)
 {
 	struct aarch64_sysctl_cpu_id *id = &ci->ci_id;
 
-	/* Probably shared between cores.  */
-	if (!CPU_IS_PRIMARY(ci))
-		return;
-
 	/* Verify that it is supported.  */
 	switch (__SHIFTOUT(id->ac_aa64isar0, ID_AA64ISAR0_EL1_RNDR)) {
 	case ID_AA64ISAR0_EL1_RNDR_RNDRRS:
@@ -624,7 +667,16 @@ cpu_setup_rng(device_t dv, struct cpu_info *ci)
 		return;
 	}
 
-	/* Attach it.  */
+	/* Attach event counter for RNDRRS failure.  */
+	evcnt_attach_dynamic(&ci->ci_rndrrs_fail, EVCNT_TYPE_MISC, NULL,
+	    ci->ci_cpuname, "rndrrs fail");
+
+	/*
+	 * On the primary CPU, attach random source -- this only
+	 * happens once globally.
+	 */
+	if (!CPU_IS_PRIMARY(ci))
+		return;
 	rndsource_setcb(&rndrrs_source, rndrrs_get, NULL);
 	rnd_attach_source(&rndrrs_source, "rndrrs", RND_TYPE_RNG,
 	    RND_FLAG_DEFAULT|RND_FLAG_HASCB);
@@ -677,24 +729,47 @@ cpu_setup_chacha(device_t dv, struct cpu_info *ci)
 }
 
 #ifdef MULTIPROCESSOR
+/*
+ * Initialise a secondary processor.
+ *
+ * printf isn't available as kmutex(9) relies on curcpu which isn't setup yet.
+ *
+ */
+void __noasan
+cpu_init_secondary_processor(int cpuindex)
+{
+	struct cpu_info * ci = &cpu_info_store[cpuindex];
+	struct aarch64_sysctl_cpu_id *id = &ci->ci_id;
+
+	aarch64_setcpufuncs(ci);
+
+	/* Sets ci->ci_{sctlr,midr,mpidr}, etc */
+	cpu_setup_id(ci);
+
+	arm_cpu_topology_set(ci, id->ac_mpidr);
+	aarch64_getcacheinfo(ci);
+
+	cpu_set_hatched(cpuindex);
+
+	/*
+	 * return to assembly to wait for cpu_boot_secondary_processors
+	 */
+}
+
+
+/*
+ * When we are called, the MMU and caches are on and we are running on the stack
+ * of the idlelwp for this cpu.
+ */
 void
 cpu_hatch(struct cpu_info *ci)
 {
 	KASSERT(curcpu() == ci);
+	KASSERT((reg_tcr_el1_read() & TCR_EPD0) != 0);
 
-	mutex_enter(&cpu_hatch_lock);
-
-	set_cpufuncs();
-	fpu_attach(ci);
-
-	cpu_identify1(ci->ci_dev, ci);
-	aarch64_getcacheinfo(device_unit(ci->ci_dev));
-	aarch64_printcacheinfo(ci->ci_dev);
-	cpu_identify2(ci->ci_dev, ci);
 #ifdef DDB
-	db_machdep_init();
+	db_machdep_cpu_init();
 #endif
-	mutex_exit(&cpu_hatch_lock);
 
 	cpu_init_counter(ci);
 
@@ -702,9 +777,6 @@ cpu_hatch(struct cpu_info *ci)
 
 #ifdef FDT
 	arm_fdt_cpu_hatch(ci);
-#endif
-#ifdef MD_CPU_HATCH
-	MD_CPU_HATCH(ci);	/* for non-fdt arch? */
 #endif
 
 	/*

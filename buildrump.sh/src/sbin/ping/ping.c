@@ -1,4 +1,4 @@
-/*	$NetBSD: ping.c,v 1.118 2021/06/11 18:47:56 rillig Exp $	*/
+/*	$NetBSD: ping.c,v 1.122 2022/12/01 14:42:12 christos Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -58,7 +58,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: ping.c,v 1.118 2021/06/11 18:47:56 rillig Exp $");
+__RCSID("$NetBSD: ping.c,v 1.122 2022/12/01 14:42:12 christos Exp $");
 #endif
 
 #include <stdio.h>
@@ -874,7 +874,7 @@ jiggle(int delta)
 	jiggle_cnt += delta;
 
 	/* flush the FLOOD dots when things are quiet
-	 * or occassionally to make the cursor jiggle.
+	 * or occasionally to make the cursor jiggle.
 	 */
 	dt = diffsec(&last_tx, &jiggle_time);
 	if (dt > 0.2 || (dt >= 0.15 && delta*jiggle_direction < 0))
@@ -1079,7 +1079,7 @@ pr_pack(u_char *buf,
 	/* Check the IP header */
 	ip = (struct ip *) buf;
 	hlen = ip->ip_hl << 2;
-	if (tot_len < hlen + ICMP_MINLEN) {
+	if (hlen < (int)sizeof(*ip) || tot_len < hlen + ICMP_MINLEN) {
 		if (pingflags & F_VERBOSE) {
 			jiggle_flush(1);
 			(void)printf("packet too short (%d bytes) from %s\n",
@@ -1387,7 +1387,7 @@ timespec_to_sec(const struct timespec *tp)
  * Heavily buffered STDIO is used here, so that all the statistics
  * will be written with 1 sys-write call.  This is nice when more
  * than one copy of the program is running on a terminal;  it prevents
- * the statistics output from becomming intermingled.
+ * the statistics output from becoming intermingled.
  */
 static void
 summary(int header)

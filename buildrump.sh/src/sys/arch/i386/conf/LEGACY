@@ -1,4 +1,4 @@
-#	$NetBSD: LEGACY,v 1.1 2015/03/07 07:28:37 mrg Exp $
+#	$NetBSD: LEGACY,v 1.4 2024/05/13 21:50:47 nia Exp $
 
 # LEGACY kernel -- includes vga@isa and pcdisplay@isa for pre-PCI
 # systems, due to significant pain making them fail to attach when
@@ -10,5 +10,19 @@ vga0		at isa?
 pcdisplay0	at isa?			# CGA, MDA, EGA, HGA
 wsdisplay*	at pcdisplay? console ?
 
+# Enable DMA -> PIO downgrade after a certain number of DMA errors.
+options 	ATA_DOWNGRADE_MODE
+
 # XXX we could turn off all sorts of other modern features in this
 # configuration, but that is left for future work.
+
+no i915drmkms*		at pci?
+no intelfb*		at intelfbbus?          
+
+no radeon*		at pci?
+no radeondrmkmsfb*	at radeonfbbus?        
+
+no nouveau*		at pci?
+no nouveaufb*		at nouveaufbbus?
+
+no options		DRM_LEGACY

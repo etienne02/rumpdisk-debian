@@ -1,4 +1,4 @@
-#	$NetBSD: special,v 1.171 2021/02/26 18:39:10 jakllsch Exp $
+#	$NetBSD: special,v 1.179 2024/07/27 15:49:49 christos Exp $
 #	@(#)special	8.2 (Berkeley) 1/23/94
 #
 # This file may be overwritten on upgrades.
@@ -133,6 +133,8 @@
 ./etc/npf.conf			type=file mode=0644 optional
 ./etc/nsswitch.conf		type=file mode=0644
 ./etc/ntp.conf			type=file mode=0644 optional
+./etc/openssl			type=dir  mode=0755
+./etc/openssl/certs.conf	type=file mode=0644
 ./etc/pam.conf			type=file mode=0644 optional
 ./etc/pam.d			type=dir  mode=0755
 ./etc/pam.d/display_manager	type=file mode=0644
@@ -338,6 +340,8 @@
 ./etc/ssh/ssh_host_dsa_key.pub	type=file mode=0644 optional
 ./etc/ssh/ssh_host_ecdsa_key	type=file mode=0600 optional tags=nodiff
 ./etc/ssh/ssh_host_ecdsa_key.pub	type=file mode=0644 optional
+./etc/ssh/ssh_host_ed25519_key	type=file mode=0600 optional tags=nodiff
+./etc/ssh/ssh_host_ed25519_key.pub	type=file mode=0644 optional
 ./etc/ssh/ssh_host_key		type=file mode=0600 optional tags=nodiff tags=nodiff
 ./etc/ssh/ssh_host_key.pub	type=file mode=0644 optional
 ./etc/ssh/ssh_host_rsa_key	type=file mode=0600 optional tags=nodiff
@@ -353,6 +357,7 @@
 ./etc/weekly			type=file mode=0644
 ./etc/weekly.conf		type=file mode=0644
 ./etc/weekly.local		type=file mode=0644 optional
+./etc/wpa_supplicant.conf	type=file mode=0644 optional
 ./etc/wscons.conf		type=file mode=0644
 ./etc/zfs			type=dir  mode=0755
 

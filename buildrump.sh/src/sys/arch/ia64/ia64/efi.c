@@ -1,4 +1,4 @@
-/*	$NetBSD: efi.c,v 1.2 2006/08/30 11:12:04 cherry Exp $	*/
+/*	$NetBSD: efi.c,v 1.5 2022/08/20 10:55:03 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2004 Marcel Moolenaar
@@ -68,12 +68,13 @@ efi_boot_minimal(uint64_t systbl)
 		efi_systbl = NULL;
 		return (EFAULT);
 	}
-	efi_cfgtbl = (efi_systbl->st_cfgtbl == 0) ? NULL :
-	    (struct efi_cfgtbl *)IA64_PHYS_TO_RR7(efi_systbl->st_cfgtbl);
+	efi_cfgtbl = (efi_systbl->st_cfgtbl == NULL) ? NULL :
+	    (struct efi_cfgtbl *)IA64_PHYS_TO_RR7(
+		(uint64_t)efi_systbl->st_cfgtbl);
 	if (efi_cfgtbl == NULL)
 		return (ENOENT);
-	efi_runtime = (efi_systbl->st_rt == 0) ? NULL :
-	    (struct efi_rt *)IA64_PHYS_TO_RR7(efi_systbl->st_rt);
+	efi_runtime = (efi_systbl->st_rt == NULL) ? NULL :
+	    (struct efi_rt *)IA64_PHYS_TO_RR7((uint64_t)efi_systbl->st_rt);
 	if (efi_runtime == NULL)
 		return (ENOENT);
 
@@ -85,10 +86,10 @@ efi_boot_minimal(uint64_t systbl)
 		if (md->md_attr & EFI_MD_ATTR_RT) {
 			if (md->md_attr & EFI_MD_ATTR_WB)
 				md->md_virt =
-				    (void *)IA64_PHYS_TO_RR7(md->md_phys);
+				    (uint64_t)IA64_PHYS_TO_RR7(md->md_phys);
 			else if (md->md_attr & EFI_MD_ATTR_UC)
 				md->md_virt =
-				    (void *)IA64_PHYS_TO_RR6(md->md_phys);
+				    (uint64_t)IA64_PHYS_TO_RR6(md->md_phys);
 		}
 		md = efi_md_next(md);
 	}
@@ -109,8 +110,10 @@ efi_get_table(struct uuid *uuid)
 	count = efi_systbl->st_entries;
 	ct = efi_cfgtbl;
 	while (count--) {
-		if (!memcmp(&ct->ct_uuid, uuid, sizeof(*uuid)))
-			return ((void *)IA64_PHYS_TO_RR7(ct->ct_data));
+		if (!memcmp(&ct->ct_uuid, uuid, sizeof(*uuid))) {
+			uint64_t data_pa = (uint64_t)(uintptr_t)ct->ct_data;
+			return ((void *)IA64_PHYS_TO_RR7(data_pa));
+		}
 		ct++;
 	}
 	return (NULL);

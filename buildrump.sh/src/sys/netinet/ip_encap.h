@@ -1,4 +1,4 @@
-/*	$NetBSD: ip_encap.h,v 1.25 2018/09/14 05:09:51 maxv Exp $	*/
+/*	$NetBSD: ip_encap.h,v 1.28 2022/12/07 08:33:02 knakahara Exp $	*/
 /*	$KAME: ip_encap.h,v 1.7 2000/03/25 07:23:37 sumikawa Exp $	*/
 
 /*
@@ -35,10 +35,6 @@
 
 #ifdef _KERNEL
 
-#ifndef RNF_NORMAL
-#include <net/radix.h>
-#endif
-
 #include <sys/pslist.h>
 #include <sys/psref.h>
 
@@ -62,24 +58,48 @@ struct encapsw {
 #define encapsw4 encapsw46._encapsw4
 #define encapsw6 encapsw46._encapsw6
 
+typedef	int encap_priofunc_t(struct mbuf *, int, int, void *);
+
+struct encap_key {
+	union  {
+		struct sockaddr		local_u_sa;
+		struct sockaddr_in	local_u_sin;
+		struct sockaddr_in6	local_u_sin6;
+	}	local_u;
+#define local_sa	local_u.local_u_sa
+#define local_sin	local_u.local_u_sin
+#define local_sin6	local_u.local_u_sin6
+
+	union  {
+		struct sockaddr		remote_u_sa;
+		struct sockaddr_in	remote_u_sin;
+		struct sockaddr_in6	remote_u_sin6;
+	}	remote_u;
+#define remote_sa	remote_u.remote_u_sa
+#define remote_sin	remote_u.remote_u_sin
+#define remote_sin6	remote_u.remote_u_sin6
+
+	u_int seq;
+};
+
 struct encaptab {
-	struct radix_node nodes[2];
 	struct pslist_entry chain;
 	int af;
 	int proto;			/* -1: don't care, I'll check myself */
-	struct sockaddr *addrpack;	/* malloc'ed, for radix lookup */
-	struct sockaddr *maskpack;	/* ditto */
+	struct sockaddr *addrpack;	/* malloc'ed, for lookup */
 	struct sockaddr *src;		/* my addr */
-	struct sockaddr *srcmask;
 	struct sockaddr *dst;		/* remote addr */
-	struct sockaddr *dstmask;
-	int (*func) (struct mbuf *, int, int, void *);
+	encap_priofunc_t *func;
 	const struct encapsw *esw;
 	void *arg;
+	struct encap_key key;
+	u_int flag;
 	struct psref_target	psref;
 };
 
-/* to lookup a pair of address using radix tree */
+#define IP_ENCAP_ADDR_ENABLE	__BIT(0)
+
+/* to lookup a pair of address using map */
 struct sockaddr_pack {
 	u_int8_t sp_len;
 	u_int8_t sp_family;	/* not really used */
@@ -102,12 +122,12 @@ void	encapinit(void);
 void	encap_init(void);
 void	encap4_input(struct mbuf *, int, int);
 int	encap6_input(struct mbuf **, int *, int);
-const struct encaptab *encap_attach(int, int, const struct sockaddr *,
-	const struct sockaddr *, const struct sockaddr *,
-	const struct sockaddr *, const struct encapsw *, void *);
 const struct encaptab *encap_attach_func(int, int,
-	int (*)(struct mbuf *, int, int, void *),
+	encap_priofunc_t *,
 	const struct encapsw *, void *);
+const struct encaptab *encap_attach_addr(int, int,
+	const struct sockaddr *, const struct sockaddr *,
+	encap_priofunc_t *, const struct encapsw *, void *);
 void	*encap6_ctlinput(int, const struct sockaddr *, void *);
 int	encap_detach(const struct encaptab *);
 

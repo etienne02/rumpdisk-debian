@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_srvsubs.c,v 1.15 2020/01/17 20:08:09 ad Exp $	*/
+/*	$NetBSD: nfs_srvsubs.c,v 1.17 2023/03/23 19:52:42 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993
@@ -70,7 +70,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_srvsubs.c,v 1.15 2020/01/17 20:08:09 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_srvsubs.c,v 1.17 2023/03/23 19:52:42 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/proc.h>
@@ -116,7 +116,7 @@ __KERNEL_RCSID(0, "$NetBSD: nfs_srvsubs.c,v 1.15 2020/01/17 20:08:09 ad Exp $");
  * it is not.
  */
 int
-nfs_namei(struct nameidata *ndp, nfsrvfh_t *nsfh, uint32_t len, struct nfssvc_sock *slp, struct mbuf *nam, struct mbuf **mdp, char **dposp, struct vnode **retdirp, struct lwp *l, int kerbflag, int pubflag)
+nfs_namei(struct nameidata *ndp, nfsrvfh_t *nsfh, uint32_t len, struct nfssvc_sock *slp, struct mbuf *nam, struct mbuf **mdp, char **dposp, struct vnode **retdirp, int *dirattr_retp, struct vattr *dirattrp, struct lwp *l, int kerbflag, int pubflag)
 {
 	int i, rem;
 	struct mbuf *md;
@@ -129,7 +129,7 @@ nfs_namei(struct nameidata *ndp, nfsrvfh_t *nsfh, uint32_t len, struct nfssvc_so
 	*retdirp = NULL;
 	ndp->ni_pathbuf = NULL;
 
-	if ((len + 1) > NFS_MAXPATHLEN)
+	if (len > NFS_MAXPATHLEN - 1)
 		return (ENAMETOOLONG);
 	if (len == 0)
 		return (EACCES);
@@ -188,6 +188,11 @@ nfs_namei(struct nameidata *ndp, nfsrvfh_t *nsfh, uint32_t len, struct nfssvc_so
 		cnp->cn_flags |= RDONLY;
 
 	*retdirp = dp;
+	if (dirattr_retp != NULL) {
+		vn_lock(dp, LK_SHARED | LK_RETRY);
+		*dirattr_retp = VOP_GETATTR(dp, dirattrp, ndp->ni_cnd.cn_cred);
+		VOP_UNLOCK(dp);
+	}
 
 	if (pubflag) {
 		/*

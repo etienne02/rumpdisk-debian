@@ -1,4 +1,4 @@
-/*	$NetBSD: ofw_pci_subr.c,v 1.1 2021/05/12 23:22:33 thorpej Exp $	*/
+/*	$NetBSD: ofw_pci_subr.c,v 1.3 2022/01/22 11:49:18 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 2021 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ofw_pci_subr.c,v 1.1 2021/05/12 23:22:33 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ofw_pci_subr.c,v 1.3 2022/01/22 11:49:18 thorpej Exp $");
 
 #include <sys/types.h>
 #include <sys/device.h>
@@ -38,6 +38,7 @@ __KERNEL_RCSID(0, "$NetBSD: ofw_pci_subr.c,v 1.1 2021/05/12 23:22:33 thorpej Exp
 #include <sys/errno.h>
 
 #include <dev/pci/pcivar.h>
+#include <dev/pci/pci_calls.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_pci.h>
@@ -76,11 +77,11 @@ ofw_pci_bus_get_child_devhandle(device_t dev, devhandle_t call_handle, void *v)
 		}
 
 		/* Found it! */
-		args->devhandle = devhandle_from_of(phandle);
+		args->devhandle = devhandle_from_of(call_handle, phandle);
 		return 0;
 	}
 
 	return ENODEV;
 }
-OF_DEVICE_CALL_REGISTER("pci-bus-get-child-devhandle",
+OF_DEVICE_CALL_REGISTER(PCI_BUS_GET_CHILD_DEVHANDLE_STR,
 			ofw_pci_bus_get_child_devhandle)

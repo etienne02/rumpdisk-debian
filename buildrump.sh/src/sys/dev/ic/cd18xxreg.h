@@ -1,4 +1,4 @@
-/*	$NetBSD: cd18xxreg.h,v 1.4 2008/05/29 14:51:27 mrg Exp $	*/
+/*	$NetBSD: cd18xxreg.h,v 1.6 2023/05/06 22:17:28 andvar Exp $	*/
 
 /*
  * Copyright (c) 1998, 2001 Matthew R. Green
@@ -99,7 +99,7 @@
 #define	CD18xx_MCOR2		0x11	/* modem change option (2) */
 #define	CD18xx_MSVR		0x28	/* modem signal value */
 #define	CD18xx_MSVRTS		0x29	/* modem signal value RTS */
-#define	CD18xx_MSVDTR		0x2a	/* mdoem signal value DTR */
+#define	CD18xx_MSVDTR		0x2a	/* modem signal value DTR */
 
 
 /*
@@ -259,7 +259,7 @@
 #define	CD18xx_RBR_RxD		0x40	/* last RxD input */
 #define	CD18xx_RBR_STARTHUNT	0x20	/* hunting for a start bit */
 
-/* bit rate period resisters */
+/* bit rate period registers */
 #define CD18xx_xBRPR_TPC	0x10	/* ticks per character */
 
 /* mode change register */

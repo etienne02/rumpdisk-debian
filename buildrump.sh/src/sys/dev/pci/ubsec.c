@@ -1,4 +1,4 @@
-/*	$NetBSD: ubsec.c,v 1.52 2020/06/14 23:22:09 riastradh Exp $	*/
+/*	$NetBSD: ubsec.c,v 1.65 2024/02/23 22:03:45 andvar Exp $	*/
 /* $FreeBSD: src/sys/dev/ubsec/ubsec.c,v 1.6.2.6 2003/01/23 21:06:43 sam Exp $ */
 /*	$OpenBSD: ubsec.c,v 1.143 2009/03/27 13:31:30 reyk Exp$	*/
 
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ubsec.c,v 1.52 2020/06/14 23:22:09 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ubsec.c,v 1.65 2024/02/23 22:03:45 andvar Exp $");
 
 #undef UBSEC_DEBUG
 
@@ -99,7 +99,7 @@ int ubsec_debug=1;
 
 static	int	ubsec_intr(void *);
 static	int	ubsec_newsession(void*, u_int32_t *, struct cryptoini *);
-static	int	ubsec_freesession(void*, u_int64_t);
+static	void	ubsec_freesession(void*, u_int64_t);
 static	int	ubsec_process(void*, struct cryptop *, int hint);
 static	void	ubsec_callback(struct ubsec_softc *, struct ubsec_q *);
 static	void	ubsec_feed(struct ubsec_softc *);
@@ -118,11 +118,11 @@ static	void	ubsec_dma_free(struct ubsec_softc *, struct ubsec_dma_alloc *);
 static	int	ubsec_dmamap_aligned(bus_dmamap_t);
 
 static	int	ubsec_kprocess(void*, struct cryptkop *, int);
-static	int	ubsec_kprocess_modexp_sw(struct ubsec_softc *,
+static	void	ubsec_kprocess_modexp_sw(struct ubsec_softc *,
 					 struct cryptkop *, int);
-static	int	ubsec_kprocess_modexp_hw(struct ubsec_softc *,
+static	void	ubsec_kprocess_modexp_hw(struct ubsec_softc *,
 					 struct cryptkop *, int);
-static	int	ubsec_kprocess_rsapriv(struct ubsec_softc *,
+static	void	ubsec_kprocess_rsapriv(struct ubsec_softc *,
 				       struct cryptkop *, int);
 static	void	ubsec_kfree(struct ubsec_softc *, struct ubsec_q2 *);
 static	int	ubsec_ksigbits(struct crparam *);
@@ -608,8 +608,8 @@ SYSCTL_SETUP(ubsec_sysctl_init, "ubsec sysctl")
 
 	sysctl_createv(clog, 0, NULL, &node,
 		CTLFLAG_PERMANENT,
-		CTLTYPE_NODE, "ubsec", 
-		SYSCTL_DESCR("ubsec opetions"),
+		CTLTYPE_NODE, "ubsec",
+		SYSCTL_DESCR("ubsec options"),
 		NULL, 0, NULL, 0,
 		CTL_HW, CTL_CREATE, CTL_EOL);
 	sysctl_createv(clog, 0, &node, NULL,
@@ -955,17 +955,11 @@ static int
 ubsec_newsession(void *arg, u_int32_t *sidp, struct cryptoini *cri)
 {
 	struct cryptoini *c, *encini = NULL, *macini = NULL;
-	struct ubsec_softc *sc;
+	struct ubsec_softc *sc = arg;
 	struct ubsec_session *ses = NULL;
 	MD5_CTX md5ctx;
 	SHA1_CTX sha1ctx;
 	int i, sesn;
-
-	sc = arg;
-	KASSERT(sc != NULL /*, ("ubsec_newsession: null softc")*/);
-
-	if (sidp == NULL || cri == NULL || sc == NULL)
-		return (EINVAL);
 
 	for (c = cri; c != NULL; c = c->cri_next) {
 		if (c->cri_alg == CRYPTO_MD5_HMAC_96 ||
@@ -1105,22 +1099,19 @@ ubsec_newsession(void *arg, u_int32_t *sidp, struct cryptoini *cri)
 /*
  * Deallocate a session.
  */
-static int
+static void
 ubsec_freesession(void *arg, u_int64_t tid)
 {
-	struct ubsec_softc *sc;
+	struct ubsec_softc *sc = arg;
 	int session;
 	u_int32_t sid = ((u_int32_t) tid) & 0xffffffff;
 
-	sc = arg;
-	KASSERT(sc != NULL /*, ("ubsec_freesession: null softc")*/);
-
 	session = UBSEC_SESSION(sid);
-	if (session >= sc->sc_nsessions)
-		return (EINVAL);
+	KASSERTMSG(session >= 0, "session=%d", session);
+	KASSERTMSG(session < sc->sc_nsessions, "session=%d nsessions=%d",
+	    session, sc->sc_nsessions);
 
 	memset(&sc->sc_sessions[session], 0, sizeof(sc->sc_sessions[session]));
-	return (0);
 }
 
 #ifdef __FreeBSD__ /* Ugly gratuitous changes to bus_dma */
@@ -1148,7 +1139,7 @@ ubsec_process(void *arg, struct cryptop *crp, int hint)
 {
 	struct ubsec_q *q = NULL;
 	int err = 0, i, j, nicealign;
-	struct ubsec_softc *sc;
+	struct ubsec_softc *sc = arg;
 	struct cryptodesc *crd1, *crd2, *maccrd, *enccrd;
 	int encoffset = 0, macoffset = 0, cpskip, cpoffset;
 	int sskip, dskip, stheend, dtheend;
@@ -1158,27 +1149,17 @@ ubsec_process(void *arg, struct cryptop *crp, int hint)
 	u_int16_t flags = 0;
 	int ivlen = 0, keylen = 0;
 
-	sc = arg;
-	KASSERT(sc != NULL /*, ("ubsec_process: null softc")*/);
-
-	if (crp == NULL || crp->crp_callback == NULL || sc == NULL) {
-		ubsecstats.hst_invalid++;
-		return (EINVAL);
-	}
-	if (UBSEC_SESSION(crp->crp_sid) >= sc->sc_nsessions) {
-		ubsecstats.hst_badsession++;
-		return (EINVAL);
-	}
+	KASSERTMSG(UBSEC_SESSION(crp->crp_sid) < sc->sc_nsessions,
+	    "invalid session id 0x%"PRIx64", nsessions=%d",
+	    crp->crp_sid, sc->sc_nsessions);
 
 	mutex_spin_enter(&sc->sc_mtx);
-
 	if (SIMPLEQ_EMPTY(&sc->sc_freequeue)) {
 		ubsecstats.hst_queuefull++;
-		sc->sc_needwakeup |= CRYPTO_SYMQ;
 		mutex_spin_exit(&sc->sc_mtx);
-		return(ERESTART);
+		err = ERESTART;
+		goto errout;
 	}
-
 	q = SIMPLEQ_FIRST(&sc->sc_freequeue);
 	SIMPLEQ_REMOVE_HEAD(&sc->sc_freequeue, /*q,*/ q_next);
 	mutex_spin_exit(&sc->sc_mtx);
@@ -1690,7 +1671,7 @@ ubsec_process(void *arg, struct cryptop *crp, int hint)
 			for (i = 0; i < 5; i++)
 				aes128->pc_hminner[i] = key.ses_hminner[i];
 			for (i = 0; i < 5; i++)
-				aes128->pc_hmouter[i] = key.ses_hmouter[i];   
+				aes128->pc_hmouter[i] = key.ses_hmouter[i];
 			for (i = 0; i < 4; i++)
 				aes128->pc_iv[i] = key.ses_iv[i];
 			break;
@@ -1703,7 +1684,7 @@ ubsec_process(void *arg, struct cryptop *crp, int hint)
 			for (i = 0; i < 5; i++)
 				aes192->pc_hminner[i] = key.ses_hminner[i];
 			for (i = 0; i < 5; i++)
-				aes192->pc_hmouter[i] = key.ses_hmouter[i];   
+				aes192->pc_hmouter[i] = key.ses_hmouter[i];
 			for (i = 0; i < 4; i++)
 				aes192->pc_iv[i] = key.ses_iv[i];
 			break;
@@ -1716,7 +1697,7 @@ ubsec_process(void *arg, struct cryptop *crp, int hint)
 			for (i = 0; i < 5; i++)
 				aes256->pc_hminner[i] = key.ses_hminner[i];
 			for (i = 0; i < 5; i++)
-				aes256->pc_hmouter[i] = key.ses_hmouter[i];   
+				aes256->pc_hmouter[i] = key.ses_hmouter[i];
 			for (i = 0; i < 4; i++)
 				aes256->pc_iv[i] = key.ses_iv[i];
 			break;
@@ -1755,7 +1736,7 @@ ubsec_process(void *arg, struct cryptop *crp, int hint)
 		for (i = 0; i < 5; i++)
 			ctx->pc_hminner[i] = key.ses_hminner[i];
 		for (i = 0; i < 5; i++)
-			ctx->pc_hmouter[i] = key.ses_hmouter[i];   
+			ctx->pc_hmouter[i] = key.ses_hmouter[i];
 		for (i = 0; i < 2; i++)
 			ctx->pc_iv[i] = key.ses_iv[i];
 	}
@@ -1768,13 +1749,10 @@ ubsec_process(void *arg, struct cryptop *crp, int hint)
 	if ((hint & CRYPTO_HINT_MORE) == 0 || sc->sc_nqueue >= ubsec_maxbatch)
 		ubsec_feed(sc);
 	mutex_spin_exit(&sc->sc_mtx);
-	return (0);
+	return 0;
 
 errout:
 	if (q != NULL) {
-		if ((q->q_dst_m != NULL) && (q->q_src_m != q->q_dst_m))
-			m_freem(q->q_dst_m);
-
 		if (q->q_dst_map != NULL && q->q_dst_map != q->q_src_map) {
 			bus_dmamap_unload(sc->sc_dmat, q->q_dst_map);
 		}
@@ -1782,23 +1760,22 @@ errout:
 			bus_dmamap_unload(sc->sc_dmat, q->q_src_map);
 		}
 
+		if ((q->q_dst_m != NULL) && (q->q_src_m != q->q_dst_m))
+			m_freem(q->q_dst_m);
+
 		mutex_spin_enter(&sc->sc_mtx);
 		SIMPLEQ_INSERT_TAIL(&sc->sc_freequeue, q, q_next);
 		mutex_spin_exit(&sc->sc_mtx);
 	}
-#if 0 /* jonathan says: this openbsd code seems to be subsumed elsewhere */
-	if (err == EINVAL)
-		ubsecstats.hst_invalid++;
-	else
-		ubsecstats.hst_nomem++;
-#endif
-	if (err != ERESTART) {
-		crp->crp_etype = err;
-		crypto_done(crp);
-	} else {
+	if (err == ERESTART) {
+		mutex_spin_enter(&sc->sc_mtx);
 		sc->sc_needwakeup |= CRYPTO_SYMQ;
+		mutex_spin_exit(&sc->sc_mtx);
+		return ERESTART;
 	}
-	return (err);
+	crp->crp_etype = err;
+	crypto_done(crp);
+	return 0;
 }
 
 static void
@@ -1962,7 +1939,7 @@ ubsec_callback2(struct ubsec_softc *sc, struct ubsec_q2 *q)
 		    rng->rng_buf.dma_map->dm_mapsize, BUS_DMASYNC_POSTREAD);
 		p = (u_int32_t *)rng->rng_buf.dma_vaddr;
 		i = UBSEC_RNG_BUFSIZ * sizeof(u_int32_t);
-		rnd_add_data(&sc->sc_rnd_source, (char *)p, i, i * NBBY);
+		rnd_add_data_intr(&sc->sc_rnd_source, (char *)p, i, i * NBBY);
 		sc->sc_rng_need -= i;
 		rng->rng_used = 0;
 		if (sc->sc_rng_need > 0) {
@@ -2191,7 +2168,7 @@ ubsec_dma_free(struct ubsec_softc *sc, struct ubsec_dma_alloc *dma)
 }
 
 /*
- * Resets the board.  Values in the regesters are left as is
+ * Resets the board.  Values in the registers are left as is
  * from the reset (i.e. initial values are assigned elsewhere).
  */
 static void
@@ -2204,7 +2181,7 @@ ubsec_reset_board(struct ubsec_softc *sc)
 	WRITE_REG(sc, BS_CTRL, ctrl);
 
 	/*
-	* Wait aprox. 30 PCI clocks = 900 ns = 0.9 us
+	* Wait approx. 30 PCI clocks = 900 ns = 0.9 us
 	*/
 	DELAY(10);
 
@@ -2402,13 +2379,7 @@ ubsec_kfree(struct ubsec_softc *sc, struct ubsec_q2 *q)
 static int
 ubsec_kprocess(void *arg, struct cryptkop *krp, int hint)
 {
-	struct ubsec_softc *sc;
-	int r;
-
-	if (krp == NULL || krp->krp_callback == NULL)
-		return (EINVAL);
-	sc = arg;
-	KASSERT(sc != NULL /*, ("ubsec_kprocess: null softc")*/);
+	struct ubsec_softc *sc = arg;
 
 	while (!SIMPLEQ_EMPTY(&sc->sc_q2free)) {
 		struct ubsec_q2 *q;
@@ -2421,27 +2392,26 @@ ubsec_kprocess(void *arg, struct cryptkop *krp, int hint)
 	switch (krp->krp_op) {
 	case CRK_MOD_EXP:
 		if (sc->sc_flags & UBS_FLAGS_HWNORM)
-			r = ubsec_kprocess_modexp_hw(sc, krp, hint);
+			ubsec_kprocess_modexp_hw(sc, krp, hint);
 		else
-			r = ubsec_kprocess_modexp_sw(sc, krp, hint);
+			ubsec_kprocess_modexp_sw(sc, krp, hint);
 		break;
 	case CRK_MOD_EXP_CRT:
-		r = ubsec_kprocess_rsapriv(sc, krp, hint);
+		ubsec_kprocess_rsapriv(sc, krp, hint);
 		break;
 	default:
 		printf("%s: kprocess: invalid op 0x%x\n",
 		    device_xname(sc->sc_dev), krp->krp_op);
 		krp->krp_status = EOPNOTSUPP;
 		crypto_kdone(krp);
-		r = 0;
 	}
-	return (r);
+	return 0;
 }
 
 /*
  * Start computation of cr[C] = (cr[M] ^ cr[E]) mod cr[N] (sw normalization)
  */
-static int
+static void
 ubsec_kprocess_modexp_sw(struct ubsec_softc *sc, struct cryptkop *krp,
 			 int hint)
 {
@@ -2612,7 +2582,7 @@ ubsec_kprocess_modexp_sw(struct ubsec_softc *sc, struct cryptkop *krp,
 	ubsecstats.hst_modexp++;
 	mutex_spin_exit(&sc->sc_mtx);
 
-	return (0);
+	return;
 
 errout:
 	if (me != NULL) {
@@ -2641,13 +2611,12 @@ errout:
 	}
 	krp->krp_status = err;
 	crypto_kdone(krp);
-	return (0);
 }
 
 /*
  * Start computation of cr[C] = (cr[M] ^ cr[E]) mod cr[N] (hw normalization)
  */
-static int
+static void
 ubsec_kprocess_modexp_hw(struct ubsec_softc *sc, struct cryptkop *krp,
 			 int hint)
 {
@@ -2817,7 +2786,7 @@ ubsec_kprocess_modexp_hw(struct ubsec_softc *sc, struct cryptkop *krp,
 	ubsec_feed2(sc);
 	mutex_spin_exit(&sc->sc_mtx);
 
-	return (0);
+	return;
 
 errout:
 	if (me != NULL) {
@@ -2846,10 +2815,9 @@ errout:
 	}
 	krp->krp_status = err;
 	crypto_kdone(krp);
-	return (0);
 }
 
-static int
+static void
 ubsec_kprocess_rsapriv(struct ubsec_softc *sc, struct cryptkop *krp,
 		       int hint)
 {
@@ -2895,8 +2863,10 @@ ubsec_kprocess_rsapriv(struct ubsec_softc *sc, struct cryptkop *krp,
 	}
 
 	rp = malloc(sizeof *rp, M_DEVBUF, M_NOWAIT|M_ZERO);
-	if (rp == NULL)
-		return (ENOMEM);
+	if (rp == NULL) {
+		err = ENOMEM;
+		goto errout;
+	}
 	rp->rpr_krp = krp;
 	rp->rpr_q.q_type = UBS_CTXOP_RSAPRIV;
 
@@ -3014,7 +2984,7 @@ ubsec_kprocess_rsapriv(struct ubsec_softc *sc, struct cryptkop *krp,
 	ubsec_feed2(sc);
 	ubsecstats.hst_modexpcrt++;
 	mutex_spin_exit(&sc->sc_mtx);
-	return (0);
+	return;
 
 errout:
 	if (rp != NULL) {
@@ -3034,7 +3004,6 @@ errout:
 	}
 	krp->krp_status = err;
 	crypto_kdone(krp);
-	return (0);
 }
 
 #ifdef UBSEC_DEBUG

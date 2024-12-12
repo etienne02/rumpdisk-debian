@@ -1,4 +1,4 @@
-/*	$NetBSD: gcc_init_compound_literal.c,v 1.4 2021/04/18 08:03:56 rillig Exp $	*/
+/*	$NetBSD: gcc_init_compound_literal.c,v 1.8 2023/07/29 07:49:15 rillig Exp $	*/
 # 3 "gcc_init_compound_literal.c"
 
 /*
@@ -13,10 +13,12 @@
  * object created by a compound literal (C99 6.5.2.5), using either an
  * explicit '&' or the implicit array-to-pointer conversion from C99 6.3.2.1.
  *
- * Before init.c 1.195 from 2021-04-17, lint failed with an assertion failure
- * in check_global_variable, called by check_global_symbols since these
- * temporary objects have neither storage class EXTERN nor STATIC.
+ * Before init.c 1.195 from 2021-04-17, an assertion in check_global_variable
+ * failed since these temporary objects have neither storage class EXTERN nor
+ * STATIC.
  */
+
+/* lint1-extra-flags: -X 351 */
 
 // Seen in sys/crypto/aes/aes_ccm.c.
 const struct {
@@ -37,7 +39,7 @@ struct node {
  * Initial tree for representing the decisions in the classic number guessing
  * game often used in teaching the basics of programming.
  */
-/* expect+1: static variable guess unused */
+/* expect+1: warning: static variable 'guess' unused [226] */
 static const struct node guess = {
 	50,
 	&(struct node){

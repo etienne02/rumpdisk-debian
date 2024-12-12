@@ -1,4 +1,4 @@
-/*	$NetBSD: ffs_vfsops.c,v 1.372 2020/08/20 20:28:13 christos Exp $	*/
+/*	$NetBSD: ffs_vfsops.c,v 1.382 2023/09/08 23:21:55 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2008, 2009 The NetBSD Foundation, Inc.
@@ -61,7 +61,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: ffs_vfsops.c,v 1.372 2020/08/20 20:28:13 christos Exp $");
+__KERNEL_RCSID(0, "$NetBSD: ffs_vfsops.c,v 1.382 2023/09/08 23:21:55 riastradh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_ffs.h"
@@ -190,12 +190,12 @@ static const struct ufs_ops ffs_ufsops = {
 };
 
 static int
-ffs_checkrange(struct mount *mp, uint32_t ino)
+ffs_checkrange(struct mount *mp, ino_t ino)
 {
 	struct fs *fs = VFSTOUFS(mp)->um_fs;
 
 	if (ino < UFS_ROOTINO || ino >= fs->fs_ncg * fs->fs_ipg) {
-		DPRINTF("out of range %u\n", ino);
+		DPRINTF("out of range %" PRIu64 "\n", ino);
 		return ESTALE;
 	}
 
@@ -213,7 +213,8 @@ ffs_checkrange(struct mount *mp, uint32_t ino)
 	int error = bread(ump->um_devvp, FFS_FSBTODB(fs, cgtod(fs, cg)),
 	    (int)fs->fs_cgsize, B_MODIFY, &bp);
 	if (error) {
-		DPRINTF("error %d reading cg %d ino %u\n", error, cg, ino);
+		DPRINTF("error %d reading cg %d ino %" PRIu64 "\n",
+		    error, cg, ino);
 		return error;
 	}
 
@@ -222,7 +223,8 @@ ffs_checkrange(struct mount *mp, uint32_t ino)
 	struct cg *cgp = (struct cg *)bp->b_data;
 	if (!cg_chkmagic(cgp, needswap)) {
 		brelse(bp, 0);
-		DPRINTF("bad cylinder group magic cg %d ino %u\n", cg, ino);
+		DPRINTF("bad cylinder group magic cg %d ino %" PRIu64 "\n",
+		    cg, ino);
 		return ESTALE;
 	}
 
@@ -230,7 +232,7 @@ ffs_checkrange(struct mount *mp, uint32_t ino)
 	brelse(bp, 0);
 
 	if (cg * fs->fs_ipg + initediblk < ino) {
-		DPRINTF("cg=%d fs->fs_ipg=%d initediblk=%d ino=%u\n",
+		DPRINTF("cg=%d fs->fs_ipg=%d initediblk=%d ino=%" PRIu64 "\n",
 		    cg, fs->fs_ipg, initediblk, ino);
 		return ESTALE;
 	}
@@ -395,50 +397,61 @@ ffs_mountroot(void)
 	return (0);
 }
 
-static void
+static int
 ffs_acls(struct mount *mp, int fs_flags)
 {
-	if ((fs_flags & FS_ACLS) != 0) {
-#ifdef UFS_ACL
-		if (mp->mnt_flag & MNT_POSIX1EACLS)
-			printf("WARNING: %s: ACLs flag on fs conflicts with "
-			    "\"posix1eacls\" mount option; option ignored\n",
-			    mp->mnt_stat.f_mntonname);
-		mp->mnt_flag &= ~MNT_POSIX1EACLS;
-		mp->mnt_flag |= MNT_ACLS;
+	struct ufsmount *ump;
 
-#else
-		printf("WARNING: %s: ACLs flag on fs but no ACLs support\n",
-		    mp->mnt_stat.f_mntonname);
-#endif
+	ump = VFSTOUFS(mp);
+	if (ump->um_fstype == UFS2 && (ump->um_flags & UFS_EA) == 0 &&
+	    ((mp->mnt_flag & (MNT_POSIX1EACLS | MNT_NFS4ACLS)) != 0 ||
+	     (fs_flags & (FS_POSIX1EACLS | FS_NFS4ACLS)) != 0)) {
+		printf("%s: ACLs requested but not supported by this fs\n",
+		       mp->mnt_stat.f_mntonname);
+		return EINVAL;
 	}
+
 	if ((fs_flags & FS_POSIX1EACLS) != 0) {
 #ifdef UFS_ACL
-		if (mp->mnt_flag & MNT_ACLS)
-			printf("WARNING: %s: NFSv4 ACLs flag on fs conflicts "
-			    "with \"acls\" mount option; option ignored\n",
+		if (mp->mnt_flag & MNT_NFS4ACLS)
+			printf("WARNING: %s: POSIX.1e ACLs flag on fs conflicts "
+			    "with \"nfsv4acls\" mount option; option ignored\n",
 			    mp->mnt_stat.f_mntonname);
-		mp->mnt_flag &= ~MNT_ACLS;
+		mp->mnt_flag &= ~MNT_NFS4ACLS;
 		mp->mnt_flag |= MNT_POSIX1EACLS;
 #else
 		printf("WARNING: %s: POSIX.1e ACLs flag on fs but no "
 		    "ACLs support\n", mp->mnt_stat.f_mntonname);
 #endif
 	}
-
-	if ((mp->mnt_flag & (MNT_ACLS | MNT_POSIX1EACLS))
-	    == (MNT_ACLS | MNT_POSIX1EACLS))
-	{
-		printf("WARNING: %s: posix1eacl conflicts "
-		    "with \"acls\" mount option; option ignored\n",
-		    mp->mnt_stat.f_mntonname);
+	if ((fs_flags & FS_NFS4ACLS) != 0) {
+#ifdef UFS_ACL
+		if (mp->mnt_flag & MNT_POSIX1EACLS)
+			printf("WARNING: %s: NFSv4 ACLs flag on fs conflicts "
+			    "with \"posix1eacls\" mount option; option ignored\n",
+			    mp->mnt_stat.f_mntonname);
 		mp->mnt_flag &= ~MNT_POSIX1EACLS;
+		mp->mnt_flag |= MNT_NFS4ACLS;
+
+#else
+		printf("WARNING: %s: NFSv4 ACLs flag on fs but no "
+		    "ACLs support\n", mp->mnt_stat.f_mntonname);
+#endif
+	}
+	if ((mp->mnt_flag & (MNT_NFS4ACLS | MNT_POSIX1EACLS))
+	    == (MNT_NFS4ACLS | MNT_POSIX1EACLS))
+	{
+		printf("%s: \"posix1eacls\" and \"nfsv4acls\" options "
+		       "are mutually exclusive\n",
+		    mp->mnt_stat.f_mntonname);
+		return EINVAL;
 	}
 
-	if (mp->mnt_flag & (MNT_ACLS | MNT_POSIX1EACLS))
+	if (mp->mnt_flag & (MNT_NFS4ACLS | MNT_POSIX1EACLS))
 		mp->mnt_iflag &= ~(IMNT_SHRLOOKUP|IMNT_NCLOOKUP);
 	else
 		mp->mnt_iflag |= IMNT_SHRLOOKUP|IMNT_NCLOOKUP;
+	return 0;
 }
 
 /*
@@ -568,6 +581,11 @@ ffs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 	mp->mnt_flag &= ~MNT_LOG;
 #endif /* !WAPBL */
 
+	error = set_statvfs_info(path, UIO_USERSPACE, args->fspec,
+	    UIO_USERSPACE, mp->mnt_op->vfs_name, mp, l);
+	if (error)
+		goto fail;
+
 	if (!update) {
 		int xflags;
 
@@ -658,7 +676,9 @@ ffs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 			fs->fs_fmod = 0;
 		}
 
-		ffs_acls(mp, fs->fs_flags);
+		error = ffs_acls(mp, fs->fs_flags);
+		if (error)
+			return error;
 		if (mp->mnt_flag & MNT_RELOAD) {
 			error = ffs_reload(mp, l->l_cred, l);
 			if (error) {
@@ -683,7 +703,8 @@ ffs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 			}
 #endif
 			fs->fs_ronly = 0;
-			fs->fs_clean <<= 1;
+			fs->fs_clean =
+			    fs->fs_clean == FS_ISCLEAN ? FS_WASCLEAN : 0;
 			fs->fs_fmod = 1;
 #ifdef WAPBL
 			if (fs->fs_flags & FS_DOWAPBL) {
@@ -734,29 +755,26 @@ ffs_mount(struct mount *mp, const char *path, void *data, size_t *data_len)
 			return 0;
 	}
 
-	error = set_statvfs_info(path, UIO_USERSPACE, args->fspec,
-	    UIO_USERSPACE, mp->mnt_op->vfs_name, mp, l);
-	if (error == 0)
-		(void)strncpy(fs->fs_fsmnt, mp->mnt_stat.f_mntonname,
-		    sizeof(fs->fs_fsmnt));
-	else {
-	    DPRINTF("set_statvfs_info returned %d", error);
-	}
+	(void)strncpy(fs->fs_fsmnt, mp->mnt_stat.f_mntonname,
+	    sizeof(fs->fs_fsmnt));
+
 	fs->fs_flags &= ~FS_DOSOFTDEP;
-	if (fs->fs_fmod != 0) {	/* XXX */
+
+	if ((fs->fs_ronly && (fs->fs_clean & FS_ISCLEAN) == 0) ||
+	    (!fs->fs_ronly && (fs->fs_clean & FS_WASCLEAN) == 0)) {
+		printf("%s: file system not clean (fs_clean=%#x); "
+		    "please fsck(8)\n", mp->mnt_stat.f_mntfromname,
+		    fs->fs_clean);
+	}
+
+	if (fs->fs_fmod != 0) {
 		int err;
 
-		fs->fs_fmod = 0;
+		KASSERT(!fs->fs_ronly);
+
 		if (fs->fs_clean & FS_WASCLEAN)
 			fs->fs_time = time_second;
-		else {
-			printf("%s: file system not clean (fs_clean=%#x); "
-			    "please fsck(8)\n", mp->mnt_stat.f_mntfromname,
-			    fs->fs_clean);
-			printf("%s: lost blocks %" PRId64 " files %d\n",
-			    mp->mnt_stat.f_mntfromname, fs->fs_pendingblocks,
-			    fs->fs_pendinginodes);
-		}
+		fs->fs_fmod = 0;
 		err = UFS_WAPBL_BEGIN(mp);
 		if (err == 0) {
 			(void) ffs_cgupdate(ump, MNT_WAIT);
@@ -841,6 +859,15 @@ ffs_reload(struct mount *mp, kauth_cred_t cred, struct lwp *l)
 		newfs->fs_flags &= ~FS_SWAPPED;
 
 	brelse(bp, 0);
+
+	/* Allow converting from UFS2 to UFS2EA but not vice versa. */
+	if (newfs->fs_magic == FS_UFS2EA_MAGIC) {
+		ump->um_flags |= UFS_EA;
+		newfs->fs_magic = FS_UFS2_MAGIC;
+	} else {
+		if ((ump->um_flags & UFS_EA) != 0)
+			return EINVAL;
+	}
 
 	if ((newfs->fs_magic != FS_UFS1_MAGIC) &&
 	    (newfs->fs_magic != FS_UFS2_MAGIC)) {
@@ -1214,6 +1241,13 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 		 * size to read the superblock. Once read, we swap the whole
 		 * superblock structure.
 		 */
+		if (fs->fs_magic == FS_UFS2EA_MAGIC) {
+			ump->um_flags |= UFS_EA;
+			fs->fs_magic = FS_UFS2_MAGIC;
+		} else if (fs->fs_magic == FS_UFS2EA_MAGIC_SWAPPED) {
+			ump->um_flags |= UFS_EA;
+			fs->fs_magic = FS_UFS2_MAGIC_SWAPPED;
+		}
 		if (fs->fs_magic == FS_UFS1_MAGIC) {
 			fs_sbsize = fs->fs_sbsize;
 			fstype = UFS1;
@@ -1346,6 +1380,7 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 		}
 	}
 
+	fs->fs_fmod = 0;
 	if (fs->fs_pendingblocks != 0 || fs->fs_pendinginodes != 0) {
 		fs->fs_pendingblocks = 0;
 		fs->fs_pendinginodes = 0;
@@ -1427,7 +1462,8 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 	/* Don't bump fs_clean if we're replaying journal */
 	if (!((fs->fs_flags & FS_DOWAPBL) && (fs->fs_clean & FS_WASCLEAN))) {
 		if (ronly == 0) {
-			fs->fs_clean <<= 1;
+			fs->fs_clean =
+			    fs->fs_clean == FS_ISCLEAN ? FS_WASCLEAN : 0;
 			fs->fs_fmod = 1;
 		}
 	}
@@ -1514,7 +1550,9 @@ ffs_mountfs(struct vnode *devvp, struct mount *mp, struct lwp *l)
 	if (needswap)
 		ump->um_flags |= UFS_NEEDSWAP;
 #endif
-	ffs_acls(mp, fs->fs_flags);
+	error = ffs_acls(mp, fs->fs_flags);
+	if (error)
+		goto out1;
 	ump->um_mountp = mp;
 	ump->um_dev = dev;
 	ump->um_devvp = devvp;
@@ -1983,14 +2021,25 @@ ffs_sync(struct mount *mp, int waitfor, kauth_cred_t cred)
 	/*
 	 * Force stale file system control information to be flushed.
 	 */
-	if (waitfor != MNT_LAZY && (ump->um_devvp->v_numoutput > 0 ||
-	    !LIST_EMPTY(&ump->um_devvp->v_dirtyblkhd))) {
-		vn_lock(ump->um_devvp, LK_EXCLUSIVE | LK_RETRY);
-		if ((error = VOP_FSYNC(ump->um_devvp, cred,
-		    (waitfor == MNT_WAIT ? FSYNC_WAIT : 0) | FSYNC_NOLOG,
-		    0, 0)) != 0)
-			allerror = error;
-		VOP_UNLOCK(ump->um_devvp);
+	if (waitfor != MNT_LAZY)  {
+		bool need_devvp_fsync;
+
+		mutex_enter(ump->um_devvp->v_interlock);
+		need_devvp_fsync = (ump->um_devvp->v_numoutput > 0 ||
+		    !LIST_EMPTY(&ump->um_devvp->v_dirtyblkhd));
+		mutex_exit(ump->um_devvp->v_interlock);
+		if (need_devvp_fsync) {
+			int flags = FSYNC_NOLOG;
+
+			if (waitfor == MNT_WAIT)
+				flags |= FSYNC_WAIT;
+
+			vn_lock(ump->um_devvp, LK_EXCLUSIVE | LK_RETRY);
+			if ((error = VOP_FSYNC(ump->um_devvp, cred, flags, 0,
+				    0)) != 0)
+				allerror = error;
+			VOP_UNLOCK(ump->um_devvp);
+		}
 	}
 #if defined(QUOTA) || defined(QUOTA2)
 	qsync(mp);
@@ -2064,7 +2113,6 @@ ffs_init_vnode(struct ufsmount *ump, struct vnode *vp, ino_t ino)
 	/* Initialise vnode with this inode. */
 	vp->v_tag = VT_UFS;
 	vp->v_op = ffs_vnodeop_p;
-	vp->v_vflag |= VV_LOCKSWORK;
 	vp->v_data = ip;
 
 	/* Initialize genfs node. */
@@ -2371,6 +2419,11 @@ ffs_sbupdate(struct ufsmount *mp, int waitfor)
 	memcpy(bp->b_data, fs, fs->fs_sbsize);
 
 	ffs_oldfscompat_write((struct fs *)bp->b_data, mp);
+	if (mp->um_flags & UFS_EA) {
+		struct fs *bfs = (struct fs *)bp->b_data;
+		KASSERT(bfs->fs_magic == FS_UFS2_MAGIC);
+		bfs->fs_magic = FS_UFS2EA_MAGIC;
+	}
 #ifdef FFS_EI
 	if (mp->um_flags & UFS_NEEDSWAP)
 		ffs_sb_swap((struct fs *)bp->b_data, (struct fs *)bp->b_data);

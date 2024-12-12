@@ -1,7 +1,7 @@
-/*	$NetBSD: msg_324.c,v 1.5 2021/01/31 11:12:07 rillig Exp $	*/
+/*	$NetBSD: msg_324.c,v 1.10 2024/01/28 08:17:27 rillig Exp $	*/
 # 3 "msg_324.c"
 
-// Test for message: suggest cast from '%s' to '%s' on op %s to avoid overflow [324]
+// Test for message: suggest cast from '%s' to '%s' on op '%s' to avoid overflow [324]
 
 /*
  * This warning applies to binary operators if the result of the operator
@@ -14,7 +14,7 @@
  * have been lost.
  */
 
-/* lint1-flags: -g -S -w -P */
+/* lint1-flags: -g -S -w -P -X 351 */
 
 void
 example(char c, int i, unsigned u)
@@ -22,13 +22,22 @@ example(char c, int i, unsigned u)
 	long long ll;
 	unsigned long long ull;
 
-	ll = c + i;		/* expect: 324 */
-	ll = i - c;		/* expect: 324 */
-	ull = c * u;		/* expect: 324 */
-	ull = u + c;		/* expect: 324 */
-	ull = i - u;		/* expect: 324 */
-	ull = u * i;		/* expect: 324 */
-	ll = i << c;		/* expect: 324 */
+	/* expect+2: warning: suggest cast from 'int' to 'long long' on op '+' to avoid overflow [324] */
+	/* expect+1: warning: 'll' set but not used in function 'example' [191] */
+	ll = c + i;
+	/* expect+1: warning: suggest cast from 'int' to 'long long' on op '-' to avoid overflow [324] */
+	ll = i - c;
+	/* expect+2: warning: suggest cast from 'unsigned int' to 'unsigned long long' on op '*' to avoid overflow [324] */
+	/* expect+1: warning: 'ull' set but not used in function 'example' [191] */
+	ull = c * u;
+	/* expect+1: warning: suggest cast from 'unsigned int' to 'unsigned long long' on op '+' to avoid overflow [324] */
+	ull = u + c;
+	/* expect+1: warning: suggest cast from 'unsigned int' to 'unsigned long long' on op '-' to avoid overflow [324] */
+	ull = i - u;
+	/* expect+1: warning: suggest cast from 'unsigned int' to 'unsigned long long' on op '*' to avoid overflow [324] */
+	ull = u * i;
+	/* expect+1: warning: suggest cast from 'int' to 'long long' on op '<<' to avoid overflow [324] */
+	ll = i << c;
 
 	/*
 	 * The operators SHR, DIV and MOD cannot produce an overflow,

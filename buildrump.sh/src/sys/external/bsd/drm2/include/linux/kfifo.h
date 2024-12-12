@@ -1,4 +1,4 @@
-/*	$NetBSD: kfifo.h,v 1.3 2018/08/27 14:41:53 riastradh Exp $	*/
+/*	$NetBSD: kfifo.h,v 1.6 2021/12/19 12:33:02 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -52,7 +52,41 @@ struct kfifo_meta {
 		TYPE			*kf_buf;			      \
 	}
 
+#define	_KFIFO_TYPE(TAG, TYPE, N)					      \
+	struct TAG {							      \
+		struct kfifo_meta	kf_meta;			      \
+		TYPE			kf_buf[N];			      \
+	}
+
 #define	DECLARE_KFIFO_PTR(FIFO, TYPE)	_KFIFO_PTR_TYPE(, TYPE) FIFO
+#define	DECLARE_KFIFO(FIFO, TYPE, N)	_KFIFO_TYPE(, TYPE, N) FIFO
+
+#define	INIT_KFIFO(FIFO) do						      \
+{									      \
+	_init_kfifo(&(FIFO).kf_meta, sizeof((FIFO).kf_buf));		      \
+} while (0)
+
+#define	FINI_KFIFO(FIFO) do						      \
+{									      \
+	_fini_kfifo(&(FIFO).kf_meta);					      \
+} while (0)
+
+static inline void
+_init_kfifo(struct kfifo_meta *meta, size_t nbytes)
+{
+
+	mutex_init(&meta->kfm_lock, MUTEX_DEFAULT, IPL_VM);
+	meta->kfm_head = 0;
+	meta->kfm_tail = 0;
+	meta->kfm_nbytes = nbytes;
+}
+
+static inline void
+_fini_kfifo(struct kfifo_meta *meta)
+{
+
+	mutex_destroy(&meta->kfm_lock);
+}
 
 _KFIFO_PTR_TYPE(kfifo, void);
 
@@ -71,10 +105,7 @@ _kfifo_alloc(struct kfifo_meta *meta, void *bufp, size_t nbytes, gfp_t gfp)
 	/* Type pun!  Hope void * == struct whatever *.  */
 	memcpy(bufp, &buf, sizeof(void *));
 
-	mutex_init(&meta->kfm_lock, MUTEX_DEFAULT, IPL_VM);
-	meta->kfm_head = 0;
-	meta->kfm_tail = 0;
-	meta->kfm_nbytes = nbytes;
+	_init_kfifo(meta, nbytes);
 
 	return 0;
 }

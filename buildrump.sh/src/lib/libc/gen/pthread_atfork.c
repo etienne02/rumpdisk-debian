@@ -1,4 +1,4 @@
-/*	$NetBSD: pthread_atfork.c,v 1.15 2020/05/15 14:37:21 joerg Exp $	*/
+/*	$NetBSD: pthread_atfork.c,v 1.18 2024/01/20 14:52:47 christos Exp $	*/
 
 /*-
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -31,7 +31,7 @@
 
 #include <sys/cdefs.h>
 #if defined(LIBC_SCCS) && !defined(lint)
-__RCSID("$NetBSD: pthread_atfork.c,v 1.15 2020/05/15 14:37:21 joerg Exp $");
+__RCSID("$NetBSD: pthread_atfork.c,v 1.18 2024/01/20 14:52:47 christos Exp $");
 #endif /* LIBC_SCCS and not lint */
 
 #include "namespace.h"
@@ -47,9 +47,6 @@ __RCSID("$NetBSD: pthread_atfork.c,v 1.15 2020/05/15 14:37:21 joerg Exp $");
 __weak_alias(pthread_atfork, _pthread_atfork)
 __weak_alias(fork, _fork)
 #endif /* __weak_alias */
-
-pid_t	__fork(void);	/* XXX */
-pid_t	__locked_fork(int *) __weak; /* XXX */
 
 pid_t
 __locked_fork(int *my_errno)
@@ -101,15 +98,20 @@ pthread_atfork(void (*prepare)(void), void (*parent)(void),
     void (*child)(void))
 {
 	struct atfork_callback *newprepare, *newparent, *newchild;
+	sigset_t mask, omask;
+	int error;
 
 	newprepare = newparent = newchild = NULL;
+
+	sigfillset(&mask);
+	thr_sigsetmask(SIG_SETMASK, &mask, &omask);
 
 	mutex_lock(&atfork_lock);
 	if (prepare != NULL) {
 		newprepare = af_alloc();
 		if (newprepare == NULL) {
-			mutex_unlock(&atfork_lock);
-			return ENOMEM;
+			error = ENOMEM;
+			goto out;
 		}
 		newprepare->fn = prepare;
 	}
@@ -119,8 +121,8 @@ pthread_atfork(void (*prepare)(void), void (*parent)(void),
 		if (newparent == NULL) {
 			if (newprepare != NULL)
 				af_free(newprepare);
-			mutex_unlock(&atfork_lock);
-			return ENOMEM;
+			error = ENOMEM;
+			goto out;
 		}
 		newparent->fn = parent;
 	}
@@ -132,8 +134,8 @@ pthread_atfork(void (*prepare)(void), void (*parent)(void),
 				af_free(newprepare);
 			if (newparent != NULL)
 				af_free(newparent);
-			mutex_unlock(&atfork_lock);
-			return ENOMEM;
+			error = ENOMEM;
+			goto out;
 		}
 		newchild->fn = child;
 	}
@@ -150,9 +152,11 @@ pthread_atfork(void (*prepare)(void), void (*parent)(void),
 		SIMPLEQ_INSERT_TAIL(&parentq, newparent, next);
 	if (child)
 		SIMPLEQ_INSERT_TAIL(&childq, newchild, next);
-	mutex_unlock(&atfork_lock);
+	error = 0;
 
-	return 0;
+out:	mutex_unlock(&atfork_lock);
+	thr_sigsetmask(SIG_SETMASK, &omask, NULL);
+	return error;
 }
 
 pid_t
@@ -202,7 +206,7 @@ fork(void)
 		 * a locked mutex in this context.
 		 *
 		 * The problem exists for users of this interface,
-		 * too, since the intented use of pthread_atfork() is
+		 * too, since the intended use of pthread_atfork() is
 		 * to acquire locks across the fork call to ensure
 		 * that the child sees consistent state. There's not
 		 * much that can usefully be done in a child handler,

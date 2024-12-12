@@ -1,4 +1,4 @@
-/*	$NetBSD: nfs_vfsops.c,v 1.243 2021/06/13 10:25:11 mlelstv Exp $	*/
+/*	$NetBSD: nfs_vfsops.c,v 1.246 2024/05/13 00:11:22 msaitoh Exp $	*/
 
 /*
  * Copyright (c) 1989, 1993, 1995
@@ -35,7 +35,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: nfs_vfsops.c,v 1.243 2021/06/13 10:25:11 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: nfs_vfsops.c,v 1.246 2024/05/13 00:11:22 msaitoh Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_nfs.h"
@@ -81,7 +81,7 @@ extern struct nfsstats nfsstats;
 extern int nfs_ticks;
 
 /*
- * keep a count of the nfs mounts to generate ficticious drive names
+ * keep a count of the nfs mounts to generate fictitious drive names
  * for the per drive stats.
  */
 unsigned int nfs_mount_count = 0;
@@ -323,7 +323,7 @@ nfs_mountroot(void)
 	struct mount *mp;
 	struct vnode *vp;
 	struct lwp *l;
-	long n;
+	time_t n;
 	int error;
 
 	l = curlwp; /* XXX */
@@ -378,7 +378,7 @@ nfs_mountroot(void)
 		panic("nfs_mountroot: getattr for root");
 	n = attr.va_atime.tv_sec;
 #ifdef	DEBUG
-	printf("root time: 0x%lx\n", n);
+	printf("root time: 0x%jx\n", (intmax_t)n);
 #endif
 	setrootfstime(n);
 
@@ -1135,6 +1135,7 @@ nfs_start(struct mount *mp, int flags)
 void
 nfs_vfs_init(void)
 {
+	unsigned scale;
 
 	/* Initialize NFS server / client shared data. */
 	nfs_init();
@@ -1145,7 +1146,8 @@ nfs_vfs_init(void)
 	/* Initialize the iod structures */
 	nfs_iodinit();
 
-	nfs_commitsize = uvmexp.npages << (PAGE_SHIFT - 4);
+	scale = PAGE_SHIFT - 4;
+	nfs_commitsize = uimin(uvmexp.npages, INT_MAX >> scale) << scale;
 }
 
 void

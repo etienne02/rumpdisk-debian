@@ -1,4 +1,4 @@
-/* $NetBSD: sunxi_debe.c,v 1.15 2021/08/20 20:25:27 andvar Exp $ */
+/* $NetBSD: sunxi_debe.c,v 1.17 2024/02/02 22:14:04 andvar Exp $ */
 
 /*-
  * Copyright (c) 2018 Manuel Bouyer <bouyer@antioche.eu.org>
@@ -38,7 +38,7 @@
 #define SUNXI_DEBE_CURMAX	64
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: sunxi_debe.c,v 1.15 2021/08/20 20:25:27 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: sunxi_debe.c,v 1.17 2024/02/02 22:14:04 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/bus.h>
@@ -238,7 +238,7 @@ sunxi_debe_doreset(void)
 		error = clk_set_rate(sc->sc_clk_mod, 300000000);
 		if (error) {
 			aprint_error_dev(dev,
-			    "couln't set mod clock rate (%d)\n", error);
+			    "couldn't set mod clock rate (%d)\n", error);
 			return;
 		}
 
@@ -704,7 +704,7 @@ sunxi_debe_ioctl(device_t self, u_long cmd, void *data)
 	return EPASSTHROUGH;
 }
 
-/* genfb attachement */
+/* genfb attachment */
 
 struct sunxi_befb_softc {
 	struct genfb_softc sc_gen;

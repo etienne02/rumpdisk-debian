@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.170 2021/05/04 09:02:21 skrll Exp $	*/
+/*	$NetBSD: pmap.h,v 1.177 2023/10/12 11:33:37 skrll Exp $	*/
 
 /*
  * Copyright (c) 2002, 2003 Wasabi Systems, Inc.
@@ -79,7 +79,10 @@
 #endif
 #include <arm/cpufunc.h>
 #include <arm/locore.h>
+
 #include <uvm/uvm_object.h>
+
+#include <uvm/pmap/pmap_devmap.h>
 #include <uvm/pmap/pmap_pvt.h>
 #endif
 
@@ -89,14 +92,9 @@
 #if PMAP_TLB_MAX > 1
 #define	PMAP_TLB_NEED_SHOOTDOWN		1
 #endif
-#define	PMAP_TLB_FLUSH_ASID_ON_RESET	(arm_has_tlbiasid_p)
+#define	PMAP_TLB_FLUSH_ASID_ON_RESET	arm_has_tlbiasid_p
 #define	PMAP_TLB_NUM_PIDS		256
-#define	cpu_set_tlb_info(ci, ti)        ((void)((ci)->ci_tlb_info = (ti)))
-#if PMAP_TLB_MAX > 1
-#define	cpu_tlb_info(ci)		((ci)->ci_tlb_info)
-#else
-#define	cpu_tlb_info(ci)		(&pmap_tlb0_info)
-#endif
+
 #define	pmap_md_tlb_asid_max()		(PMAP_TLB_NUM_PIDS - 1)
 #include <uvm/pmap/tlb.h>
 #include <uvm/pmap/pmap_tlb.h>
@@ -201,29 +199,10 @@ union pmap_cache_state {
 #define	PMAP_CACHE_STATE_ALL	0xffffffffu
 #endif /* !ARM_MMU_EXTENDED */
 
-/*
- * This structure is used by machine-dependent code to describe
- * static mappings of devices, created at bootstrap time.
- */
-struct pmap_devmap {
-	vaddr_t		pd_va;		/* virtual address */
-	paddr_t		pd_pa;		/* physical address */
-	psize_t		pd_size;	/* size of region */
-	vm_prot_t	pd_prot;	/* protection code */
-	int		pd_cache;	/* cache attributes */
-};
 
 #define	DEVMAP_ALIGN(a)	((a) & ~L1_S_OFFSET)
 #define	DEVMAP_SIZE(s)	roundup2((s), L1_S_SIZE)
-#define	DEVMAP_ENTRY(va, pa, sz)			\
-	{						\
-		.pd_va = DEVMAP_ALIGN(va),		\
-		.pd_pa = DEVMAP_ALIGN(pa),		\
-		.pd_size = DEVMAP_SIZE(sz),		\
-		.pd_prot = VM_PROT_READ|VM_PROT_WRITE,	\
-		.pd_cache = PTE_DEV			\
-	}
-#define	DEVMAP_ENTRY_END	{ 0 }
+#define	DEVMAP_FLAGS	PMAP_DEV
 
 /*
  * The pmap structure itself
@@ -238,10 +217,10 @@ struct pmap {
 	struct l2_dtable	*pm_l2[L2_SIZE];
 	struct pmap_statistics	pm_stats;
 	LIST_ENTRY(pmap)	pm_list;
+	bool			pm_remove_all;
 #ifdef ARM_MMU_EXTENDED
 	pd_entry_t		*pm_l1;
 	paddr_t			pm_l1_pa;
-	bool			pm_remove_all;
 #ifdef MULTIPROCESSOR
 	kcpuset_t		*pm_onproc;
 	kcpuset_t		*pm_active;
@@ -255,7 +234,6 @@ struct pmap {
 	union pmap_cache_state	pm_cstate;
 	uint8_t			pm_domain;
 	bool			pm_activated;
-	bool			pm_remove_all;
 #endif
 };
 
@@ -287,6 +265,9 @@ extern pv_addr_t undstack;
 extern pv_addr_t idlestack;
 extern pv_addr_t systempage;
 extern pv_addr_t kernel_l1pt;
+#if defined(EFI_RUNTIME)
+extern pv_addr_t efirt_l1pt;
+#endif
 
 #ifdef ARM_MMU_EXTENDED
 extern bool arm_has_tlbiasid_p;	/* also in <arm/locore.h> */
@@ -387,6 +368,8 @@ void	pmap_prefer(vaddr_t, vaddr_t *, int);
 
 #ifdef ARM_MMU_EXTENDED
 int	pmap_maxproc_set(int);
+struct pmap *
+	pmap_efirt(void);
 #endif
 
 void	pmap_icache_sync_range(pmap_t, vaddr_t, vaddr_t);
@@ -399,6 +382,11 @@ vaddr_t	pmap_steal_memory(vsize_t, vaddr_t *, vaddr_t *);
 #endif
 void	pmap_bootstrap(vaddr_t, vaddr_t);
 
+struct pmap *
+	pmap_efirt(void);
+void	pmap_activate_efirt(void);
+void	pmap_deactivate_efirt(void);
+
 void	pmap_do_remove(pmap_t, vaddr_t, vaddr_t, int);
 int	pmap_fault_fixup(pmap_t, vaddr_t, vm_prot_t, int);
 int	pmap_prefetchabt_fixup(void *);
@@ -410,17 +398,14 @@ void	pmap_postinit(void);
 
 void	vector_page_setprot(int);
 
-const struct pmap_devmap *pmap_devmap_find_pa(paddr_t, psize_t);
-const struct pmap_devmap *pmap_devmap_find_va(vaddr_t, vsize_t);
-
 /* Bootstrapping routines. */
 void	pmap_map_section(vaddr_t, vaddr_t, paddr_t, int, int);
 void	pmap_map_entry(vaddr_t, vaddr_t, paddr_t, int, int);
 vsize_t	pmap_map_chunk(vaddr_t, vaddr_t, paddr_t, vsize_t, int, int);
 void	pmap_unmap_chunk(vaddr_t, vaddr_t, vsize_t);
 void	pmap_link_l2pt(vaddr_t, vaddr_t, pv_addr_t *);
-void	pmap_devmap_bootstrap(vaddr_t, const struct pmap_devmap *);
-void	pmap_devmap_register(const struct pmap_devmap *);
+
+vsize_t pmap_kenter_range(vaddr_t, paddr_t, vsize_t, vm_prot_t, u_int);
 
 /*
  * Special page zero routine for use by the idle loop (no cache cleans).
@@ -741,6 +726,15 @@ extern pt_entry_t		pte_l2_s_proto;
 
 extern void (*pmap_copy_page_func)(paddr_t, paddr_t);
 extern void (*pmap_zero_page_func)(paddr_t);
+
+/*
+ * Global varaiables in cpufunc_asm_xscale.S supporting the Xscale
+ * cache clean/purge functions.
+ */
+extern vaddr_t xscale_minidata_clean_addr;
+extern vsize_t xscale_minidata_clean_size;
+extern vaddr_t xscale_cache_clean_addr;
+extern vsize_t xscale_cache_clean_size;
 
 #endif /* !_LOCORE */
 

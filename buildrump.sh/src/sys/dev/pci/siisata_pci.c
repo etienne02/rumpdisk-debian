@@ -1,4 +1,4 @@
-/* $NetBSD: siisata_pci.c,v 1.21 2021/05/05 19:30:51 jdolecek Exp $ */
+/* $NetBSD: siisata_pci.c,v 1.23 2022/09/25 17:52:25 thorpej Exp $ */
 
 /*
  * Copyright (c) 2006 Manuel Bouyer.
@@ -51,10 +51,9 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: siisata_pci.c,v 1.21 2021/05/05 19:30:51 jdolecek Exp $");
+__KERNEL_RCSID(0, "$NetBSD: siisata_pci.c,v 1.23 2022/09/25 17:52:25 thorpej Exp $");
 
 #include <sys/types.h>
-#include <sys/malloc.h>
 #include <sys/param.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
@@ -95,7 +94,7 @@ static const struct siisata_pci_board siisata_pci_boards[] = {
 		.spb_chip = 3124,
 		/*
 		 * SiI3124 seems to be PCI/PCI-X chip behind PCI-e bridge,
-		 * claims MSI support but interrups don't work with MSI on.
+		 * claims MSI support but interrupts don't work with MSI on.
 		 */
 		.sbp_flags = SIISATA_BROKEN_MSI,
 	},

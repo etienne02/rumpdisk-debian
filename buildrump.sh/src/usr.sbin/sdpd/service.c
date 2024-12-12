@@ -1,4 +1,4 @@
-/*	$NetBSD: service.c,v 1.3 2015/03/31 09:25:41 plunky Exp $	*/
+/*	$NetBSD: service.c,v 1.5 2024/02/05 21:46:07 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2009 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__RCSID("$NetBSD: service.c,v 1.3 2015/03/31 09:25:41 plunky Exp $");
+__RCSID("$NetBSD: service.c,v 1.5 2024/02/05 21:46:07 andvar Exp $");
 
 #include <bluetooth.h>
 #include <sdp.h>
@@ -418,7 +418,7 @@ service_search_attribute_request(server_t *srv, int fd)
 /*
  * validate ServiceSearchPattern
  *
- * The SerivceSearchPattern is a list of data elements, where each element
+ * The ServiceSearchPattern is a list of data elements, where each element
  * is a UUID. The list must contain at least one UUID and the maximum number
  * of UUIDs is 12
  */
@@ -451,7 +451,7 @@ sdpd_valid_ssp(sdp_data_t *ssp)
  * order 16-bits are the beginning of the range and the low order 16-bits
  * are the ending
  *
- * The attrbute IDs should be listed in ascending order without duplication
+ * The attribute IDs should be listed in ascending order without duplication
  * of any attribute ID values but we don't worry about that, since if the
  * remote party messes up, their results will be messed up
  */

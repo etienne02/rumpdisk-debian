@@ -1,4 +1,4 @@
-/*	$NetBSD: vidc20config.c,v 1.34 2014/10/25 10:58:12 skrll Exp $	*/
+/*	$NetBSD: vidc20config.c,v 1.37 2024/05/18 19:04:45 andvar Exp $	*/
 
 /*
  * Copyright (c) 2001 Reinoud Zandijk
@@ -42,13 +42,13 @@
  * This file is the lower basis of the wscons driver for VIDC based ARM machines.
  * It features the initialisation and all VIDC writing and keeps in internal state
  * copy.
- * Its currenly set up as a library file and not as a device; it could be named
+ * Its currently set up as a library file and not as a device; it could be named
  * vidcvideo0 eventually.
  */
 
 #include <sys/cdefs.h>
 
-__KERNEL_RCSID(0, "$NetBSD: vidc20config.c,v 1.34 2014/10/25 10:58:12 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vidc20config.c,v 1.37 2024/05/18 19:04:45 andvar Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -206,7 +206,7 @@ vidcvideo_write(u_int reg, int value)
 
 	/*
 	 * Undefine SAFER if you wish to speed things up (a little)
-	 * although this means the function will assume things abou
+	 * although this means the function will assume things about
 	 * the structure of vidc_state. i.e. the first 256 words are
 	 * the palette array
 	 */
@@ -371,7 +371,7 @@ vidcvideo_coldinit(void)
 
 
 /* simple function to abstract vidc variables ; returns virt start address of screen */
-/* XXX asumption that video memory is mapped in twice */
+/* XXX assumption that video memory is mapped in twice */
 void *vidcvideo_hwscroll(int bytes)
 {
 
@@ -406,7 +406,7 @@ void *vidcvideo_hwscroll_back(void *cookie)
 }
 
 
-/* this function is to be called perferably at vsync */
+/* this function is to be called preferably at vsync */
 void vidcvideo_progr_scroll(void)
 {
 

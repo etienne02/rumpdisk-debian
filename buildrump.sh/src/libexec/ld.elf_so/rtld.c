@@ -1,4 +1,4 @@
-/*	$NetBSD: rtld.c,v 1.209 2021/06/16 21:53:51 riastradh Exp $	 */
+/*	$NetBSD: rtld.c,v 1.217 2024/01/19 19:21:34 christos Exp $	 */
 
 /*
  * Copyright 1996 John D. Polstra.
@@ -40,7 +40,7 @@
 
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: rtld.c,v 1.209 2021/06/16 21:53:51 riastradh Exp $");
+__RCSID("$NetBSD: rtld.c,v 1.217 2024/01/19 19:21:34 christos Exp $");
 #endif /* not lint */
 
 #include <sys/param.h>
@@ -60,12 +60,21 @@ __RCSID("$NetBSD: rtld.c,v 1.209 2021/06/16 21:53:51 riastradh Exp $");
 #include <ctype.h>
 
 #include <dlfcn.h>
+
 #include "debug.h"
+#include "hash.h"
 #include "rtld.h"
 
 #if !defined(lint)
 #include "sysident.h"
 #endif
+
+/*
+ * Hidden function from common/lib/libc/atomic - nop on machines
+ * with enough atomic ops. Need to explicitly call it early.
+ * libc has the same symbol and will initialize itself, but not our copy.
+ */
+void __libc_atomic_init(void);
 
 /*
  * Function declarations.
@@ -137,25 +146,25 @@ static Obj_Entry *_rtld_obj_from_addr(const void *);
 static void _rtld_fill_dl_phdr_info(const Obj_Entry *, struct dl_phdr_info *);
 
 static inline void
-_rtld_call_initfini_function(const Obj_Entry *obj, Elf_Addr func, sigset_t *mask)
+_rtld_call_initfini_function(fptr_t func, sigset_t *mask)
 {
 	_rtld_exclusive_exit(mask);
-	_rtld_call_function_void(obj, func);
+	(*func)();
 	_rtld_exclusive_enter(mask);
 }
 
 static void
 _rtld_call_fini_function(Obj_Entry *obj, sigset_t *mask, u_int cur_objgen)
 {
-	if (obj->fini_arraysz == 0 && (obj->fini == 0 || obj->fini_called))
+	if (obj->fini_arraysz == 0 && (obj->fini == NULL || obj->fini_called))
 		return;
 
-	if (obj->fini != 0 && !obj->fini_called) {
+	if (obj->fini != NULL && !obj->fini_called) {
 		dbg (("calling fini function %s at %p%s", obj->path,
 		    (void *)obj->fini,
 		    obj->z_initfirst ? " (DF_1_INITFIRST)" : ""));
 		obj->fini_called = 1;
-		_rtld_call_initfini_function(obj, obj->fini, mask);
+		_rtld_call_initfini_function(obj->fini, mask);
 	}
 #ifdef HAVE_INITFINI_ARRAY
 	/*
@@ -165,12 +174,12 @@ _rtld_call_fini_function(Obj_Entry *obj, sigset_t *mask, u_int cur_objgen)
 	 * the loop.
 	 */
 	while (obj->fini_arraysz > 0 && _rtld_objgen == cur_objgen) {
-		Elf_Addr fini = *obj->fini_array++;
+		fptr_t fini = *obj->fini_array++;
 		obj->fini_arraysz--;
 		dbg (("calling fini array function %s at %p%s", obj->path,
 		    (void *)fini,
 		    obj->z_initfirst ? " (DF_1_INITFIRST)" : ""));
-		_rtld_call_initfini_function(obj, fini, mask);
+		_rtld_call_initfini_function(fini, mask);
 	}
 #endif /* HAVE_INITFINI_ARRAY */
 }
@@ -231,15 +240,15 @@ restart:
 static void
 _rtld_call_init_function(Obj_Entry *obj, sigset_t *mask, u_int cur_objgen)
 {
-	if (obj->init_arraysz == 0 && (obj->init_called || obj->init == 0))
+	if (obj->init_arraysz == 0 && (obj->init_called || obj->init == NULL))
 		return;
 
-	if (!obj->init_called && obj->init != 0) {
+	if (!obj->init_called && obj->init != NULL) {
 		dbg (("calling init function %s at %p%s",
 		    obj->path, (void *)obj->init,
 		    obj->z_initfirst ? " (DF_1_INITFIRST)" : ""));
 		obj->init_called = 1;
-		_rtld_call_initfini_function(obj, obj->init, mask);
+		_rtld_call_initfini_function(obj->init, mask);
 	}
 
 #ifdef HAVE_INITFINI_ARRAY
@@ -250,12 +259,12 @@ _rtld_call_init_function(Obj_Entry *obj, sigset_t *mask, u_int cur_objgen)
 	 * the loop.
 	 */
 	while (obj->init_arraysz > 0 && _rtld_objgen == cur_objgen) {
-		Elf_Addr init = *obj->init_array++;
+		fptr_t init = *obj->init_array++;
 		obj->init_arraysz--;
 		dbg (("calling init_array function %s at %p%s",
 		    obj->path, (void *)init,
 		    obj->z_initfirst ? " (DF_1_INITFIRST)" : ""));
-		_rtld_call_initfini_function(obj, init, mask);
+		_rtld_call_initfini_function(init, mask);
 	}
 #endif /* HAVE_INITFINI_ARRAY */
 }
@@ -402,6 +411,8 @@ _rtld_init(caddr_t mapbase, caddr_t relocbase, const char *execname)
 	ehdr = (Elf_Ehdr *)mapbase;
 	_rtld_objself.phdr = (Elf_Phdr *)((char *)mapbase + ehdr->e_phoff);
 	_rtld_objself.phsize = ehdr->e_phnum * sizeof(_rtld_objself.phdr[0]);
+
+	__libc_atomic_init();
 }
 
 /*
@@ -1026,7 +1037,7 @@ __strong_alias(__dlopen,dlopen)
 void *
 dlopen(const char *name, int mode)
 {
-	Obj_Entry **old_obj_tail = _rtld_objtail;
+	Obj_Entry **old_obj_tail;
 	Obj_Entry *obj = NULL;
 	int flags = _RTLD_DLOPEN;
 	bool nodelete;
@@ -1034,9 +1045,11 @@ dlopen(const char *name, int mode)
 	sigset_t mask;
 	int result;
 
-	dbg(("dlopen of %s %d", name, mode));
+	dbg(("dlopen of %s 0x%x", name, mode));
 
 	_rtld_exclusive_enter(&mask);
+
+	old_obj_tail = _rtld_objtail;
 
 	flags |= (mode & RTLD_GLOBAL) ? _RTLD_GLOBAL : 0;
 	flags |= (mode & RTLD_NOLOAD) ? _RTLD_NOLOAD : 0;
@@ -1088,6 +1101,9 @@ dlopen(const char *name, int mode)
 	}
 	_rtld_debug.r_state = RT_CONSISTENT;
 	_rtld_debug_state();
+
+	dbg(("dlopen of %s 0x%x returned %p%s%s%s", name, mode, obj,
+	    obj ? "" : " (", obj ? "" : error_message, obj ? "" : ")"));
 
 	_rtld_exclusive_exit(&mask);
 
@@ -1534,19 +1550,16 @@ __dl_cxa_refcount(void *addr, ssize_t delta)
 	_rtld_exclusive_exit(&mask);
 }
 
-pid_t __fork(void);
-
 __dso_public pid_t
 __locked_fork(int *my_errno)
 {
-	sigset_t mask;
 	pid_t result;
 
-	_rtld_exclusive_enter(&mask);
+	_rtld_shared_enter();
 	result = __fork();
 	if (result == -1)
 		*my_errno = errno;
-	_rtld_exclusive_exit(&mask);
+	_rtld_shared_exit();
 
 	return result;
 }
@@ -1564,6 +1577,7 @@ _rtld_error(const char *fmt,...)
 
 	va_start(ap, fmt);
 	xvsnprintf(buf, sizeof buf, fmt, ap);
+	dbg(("%s: %s", __func__, buf));
 	error_message = buf;
 	va_end(ap);
 }
@@ -1682,7 +1696,7 @@ _rtld_shared_enter(void)
 			/* Yes, so increment use counter */
 			if (atomic_cas_uint(&_rtld_mutex, cur, cur + 1) != cur)
 				continue;
-			membar_enter();
+			membar_acquire();
 			return;
 		}
 		/*
@@ -1728,7 +1742,7 @@ _rtld_shared_exit(void)
 	 * Wakeup LWPs waiting for an exclusive lock if this is the last
 	 * LWP on the shared lock.
 	 */
-	membar_exit();
+	membar_release();
 	if (atomic_dec_uint_nv(&_rtld_mutex))
 		return;
 	membar_sync();
@@ -1750,7 +1764,7 @@ _rtld_exclusive_enter(sigset_t *mask)
 
 	for (;;) {
 		if (atomic_cas_uint(&_rtld_mutex, 0, locked_value) == 0) {
-			membar_enter();
+			membar_acquire();
 			break;
 		}
 		waiter = atomic_swap_uint(&_rtld_waiter_exclusive, self);
@@ -1774,7 +1788,7 @@ _rtld_exclusive_exit(sigset_t *mask)
 {
 	lwpid_t waiter;
 
-	membar_exit();
+	membar_release();
 	_rtld_mutex = 0;
 	membar_sync();
 	if ((waiter = _rtld_waiter_exclusive) != 0)

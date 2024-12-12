@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2021, Intel Corp.
+ * Copyright (C) 2000 - 2023, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,7 +54,7 @@
 #define ASL_CREATOR_ID              "INTL"
 #define ASL_DEFINE                  "__IASL__"
 #define ASL_PREFIX                  "iASL: "
-#define ASL_COMPLIANCE              "Supports ACPI Specification Revision 6.3"
+#define ASL_COMPLIANCE              "Supports ACPI Specification Revision 6.5"
 
 
 /* Configuration constants */

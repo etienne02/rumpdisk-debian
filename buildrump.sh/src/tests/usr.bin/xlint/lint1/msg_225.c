@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_225.c,v 1.2 2021/01/24 17:55:41 rillig Exp $	*/
+/*	$NetBSD: msg_225.c,v 1.5 2023/07/07 19:45:22 rillig Exp $	*/
 # 3 "msg_225.c"
 
-// Test for message: static function called but not defined: %s() [225]
+// Test for message: static function '%s' called but not defined [225]
+
+/* lint1-extra-flags: -X 351 */
 
 static void undefined(void);
 
@@ -10,7 +12,8 @@ static void defined_later(void);
 void
 caller(void)
 {
-	undefined();		/* expect: 225 */
+	/* expect+1: error: static function 'undefined' called but not defined [225] */
+	undefined();
 	defined_later();
 }
 

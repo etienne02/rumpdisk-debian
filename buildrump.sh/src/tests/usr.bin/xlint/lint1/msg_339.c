@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_339.c,v 1.2 2021/04/05 01:35:34 rillig Exp $	*/
+/*	$NetBSD: msg_339.c,v 1.4 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_339.c"
 
 // Test for message: option '%c' should be listed in the options string [339]
+
+/* lint1-extra-flags: -X 351 */
 
 int getopt(int, char *const *, const char *);
 extern char *optarg;
@@ -11,7 +13,9 @@ main(int argc, char **argv)
 {
 	int o;
 
-	while ((o = getopt(argc, argv, "a:bc:d")) != -1) { /* expect: 338 *//* expect: 338 */
+	/* expect+2: warning: option 'c' should be handled in the switch [338] */
+	/* expect+1: warning: option 'd' should be handled in the switch [338] */
+	while ((o = getopt(argc, argv, "a:bc:d")) != -1) {
 		switch (o) {
 		case 'a':
 			break;
@@ -23,9 +27,11 @@ main(int argc, char **argv)
 			while (optarg[0] != '\0')
 				optarg++;
 			break;
-		case 'e':	/* expect: option 'e' should be listed */
+		case 'e':
+			/* expect-1: warning: option 'e' should be listed in the options string [339] */
 			break;
-		case 'f':	/* expect: option 'f' should be listed */
+		case 'f':
+			/* expect-1: warning: option 'f' should be listed in the options string [339] */
 			/*
 			 * The case labels in nested switch statements are
 			 * ignored by the check for getopt options.

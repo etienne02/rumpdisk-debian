@@ -1,4 +1,4 @@
-/*	$NetBSD: armv6_start.S,v 1.35 2021/08/02 12:56:22 andvar Exp $	*/
+/*	$NetBSD: armv6_start.S,v 1.39 2024/09/07 06:17:37 andvar Exp $	*/
 
 /*-
  * Copyright (c) 2012, 2017, 2018 The NetBSD Foundation, Inc.
@@ -302,7 +302,7 @@ arm_build_translation_table:
 	VPRINTF("DTB")
 
 	/*
-	 * Add DTB identity mapping (1MB) from originaly r2 (but saved in
+	 * Add DTB identity mapping (1MB) from originally r2 (but saved in
 	 * R_FDTADDR)
 	 */
 	ldr	r0, =(L1_S_SIZE - 1)		/* align DTB PA to 1M */
@@ -472,6 +472,14 @@ generic_vstartv7:
 	add	sp, sp, R_VTOPDIFF
 
 	VPRINTF("virtual\n\r")
+
+	VPRINTF("prrr  : ")
+	mrc	p15, 0, r0, c10, c2, 0	// Primary Region Remap Register (PRRR)
+	VPRINTX(r0)
+	VPRINTF("\n\rnmrr  : ")
+	mrc	p15, 0, r0, c10, c2, 1	// Normal Memory Remap Register (NMRR)
+	VPRINTX(r0)
+	VPRINTF("\n\r")
 
 #if defined(KASAN)
 	ldr	r0, =start_stacks_bottom
@@ -916,8 +924,8 @@ armv7_mpcontinuation:
 	lsl	r5, R_INDEX			// ... for our cpu
 
 	/* wait for the mailbox start bit to become true */
-1:	dmb					// data memory barrier
-	ldr	r2, [r6]			// load mbox
+1:	ldr	r2, [r6]			// load mbox
+	dmb					//    make it a load-acquire
 	tst	r2, r5				// is our bit set?
 	wfeeq					//    no, back to waiting
 	beq	1b				//    no, and try again
@@ -935,6 +943,11 @@ armv7_mpcontinuation:
 #else
 #error either TPIDRPRW_IS_CURCPU or TPIDRPRW_IS_CURLWP must be defined
 #endif
+	/*
+	 * No membar needed because we're not switching from a
+	 * previous lwp, and the idle lwp we're switching to can't be
+	 * holding locks already; see cpu_switchto.
+	 */
 	str	r6, [r5, #CI_CURLWP]		// and note we are running on it
 
 	mov	r0, r5				// pass cpu_info

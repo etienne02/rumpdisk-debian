@@ -1,4 +1,4 @@
-/*	$NetBSD: efidisk.c,v 1.9 2019/12/17 01:37:52 manu Exp $	*/
+/*	$NetBSD: efidisk.c,v 1.11 2024/01/06 21:26:43 mlelstv Exp $	*/
 
 /*-
  * Copyright (c) 2016 Kimihiro Nonaka <nonaka@netbsd.org>
@@ -38,9 +38,12 @@
 #include "biosdisk_ll.h"
 #include "devopen.h"
 #include "efidisk.h"
+#include "bootinfo.h"
 
 static struct efidiskinfo_lh efi_disklist;
 static int nefidisks;
+static struct btinfo_biosgeom *bibg;
+static size_t bibg_len;
 
 #define MAXDEVNAME 39 /* "NAME=" + 34 char part_name */
 
@@ -70,9 +73,9 @@ dealloc_biosdisk_part(struct biosdisk_partition *part, int nparts)
 			part[i].part_name = NULL;
 		}
 	}
-	
+
 	dealloc(part, sizeof(*part) * nparts);
-	
+
 	return;
 }
 
@@ -158,6 +161,23 @@ next:
 		if (edi->bootdev)
 			boot_biosdev = edi->dev;
 	}
+
+	bibg_len = sizeof(*bibg) + nefidisks * sizeof(struct bi_biosgeom_entry);
+	bibg = alloc(bibg_len);
+	if (bibg == NULL)
+		return;
+
+	bibg->num = nefidisks;
+
+	i = 0;
+	TAILQ_FOREACH(edi, &efi_disklist, list) {
+		if (edi->type == BIOSDISK_TYPE_HD) {
+			memset(&bibg->disk[i], 0, sizeof(bibg->disk[i]));
+			bibg->disk[i].dev = edi->dev;
+			bibg->disk[i].flags = BI_GEOM_INVALID;
+		}
+		++i;
+	}
 }
 
 static void
@@ -193,7 +213,6 @@ efi_raidframe_probe(struct efi_raidframe *raidframe, int *raidframe_count,
 
 	return;
 }
-
 
 void
 efi_disk_show(void)
@@ -293,7 +312,7 @@ efi_disk_show(void)
 		    raidframe[i].size,
 		    &part, &nparts))
 			continue;
-			
+
 		first = 1;
 		for (j = 0; j < nparts; j++) {
 			bool bootme = part[j].attr & GPT_ENT_ATTR_BOOTME;
@@ -384,3 +403,10 @@ efidisk_get_efi_system_partition(int dev, int *partition)
 	*partition = i;
 	return 0;
 }
+
+void
+efidisk_getbiosgeom()
+{
+	BI_ADD(bibg, BTINFO_BIOSGEOM, bibg_len);
+}
+

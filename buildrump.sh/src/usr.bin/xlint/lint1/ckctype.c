@@ -1,4 +1,4 @@
-/* $NetBSD: ckctype.c,v 1.3 2021/07/25 22:43:08 rillig Exp $ */
+/* $NetBSD: ckctype.c,v 1.12 2024/03/19 23:19:03 rillig Exp $ */
 
 /*-
  * Copyright (c) 2021 The NetBSD Foundation, Inc.
@@ -35,8 +35,8 @@
 
 #include <sys/cdefs.h>
 
-#if defined(__RCSID) && !defined(lint)
-__RCSID("$NetBSD: ckctype.c,v 1.3 2021/07/25 22:43:08 rillig Exp $");
+#if defined(__RCSID)
+__RCSID("$NetBSD: ckctype.c,v 1.12 2024/03/19 23:19:03 rillig Exp $");
 #endif
 
 #include <string.h>
@@ -44,12 +44,15 @@ __RCSID("$NetBSD: ckctype.c,v 1.3 2021/07/25 22:43:08 rillig Exp $");
 #include "lint1.h"
 
 /*
- * Check that the functions from <ctype.h> are used properly.  They are
- * difficult to use when their argument comes from an expression of type
- * 'char'.  In such a case, the argument must be converted to 'unsigned char',
- * not directly to 'int'.
+ * Check that the functions from <ctype.h> are used properly.  They must not
+ * be called with an argument of type 'char'.  In such a case, the argument
+ * must be converted to 'unsigned char'.  The tricky thing is that even though
+ * the parameter type is declared as 'int', a 'char' argument must not be
+ * directly cast to 'int', as that would preserve negative argument values.
  *
- * https://stackoverflow.com/a/60696378
+ * See also:
+ *	ctype(3)
+ *	https://stackoverflow.com/a/60696378
  */
 
 static bool
@@ -58,21 +61,21 @@ is_ctype_function(const char *name)
 
 	if (name[0] == 'i' && name[1] == 's')
 		return strcmp(name, "isalnum") == 0 ||
-		       strcmp(name, "isalpha") == 0 ||
-		       strcmp(name, "isblank") == 0 ||
-		       strcmp(name, "iscntrl") == 0 ||
-		       strcmp(name, "isdigit") == 0 ||
-		       strcmp(name, "isgraph") == 0 ||
-		       strcmp(name, "islower") == 0 ||
-		       strcmp(name, "isprint") == 0 ||
-		       strcmp(name, "ispunct") == 0 ||
-		       strcmp(name, "isspace") == 0 ||
-		       strcmp(name, "isupper") == 0 ||
-		       strcmp(name, "isxdigit") == 0;
+		    strcmp(name, "isalpha") == 0 ||
+		    strcmp(name, "isblank") == 0 ||
+		    strcmp(name, "iscntrl") == 0 ||
+		    strcmp(name, "isdigit") == 0 ||
+		    strcmp(name, "isgraph") == 0 ||
+		    strcmp(name, "islower") == 0 ||
+		    strcmp(name, "isprint") == 0 ||
+		    strcmp(name, "ispunct") == 0 ||
+		    strcmp(name, "isspace") == 0 ||
+		    strcmp(name, "isupper") == 0 ||
+		    strcmp(name, "isxdigit") == 0;
 
 	if (name[0] == 't' && name[1] == 'o')
 		return strcmp(name, "tolower") == 0 ||
-		       strcmp(name, "toupper") == 0;
+		    strcmp(name, "toupper") == 0;
 
 	return false;
 }
@@ -96,14 +99,14 @@ check_ctype_arg(const char *func, const tnode_t *arg)
 {
 	const tnode_t *on, *cn;
 
-	for (on = arg; on->tn_op == CVT; on = on->tn_left)
+	for (on = arg; on->tn_op == CVT; on = on->u.ops.left)
 		if (on->tn_type->t_tspec == UCHAR)
 			return;
 	if (on->tn_type->t_tspec == UCHAR)
 		return;
 
 	if (arg->tn_op == CVT && arg->tn_cast) {
-		/* argument to '%s' must be cast to 'unsigned char', not to '%s' */
+		/* argument to '%s' must be cast to 'unsigned char', not ... */
 		warning(342, func, type_name(arg->tn_type));
 		return;
 	}
@@ -117,15 +120,13 @@ check_ctype_arg(const char *func, const tnode_t *arg)
 }
 
 void
-check_ctype_function_call(const tnode_t *func, const tnode_t *args)
+check_ctype_function_call(const function_call *call)
 {
 
-	if (func->tn_op == NAME &&
-	    is_ctype_function(func->tn_sym->s_name) &&
-	    args != NULL &&
-	    args->tn_left != NULL &&
-	    args->tn_right == NULL)
-		check_ctype_arg(func->tn_sym->s_name, args->tn_left);
+	if (call->args_len == 1 &&
+	    call->func->tn_op == NAME &&
+	    is_ctype_function(call->func->u.sym->s_name))
+		check_ctype_arg(call->func->u.sym->s_name, call->args[0]);
 }
 
 void
@@ -133,10 +134,10 @@ check_ctype_macro_invocation(const tnode_t *ln, const tnode_t *rn)
 {
 
 	if (ln->tn_op == PLUS &&
-	    ln->tn_left != NULL &&
-	    ln->tn_left->tn_op == LOAD &&
-	    ln->tn_left->tn_left != NULL &&
-	    ln->tn_left->tn_left->tn_op == NAME &&
-	    is_ctype_table(ln->tn_left->tn_left->tn_sym->s_name))
+	    ln->u.ops.left != NULL &&
+	    ln->u.ops.left->tn_op == LOAD &&
+	    ln->u.ops.left->u.ops.left != NULL &&
+	    ln->u.ops.left->u.ops.left->tn_op == NAME &&
+	    is_ctype_table(ln->u.ops.left->u.ops.left->u.sym->s_name))
 		check_ctype_arg("function from <ctype.h>", rn);
 }

@@ -1,4 +1,4 @@
-/*	$NetBSD: inode.c,v 1.73 2020/04/17 09:42:27 jdolecek Exp $	*/
+/*	$NetBSD: inode.c,v 1.78 2023/07/05 10:59:08 riastradh Exp $	*/
 
 /*
  * Copyright (c) 1980, 1986, 1993
@@ -34,7 +34,7 @@
 #if 0
 static char sccsid[] = "@(#)inode.c	8.8 (Berkeley) 4/28/95";
 #else
-__RCSID("$NetBSD: inode.c,v 1.73 2020/04/17 09:42:27 jdolecek Exp $");
+__RCSID("$NetBSD: inode.c,v 1.78 2023/07/05 10:59:08 riastradh Exp $");
 #endif
 #endif /* not lint */
 
@@ -251,7 +251,7 @@ iblock(struct inodesc *idesc, long ilevel, u_int64_t isize)
 				    pathbuf);
 				if (reply("ADJUST LENGTH") == 1) {
 					dp = ginode(idesc->id_number);
-					DIP_SET(dp, size, 
+					DIP_SET(dp, size,
 					    iswap64(iswap64(DIP(dp, size))
 						- isize));
 					isize = 0;
@@ -563,11 +563,11 @@ inocleanup(void)
 	free((char *)inpsort);
 	inphead = inpsort = NULL;
 }
-	
+
 void
 inodirty(void)
 {
-	
+
 	dirty(pbp);
 }
 
@@ -731,13 +731,13 @@ allocino(ino_t request, int type)
 		return (0);
 	cg = ino_to_cg(sblock, ino);
 	/* If necessary, extend the inoinfo array. grow exponentially */
-	if ((ino % sblock->fs_ipg) >= (uint64_t)inostathead[cg].il_numalloced) {
-		unsigned long newalloced, i;
+	if ((ino % sblock->fs_ipg) >= inostathead[cg].il_numalloced) {
+		size_t newalloced, i;
 		newalloced = MIN(sblock->fs_ipg,
 			MAX(2 * inostathead[cg].il_numalloced, 10));
-		info = calloc(newalloced, sizeof(struct inostat));
+		info = calloc(newalloced, sizeof(*info));
 		if (info == NULL) {
-			pwarn("cannot alloc %lu bytes to extend inoinfo\n",
+			pwarn("cannot alloc %zu bytes to extend inoinfo\n",
 				sizeof(struct inostat) * newalloced);
 			return 0;
 		}
@@ -908,7 +908,7 @@ readblk(union dinode *dp, off_t offset, struct bufarea **bp)
 		else
 			blkno -= nblks;
 	}
-	if (ilevel > UFS_NIADDR) 
+	if (ilevel > UFS_NIADDR)
 		errexit("bad ofsset %" PRIu64 " to readblk", offset);
 
 	/* get the first indirect block */
@@ -988,7 +988,7 @@ expandfile(union dinode *dp)
 		else
 			blkno -= nblks;
 	}
-	if (ilevel > UFS_NIADDR) 
+	if (ilevel > UFS_NIADDR)
 		errexit("bad filesize %" PRIu64 " to expandfile", filesize);
 
 	/* get the first indirect block, allocating if needed */
@@ -1036,7 +1036,7 @@ expandfile(union dinode *dp)
 		errexit("INTERNAL ERROR: "
 		    "expandfile() failed to allocate a new block\n");
 	}
-	
+
 out:
 	filesize += sblock->fs_bsize;
 	if (is_ufs2) {

@@ -1,4 +1,4 @@
-/*	$NetBSD: bf_locl.h,v 1.6 2019/02/04 08:23:53 mrg Exp $	*/
+/*	$NetBSD: bf_locl.h,v 1.8 2022/04/16 18:15:21 andvar Exp $	*/
 /*	$KAME: bf_locl.h,v 1.5 2000/08/31 06:03:48 itojun Exp $	*/
 
 /* crypto/bf/bf_local.h */
@@ -179,7 +179,7 @@
 
 #if defined(BF_PTR2)
 
-/* This is basically a special pentium verson */
+/* This is basically a special pentium version */
 #define BF_ENC(LL,R,S,P) \
 	{ \
 	BF_LONG t,u,v; \
@@ -211,7 +211,7 @@
 		*(const BF_LONG *)((const unsigned char *)&(S[768])+((R<<BF_3)&BF_M)));
 #else
 
-/* This will always work, even on 64 bit machines and strangly enough,
+/* This will always work, even on 64 bit machines and strangely enough,
  * on the Alpha it is faster than the pointer versions (both 32 and 64
  * versions of BF_LONG) */
 

@@ -1,4 +1,4 @@
-/*	$NetBSD: st.c,v 1.241 2021/06/13 10:07:56 mlelstv Exp $ */
+/*	$NetBSD: st.c,v 1.243 2022/02/23 21:54:41 andvar Exp $ */
 
 /*-
  * Copyright (c) 1998, 2004 The NetBSD Foundation, Inc.
@@ -50,7 +50,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: st.c,v 1.241 2021/06/13 10:07:56 mlelstv Exp $");
+__KERNEL_RCSID(0, "$NetBSD: st.c,v 1.243 2022/02/23 21:54:41 andvar Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_scsi.h"
@@ -170,7 +170,7 @@ static const struct st_quirk_inquiry_pattern st_quirk_patterns[] = {
 	 * lacking a manual for the 4200, it's not clear what the
 	 * specific density codes should be- the device is a 2.5GB
 	 * capable QIC drive, those density codes aren't readily
-	 * availabel. The 'default' will just have to do.
+	 * available. The 'default' will just have to do.
 	 */
  	{{T_SEQUENTIAL, T_REMOV,
  	 "TANDBERG", " TDC 4200       ", ""},     {0, 0, {
@@ -1686,7 +1686,7 @@ st_read(struct st_softc *st, char *bf, int size, int flags)
 {
 	struct scsi_rw_tape cmd;
 
-	/* If it's a null transfer, return immediatly */
+	/* If it's a null transfer, return immediately */
 	if (size == 0)
 		return 0;
 	memset(&cmd, 0, sizeof(cmd));

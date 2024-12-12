@@ -1,8 +1,8 @@
-/*	$NetBSD: subr_pool.c,v 1.277 2021/07/25 06:00:31 simonb Exp $	*/
+/*	$NetBSD: subr_pool.c,v 1.292 2024/12/07 23:23:25 chs Exp $	*/
 
 /*
  * Copyright (c) 1997, 1999, 2000, 2002, 2007, 2008, 2010, 2014, 2015, 2018,
- *     2020 The NetBSD Foundation, Inc.
+ *     2020, 2021 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * This code is derived from software contributed to The NetBSD Foundation
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: subr_pool.c,v 1.277 2021/07/25 06:00:31 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: subr_pool.c,v 1.292 2024/12/07 23:23:25 chs Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ddb.h"
@@ -142,8 +142,13 @@ static bool pool_cache_put_nocache(pool_cache_t, void *);
 #define NO_CTOR	__FPTRCAST(int (*)(void *, void *, int), nullop)
 #define NO_DTOR	__FPTRCAST(void (*)(void *, void *), nullop)
 
+#define pc_has_pser(pc) (((pc)->pc_roflags & PR_PSERIALIZE) != 0)
 #define pc_has_ctor(pc) ((pc)->pc_ctor != NO_CTOR)
 #define pc_has_dtor(pc) ((pc)->pc_dtor != NO_DTOR)
+
+#define pp_has_pser(pp) (((pp)->pr_roflags & PR_PSERIALIZE) != 0)
+
+#define pool_barrier()	xc_barrier(0)
 
 /*
  * Pool backend allocators.
@@ -348,7 +353,7 @@ struct pool_item {
  * cache is drained, the most idle cache group is freed to the pool in
  * its entirety.
  *
- * Pool caches are layed on top of pools.  By layering them, we can avoid
+ * Pool caches are laid on top of pools.  By layering them, we can avoid
  * the complexity of cache management for pools which would not benefit
  * from it.
  */
@@ -478,6 +483,8 @@ pr_item_linkedlist_put(const struct pool *pp, struct pool_item_header *ph,
     void *obj)
 {
 	struct pool_item *pi = obj;
+
+	KASSERT(!pp_has_pser(pp));
 
 #ifdef POOL_CHECK_MAGIC
 	pi->pi_magic = PI_MAGIC;
@@ -823,8 +830,18 @@ pool_init(struct pool *pp, size_t size, u_int align, u_int ioff, int flags,
 		mutex_exit(&pool_head_lock);
 #endif
 
-	if (palloc == NULL)
-		palloc = &pool_allocator_kmem;
+	if (palloc == NULL) {
+		if (size > PAGE_SIZE) {
+			int bigidx = pool_bigidx(size);
+
+			palloc = &pool_allocator_big[bigidx];
+			flags |= PR_NOALIGN;
+		} else if (ipl == IPL_NONE) {
+			palloc = &pool_allocator_nointr;
+		} else {
+			palloc = &pool_allocator_kmem;
+		}
+	}
 
 	if (!cold)
 		mutex_enter(&pool_allocator_lock);
@@ -840,6 +857,14 @@ pool_init(struct pool *pp, size_t size, u_int align, u_int ioff, int flags,
 	}
 	if (!cold)
 		mutex_exit(&pool_allocator_lock);
+
+	/*
+	 * PR_PSERIALIZE implies PR_NOTOUCH; freed objects must remain
+	 * valid until the the backing page is returned to the system.
+	 */
+	if (flags & PR_PSERIALIZE) {
+		flags |= PR_NOTOUCH;
+	}
 
 	if (align == 0)
 		align = ALIGN(1);
@@ -864,6 +889,7 @@ pool_init(struct pool *pp, size_t size, u_int align, u_int ioff, int flags,
 	pp->pr_npages = 0;
 	pp->pr_minitems = 0;
 	pp->pr_minpages = 0;
+	pp->pr_maxitems = UINT_MAX;
 	pp->pr_maxpages = UINT_MAX;
 	pp->pr_roflags = flags;
 	pp->pr_flags = 0;
@@ -989,7 +1015,7 @@ pool_init(struct pool *pp, size_t size, u_int align, u_int ioff, int flags,
 }
 
 /*
- * De-commision a pool resource.
+ * De-commission a pool resource.
  */
 void
 pool_destroy(struct pool *pp)
@@ -1305,7 +1331,8 @@ pool_do_put(struct pool *pp, void *v, struct pool_pagelist *pq)
 		pp->pr_nidle++;
 		if (pp->pr_nitems - pp->pr_itemsperpage >= pp->pr_minitems &&
 		    pp->pr_npages > pp->pr_minpages &&
-		    pp->pr_npages > pp->pr_maxpages) {
+		    (pp->pr_npages > pp->pr_maxpages ||
+		     pp->pr_nitems > pp->pr_maxitems)) {
 			pr_rmpage(pp, ph, pq);
 		} else {
 			LIST_REMOVE(ph, ph_pagelist);
@@ -1558,8 +1585,8 @@ pool_update_curpage(struct pool *pp)
 	if (pp->pr_curpage == NULL) {
 		pp->pr_curpage = LIST_FIRST(&pp->pr_emptypages);
 	}
-	KASSERT((pp->pr_curpage == NULL && pp->pr_nitems == 0) ||
-	    (pp->pr_curpage != NULL && pp->pr_nitems > 0));
+	KASSERTMSG((pp->pr_curpage == NULL) == (pp->pr_nitems == 0),
+	    "pp=%p curpage=%p nitems=%u", pp, pp->pr_curpage, pp->pr_nitems);
 }
 
 void
@@ -1633,11 +1660,13 @@ pool_reclaim(struct pool *pp)
 {
 	struct pool_item_header *ph, *phnext;
 	struct pool_pagelist pq;
+	struct pool_cache *pc;
 	uint32_t curtime;
 	bool klock;
 	int rv;
 
-	KASSERT(!cpu_intr_p() && !cpu_softintr_p());
+	KASSERT(!cpu_intr_p());
+	KASSERT(!cpu_softintr_p());
 
 	if (pp->pr_drain_hook != NULL) {
 		/*
@@ -1658,8 +1687,8 @@ pool_reclaim(struct pool *pp)
 		klock = false;
 
 	/* Reclaim items from the pool's cache (if any). */
-	if (pp->pr_cache != NULL)
-		pool_cache_invalidate(pp->pr_cache);
+	if ((pc = atomic_load_consume(&pp->pr_cache)) != NULL)
+		pool_cache_invalidate(pc);
 
 	if (mutex_tryenter(&pp->pr_lock) == 0) {
 		if (klock) {
@@ -1779,10 +1808,11 @@ pool_totalpages_locked(void)
 	uint64_t total = 0;
 
 	TAILQ_FOREACH(pp, &pool_head, pr_poollist) {
-		uint64_t bytes = pp->pr_npages * pp->pr_alloc->pa_pagesz;
+		uint64_t bytes =
+		    (uint64_t)pp->pr_npages * pp->pr_alloc->pa_pagesz;
 
 		if ((pp->pr_roflags & PR_RECURSIVE) != 0)
-			bytes -= (pp->pr_nout * pp->pr_size);
+			bytes -= ((uint64_t)pp->pr_nout * pp->pr_size);
 		total += bytes;
 	}
 
@@ -1868,7 +1898,7 @@ pool_print1(struct pool *pp, const char *modif, void (*pr)(const char *, ...))
 	if (skip_empty && pp->pr_nget == 0)
 		return;
 
-	if ((pc = pp->pr_cache) != NULL) {
+	if ((pc = atomic_load_consume(&pp->pr_cache)) != NULL) {
 		(*pr)("POOLCACHE");
 	} else {
 		(*pr)("POOL");
@@ -1876,17 +1906,18 @@ pool_print1(struct pool *pp, const char *modif, void (*pr)(const char *, ...))
 
 	/* Single line output. */
 	if (print_short) {
-		(*pr)(" %s:%p:%u:%u:%u:%u:%u:%u:%u:%u:%u:%u\n",
+		(*pr)(" %s:%p:%u:%u:%u:%u:%u:%u:%u:%u:%u:%u:%zu\n",
 		    pp->pr_wchan, pp, pp->pr_size, pp->pr_align, pp->pr_npages,
 		    pp->pr_nitems, pp->pr_nout, pp->pr_nget, pp->pr_nput,
-		    pp->pr_npagealloc, pp->pr_npagefree, pp->pr_nidle);
-		
+		    pp->pr_npagealloc, pp->pr_npagefree, pp->pr_nidle,
+		    (size_t)pp->pr_npagealloc * pp->pr_alloc->pa_pagesz);
 		return;
 	}
 
-	(*pr)(" %s: size %u, align %u, ioff %u, roflags 0x%08x\n",
-	    pp->pr_wchan, pp->pr_size, pp->pr_align, pp->pr_itemoffset,
-	    pp->pr_roflags);
+	(*pr)(" %s: itemsize %u, totalmem %zu align %u, ioff %u, roflags 0x%08x\n",
+	    pp->pr_wchan, pp->pr_size,
+	    (size_t)pp->pr_npagealloc * pp->pr_alloc->pa_pagesz,
+	    pp->pr_align, pp->pr_itemoffset, pp->pr_roflags);
 	(*pr)("\tpool %p, alloc %p\n", pp, pp->pr_alloc);
 	(*pr)("\tminitems %u, minpages %u, maxpages %u, npages %u\n",
 	    pp->pr_minitems, pp->pr_minpages, pp->pr_maxpages, pp->pr_npages);
@@ -2095,25 +2126,24 @@ pool_cache_bootstrap(pool_cache_t pc, size_t size, u_int align,
 	pool_cache_t pc1;
 	struct cpu_info *ci;
 	struct pool *pp;
+	unsigned int ppflags;
 
 	pp = &pc->pc_pool;
-	if (palloc == NULL && ipl == IPL_NONE) {
-		if (size > PAGE_SIZE) {
-			int bigidx = pool_bigidx(size);
-
-			palloc = &pool_allocator_big[bigidx];
-			flags |= PR_NOALIGN;
-		} else
-			palloc = &pool_allocator_nointr;
-	}
-	pool_init(pp, size, align, align_offset, flags, wchan, palloc, ipl);
-
+	ppflags = flags;
 	if (ctor == NULL) {
 		ctor = NO_CTOR;
 	}
 	if (dtor == NULL) {
 		dtor = NO_DTOR;
+	} else {
+		/*
+		 * If we have a destructor, then the pool layer does not
+		 * need to worry about PR_PSERIALIZE.
+		 */
+		ppflags &= ~PR_PSERIALIZE;
 	}
+
+	pool_init(pp, size, align, align_offset, ppflags, wchan, palloc, ipl);
 
 	pc->pc_fullgroups = NULL;
 	pc->pc_partgroups = NULL;
@@ -2121,6 +2151,7 @@ pool_cache_bootstrap(pool_cache_t pc, size_t size, u_int align,
 	pc->pc_dtor = dtor;
 	pc->pc_arg  = arg;
 	pc->pc_refcnt = 0;
+	pc->pc_roflags = flags;
 	pc->pc_freecheck = NULL;
 
 	if ((flags & PR_LARGECACHE) != 0) {
@@ -2159,8 +2190,7 @@ pool_cache_bootstrap(pool_cache_t pc, size_t size, u_int align,
 	if (__predict_true(!cold))
 		mutex_exit(&pool_head_lock);
 
-	membar_sync();
-	pp->pr_cache = pc;
+	atomic_store_release(&pp->pr_cache, pc);
 }
 
 /*
@@ -2199,7 +2229,7 @@ pool_cache_bootstrap_destroy(pool_cache_t pc)
 
 	/* Disassociate it from the pool. */
 	mutex_enter(&pp->pr_lock);
-	pp->pr_cache = NULL;
+	atomic_store_relaxed(&pp->pr_cache, NULL);
 	mutex_exit(&pp->pr_lock);
 
 	/* Destroy per-CPU data */
@@ -2290,6 +2320,18 @@ pool_cache_reclaim(pool_cache_t pc)
 	return pool_reclaim(&pc->pc_pool);
 }
 
+static inline void
+pool_cache_pre_destruct(pool_cache_t pc)
+{
+	/*
+	 * Perform a passive serialization barrier before destructing
+	 * a batch of one or more objects.
+	 */
+	if (__predict_false(pc_has_pser(pc))) {
+		pool_barrier();
+	}
+}
+
 static void
 pool_cache_destruct_object1(pool_cache_t pc, void *object)
 {
@@ -2309,6 +2351,7 @@ pool_cache_destruct_object(pool_cache_t pc, void *object)
 
 	FREECHECK_IN(&pc->pc_freecheck, object);
 
+	pool_cache_pre_destruct(pc);
 	pool_cache_destruct_object1(pc, object);
 }
 
@@ -2324,6 +2367,12 @@ pool_cache_invalidate_groups(pool_cache_t pc, pcg_t *pcg)
 	void *object;
 	pcg_t *next;
 	int i, n;
+
+	if (pcg == NULL) {
+		return 0;
+	}
+
+	pool_cache_pre_destruct(pc);
 
 	for (n = 0; pcg != NULL; pcg = next, n++) {
 		next = pcg->pcg_next;
@@ -2363,7 +2412,8 @@ pool_cache_invalidate(pool_cache_t pc)
 	pcg_t *pcg;
 	int n, s;
 
-	KASSERT(!cpu_intr_p() && !cpu_softintr_p());
+	KASSERT(!cpu_intr_p());
+	KASSERT(!cpu_softintr_p());
 
 	if (ncpu < 2 || !mp_online) {
 		/*
@@ -2514,9 +2564,7 @@ pool_pcg_get(pcg_t *volatile *head, pcg_t **pcgp)
 		n = atomic_cas_ptr(head, o, __UNCONST(&pcg_dummy));
 		if (o == n) {
 			/* Fetch pointer to next item and then unlock. */
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
 			membar_datadep_consumer(); /* alpha */
-#endif
 			n = atomic_load_relaxed(&o->pcg_next);
 			atomic_store_release(head, n);
 			break;
@@ -2548,9 +2596,7 @@ pool_pcg_trunc(pcg_t *volatile *head)
 		n = atomic_cas_ptr(head, o, NULL);
 		if (o == n) {
 			splx(s);
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
 			membar_datadep_consumer(); /* alpha */
-#endif
 			return o;
 		}
 	}
@@ -2577,9 +2623,7 @@ pool_pcg_put(pcg_t *volatile *head, pcg_t *pcg)
 			continue;
 		}
 		pcg->pcg_next = o;
-#ifndef __HAVE_ATOMIC_AS_MEMBAR
-		membar_exit();
-#endif
+		membar_release();
 		n = atomic_cas_ptr(head, o, pcg);
 		if (o == n) {
 			return count != SPINLOCK_BACKOFF_MIN;
@@ -2665,10 +2709,17 @@ pool_cache_get_paddr(pool_cache_t pc, int flags, paddr_t *pap)
 	int s;
 
 	KASSERT(!(flags & PR_NOWAIT) != !(flags & PR_WAITOK));
-	KASSERTMSG((!cpu_intr_p() && !cpu_softintr_p()) ||
-	    (pc->pc_pool.pr_ipl != IPL_NONE || cold || panicstr != NULL),
-	    "%s: [%s] is IPL_NONE, but called from interrupt context",
-	    __func__, pc->pc_pool.pr_wchan);
+	if (pc->pc_pool.pr_ipl == IPL_NONE &&
+	    __predict_true(!cold) &&
+	    __predict_true(panicstr == NULL)) {
+		KASSERTMSG(!cpu_intr_p(),
+		    "%s: [%s] is IPL_NONE, but called from interrupt context",
+		    __func__, pc->pc_pool.pr_wchan);
+		KASSERTMSG(!cpu_softintr_p(),
+		    "%s: [%s] is IPL_NONE,"
+		    " but called from soft interrupt context",
+		    __func__, pc->pc_pool.pr_wchan);
+	}
 
 	if (flags & PR_WAITOK) {
 		ASSERT_SLEEPABLE();
@@ -2939,7 +2990,14 @@ pool_allocator_free(struct pool *pp, void *v)
 	struct pool_allocator *pa = pp->pr_alloc;
 
 	if (pp->pr_redzone) {
+		KASSERT(!pp_has_pser(pp));
 		kasan_mark(v, pa->pa_pagesz, pa->pa_pagesz, 0);
+	} else if (__predict_false(pp_has_pser(pp))) {
+		/*
+		 * Perform a passive serialization barrier before freeing
+		 * the pool page back to the system.
+		 */
+		pool_barrier();
 	}
 	(*pa->pa_free)(pp, v);
 }
@@ -3148,6 +3206,7 @@ pool_redzone_fill(struct pool *pp, void *p)
 {
 	if (!pp->pr_redzone)
 		return;
+	KASSERT(!pp_has_pser(pp));
 #ifdef KASAN
 	kasan_mark(p, pp->pr_reqsize, pp->pr_reqsize_with_redzone,
 	    KASAN_POOL_REDZONE);
@@ -3178,6 +3237,7 @@ pool_redzone_check(struct pool *pp, void *p)
 {
 	if (!pp->pr_redzone)
 		return;
+	KASSERT(!pp_has_pser(pp));
 #ifdef KASAN
 	kasan_mark(p, 0, pp->pr_reqsize_with_redzone, KASAN_POOL_FREED);
 #else
@@ -3210,8 +3270,12 @@ static void
 pool_cache_redzone_check(pool_cache_t pc, void *p)
 {
 #ifdef KASAN
-	/* If there is a ctor/dtor, leave the data as valid. */
-	if (__predict_false(pc_has_ctor(pc) || pc_has_dtor(pc))) {
+	/*
+	 * If there is a ctor/dtor, or if the cache objects use
+	 * passive serialization, leave the data as valid.
+	 */
+	if (__predict_false(pc_has_ctor(pc) || pc_has_dtor(pc) ||
+	    pc_has_pser(pc))) {
 		return;
 	}
 #endif
@@ -3260,7 +3324,7 @@ pool_allocated(struct pool *pp, struct pool_item_header *ph, uintptr_t addr)
 		unsigned int idx = pr_item_bitmap_index(pp, ph, (void *)addr);
 		pool_item_bitmap_t *bitmap =
 		    ph->ph_bitmap + (idx / BITMAP_SIZE);
-		pool_item_bitmap_t mask = 1 << (idx & BITMAP_MASK);
+		pool_item_bitmap_t mask = 1U << (idx & BITMAP_MASK);
 
 		return (*bitmap & mask) == 0;
 	} else {
@@ -3282,6 +3346,7 @@ pool_whatis(uintptr_t addr, void (*pr)(const char *, ...))
 
 	TAILQ_FOREACH(pp, &pool_head, pr_poollist) {
 		struct pool_item_header *ph;
+		struct pool_cache *pc;
 		uintptr_t item;
 		bool allocated = true;
 		bool incache = false;
@@ -3316,8 +3381,8 @@ pool_whatis(uintptr_t addr, void (*pr)(const char *, ...))
 			allocated = pool_allocated(pp, ph, addr);
 		}
 found:
-		if (allocated && pp->pr_cache) {
-			pool_cache_t pc = pp->pr_cache;
+		if (allocated &&
+		    (pc = atomic_load_consume(&pp->pr_cache)) != NULL) {
 			struct pool_cache_group *pcg;
 			int i;
 
@@ -3380,9 +3445,11 @@ pool_sysctl(SYSCTLFN_ARGS)
 	memset(&data, 0, sizeof(data));
 	error = 0;
 	written = 0;
+	mutex_enter(&pool_head_lock);
 	TAILQ_FOREACH(pp, &pool_head, pr_poollist) {
 		if (written + sizeof(data) > *oldlenp)
 			break;
+		pp->pr_refcnt++;
 		strlcpy(data.pr_wchan, pp->pr_wchan, sizeof(data.pr_wchan));
 		data.pr_pagesize = pp->pr_alloc->pa_pagesz;
 		data.pr_flags = pp->pr_roflags | pp->pr_flags;
@@ -3412,9 +3479,8 @@ pool_sysctl(SYSCTLFN_ARGS)
 		data.pr_cache_nempty = 0;
 		data.pr_cache_ncontended = 0;
 		data.pr_cache_npartial = 0;
-		if (pp->pr_cache) {
+		if ((pc = atomic_load_consume(&pp->pr_cache)) != NULL) {
 			uint32_t nfull = 0;
-			pc = pp->pr_cache;
 			data.pr_cache_meta_size = pc->pc_pcgsize;
 			for (i = 0; i < pc->pc_ncpu; ++i) {
 				cc = pc->pc_cpus[i];
@@ -3435,12 +3501,19 @@ pool_sysctl(SYSCTLFN_ARGS)
 		data.pr_cache_nhit_global = data.pr_cache_nmiss_pcpu -
 		    data.pr_cache_nmiss_global;
 
+		if (pp->pr_refcnt == UINT_MAX) /* XXX possible? */
+			continue;
+		mutex_exit(&pool_head_lock);
 		error = sysctl_copyout(l, &data, oldp, sizeof(data));
+		mutex_enter(&pool_head_lock);
+		if (--pp->pr_refcnt == 0)
+			cv_broadcast(&pool_busy);
 		if (error)
 			break;
 		written += sizeof(data);
 		oldp = (char *)oldp + sizeof(data);
 	}
+	mutex_exit(&pool_head_lock);
 
 	*oldlenp = written;
 	return error;

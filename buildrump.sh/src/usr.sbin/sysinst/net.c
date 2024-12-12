@@ -1,4 +1,4 @@
-/*	$NetBSD: net.c,v 1.36 2021/01/31 22:45:46 rillig Exp $	*/
+/*	$NetBSD: net.c,v 1.45 2023/12/17 18:46:42 martin Exp $	*/
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -47,6 +47,11 @@
 #include <net/if.h>
 #include <net/if_media.h>
 #include <netinet/in.h>
+#include <net80211/ieee80211_ioctl.h>
+#include <netinet/ip_var.h>
+#ifdef INET6
+#include <netinet6/ip6_var.h>
+#endif
 
 #include <err.h>
 #include <stdio.h>
@@ -79,6 +84,8 @@ static char net_mask[SSTRSIZE];
 char net_namesvr[STRSIZE];
 static char net_defroute[STRSIZE];
 static char net_media[STRSIZE];
+static char net_ssid[STRSIZE];
+static char net_passphrase[STRSIZE];
 static char sl_flags[STRSIZE];
 static int net_dhcpconf;
 #define DHCPCONF_IPADDR         0x01
@@ -100,8 +107,11 @@ static char *url_encode (char *dst, const char *src, const char *ep,
 static void write_etc_hosts(FILE *f);
 
 #define DHCPCD "/sbin/dhcpcd"
+#define WPA_SUPPLICANT "/usr/sbin/wpa_supplicant"
 #include <signal.h>
+static int config_eth_medium(char *);
 static int config_dhcp(char *);
+static int config_wlan(char *);
 
 #ifdef INET6
 static int is_v6kernel (void);
@@ -219,6 +229,50 @@ static const char *ignored_if_names[] = {
 	NULL,
 };
 
+static bool
+have_working_ipv4(void)
+{
+	uint64_t ipstats[IP_NSTATS];
+	size_t size = sizeof(ipstats);
+
+	/* At least some packets delivered to upper layers? */
+	if (sysctlbyname("net.inet.ip.stats", ipstats, &size, NULL, 0) == -1)
+		return false;
+	if (ipstats[IP_STAT_DELIVERED] < 10)	/* arbitrary threshold */
+		return false;
+
+	/* do we have a default route? */
+	if (run_program(RUN_SILENT|RUN_ERROR_OK,
+	    "/sbin/route  get -inet default") != 0)
+		return false;
+
+	return true;
+}
+
+#ifdef INET6
+static bool
+have_working_ipv6(void)
+{
+	uint64_t ipstats[IP6_NSTATS];
+	size_t size = sizeof(ipstats);
+
+	/* At least some packets delivered to upper layers? */
+	if (sysctlbyname("net.inet6.ip6.stats", ipstats, &size, NULL, 0) == -1)
+		return false;
+	if (ipstats[IP6_STAT_DELIVERED] < 10)	/* arbitrary threshold */
+		return false;
+
+	/* do we have a default route? */
+	if (run_program(RUN_SILENT|RUN_ERROR_OK,
+	    "/sbin/route  get -inet6 default") != 0)
+		return false;
+
+	return true;
+}
+#else
+#define	have_working_ipv6()	false
+#endif
+
 static int
 get_ifconfig_info(struct net_desc *devs)
 {
@@ -269,7 +323,7 @@ get_ifconfig_info(struct net_desc *devs)
 }
 
 static int
-do_ifreq(struct ifreq *ifr, unsigned long cmd)
+do_ifreq(struct ifreq *ifr, unsigned long cmd, void *data)
 {
 	int sock;
 	int rval;
@@ -279,6 +333,7 @@ do_ifreq(struct ifreq *ifr, unsigned long cmd)
 		return -1;
 
 	memset(ifr, 0, sizeof *ifr);
+	ifr->ifr_data = data;
 	strlcpy(ifr->ifr_name, net_dev, sizeof ifr->ifr_name);
 	rval = ioctl(sock, cmd, ifr);
 	close(sock);
@@ -315,10 +370,12 @@ get_ifinterface_info(void)
 	const char *media_opt;
 	const char *sep;
 
-	if (do_ifreq(&ifr, SIOCGIFADDR) == 0 && sa_in->sin_addr.s_addr != 0)
+	if (do_ifreq(&ifr, SIOCGIFADDR, NULL) == 0 &&
+	    sa_in->sin_addr.s_addr != 0)
 		strlcpy(net_ip, inet_ntoa(sa_in->sin_addr), sizeof net_ip);
 
-	if (do_ifreq(&ifr, SIOCGIFNETMASK) == 0 && sa_in->sin_addr.s_addr != 0)
+	if (do_ifreq(&ifr, SIOCGIFNETMASK, NULL) == 0 &&
+	    sa_in->sin_addr.s_addr != 0)
 		strlcpy(net_mask, inet_ntoa(sa_in->sin_addr), sizeof net_mask);
 
 	if (do_ifmreq(&ifmr, SIOCGIFMEDIA) == 0) {
@@ -474,7 +531,7 @@ handle_license(const char *dev)
  * make sure both the gateway and the name server are up.
  */
 int
-config_network(void)
+config_network(int force)
 {
 	char *textbuf;
 	int  octet0;
@@ -484,6 +541,7 @@ config_network(void)
  	int  pid, status;
  	char **ap, *slcmd[10], *in_buf;
  	char buffer[STRSIZE];
+	char hostname[MAXHOSTNAMELEN + 1];
  	struct statvfs sb;
 	struct net_desc net_devs[MAX_NETS];
 	menu_ent *net_menu;
@@ -509,6 +567,13 @@ config_network(void)
 		return -1;
 	}
 
+	if (!force && (have_working_ipv4() || have_working_ipv6())) {
+		if (ask_yesno(MSG_network_ok)) {
+			network_up = 1;
+			return 1;
+		}
+	}
+
 	net_menu = calloc(num_devs, sizeof(*net_menu));
 	if (net_menu == NULL) {
 		err_msg_win(err_outofmem);
@@ -529,6 +594,7 @@ again:
 	selected_net = -1;
 	msg_display(MSG_asknetdev);
 	process_menu(menu_no, &selected_net);
+	msg_clear();
 
 	if (selected_net == -1) {
 		free_menu(menu_no);
@@ -562,45 +628,8 @@ again:
 		/* domain and host */
 		msg_display(MSG_netinfo);
 
-		/* ethernet medium */
-		for (;;) {
-			msg_prompt_add(MSG_net_media, net_media, net_media,
-					sizeof net_media);
-
-			/*
-			 * ifconfig does not allow media specifiers on
-			 * IFM_MANUAL interfaces.  Our UI gives no way
-			 * to set an option back
-			 * to null-string if it gets accidentally set.
-			 * Check for plausible alternatives.
-			 */
-			if (strcmp(net_media, "<default>") == 0 ||
-			    strcmp(net_media, "default") == 0 ||
-			    strcmp(net_media, "<manual>") == 0 ||
-			    strcmp(net_media, "manual") == 0 ||
-			    strcmp(net_media, "<none>") == 0 ||
-			    strcmp(net_media, "none") == 0 ||
-			    strcmp(net_media, " ") == 0) {
-				*net_media = '\0';
-			}
-
-			if (*net_media == '\0')
-				break;
-			/*
-			 * We must set the media type here - to give dhcp
-			 * a chance
-			 */
-			if (run_program(0, "/sbin/ifconfig %s media %s",
-				    net_dev, net_media) == 0)
-				break;
-			/* Failed to set - output the supported values */
-			if (collect(T_OUTPUT, &textbuf, "/sbin/ifconfig -m %s |"
-				    "while IFS=; read line;"
-				    " do [ \"$line\" = \"${line#*media}\" ] || "
-				    "echo $line;"
-				    " done", net_dev ) > 0)
-				msg_display(textbuf);
-			free(textbuf);
+		if (!config_wlan(net_dev)) {
+			config_eth_medium(net_dev);
 		}
 
 		net_dhcpconf = 0;
@@ -680,13 +709,19 @@ again:
 		}
 	}
 
-	if (!(net_dhcpconf & DHCPCONF_HOST))
-		msg_prompt_add(MSG_net_host, net_host, net_host,
-		    sizeof net_host);
-
-	if (!(net_dhcpconf & DHCPCONF_DOMAIN))
-		msg_prompt_add(MSG_net_domain, net_domain, net_domain,
-		    sizeof net_domain);
+	/*
+	 * Prompt for hostname and domain, even when using DHCP. The names
+	 * discovered on the network may not match the desired values
+	 * for the target system.
+	 */ 
+	strlcpy(hostname, recombine_host_domain(), MAXHOSTNAMELEN);
+	msg_prompt_add(MSG_net_host, net_host, net_host,
+	    sizeof net_host);
+	msg_prompt_add(MSG_net_domain, net_domain, net_domain,
+	    sizeof net_domain);
+	if (strcmp(hostname, recombine_host_domain()) != 0) {
+		net_dhcpconf &= ~(DHCPCONF_DOMAIN|DHCPCONF_HOST);
+	}
 
 	if (!dhcp_config) {
 		/* Manually configure IPv4 */
@@ -870,8 +905,9 @@ const char *
 url_proto(unsigned int xfer)
 {
 	switch (xfer) {
-	case XFER_FTP:	return "ftp";
-	case XFER_HTTP:	return "http";
+	case XFER_FTP:		return "ftp";
+	case XFER_HTTP:		return "http";
+	case XFER_HTTPS:	return "https";
 	}
 
 	return "";
@@ -921,7 +957,8 @@ make_url(char *urlbuffer, struct ftpinfo *f, const char *dir)
 			RFC1738_SAFE_LESS_SHELL_PLUS_SLASH, 0);
 
 	snprintf(urlbuffer, STRSIZE, "%s://%s%s/%s", url_proto(f->xfer),
-	    ftp_user_encoded, f->xfer_host[f->xfer], ftp_dir_encoded);
+	    ftp_user_encoded, f->xfer_host[XFER_HOST(f->xfer)],
+	    ftp_dir_encoded);
 }
 
 
@@ -992,6 +1029,9 @@ int
 get_via_ftp(unsigned int xfer)
 {
 	arg_rv arg;
+
+	if (!network_up)
+		config_network(0);
 
 	arg.rv = -1;
 	arg.arg = (void*)(uintptr_t)(xfer);
@@ -1092,6 +1132,10 @@ mnt_net_config(void)
 	if (net_namesvr[0] != '\0')
 		dup_file_into_target("/etc/resolv.conf");
 
+	/* Copy wpa_supplicant.conf to target. */
+	if (net_ssid[0] != '\0')
+		dup_file_into_target("/etc/wpa_supplicant.conf");
+
 	/*
 	 * bring the interface up, it will be necessary for IPv6, and
 	 * it won't make trouble with IPv4 case either
@@ -1149,10 +1193,78 @@ mnt_net_config(void)
 		add_rc_conf("dhcpcd_flags=\"-qM %s\"\n", net_dev);
         }
 
+	if (net_ssid[0] != '\0') {
+		add_rc_conf("wpa_supplicant=YES\n");
+		add_rc_conf("wpa_supplicant_flags=\"-B -s -i %s -D bsd -c /etc/wpa_supplicant.conf\"\n", net_dev);
+	}
+
 	if (ifconf)
 		fclose(ifconf);
 
 	fflush(NULL);
+}
+
+int
+config_wlan(char *inter)
+{
+	FILE *wpa_conf = NULL;
+	char wpa_cmd[256];
+	struct ifreq ifr = {0};
+	struct ieee80211_nwid nwid = {0};
+
+	/* skip non-WLAN devices */
+	if (do_ifreq(&ifr, SIOCG80211NWID, &nwid) == -1)
+		return 0;
+
+	if (!file_mode_match(WPA_SUPPLICANT, S_IFREG))
+		return 0;
+
+	msg_prompt_add(MSG_net_ssid, net_ssid, net_ssid,
+			sizeof net_ssid);
+	if (net_ssid[0] == '\0')
+		return 0;
+
+	msg_prompt_noecho(MSG_net_passphrase, net_passphrase, net_passphrase,
+			sizeof net_passphrase);
+
+	wpa_conf = fopen("/etc/wpa_supplicant.conf", "a");
+	if (wpa_conf == NULL)
+		return 0;
+
+	scripting_fprintf(NULL,
+	    "cat <<EOF >>%s/etc/wpa_supplicant.conf\n",
+	    target_prefix());
+	scripting_fprintf(wpa_conf, "\n#\n");
+	scripting_fprintf(wpa_conf, "# Added by NetBSD sysinst\n");
+	scripting_fprintf(wpa_conf, "#\n");
+	scripting_fprintf(wpa_conf, "network={\n");
+	scripting_fprintf(wpa_conf,
+	    "\tssid=\"%s\"\n", net_ssid);
+	if (net_passphrase[0] != '\0') {
+		scripting_fprintf(wpa_conf, "\tpsk=\"%s\"\n",
+		    net_passphrase);
+	} else {
+		scripting_fprintf(wpa_conf, "\tkey_mgmt=NONE\n");
+	}
+	scripting_fprintf(wpa_conf, "\tscan_ssid=1\n");
+	scripting_fprintf(wpa_conf, "}\n");
+	(void)fclose(wpa_conf);
+	scripting_fprintf(NULL, "EOF\n");
+
+	if (run_program(RUN_DISPLAY | RUN_PROGRESS,
+	    "/sbin/ifconfig %s up", inter) != 0)
+		return 0;
+
+	/*
+	 * have to use system() here to avoid the server process dying
+	 */
+	if (snprintf(wpa_cmd, sizeof(wpa_cmd),
+	    WPA_SUPPLICANT
+	    " -B -s -i %s -D bsd -c /etc/wpa_supplicant.conf", inter) < 0)
+		return 0;
+	(void)do_system(wpa_cmd);
+
+	return 1;
 }
 
 int
@@ -1173,6 +1285,54 @@ config_dhcp(char *inter)
 		dhcpautoconf = run_program(RUN_DISPLAY | RUN_PROGRESS,
 		    "%s -d -n %s", DHCPCD, inter);
 		return dhcpautoconf ? 0 : 1;
+	}
+	return 0;
+}
+
+
+int
+config_eth_medium(char *inter)
+{
+	char *textbuf = NULL;
+
+	for (;;) {
+		msg_prompt_add(MSG_net_media, net_media, net_media,
+				sizeof net_media);
+
+		/*
+		 * ifconfig does not allow media specifiers on
+		 * IFM_MANUAL interfaces.  Our UI gives no way
+		 * to set an option back
+		 * to null-string if it gets accidentally set.
+		 * Check for plausible alternatives.
+		 */
+		if (strcmp(net_media, "<default>") == 0 ||
+		    strcmp(net_media, "default") == 0 ||
+		    strcmp(net_media, "<manual>") == 0 ||
+		    strcmp(net_media, "manual") == 0 ||
+		    strcmp(net_media, "<none>") == 0 ||
+		    strcmp(net_media, "none") == 0 ||
+		    strcmp(net_media, " ") == 0) {
+			*net_media = '\0';
+		}
+
+		if (*net_media == '\0')
+			break;
+		/*
+		 * We must set the media type here - to give dhcp
+		 * a chance
+		 */
+		if (run_program(0, "/sbin/ifconfig %s media %s",
+			    net_dev, net_media) == 0)
+			break;
+		/* Failed to set - output the supported values */
+		if (collect(T_OUTPUT, &textbuf, "/sbin/ifconfig -m %s |"
+			    "while IFS=; read line;"
+			    " do [ \"$line\" = \"${line#*media}\" ] || "
+			    "echo $line;"
+			    " done", net_dev ) > 0)
+			msg_display(textbuf);
+		free(textbuf);
 	}
 	return 0;
 }

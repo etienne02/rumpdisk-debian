@@ -1,4 +1,4 @@
-/*	$NetBSD: linux_machdep.c,v 1.167 2021/08/09 19:57:57 andvar Exp $	*/
+/*	$NetBSD: linux_machdep.c,v 1.169 2021/11/01 05:07:16 thorpej Exp $	*/
 
 /*-
  * Copyright (c) 1995, 2000, 2008, 2009 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: linux_machdep.c,v 1.167 2021/08/09 19:57:57 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: linux_machdep.c,v 1.169 2021/11/01 05:07:16 thorpej Exp $");
 
 #if defined(_KERNEL_OPT)
 #include "opt_user_ldt.h"
@@ -109,7 +109,7 @@ extern struct disklist *x86_alldisks;
 
 static struct biosdisk_info *fd2biosinfo(struct proc *, struct file *);
 static void linux_save_ucontext(struct lwp *, struct trapframe *,
-    const sigset_t *, struct sigaltstack *, struct linux_ucontext *);
+    const sigset_t *, stack_t *, struct linux_ucontext *);
 static void linux_save_sigcontext(struct lwp *, struct trapframe *,
     const sigset_t *, struct linux_sigcontext *);
 static int linux_restore_sigcontext(struct lwp *,
@@ -175,7 +175,8 @@ linux_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 
 
 static void
-linux_save_ucontext(struct lwp *l, struct trapframe *tf, const sigset_t *mask, struct sigaltstack *sas, struct linux_ucontext *uc)
+linux_save_ucontext(struct lwp *l, struct trapframe *tf, const sigset_t *mask,
+    stack_t *sas, struct linux_ucontext *uc)
 {
 	uc->uc_flags = 0;
 	uc->uc_link = NULL;
@@ -232,7 +233,7 @@ linux_rt_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 	int onstack, error;
 	int sig = ksi->ksi_signo;
 	sig_t catcher = SIGACTION(p, sig).sa_handler;
-	struct sigaltstack *sas = &l->l_sigstk;
+	stack_t *sas = &l->l_sigstk;
 
 	tf = l->l_md.md_regs;
 	/* Do we need to jump onto the signal stack? */
@@ -251,6 +252,8 @@ linux_rt_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 	DPRINTF(("rt: onstack = %d, fp = %p sig = %d eip = 0x%x cr2 = 0x%x\n",
 	    onstack, fp, sig, tf->tf_eip,
 	    ((struct pcb *)lwp_getpcb(l))->pcb_cr2));
+
+	memset(&frame, 0, sizeof(frame));
 
 	/* Build stack frame for signal trampoline. */
 	frame.sf_handler = catcher;
@@ -309,7 +312,7 @@ linux_old_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 	int onstack, error;
 	int sig = ksi->ksi_signo;
 	sig_t catcher = SIGACTION(p, sig).sa_handler;
-	struct sigaltstack *sas = &l->l_sigstk;
+	stack_t *sas = &l->l_sigstk;
 
 	tf = l->l_md.md_regs;
 
@@ -328,6 +331,8 @@ linux_old_sendsig(const ksiginfo_t *ksi, const sigset_t *mask)
 	DPRINTF(("old: onstack = %d, fp = %p sig = %d eip = 0x%x cr2 = 0x%x\n",
 	    onstack, fp, sig, tf->tf_eip,
 	    ((struct pcb *)lwp_getpcb(l))->pcb_cr2));
+
+	memset(&frame, 0, sizeof(frame));
 
 	/* Build stack frame for signal trampoline. */
 	frame.sf_handler = catcher;
@@ -421,7 +426,7 @@ linux_restore_sigcontext(struct lwp *l, struct linux_sigcontext *scp,
     register_t *retval)
 {
 	struct proc *p = l->l_proc;
-	struct sigaltstack *sas = &l->l_sigstk;
+	stack_t *sas = &l->l_sigstk;
 	struct trapframe *tf;
 	sigset_t mask;
 	ssize_t ss_gap;
@@ -837,6 +842,7 @@ linux_machdepioctl(struct lwp *l, const struct linux_sys_ioctl_args *uap, regist
 		com = VT_OPENQRY;
 		break;
 	case LINUX_VT_GETMODE:
+		memset(&lvt, 0, sizeof(lvt));
 		error = fp->f_ops->fo_ioctl(fp, VT_GETMODE, &lvt);
 		if (error != 0)
 			goto out;
@@ -932,6 +938,7 @@ linux_machdepioctl(struct lwp *l, const struct linux_sys_ioctl_args *uap, regist
 			sectors = label.d_nsectors;
 		}
 		if (com == LINUX_HDIO_GETGEO) {
+			memset(&hdg, 0, sizeof(hdg));
 			hdg.start = start;
 			hdg.heads = heads;
 			hdg.cylinders = cylinders;
@@ -939,6 +946,7 @@ linux_machdepioctl(struct lwp *l, const struct linux_sys_ioctl_args *uap, regist
 			error = copyout(&hdg, SCARG(uap, data), sizeof hdg);
 			goto out;
 		} else {
+			memset(&hdg_big, 0, sizeof(hdg_big));
 			hdg_big.start = start;
 			hdg_big.heads = heads;
 			hdg_big.cylinders = cylinders;

@@ -1,4 +1,4 @@
-/* $NetBSD: scan_ffs.c,v 1.32 2015/10/15 06:25:23 dholland Exp $ */
+/* $NetBSD: scan_ffs.c,v 1.37 2023/01/24 08:05:07 mlelstv Exp $ */
 
 /*
  * Copyright (c) 2005-2007 Juan Romero Pardines
@@ -33,7 +33,7 @@
  
 #include <sys/cdefs.h>
 #ifndef lint
-__RCSID("$NetBSD: scan_ffs.c,v 1.32 2015/10/15 06:25:23 dholland Exp $");
+__RCSID("$NetBSD: scan_ffs.c,v 1.37 2023/01/24 08:05:07 mlelstv Exp $");
 #endif /* not lint */
 
 #include <sys/types.h>
@@ -50,6 +50,7 @@ __RCSID("$NetBSD: scan_ffs.c,v 1.32 2015/10/15 06:25:23 dholland Exp $");
 
 #include <ufs/ufs/dinode.h>
 #include <ufs/ffs/fs.h>
+#include <ufs/ffs/ffs_extern.h>
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -57,6 +58,7 @@ __RCSID("$NetBSD: scan_ffs.c,v 1.32 2015/10/15 06:25:23 dholland Exp $");
 #include <string.h>
 #include <err.h>
 #include <util.h>
+#include <paths.h>
 
 #define BLK_CNT		(blk + (n / 512))
 
@@ -79,6 +81,8 @@ static int	sbaddr = 0; /* counter for the LFS superblocks */
 
 static char	device[MAXPATHLEN];
 static const char *fstypes[] = { "NONE", "FFSv1", "FFSv2" };
+
+static sig_atomic_t print_info = 0;
 
 #define FSTYPE_NONE	0
 #define FSTYPE_FFSV1	1
@@ -109,16 +113,33 @@ static void	lfs_scan(struct sblockinfo *, int);
 static void	usage(void) __dead;
 static int	scan_disk(int, daddr_t, daddr_t, int);
 
+static void
+got_siginfo(int signo)
+{
+
+	print_info = 1;
+}
+
 static int
 ffs_checkver(struct sblockinfo *sbi)
 {
+	switch (sbi->ffs->fs_magic) {
+		case FS_UFS1_MAGIC_SWAPPED:
+		case FS_UFS2_MAGIC_SWAPPED:
+		case FS_UFS2EA_MAGIC_SWAPPED:
+			ffs_sb_swap(sbi->ffs, sbi->ffs);
+			break;
+	}
+
 	switch (sbi->ffs->fs_magic) {
 		case FS_UFS1_MAGIC:
 		case FS_UFS1_MAGIC_SWAPPED:
 			sbi->ffs->fs_size = sbi->ffs->fs_old_size;
 			return FSTYPE_FFSV1;
 		case FS_UFS2_MAGIC:
+		case FS_UFS2EA_MAGIC:
 		case FS_UFS2_MAGIC_SWAPPED:
+		case FS_UFS2EA_MAGIC_SWAPPED:
 			return FSTYPE_FFSV2;
 		default:
 			return FSTYPE_NONE;
@@ -372,6 +393,29 @@ lfs_checkmagic(struct sblockinfo *sbinfo)
 	}
 }
 
+static void
+show_status(uintmax_t beg, uintmax_t total)
+{
+	static int ttyfd = -2;
+	char buf[2048];
+	const uintmax_t done = blk - beg;
+	const double pcent = (100.0 * done) / total;
+	int n;
+
+	if (ttyfd == -2)
+		ttyfd = open(_PATH_TTY, O_RDWR | O_CLOEXEC);
+
+	if (ttyfd == -1)
+		return;
+
+	n = snprintf(buf, sizeof(buf), "%s: done %ju of %ju blocks (%3.2f%%)\n", 
+	    getprogname(), done, total, pcent);
+
+	if (n <= 0)
+		return;
+	write(ttyfd, buf, (size_t)n);
+}
+
 static int
 scan_disk(int fd, daddr_t beg, daddr_t end, int fflags)
 {
@@ -389,7 +433,13 @@ scan_disk(int fd, daddr_t beg, daddr_t end, int fflags)
 		(void)printf(
 		    "#        size    offset fstype [fsize bsize cpg/sgs]\n");
 
+	const daddr_t total = end - beg;
 	for (blk = beg; blk <= end; blk += SBPASS) {
+		if (print_info) {
+			show_status(beg, total);
+
+			print_info = 0;
+		}
 		if (pread(fd, buf, sizeof(buf), blk * 512) == -1) {
 			if (fflag && fd >= 0)
 				(void)close(fd);
@@ -478,6 +528,8 @@ main(int argc, char **argv)
 
 	argc -= optind;
 	argv += optind;
+
+	signal(SIGINFO, got_siginfo);
 
 	if (fflag) {
 		struct stat stp;

@@ -1,4 +1,4 @@
-/*	$NetBSD: mutex.h,v 1.4 2021/08/25 04:13:41 thorpej Exp $	*/
+/*	$NetBSD: mutex.h,v 1.7 2024/11/25 22:04:14 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2002, 2007 The NetBSD Foundation, Inc.
@@ -32,6 +32,8 @@
 #ifndef _RISCV_MUTEX_H_
 #define	_RISCV_MUTEX_H_
 
+#include <sys/types.h>
+
 #ifndef __MUTEX_PRIVATE
 
 struct kmutex {
@@ -40,11 +42,17 @@ struct kmutex {
 
 #else	/* __MUTEX_PRIVATE */
 
+#include <sys/cdefs.h>
+
 #include <sys/param.h>
+
+#include <machine/intr.h>
 
 struct kmutex {
 	volatile uintptr_t	mtx_owner;
 };
+
+#ifdef _KERNEL
 
 #ifdef _LP64
 #define MTX_ASMOP_SFX ".d"		// doubleword atomic op
@@ -106,6 +114,8 @@ riscv_mutex_spinbit_lock_unlock(kmutex_t *__mtx)
 		"amoand" MTX_ASMOP_SFX ".rl\tx0, %0, (%1)"
 	   ::	"r"(~MTX_LOCK), "r"(__mtx));
 }
+
+#endif /* _KERNEL */
 
 #if 0
 #define	__HAVE_MUTEX_STUBS		1

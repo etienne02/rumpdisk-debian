@@ -1,4 +1,4 @@
-/* $NetBSD: flash_vrip.c,v 1.13 2020/11/21 21:23:48 thorpej Exp $ */
+/* $NetBSD: flash_vrip.c,v 1.15 2023/09/12 19:32:00 andvar Exp $ */
 
 /*
  * Copyright (c) 2002 The NetBSD Foundation, Inc.
@@ -34,7 +34,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: flash_vrip.c,v 1.13 2020/11/21 21:23:48 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: flash_vrip.c,v 1.15 2023/09/12 19:32:00 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/conf.h>
@@ -73,7 +73,7 @@ static int intel_write(struct flash_softc *, bus_size_t);
 static int amd_erase(struct flash_softc *, bus_size_t);
 static int amd_write(struct flash_softc *, bus_size_t);
 
-extern struct cfdriver flash_cd;
+extern struct cfdriver vrflash_cd;
 
 CFATTACH_DECL_NEW(flash_vrip, sizeof(struct flash_softc),
 	      flash_probe, flash_attach, NULL, NULL);
@@ -83,7 +83,7 @@ dev_type_close(flashclose);
 dev_type_read(flashread);
 dev_type_write(flashwrite);
 
-const struct cdevsw flash_cdevsw = {
+const struct cdevsw vrflash_cdevsw = {
 	.d_open = flashopen,
 	.d_close = flashclose,
 	.d_read = flashread,
@@ -188,15 +188,15 @@ flash_probe(device_t parent, cfdata_t match, void *aux)
 	if (bus_space_map(va->va_iot, va->va_addr, va->va_size, 0, &ioh))
 		return 0;
 	if (!probe_cfi(va->va_iot, ioh)) {
-		DPRINTF("CFI ID str and command set recognized\n");
+		DPRINTF(("CFI ID str and command set recognized\n"));
 		goto detect;
 	}
 	if (!i28f128_probe(va->va_iot, ioh)) {
-		DPRINTF("28F128 detected\n");
+		DPRINTF(("28F128 detected\n"));
 		goto detect;
 	}
 	if (!mbm29160_probe(va->va_iot, ioh)) {
-		DPRINTF("29LV160 detected\n");
+		DPRINTF(("29LV160 detected\n"));
 		goto detect;
 	}
 	return 0;
@@ -318,7 +318,7 @@ flashopen(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	struct flash_softc	*sc;
 
-	sc = device_lookup_private(&flash_cd, minor(dev));
+	sc = device_lookup_private(&vrflash_cd, minor(dev));
 	if (sc == NULL)
 		return ENXIO;
 	if (sc->sc_status & FLASH_ST_BUSY)
@@ -332,7 +332,7 @@ flashclose(dev_t dev, int flag, int mode, struct lwp *l)
 {
 	struct flash_softc	*sc;
 
-	sc = device_lookup_private(&flash_cd, minor(dev));
+	sc = device_lookup_private(&vrflash_cd, minor(dev));
 	sc->sc_status &= ~FLASH_ST_BUSY;
 	return 0;
 }
@@ -348,7 +348,7 @@ flashread(dev_t dev, struct uio *uio, int flag)
 	int			count;
 	int			error;
 
-	sc = device_lookup_private(&flash_cd, minor(dev));
+	sc = device_lookup_private(&vrflash_cd, minor(dev));
 	iot = sc->sc_iot;
 	ioh = sc->sc_ioh;
 
@@ -375,7 +375,7 @@ flashwrite(dev_t dev, struct uio *uio, int flag)
 	int			stat;
 	int			error;
 
-	sc = device_lookup_private(&flash_cd, minor(dev));
+	sc = device_lookup_private(&vrflash_cd, minor(dev));
 
 	if (sc->sc_size < uio->uio_offset + uio->uio_resid)
 		return ENOSPC;

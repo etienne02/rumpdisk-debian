@@ -1,4 +1,4 @@
-# $NetBSD: GENERIC,v 1.196 2021/06/29 10:22:36 nia Exp $
+# $NetBSD: GENERIC,v 1.202 2024/09/03 19:51:02 andvar Exp $
 #
 # GENERIC machine description file
 #
@@ -22,7 +22,7 @@ include 	"arch/prep/conf/std.prep"
 
 options 	INCLUDE_CONFIG_FILE	# embed config file in kernel binary
 
-#ident		"GENERIC-$Revision: 1.196 $"
+#ident		"GENERIC-$Revision: 1.202 $"
 
 maxusers	32
 
@@ -85,17 +85,15 @@ file-system	TMPFS		# Efficient memory file-system
 #file-system	UDF		# experimental - OSTA UDF CD/DVD file-system
 
 # File system options
+#options 	FFS_EI		# FFS Endian Independent support
+#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
 options 	QUOTA		# legacy UFS quotas
 options 	QUOTA2		# new, in-filesystem UFS quotas
-#options 	DISKLABEL_EI	# disklabel Endian Independent support
-#options 	FFS_EI		# FFS Endian Independent support
-options 	WAPBL		# File system journaling support
-#options 	UFS_DIRHASH	# UFS Large Directory Hashing - Experimental
-options 	NFSSERVER	# Network File System server
-#options 	FFS_NO_SNAPSHOT	# No FFS snapshot support
+options 	UFS_DIRHASH	# UFS Large Directory Hashing
 options 	UFS_EXTATTR	# Extended attribute support for UFS1
-#options 	EXT2FS_SYSTEM_FLAGS # makes ext2fs file flags (append and
- 				# immutable) behave as system flags.
+options 	WAPBL		# File system journaling support
+#options 	DISKLABEL_EI	# disklabel Endian Independent support
+options 	NFSSERVER	# Network File System server
 
 # Networking options
 #options 	GATEWAY		# packet forwarding
@@ -356,7 +354,7 @@ we*	at pnpbus?			# WD/SMC Ethernet
 #we0	at isa? port 0x280 iomem 0xd0000 irq 9	# WD/SMC Ethernet
 we1	at isa? port 0x300 iomem 0xe8000 irq 11
 
-# ISA Plug-and-Play network intefaces
+# ISA Plug-and-Play network interfaces
 #ep*	at isapnp?			# 3Com 3c509 Ethernet
 #ne*	at isapnp?			# NE2000-compatible Ethernet
 
@@ -498,9 +496,6 @@ ukphy*	at mii? phy ?			# generic unknown PHYs
 # ISA joysticks. Probe is a little strange; add only if you have one.
 #joy0	at isa? port 0x201
 
-# Pull in optional local configuration
-cinclude "arch/prep/conf/GENERIC.local"
-
 # Pseudo-Devices
 
 pseudo-device 	crypto		# /dev/crypto device
@@ -554,6 +549,7 @@ pseudo-device	pty			# pseudo-terminals
 #options 	RND_COM			# use "com" randomness as well
 pseudo-device	clockctl		# user control of clock subsystem
 pseudo-device	ksyms			# /dev/ksyms
+pseudo-device 	swwdog			# software watchdog timer -- swwdog(4)
 
 # a pseudo device needed for Coda	# also needs CODA (above)
 #pseudo-device	vcoda			# coda minicache <-> venus comm.
@@ -563,3 +559,6 @@ pseudo-device	wsmux			# mouse & keyboard multiplexor
 pseudo-device	wsfont
 
 include "dev/veriexec.config"
+
+# Pull in optional local configuration - always at end
+cinclude	"arch/prep/conf/GENERIC.local"

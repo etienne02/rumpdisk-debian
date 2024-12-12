@@ -1,4 +1,4 @@
-/*	$NetBSD: usb_quirks.c,v 1.98 2021/08/17 22:00:32 andvar Exp $	*/
+/*	$NetBSD: usb_quirks.c,v 1.108 2024/02/28 21:52:40 dholland Exp $	*/
 /*	$FreeBSD: src/sys/dev/usb/usb_quirks.c,v 1.30 2003/01/02 04:15:55 imp Exp $	*/
 
 /*
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: usb_quirks.c,v 1.98 2021/08/17 22:00:32 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: usb_quirks.c,v 1.108 2024/02/28 21:52:40 dholland Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_usb.h"
@@ -47,10 +47,6 @@ __KERNEL_RCSID(0, "$NetBSD: usb_quirks.c,v 1.98 2021/08/17 22:00:32 andvar Exp $
 #include <dev/usb/usbdivar.h>
 #include <dev/usb/usbhist.h>
 #include <dev/usb/usb_quirks.h>
-
-#ifdef USB_DEBUG
-extern int usbdebug;
-#endif
 
 #define DPRINTF(FMT,A,B,C,D)    USBHIST_LOG(usbdebug,FMT,A,B,C,D)
 
@@ -184,7 +180,13 @@ Static const struct usbd_quirk_entry {
  /* Devices which should be ignored by uhid */
  { USB_VENDOR_APC,		USB_PRODUCT_APC_UPS,			ANY,
 	{ UQ_HID_IGNORE, NULL }},
+ { USB_VENDOR_APC,		USB_PRODUCT_APC_UPS3,			ANY,
+	{ UQ_HID_IGNORE, NULL }},
+ { USB_VENDOR_CYBERPOWER,	USB_PRODUCT_CYBERPOWER_UPS0,		ANY,
+	{ UQ_HID_IGNORE, NULL }},
  { USB_VENDOR_CYBERPOWER,	USB_PRODUCT_CYBERPOWER_UPS,		ANY,
+	{ UQ_HID_IGNORE, NULL }},
+ { USB_VENDOR_CYBERPOWER,	USB_PRODUCT_CYBERPOWER_UPS2,		ANY,
 	{ UQ_HID_IGNORE, NULL }},
  { USB_VENDOR_GRETAGMACBETH,	ANY,					ANY,
 	{ UQ_HID_IGNORE, NULL }},
@@ -193,6 +195,10 @@ Static const struct usbd_quirk_entry {
  { USB_VENDOR_MGE,		USB_PRODUCT_MGE_UPS2,			ANY,
 	{ UQ_HID_IGNORE, NULL }},
  { USB_VENDOR_MICROCHIP,	USB_PRODUCT_MICROCHIP_PICKIT1,		ANY,
+	{ UQ_HID_IGNORE, NULL }},
+ { USB_VENDOR_MICROCHIP,	USB_PRODUCT_MICROCHIP_PICKIT2,		ANY,
+	{ UQ_HID_IGNORE, NULL }},
+ { USB_VENDOR_MICROCHIP,	USB_PRODUCT_MICROCHIP_PICKIT3,		ANY,
 	{ UQ_HID_IGNORE, NULL }},
  { USB_VENDOR_TRIPPLITE2,	ANY,					ANY,
 	{ UQ_HID_IGNORE, NULL }},
@@ -371,7 +377,7 @@ Static const struct usbd_quirk_entry {
   * 1. It corrupts its USB descriptors. The quirk is to provide hardcoded
   *    descriptors instead of getting them from the device.
   * 2. It mishandles the USB toggle bit. This causes some replies to be
-  *    filered out by the USB host controller and be reported as timed out.
+  *    filtered out by the USB host controller and be reported as timed out.
   *    NFC tool's libnfc workaround this bug by sending a dummy frame to
   *    resync the toggle bit, but in order to succeed, that operation must
   *    not be reported as failed. The quirk is therefore to pretend to 
@@ -383,6 +389,28 @@ Static const struct usbd_quirk_entry {
 	{ UQ_DESC_CORRUPT | UQ_MISS_OUT_ACK, desc_pn533 }},
  { USB_VENDOR_SHUTTLE,		USB_PRODUCT_SHUTTLE_SCL3712,		ANY,
 	{ UQ_DESC_CORRUPT | UQ_MISS_OUT_ACK, desc_pn533 }},
+
+/*
+ * These cheap mice will disconnect after 60 seconds,
+ * reconnect, and then disconnect again (ad nauseum)
+ * unless it's kept open.
+ */
+ { USB_VENDOR_CHICONY,		USB_PRODUCT_CHICONY_OPTMOUSE0939,	ANY,
+	{ UQ_ALWAYS_ON, NULL }},
+ { USB_VENDOR_PIXART,		USB_PRODUCT_PIXART_RPIMOUSE,		ANY,
+	{ UQ_ALWAYS_ON, NULL }},
+ { USB_VENDOR_LOGITECH, 	USB_PRODUCT_LOGITECH_B100_1,		ANY,
+	{ UQ_ALWAYS_ON, NULL }},
+ { USB_VENDOR_LOGITECH, 	USB_PRODUCT_LOGITECH_B100_2,		ANY,
+	{ UQ_ALWAYS_ON, NULL }},
+ { USB_VENDOR_LENOVO,		USB_PRODUCT_LENOVO_OPTUSBMOUSE,		ANY,		{ UQ_ALWAYS_ON, NULL }},
+/*
+ * The HAILUCK USB Keyboard has a built-in touchpad, which
+ * needs to be active for the keyboard to function properly.
+ */
+ { USB_VENDOR_HAILUCK,		USB_PRODUCT_HAILUCK_KEYBOARD,		ANY,
+	{ UQ_ALWAYS_ON, NULL }},
+ 
  { 0, 0, 0, { 0, NULL } }
 };
 

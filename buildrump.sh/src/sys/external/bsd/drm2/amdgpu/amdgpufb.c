@@ -1,4 +1,4 @@
-/*	$NetBSD: amdgpufb.c,v 1.1 2018/08/27 14:02:32 riastradh Exp $	*/
+/*	$NetBSD: amdgpufb.c,v 1.5 2022/07/18 23:34:02 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2018 The NetBSD Foundation, Inc.
@@ -30,14 +30,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: amdgpufb.c,v 1.1 2018/08/27 14:02:32 riastradh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: amdgpufb.c,v 1.5 2022/07/18 23:34:02 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/bus.h>
 #include <sys/device.h>
 #include <sys/errno.h>
 
-#include <drm/drmP.h>
 #include <drm/drmfb.h>
 #include <drm/drmfb_pci.h>
 
@@ -59,7 +58,6 @@ struct amdgpufb_softc {
 	device_t			sc_dev;
 	struct amdgpufb_attach_args	sc_afa;
 	struct amdgpu_task		sc_attach_task;
-	bool				sc_scheduled:1;
 	bool				sc_attached:1;
 };
 
@@ -85,29 +83,17 @@ amdgpufb_attach(device_t parent, device_t self, void *aux)
 {
 	struct amdgpufb_softc *const sc = device_private(self);
 	const struct amdgpufb_attach_args *const afa = aux;
-	int error;
 
 	sc->sc_dev = self;
 	sc->sc_afa = *afa;
-	sc->sc_scheduled = false;
 	sc->sc_attached = false;
 
 	aprint_naive("\n");
 	aprint_normal("\n");
 
 	amdgpu_task_init(&sc->sc_attach_task, &amdgpufb_attach_task);
-	error = amdgpu_task_schedule(parent, &sc->sc_attach_task);
-	if (error) {
-		aprint_error_dev(self, "failed to schedule mode set: %d\n",
-		    error);
-		goto fail0;
-	}
-	sc->sc_scheduled = true;
-
-	/* Success!  */
-	return;
-
-fail0:	return;
+	amdgpu_task_schedule(parent, &sc->sc_attach_task);
+	config_pending_incr(self);
 }
 
 static int
@@ -115,9 +101,6 @@ amdgpufb_detach(device_t self, int flags)
 {
 	struct amdgpufb_softc *const sc = device_private(self);
 	int error;
-
-	if (sc->sc_scheduled)
-		return EBUSY;
 
 	if (sc->sc_attached) {
 		pmf_device_deregister(self);
@@ -154,7 +137,7 @@ amdgpufb_attach_task(struct amdgpu_task *task)
 	if (error) {
 		aprint_error_dev(sc->sc_dev, "failed to attach drmfb: %d\n",
 		    error);
-		return;
+		goto out;
 	}
 
 	if (!pmf_device_register1(sc->sc_dev, NULL, NULL, &amdgpufb_shutdown))
@@ -162,6 +145,8 @@ amdgpufb_attach_task(struct amdgpu_task *task)
 		    "failed to register shutdown handler\n");
 
 	sc->sc_attached = true;
+out:
+	config_pending_decr(sc->sc_dev);
 }
 
 static bool
@@ -179,9 +164,7 @@ amdgpufb_drmfb_mmapfb(struct drmfb_softc *drmfb, off_t offset, int prot)
 	    struct amdgpufb_softc, sc_drmfb);
 	struct drm_fb_helper *const helper = sc->sc_afa.afa_fb_helper;
 	struct drm_framebuffer *const fb = helper->fb;
-	struct amdgpu_framebuffer *const rfb = container_of(fb,
-	    struct amdgpu_framebuffer, base);
-	struct drm_gem_object *const gobj = rfb->obj;
+	struct drm_gem_object *const gobj = fb->obj[0];
 	struct amdgpu_bo *const rbo = gem_to_amdgpu_bo(gobj);
 	const unsigned num_pages __diagused = rbo->tbo.num_pages;
 	int flags = 0;

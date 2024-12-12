@@ -1,4 +1,4 @@
-/* $NetBSD: t_des.c,v 1.1 2010/08/25 16:46:36 jmmv Exp $ */
+/* $NetBSD: t_des.c,v 1.3 2024/02/10 18:43:53 andvar Exp $ */
 
 /*
  * Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com) All rights
@@ -31,7 +31,7 @@
  * mentioning features or use of this software must display the following
  * acknowledgement: "This product includes cryptographic software written by
  * Eric Young (eay@cryptsoft.com)" The word 'cryptographic' can be left out
- * if the rouines from the library being used are not cryptographic related
+ * if the routines from the library being used are not cryptographic related
  * :-). 4. If you include any Windows specific code (or a derivative thereof)
  * from the apps directory (application code) you must include an
  * acknowledgement: "This product includes software written by Tim Hudson
@@ -247,7 +247,7 @@ static unsigned char cbc_ok[32] = {
 };
 
 #ifdef SCREW_THE_PARITY
-#error "SCREW_THE_PARITY is not ment to be defined."
+#error "SCREW_THE_PARITY is not meant to be defined."
 #error "Original vectors are preserved for reference only."
 static unsigned char cbc2_key[8] = {
 	0xf0, 0xe1, 0xd2, 0xc3, 0xb4, 0xa5, 0x96, 0x87,

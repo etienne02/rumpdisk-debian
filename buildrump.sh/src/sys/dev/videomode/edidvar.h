@@ -1,4 +1,4 @@
-/*	$NetBSD: edidvar.h,v 1.3 2014/11/17 00:46:04 jmcneill Exp $	*/
+/*	$NetBSD: edidvar.h,v 1.5 2021/12/19 11:01:01 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2006 Itronix Inc.
@@ -29,10 +29,12 @@
  * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */ 
+ */
 
 #ifndef _DEV_VIDEOMODE_EDIDVAR_H
 #define _DEV_VIDEOMODE_EDIDVAR_H
+
+#include <dev/videomode/videomode.h>
 
 struct edid_chroma {
 	uint16_t	ec_redx;

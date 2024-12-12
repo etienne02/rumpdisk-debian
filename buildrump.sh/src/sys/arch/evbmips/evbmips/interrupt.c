@@ -1,4 +1,4 @@
-/*	$NetBSD: interrupt.c,v 1.24 2016/08/26 15:45:47 skrll Exp $	*/
+/*	$NetBSD: interrupt.c,v 1.28 2024/03/13 12:44:30 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
@@ -30,7 +30,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: interrupt.c,v 1.24 2016/08/26 15:45:47 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: interrupt.c,v 1.28 2024/03/13 12:44:30 riastradh Exp $");
 
 #include <sys/param.h>
 #include <sys/cpu.h>
@@ -53,11 +53,10 @@ cpu_intr(int ppl, vaddr_t pc, uint32_t status)
 	struct cpu_info * const ci = curcpu();
 	uint32_t pending;
 	int ipl;
-#ifdef DIAGNOSTIC
 	const int mtx_count = ci->ci_mtx_count;
 	const u_int biglock_count = ci->ci_biglock_count;
 	const u_int blcnt = curlwp->l_blcnt;
-#endif
+
 	KASSERT(ci->ci_cpl == IPL_HIGH);
 	KDASSERT(mips_cp0_status_read() & MIPS_SR_INT_IE);
 
@@ -84,7 +83,7 @@ cpu_intr(int ppl, vaddr_t pc, uint32_t status)
 			KASSERTMSG(ipl == IPL_SCHED,
 			    "%s: ipl (%d) != IPL_SCHED (%d)",
 			     __func__, ipl, IPL_SCHED);
-			/* call the common MIPS3 clock interrupt handler */ 
+			/* call the common MIPS3 clock interrupt handler */
 			mips3_clockintr(&cf);
 			pending ^= MIPS_INT_MASK_5;
 		}

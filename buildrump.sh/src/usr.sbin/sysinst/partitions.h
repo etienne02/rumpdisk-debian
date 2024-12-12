@@ -1,4 +1,4 @@
-/*	$NetBSD: partitions.h,v 1.22 2021/01/31 22:45:46 rillig Exp $	*/
+/*	$NetBSD: partitions.h,v 1.29 2023/01/06 18:19:27 martin Exp $	*/
 
 /*
  * Copyright (c) 2020 The NetBSD Foundation, Inc.
@@ -32,7 +32,7 @@
  * details.
  *
  * NOTE:
- *  - all sector numbers, alignement and sizes are in units of the
+ *  - all sector numbers, alignment and sizes are in units of the
  *    disks physical sector size (not necessarily 512 bytes)!
  *  - some interfaces pass the disks sector size (when it is easily
  *    available at typical callers), but the backends can always
@@ -55,11 +55,21 @@
 #include <sys/disklabel.h>
 #undef FSTYPE_ENUMNAME
 
+/*
+ * Use random values (outside uint8_t range) to mark special file system
+ * types that are not in the FSTYPE enumeration.
+ */
 #ifndef	FS_TMPFS
-#define	FS_TMPFS	256	/* random value (outside uint8_t range) */
+#define	FS_TMPFS	256	/* tmpfs (prefered for /tmp if available) */
 #endif
 #ifndef	FS_MFS
-#define	FS_MFS		257	/* another random (out of range) value */
+#define	FS_MFS		257	/* mfs, alternative to tmpfs if that is
+				   not available */
+#endif
+#ifndef	FS_EFI_SP
+#define	FS_EFI_SP	258	/* EFI system partition, uses FS_MSDOS,
+				   but may have a different partition
+				   type */
 #endif
 
 #define	MAX_LABEL_LEN		128	/* max. length of a partition label */
@@ -122,6 +132,9 @@ struct part_type_desc {
 						 * persistent; may only be
 						 * set for a single partition!
 						 */
+#define	PTI_SPECIAL_PARTS	\
+	(PTI_PSCHEME_INTERNAL|PTI_WHOLE_DISK|PTI_SEC_CONTAINER|PTI_RAW_PART)
+
 
 /* A single partition */
 struct disk_part_info {
@@ -166,7 +179,7 @@ struct disk_part_custom_attribute {
 };
 
 /*
- * When displaying a partition editor, we have standard colums, but
+ * When displaying a partition editor, we have standard columns, but
  * partitioning schemes add custom columns to the table as well.
  * There is a fixed number of columns and they are described by this
  * structure:
@@ -176,7 +189,7 @@ struct disk_part_edit_column_desc {
 	unsigned int width;
 };
 
-struct disk_partitions;	/* in-memory represenation of a set of partitions */
+struct disk_partitions;	/* in-memory representation of a set of partitions */
 
 /*
  * When querying partition "device" names, we may ask for:
@@ -214,7 +227,7 @@ struct disk_partitioning_scheme {
 	 * scheme. Depending on partitioning details it may not be
 	 * used in the end.
 	 * This link is only here for better help messages.
-	 * See *secondary_partitions further below for actually accesing
+	 * See *secondary_partitions further below for actually accessing
 	 * secondary partitions.
 	 */
 	const struct disk_partitioning_scheme *secondary_scheme;
@@ -240,11 +253,11 @@ struct disk_partitioning_scheme {
 	size_t (*get_part_types_count)(void);
 	const struct part_type_desc * (*get_part_type)(size_t ndx);
 	/*
-	 * Get the prefered native representation for a generic partition type
+	 * Get the preferred native representation for a generic partition type
 	 */
 	const struct part_type_desc * (*get_generic_part_type)(enum part_type);
 	/*
-	 * Get the prefered native partition type for a specific file system
+	 * Get the preferred native partition type for a specific file system
 	 * type (FS_*) and subtype (fs specific value)
 	 */
 	const struct part_type_desc * (*get_fs_part_type)(
@@ -294,7 +307,7 @@ struct disk_partitioning_scheme {
 	bool (*get_part_info)(const struct disk_partitions*, part_id,
 	    struct disk_part_info*);
 
-	/* Optional: fill a atribute string describing the given partition */
+	/* Optional: fill an attribute string describing the given partition */
 	bool (*get_part_attr_str)(const struct disk_partitions*, part_id,
 	    char *str, size_t avail_space);
 	/* Format a partition editor element for the "col" column in
@@ -303,14 +316,14 @@ struct disk_partitioning_scheme {
 	bool (*format_partition_table_str)(const struct disk_partitions*,
 	    part_id, size_t col, char *outstr, size_t outspace);
 
-	/* is the type of this partition changable? */
+	/* is the type of this partition changeable? */
 	bool (*part_type_can_change)(const struct disk_partitions*,
 	    part_id);
 
 	/* can we add further partitions? */
 	bool (*can_add_partition)(const struct disk_partitions*);
 
-	/* is the custom attribut changable? */
+	/* is the custom attribute changeable? */
 	bool (*custom_attribute_writable)(const struct disk_partitions*,
 	    part_id, size_t attr_no);
 	/*
@@ -434,7 +447,7 @@ struct disk_partitioning_scheme {
 	 * function pointer to NULL.
 	 *
 	 * If force_empty = true, ignore all on-disk contents and just
-	 * create a new disk_partitons structure for the secondary scheme
+	 * create a new disk_partitions structure for the secondary scheme
 	 * (this is used after deleting all partitions and setting up
 	 * things for "use whole disk").
 	 *
@@ -618,7 +631,7 @@ partitions_read_disk(const char *, daddr_t disk_size,
     size_t bytes_per_sector, bool no_mbr);
 
 /*
- * Generic part info adaption, may be overriden by individual partitionin
+ * Generic part info adaption, may be overridden by individual partitioning
  * schemes
  */
 bool generic_adapt_foreign_part_info(
@@ -627,7 +640,7 @@ bool generic_adapt_foreign_part_info(
     const struct disk_part_info *src);
 
 /*
- * One time initialization and clenaup
+ * One time initialization and cleanup
  */
 void partitions_init(void);
 void partitions_cleanup(void);

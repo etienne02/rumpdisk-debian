@@ -1,4 +1,4 @@
-/*	$NetBSD: compat_13_machdep.c,v 1.21 2011/12/13 11:03:52 kiyohara Exp $	*/
+/*	$NetBSD: compat_13_machdep.c,v 1.23 2024/06/19 15:19:22 rin Exp $	*/
 
 /*
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: compat_13_machdep.c,v 1.21 2011/12/13 11:03:52 kiyohara Exp $");
+__KERNEL_RCSID(0, "$NetBSD: compat_13_machdep.c,v 1.23 2024/06/19 15:19:22 rin Exp $");
 
 #ifdef _KERNEL_OPT
 #include "opt_ppcarch.h"
@@ -53,6 +53,22 @@ __KERNEL_RCSID(0, "$NetBSD: compat_13_machdep.c,v 1.21 2011/12/13 11:03:52 kiyoh
 
 #include <powerpc/psl.h>
 
+#ifdef _LP64
+
+/*
+ * COMPAT_13 is useful only with COMPAT_NETBSD32.
+ */
+
+int
+compat_13_sys_sigreturn(struct lwp *l,
+    const struct compat_13_sys_sigreturn_args *uap, register_t *retval)
+{
+
+	return ENOSYS;
+}
+
+#else
+
 int
 compat_13_sys_sigreturn(struct lwp *l,
     const struct compat_13_sys_sigreturn_args *uap, register_t *retval)
@@ -69,7 +85,7 @@ compat_13_sys_sigreturn(struct lwp *l,
 	/*
 	 * The trampoline hands us the context.
 	 * It is unsafe to keep track of it ourselves, in the event that a
-	 * program jumps out of a signal hander.
+	 * program jumps out of a signal handler.
 	 */
 	if ((error = copyin(SCARG(uap, sigcntxp), &sc, sizeof sc)) != 0)
 		return (error);
@@ -104,3 +120,5 @@ compat_13_sys_sigreturn(struct lwp *l,
 
 	return (EJUSTRETURN);
 }
+
+#endif /* !_LP64 */

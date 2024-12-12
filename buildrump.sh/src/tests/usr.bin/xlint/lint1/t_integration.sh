@@ -1,4 +1,4 @@
-# $NetBSD: t_integration.sh,v 1.69 2021/08/21 11:50:57 rillig Exp $
+# $NetBSD: t_integration.sh,v 1.84 2024/06/08 06:42:59 rillig Exp $
 #
 # Copyright (c) 2008, 2010 The NetBSD Foundation, Inc.
 # All rights reserved.
@@ -25,7 +25,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 #
 
-lint1=/usr/libexec/lint1
+: "${lint1:=/usr/libexec/lint1}"
 : "${archsubdir:=archsubdir_must_be_set}"
 
 
@@ -36,34 +36,33 @@ configure_test_case()
 	# shellcheck disable=SC2016
 	awk='
 		BEGIN {
-			# see usr.bin/xlint/arch/*/targparam.h
-			platform["aarch64"]	= "schar lp64  long ldbl-128"
-			platform["alpha"]	= "schar lp64  long ldbl-64"
-			platform["arm"]		= "uchar ilp32 long ldbl-64"
-			platform["coldfire"]	= "schar ilp32 int  ldbl-64"
-			platform["hppa"]	= "schar ilp32 long ldbl-64"
-			platform["i386"]	= "schar ilp32 int  ldbl-96"
-			platform["ia64"]	= "schar lp64  long ldbl-128"
-			platform["m68000"]	= "schar ilp32 int  ldbl-64"
-			platform["m68k"]	= "schar ilp32 int  ldbl-96"
-			platform["mips"]	= "schar ilp32 ???? ldbl-64"
-			platform["mips64"]	= "schar ilp32 long ldbl-128"
-			platform["mipsn64"]	= "schar lp64  long ldbl-128"
-			platform["or1k"]	= "schar ilp32 int  ldbl-64"
-			platform["powerpc"]	= "uchar ilp32 int  ldbl-64"
-			platform["powerpc64"]	= "uchar lp64  long ldbl-64"
-			platform["powerpc64"]	= "uchar lp64  long ldbl-64"
-			platform["riscv32"]	= "schar ilp32 int  ldbl-64"
-			platform["riscv64"]	= "schar lp64  long ldbl-64"
-			platform["sh3"]		= "schar ilp32 int  ldbl-64"
-			platform["sparc"]	= "schar ilp32 long ldbl-64"
-			platform["sparc64"]	= "schar lp64  long ldbl-128"
-			platform["vax"]		= "schar ilp32 long ldbl-64"
-			platform["x86_64"]	= "schar lp64  long ldbl-128"
+			# see ./gen-platforms.sh
+			platform["aarch64"]	= "uchar lp64  long ldbl128"
+			platform["alpha"]	= "schar lp64  long ldbl64"
+			platform["arm"]		= "uchar ilp32 long ldbl64"
+			platform["coldfire"]	= "schar ilp32 int  ldbl64"
+			platform["hppa"]	= "schar ilp32 long ldbl64"
+			platform["i386"]	= "schar ilp32 int  ldbl96"
+			platform["ia64"]	= "schar lp64  long ldbl128"
+			platform["m68000"]	= "schar ilp32 int  ldbl64"
+			platform["m68k"]	= "schar ilp32 int  ldbl96"
+			platform["mips"]	= "schar ilp32 ???? ldbl64"
+			platform["mips64"]	= "schar ilp32 long ldbl128"
+			platform["mipsn64"]	= "schar lp64  long ldbl128"
+			platform["or1k"]	= "schar ilp32 int  ldbl64"
+			platform["powerpc"]	= "uchar ilp32 int  ldbl64"
+			platform["powerpc64"]	= "uchar lp64  long ldbl64"
+			platform["riscv32"]	= "schar ilp32 int  ldbl64"
+			platform["riscv64"]	= "schar lp64  long ldbl64"
+			platform["sh3"]		= "schar ilp32 int  ldbl64"
+			platform["sparc"]	= "schar ilp32 long ldbl64"
+			platform["sparc64"]	= "schar lp64  long ldbl128"
+			platform["vax"]		= "schar ilp32 long ldbl64"
+			platform["x86_64"]	= "schar lp64  long ldbl128"
 		}
 
 		function platform_has(prop) {
-			if (!match(prop, /^(schar|uchar|ilp32|lp64|int|long|ldbl-64|ldbl-96|ldbl-128)$/)) {
+			if (!match(prop, /^(schar|uchar|ilp32|lp64|int|long|ldbl64|ldbl96|ldbl128)$/)) {
 				printf("bad property '\''%s'\''\n", prop) > "/dev/stderr"
 				exit(1)
 			}
@@ -86,11 +85,9 @@ configure_test_case()
 				for (i = 3; i < NF; i++)
 					flags = flags " " $i
 			} else if ($2 == "lint1-only-if:") {
-				 if (!platform_has($3))
-				 	skip = "yes"
-			} else if ($2 == "lint1-skip-if:") {
-				if (platform_has($3))
-					skip = "yes"
+				for (i = 3; i < NF; i++)
+					if (!platform_has($i))
+						skip = "yes"
 			} else {
 				printf("bad lint1 comment '\''%s'\''\n", $2) > "/dev/stderr"
 				exit(1)
@@ -106,13 +103,21 @@ configure_test_case()
 	local config
 	config="$(awk "$awk" "$1")" || exit 1
 	eval "$config"
+
+	case "_${1%.c}_" in
+	*_utf8_*)
+		LC_ALL=en_US.UTF-8;;
+	*)
+		LC_ALL=C;;
+	esac
+	export LC_ALL
 }
 
 # shellcheck disable=SC2155
 check_lint1()
 {
 	local src="$(atf_get_srcdir)/$1"
-	local exp="${src%.c}.exp"
+	local exp="${1%.c}.exp"
 	local exp_ln="${src%.c}.exp-ln"
 	local wrk_ln="${1%.c}.ln"
 	local flags=""
@@ -129,18 +134,21 @@ check_lint1()
 		atf_skip "unsuitable platform"
 	fi
 
-	if [ -f "$exp" ]; then
-		# shellcheck disable=SC2086
-		atf_check -s not-exit:0 -o "file:$exp" -e empty \
-		    "$lint1" $flags "$src" "$wrk_ln"
-	else
-		# shellcheck disable=SC2086
-		atf_check -s exit:0 \
-		    "$lint1" $flags "$src" "$wrk_ln"
-	fi
+	# shellcheck disable=SC2086
+	atf_check -s 'exit' -o "save:$exp" \
+	    "$lint1" $flags "$src" "$wrk_ln"
+	atf_check lua "$(atf_get_srcdir)/check-expect.lua" "$src"
 
 	if [ "$exp_ln" != '/dev/null' ]; then
-		atf_check -o "file:$exp_ln" cat "$wrk_ln"
+		# Remove comments and whitespace from the .exp-ln file.
+		sed \
+		    -e '/^#/d' \
+		    -e '/^$/d' \
+		    -e 's,^#.*,,' \
+		    -e 's,\([^%]\)[[:space:]],\1,g' \
+		    < "$exp_ln" > "./${exp_ln##*/}"
+
+		atf_check -o "file:${exp_ln##*/}" cat "$wrk_ln"
 	fi
 }
 

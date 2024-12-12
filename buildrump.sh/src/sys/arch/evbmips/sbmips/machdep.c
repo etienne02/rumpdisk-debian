@@ -1,4 +1,4 @@
-/* $NetBSD: machdep.c,v 1.5 2019/04/01 06:33:57 simonb Exp $ */
+/* $NetBSD: machdep.c,v 1.8 2024/03/05 14:15:31 thorpej Exp $ */
 
 /*
  * Copyright 2000, 2001
@@ -58,7 +58,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.5 2019/04/01 06:33:57 simonb Exp $");
+__KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.8 2024/03/05 14:15:31 thorpej Exp $");
 
 #include "opt_ddb.h"
 #include "opt_execfmt.h"
@@ -75,7 +75,6 @@ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.5 2019/04/01 06:33:57 simonb Exp $");
 #include <sys/kcore.h>
 #include <sys/kernel.h>
 #include <sys/ksyms.h>
-#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mount.h>
 #include <sys/msgbuf.h>
@@ -334,7 +333,7 @@ mach_init(long fwhandle, long magic, long bootdata, long reserved)
 	}
 
 #ifdef MULTIPROCESSOR
-	mips_fixup_exceptions(mips_fixup_zero_relative);
+	mips_fixup_exceptions(mips_fixup_zero_relative, NULL);
 #endif
 }
 
@@ -372,12 +371,6 @@ cpu_reboot(int howto, char *bootstr)
 	if ((howto & RB_NOSYNC) == 0 && (waittime < 0)) {
 		waittime = 0;
 		vfs_shutdown();
-
-		/*
-		 * If we've been adjusting the clock, the todr
-		 * will be out of synch; adjust it now.
-		 */
-		resettodr();
 	}
 
 	splhigh();

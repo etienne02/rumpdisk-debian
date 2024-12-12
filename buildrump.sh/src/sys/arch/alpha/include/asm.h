@@ -1,4 +1,4 @@
-/* $NetBSD: asm.h,v 1.44 2020/09/04 03:53:12 thorpej Exp $ */
+/* $NetBSD: asm.h,v 1.46 2024/06/09 22:35:37 riastradh Exp $ */
 
 /*
  * Copyright (c) 1991,1990,1989,1994,1995,1996 Carnegie Mellon University
@@ -649,7 +649,14 @@ label:	ASCIZ msg;						\
 
 #ifdef _KERNEL
 
+#ifdef _NETBSD_REVISIONID
+#define	__KERNEL_RCSID(_n, _s)						      \
+	__SECTIONSTRING(.ident, _s);					      \
+	__SECTIONSTRING(.ident,						      \
+	    "$" "NetBSD: " __FILE__ " " _NETBSD_REVISIONID " $")
+#else
 #define	__KERNEL_RCSID(_n, _s)		__SECTIONSTRING(.ident, _s)
+#endif
 #define	__KERNEL_COPYRIGHT(_n, _s)	__SECTIONSTRING(.copyright, _s)
 
 #ifdef NO_KERNEL_RCSIDS
@@ -669,10 +676,30 @@ label:	ASCIZ msg;						\
 #define	GET_CURLWP							\
 	call_pal PAL_OSF1_rdval
 
+/*
+ * Issue barriers to coordinate mutex_exit on this CPU with
+ * mutex_vector_enter on another CPU.
+ *
+ * 1. Any prior mutex_exit by oldlwp must be visible to other
+ *    CPUs before we set ci_curlwp := newlwp on this one,
+ *    requiring a store-before-store barrier.
+ *
+ * 2. ci_curlwp := newlwp must be visible on all other CPUs
+ *    before any subsequent mutex_exit by newlwp can even test
+ *    whether there might be waiters, requiring a
+ *    store-before-load barrier.
+ *
+ * See kern_mutex.c for details -- this is necessary for
+ * adaptive mutexes to detect whether the lwp is on the CPU in
+ * order to safely block without requiring atomic r/m/w in
+ * mutex_exit.
+ */
 #define	SET_CURLWP(r)							\
 	ldq	v0, L_CPU(r)					;	\
 	mov	r, a0						;	\
+	wmb	/* store-before-store XXX patch out if !MP? */	;	\
 	stq	r, CPU_INFO_CURLWP(v0)				;	\
+	mb	/* store-before-load XXX patch out if !MP? */	;	\
 	call_pal PAL_OSF1_wrval
 
 #else	/* if not MULTIPROCESSOR... */
@@ -686,7 +713,16 @@ IMPORT(cpu_info_primary, CPU_INFO_SIZEOF)
 				stq r, CPU_INFO_CURLWP(v0)
 
 #endif /* MULTIPROCESSOR */
+
+#else /* !_KERNEL */
+
+#ifdef _NETBSD_REVISIONID
+#define	RCSID(_s)							      \
+	__SECTIONSTRING(.ident, _s);					      \
+	__SECTIONSTRING(.ident,						      \
+	    "$" "NetBSD: " __FILE__ " " _NETBSD_REVISIONID " $")
 #else
 #define	RCSID(_s)		__SECTIONSTRING(.ident, _s)
+#endif
 
 #endif /* _KERNEL */

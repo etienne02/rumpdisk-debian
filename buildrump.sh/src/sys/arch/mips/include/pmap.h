@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.h,v 1.75 2020/12/20 16:38:25 skrll Exp $	*/
+/*	$NetBSD: pmap.h,v 1.77 2022/10/26 07:35:19 skrll Exp $	*/
 
 /*
  * Copyright (c) 1992, 1993
@@ -100,7 +100,7 @@ struct vm_page_md;
 
 #define	PMAP_VIRTUAL_CACHE_ALIASES
 #define	PMAP_INVALID_SEGTAB_ADDRESS	((pmap_segtab_t *)NULL)
-#define	PMAP_TLB_NEED_SHOOTDOWN
+#define	PMAP_TLB_NEED_SHOOTDOWN		1
 #define	PMAP_TLB_FLUSH_ASID_ON_RESET	false
 #if UPAGES > 1
 #define	PMAP_TLB_WIRED_UPAGES		MIPS3_TLB_WIRED_UPAGES
@@ -157,6 +157,28 @@ pmap_md_xtab_deactivate(struct pmap *pm)
 }
 
 #endif /* __PMAP_PRIVATE */
+
+// these use register_t so we can pass XKPHYS addresses to them on N32
+bool	pmap_md_direct_mapped_vaddr_p(register_t);
+paddr_t	pmap_md_direct_mapped_vaddr_to_paddr(register_t);
+bool	pmap_md_io_vaddr_p(vaddr_t);
+
+/*
+ * Alternate mapping hooks for pool pages.  Avoids thrashing the TLB.
+ */
+vaddr_t pmap_md_map_poolpage(paddr_t, size_t);
+paddr_t pmap_md_unmap_poolpage(vaddr_t, size_t);
+struct vm_page *pmap_md_alloc_poolpage(int);
+
+/*
+ * Other hooks for the pool allocator.
+ */
+paddr_t	pmap_md_pool_vtophys(vaddr_t);
+vaddr_t	pmap_md_pool_phystov(paddr_t);
+#define	POOL_VTOPHYS(va)	pmap_md_pool_vtophys((vaddr_t)va)
+#define	POOL_PHYSTOV(pa)	pmap_md_pool_phystov((paddr_t)pa)
+
+#define pmap_md_direct_map_paddr(pa)	pmap_md_pool_phystov((paddr_t)pa)
 
 struct tlbmask {
 	vaddr_t	tlb_hi;
@@ -240,26 +262,6 @@ void	pmap_prefer(vaddr_t, vaddr_t *, vsize_t, int);
 #endif /* MIPS3_PLUS */
 
 #define	PMAP_ENABLE_PMAP_KMPAGE	/* enable the PMAP_KMPAGE flag */
-
-// these use register_t so we can pass XKPHYS addresses to them on N32
-bool	pmap_md_direct_mapped_vaddr_p(register_t);
-paddr_t	pmap_md_direct_mapped_vaddr_to_paddr(register_t);
-bool	pmap_md_io_vaddr_p(vaddr_t);
-
-/*
- * Alternate mapping hooks for pool pages.  Avoids thrashing the TLB.
- */
-vaddr_t pmap_md_map_poolpage(paddr_t, size_t);
-paddr_t pmap_md_unmap_poolpage(vaddr_t, size_t);
-struct vm_page *pmap_md_alloc_poolpage(int);
-
-/*
- * Other hooks for the pool allocator.
- */
-paddr_t	pmap_md_pool_vtophys(vaddr_t);
-vaddr_t	pmap_md_pool_phystov(paddr_t);
-#define	POOL_VTOPHYS(va)	pmap_md_pool_vtophys((vaddr_t)va)
-#define	POOL_PHYSTOV(pa)	pmap_md_pool_phystov((paddr_t)pa)
 
 #ifdef MIPS64_SB1
 /* uncached accesses are bad; all accesses should be cached (and coherent) */

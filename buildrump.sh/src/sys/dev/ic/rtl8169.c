@@ -1,4 +1,4 @@
-/*	$NetBSD: rtl8169.c,v 1.167 2020/09/21 06:57:00 msaitoh Exp $	*/
+/*	$NetBSD: rtl8169.c,v 1.179 2024/08/12 21:27:34 christos Exp $	*/
 
 /*
  * Copyright (c) 1997, 1998-2003
@@ -33,7 +33,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: rtl8169.c,v 1.167 2020/09/21 06:57:00 msaitoh Exp $");
+__KERNEL_RCSID(0, "$NetBSD: rtl8169.c,v 1.179 2024/08/12 21:27:34 christos Exp $");
 /* $FreeBSD: /repoman/r/ncvs/src/sys/dev/re/if_re.c,v 1.20 2004/04/11 20:34:08 ru Exp $ */
 
 /*
@@ -117,7 +117,6 @@ __KERNEL_RCSID(0, "$NetBSD: rtl8169.c,v 1.167 2020/09/21 06:57:00 msaitoh Exp $"
 #include <sys/systm.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/socket.h>
 #include <sys/device.h>
@@ -589,8 +588,7 @@ re_diag(struct rtk_softc *sc)
 	sc->re_testmode = 0;
 	ifp->if_flags &= ~IFF_PROMISC;
 	re_stop(ifp, 0);
-	if (m0 != NULL)
-		m_freem(m0);
+	m_freem(m0);
 
 	return error;
 }
@@ -665,31 +663,27 @@ re_attach(struct rtk_softc *sc)
 			sc->sc_quirk |= RTKQ_NOJUMBO;
 			break;
 		case RTK_HWREV_8168E:
-		case RTK_HWREV_8168H_SPIN1:
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
 			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_PHYWAKE_PM |
 			    RTKQ_NOJUMBO;
 			break;
-		case RTK_HWREV_8168H:
-		case RTK_HWREV_8168FP:
-			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
-			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_PHYWAKE_PM |
-			    RTKQ_NOJUMBO | RTKQ_RXDV_GATED | RTKQ_TXRXEN_LATER;
-			break;
 		case RTK_HWREV_8168E_VL:
 		case RTK_HWREV_8168F:
+			sc->sc_quirk |= RTKQ_EARLYOFF;
+			/*FALLTHROUGH*/
 		case RTK_HWREV_8411:
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
 			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_NOJUMBO;
 			break;
 		case RTK_HWREV_8168EP:
+		case RTK_HWREV_8168FP:
 		case RTK_HWREV_8168G:
-		case RTK_HWREV_8168G_SPIN1:
-		case RTK_HWREV_8168G_SPIN2:
+		case RTK_HWREV_8168GU:
+		case RTK_HWREV_8168H:
 		case RTK_HWREV_8411B:
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD |
 			    RTKQ_MACSTAT | RTKQ_CMDSTOP | RTKQ_NOJUMBO | 
-			    RTKQ_RXDV_GATED;
+			    RTKQ_RXDV_GATED | RTKQ_TXRXEN_LATER;
 			break;
 		case RTK_HWREV_8100E:
 		case RTK_HWREV_8100E_SPIN2:
@@ -720,7 +714,6 @@ re_attach(struct rtk_softc *sc)
 			    RTKQ_CMDSTOP; /* CMDSTOP_WAIT_TXQ */
 			break;
 		default:
-			aprint_normal_dev(sc->sc_dev, "Use default quirks\n");
 			/* assume the latest features */
 			sc->sc_quirk |= RTKQ_DESCV2 | RTKQ_NOEECMD;
 			sc->sc_quirk |= RTKQ_NOJUMBO;
@@ -743,7 +736,7 @@ re_attach(struct rtk_softc *sc)
 	/*
 	 * RTL81x9 chips automatically read EEPROM to init MAC address,
 	 * and some NAS override its MAC address per own configuration,
-	 * so no need to explicitely read EEPROM and set ID registers.
+	 * so no need to explicitly read EEPROM and set ID registers.
 	 */
 #ifdef RE_USE_EECMD
 	if ((sc->sc_quirk & RTKQ_NOEECMD) != 0) {
@@ -1188,8 +1181,7 @@ re_newbuf(struct rtk_softc *sc, int idx, struct mbuf *m)
 
 	return 0;
  out:
-	if (n != NULL)
-		m_freem(n);
+	m_freem(n);
 	return ENOMEM;
 }
 
@@ -1479,11 +1471,11 @@ re_txeof(struct rtk_softc *sc)
 
 		net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 		if (txstat & (RE_TDESC_STAT_EXCESSCOL | RE_TDESC_STAT_COLCNT))
-			if_statinc_ref(nsr, if_collisions);
+			if_statinc_ref(ifp, nsr, if_collisions);
 		if (txstat & RE_TDESC_STAT_TXERRSUM)
-			if_statinc_ref(nsr, if_oerrors);
+			if_statinc_ref(ifp, nsr, if_oerrors);
 		else
-			if_statinc_ref(nsr, if_opackets);
+			if_statinc_ref(ifp, nsr, if_opackets);
 		IF_STAT_PUTREF(ifp);
 	}
 
@@ -1537,7 +1529,7 @@ re_intr(void *arg)
 {
 	struct rtk_softc *sc = arg;
 	struct ifnet *ifp;
-	uint16_t status;
+	uint16_t status, rndstatus = 0;
 	int handled = 0;
 
 	if (!device_has_power(sc->sc_dev))
@@ -1557,9 +1549,10 @@ re_intr(void *arg)
 		/* If the card has gone away the read returns 0xffff. */
 		if (status == 0xffff)
 			break;
-		if (status) {
+		if (status != 0) {
 			handled = 1;
 			CSR_WRITE_2(sc, RTK_ISR, status);
+			rndstatus = status;
 		}
 
 		if ((status & status_mask) == 0)
@@ -1585,7 +1578,7 @@ re_intr(void *arg)
 	if (handled)
 		if_schedule_deferred_start(ifp);
 
-	rnd_add_uint32(&sc->rnd_source, status);
+	rnd_add_uint32(&sc->rnd_source, rndstatus);
 
 	return handled;
 }
@@ -1978,6 +1971,10 @@ re_init(struct ifnet *ifp)
 	/* Set the individual bit to receive frames for this host only. */
 	rxcfg = CSR_READ_4(sc, RTK_RXCFG);
 	rxcfg |= RTK_RXCFG_RX_INDIV;
+	if (sc->sc_quirk & RTKQ_EARLYOFF)
+		rxcfg |= RTK_RXCFG_EARLYOFF;
+	else if (sc->sc_quirk & RTKQ_RXDV_GATED)
+		rxcfg |= RTK_RXCFG_EARLYOFFV2;
 
 	/* If we want promiscuous mode, set the allframes bit. */
 	if (ifp->if_flags & IFF_PROMISC)
@@ -2136,7 +2133,7 @@ re_ioctl(struct ifnet *ifp, u_long command, void *data)
 		error = 0;
 
 		if (command == SIOCSIFCAP)
-			error = (*ifp->if_init)(ifp);
+			error = if_init(ifp);
 		else if (command != SIOCADDMULTI && command != SIOCDELMULTI)
 			;
 		else if (ifp->if_flags & IFF_RUNNING)
@@ -2181,6 +2178,21 @@ re_stop(struct ifnet *ifp, int disable)
 	callout_stop(&sc->rtk_tick_ch);
 
 	mii_down(&sc->mii);
+
+	/*
+	 * Disable accepting frames to put RX MAC into idle state.
+	 * Otherwise it's possible to get frames while stop command
+	 * execution is in progress and controller can DMA the frame
+	 * to already freed RX buffer during that period.
+	 */
+	CSR_WRITE_4(sc, RTK_RXCFG, CSR_READ_4(sc, RTK_RXCFG) &
+	    ~(RTK_RXCFG_RX_ALLPHYS | RTK_RXCFG_RX_INDIV | RTK_RXCFG_RX_MULTI |
+	    RTK_RXCFG_RX_BROAD));
+
+	if (sc->sc_quirk & RTKQ_RXDV_GATED) {
+		CSR_WRITE_4(sc, RTK_MISC,
+		    CSR_READ_4(sc, RTK_MISC) | RTK_MISC_RXDV_GATED_EN);
+	}
 
 	if ((sc->sc_quirk & RTKQ_CMDSTOP) != 0)
 		CSR_WRITE_1(sc, RTK_COMMAND, RTK_CMD_STOPREQ | RTK_CMD_TX_ENB |

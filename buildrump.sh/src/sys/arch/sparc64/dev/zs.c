@@ -1,4 +1,4 @@
-/*	$NetBSD: zs.c,v 1.77 2021/08/07 16:19:05 thorpej Exp $	*/
+/*	$NetBSD: zs.c,v 1.81 2023/12/12 23:38:11 andvar Exp $	*/
 
 /*-
  * Copyright (c) 1996 The NetBSD Foundation, Inc.
@@ -38,7 +38,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.77 2021/08/07 16:19:05 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.81 2023/12/12 23:38:11 andvar Exp $");
 
 #include "opt_ddb.h"
 #include "opt_kgdb.h"
@@ -66,6 +66,8 @@ __KERNEL_RCSID(0, "$NetBSD: zs.c,v 1.77 2021/08/07 16:19:05 thorpej Exp $");
 #include <dev/cons.h>
 #include <dev/ic/z8530reg.h>
 #include <dev/sun/kbd_ms_ttyvar.h>
+
+#include <ddb/db_active.h>
 #include <ddb/db_output.h>
 
 #include <dev/sbus/sbusvar.h>
@@ -530,33 +532,18 @@ zscheckintr(void *arg)
 }
 
 
-/*
- * We need this only for TTY_DEBUG purposes.
- */
 static void
 zssoft(void *arg)
 {
 	struct zsc_softc *zsc = arg;
 
 #if 0 /* not yet */
-	/* Make sure we call the tty layer with tty_lock held. */
-	mutex_spin_enter(&tty_lock);
+	/* Make sure we call the tty layer with ttylock held. */
+	ttylock(tp);
 #endif
 	(void)zsc_intr_soft(zsc);
-#ifdef TTY_DEBUG
-	{
-		struct zstty_softc *zst0 = zsc->zsc_cs[0]->cs_private;
-		struct zstty_softc *zst1 = zsc->zsc_cs[1]->cs_private;
-		if (zst0->zst_overflows || zst1->zst_overflows ) {
-			struct trapframe *frame = (struct trapframe *)arg;
-			
-			printf("zs silo overflow from %p\n",
-			       (long)frame->tf_pc);
-		}
-	}
-#endif
 #if 0 /* not yet */
-	mutex_spin_exit(&tty_lock);
+	ttyunlock(tp);
 #endif
 }
 
@@ -615,7 +602,7 @@ zs_set_modes(struct zs_chanstate *cs, int cflag)
 	/*
 	 * Output hardware flow control on the chip is horrendous:
 	 * if carrier detect drops, the receiver is disabled, and if
-	 * CTS drops, the transmitter is stoped IN MID CHARACTER!
+	 * CTS drops, the transmitter is stopped IN MID CHARACTER!
 	 * Therefore, NEVER set the HFC bit, and instead use the
 	 * status interrupt to detect CTS changes.
 	 */
@@ -738,15 +725,11 @@ zs_abort(struct zs_chanstate *cs)
 #if defined(KGDB)
 	zskgdb(cs);
 #elif defined(DDB)
-	{
-		extern int db_active;
-		
-		if (!db_active)
-			Debugger();
-		else
-			/* Debugger is probably hozed */
-			callrom();
-	}
+	if (!db_active)
+		Debugger();
+	else
+		/* Debugger is probably hozed */
+		callrom();
 #else
 	printf("stopping on keyboard abort\n");
 	callrom();

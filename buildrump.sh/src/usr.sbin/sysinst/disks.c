@@ -1,4 +1,4 @@
-/*	$NetBSD: disks.c,v 1.76 2021/08/21 11:55:26 andvar Exp $ */
+/*	$NetBSD: disks.c,v 1.95 2023/06/24 05:25:04 msaitoh Exp $ */
 
 /*
  * Copyright 1997 Piermont Information Systems Inc.
@@ -61,6 +61,8 @@
 #include <dev/ata/atareg.h>
 #include <sys/ataio.h>
 
+#include <sys/drvctlio.h>
+
 #include "defs.h"
 #include "md.h"
 #include "msg_defs.h"
@@ -86,12 +88,12 @@ static const char name_prefix[] = NAME_PREFIX;
 
 /* things we could have as /sbin/newfs_* and /sbin/fsck_* */
 static const char *extern_fs_with_chk[] = {
-	"ext2fs", "lfs", "msdos", "v7fs"
+	"ext2fs", "lfs", "msdos", "udf", "v7fs"
 };
 
 /* things we could have as /sbin/newfs_* but not /sbin/fsck_* */
 static const char *extern_fs_newfs_only[] = {
-	"sysvbfs", "udf"
+	"sysvbfs"
 };
 
 /* Local prototypes */
@@ -110,10 +112,16 @@ getfslabelname(uint f, uint f_version)
 		return "tmpfs";
 	else if (f == FS_MFS)
 		return "mfs";
-	else if (f == FS_BSDFFS && f_version > 0)
-		return f_version == 2 ?
-		    msg_string(MSG_fs_type_ffsv2) : msg_string(MSG_fs_type_ffs);
-	else if (f == FS_EX2FS && f_version == 1)
+	else if (f == FS_EFI_SP)
+		return msg_string(MSG_fs_type_efi_sp);
+	else if (f == FS_BSDFFS) {
+		switch (f_version) {
+		default:
+		case 1:	return msg_string(MSG_fs_type_ffs);
+		case 2:	return msg_string(MSG_fs_type_ffsv2);
+		case 3:	return msg_string(MSG_fs_type_ffsv2ea);
+		}
+	} else if (f == FS_EX2FS && f_version == 1)
 		return msg_string(MSG_fs_type_ext2old);
 	else if (f >= __arraycount(fstypenames) || fstypenames[f] == NULL)
 		return "invalid";
@@ -121,12 +129,12 @@ getfslabelname(uint f, uint f_version)
 }
 
 /*
- * Decide wether we want to mount a tmpfs on /var/shm: we do this always
+ * Decide whether we want to mount a tmpfs on /var/shm: we do this always
  * when the machine has more than 16 MB of user memory. On smaller machines,
  * shm_open() and friends will not perform well anyway.
  */
 static bool
-tmpfs_on_var_shm()
+tmpfs_on_var_shm(void)
 {
 	uint64_t ram;
 	size_t len;
@@ -136,6 +144,19 @@ tmpfs_on_var_shm()
 		return false;
 
 	return ram > 16 * MEG;
+}
+
+/*
+ * Find length of string but ignore trailing whitespace
+ */
+static int
+trimmed_len(const char *s)
+{
+	size_t len = strlen(s);
+
+	while (len > 0 && isspace((unsigned char)s[len - 1]))
+		len--;
+	return len;
 }
 
 /* from src/sbin/atactl/atactl.c
@@ -321,23 +342,89 @@ get_descr_ata(struct disk_desc *dd)
 	return 1;
 }
 
+static int
+get_descr_drvctl(struct disk_desc *dd)
+{
+	prop_dictionary_t command_dict;
+	prop_dictionary_t args_dict;
+	prop_dictionary_t results_dict;
+	prop_dictionary_t props;
+	int8_t perr;
+	int error, fd;
+	bool rv;
+	char size[5];
+	const char *model;
+
+	fd = open("/dev/drvctl", O_RDONLY);
+	if (fd == -1)
+		return 0;
+
+	command_dict = prop_dictionary_create();
+	args_dict = prop_dictionary_create();
+
+	prop_dictionary_set_string_nocopy(command_dict, "drvctl-command",
+	    "get-properties");
+	prop_dictionary_set_string_nocopy(args_dict, "device-name",
+	    dd->dd_name);
+	prop_dictionary_set(command_dict, "drvctl-arguments", args_dict);
+	prop_object_release(args_dict);
+
+	error = prop_dictionary_sendrecv_ioctl(command_dict, fd,
+	    DRVCTLCOMMAND, &results_dict);
+	prop_object_release(command_dict);
+	close(fd);
+	if (error)
+		return 0;
+
+	rv = prop_dictionary_get_int8(results_dict, "drvctl-error", &perr);
+	if (rv == false || perr != 0) {
+		prop_object_release(results_dict);
+		return 0;
+	}
+
+	props = prop_dictionary_get(results_dict,
+	    "drvctl-result-data");
+	if (props == NULL) {
+		prop_object_release(results_dict);
+		return 0;
+	}
+	props = prop_dictionary_get(props, "disk-info");
+	if (props == NULL ||
+	    !prop_dictionary_get_string(props, "type", &model)) {
+		prop_object_release(results_dict);
+		return 0;
+	}
+
+	humanize_number(size, sizeof(size),
+	    (uint64_t)dd->dd_secsize * (uint64_t)dd->dd_totsec,
+	    "", HN_AUTOSCALE, HN_B | HN_NOSPACE | HN_DECIMAL);
+
+	snprintf(dd->dd_descr, sizeof(dd->dd_descr), "%s (%s, %.*s)",
+	    dd->dd_name, size, trimmed_len(model), model);
+
+	prop_object_release(results_dict);
+
+	return 1;
+}
+
 static void
 get_descr(struct disk_desc *dd)
 {
 	char size[5];
 	dd->dd_descr[0] = '\0';
 
+	/* try drvctl first, fallback to direct probing */
+	if (get_descr_drvctl(dd))
+		return;
 	/* try ATA */
 	if (get_descr_ata(dd))
-		goto done;
+		return;
 	/* try SCSI */
 	if (get_descr_scsi(dd))
-		goto done;
-
-	/* XXX: identify for ld @ NVME or microSD */
+		return;
 
 	/* XXX: get description from raid, cgd, vnd... */
-done:
+
 	/* punt, just give some generic info */
 	humanize_number(size, sizeof(size),
 	    (uint64_t)dd->dd_secsize * (uint64_t)dd->dd_totsec,
@@ -709,12 +796,13 @@ delete_scheme(struct pm_devs *p)
 }
 
 
-static void
+static bool
 convert_copy(struct disk_partitions *old_parts,
     struct disk_partitions *new_parts)
 {
 	struct disk_part_info oinfo, ninfo;
 	part_id i;
+	bool err = false;
 
 	for (i = 0; i < old_parts->num_part; i++) {
 		if (!old_parts->pscheme->get_part_info(old_parts, i, &oinfo))
@@ -729,17 +817,23 @@ convert_copy(struct disk_partitions *old_parts,
 					old_parts->pscheme->
 					    secondary_partitions(
 					    old_parts, oinfo.start, false);
-				if (sec_part)
-					convert_copy(sec_part, new_parts);
+				if (sec_part && !convert_copy(sec_part,
+				    new_parts))
+					err = true;
 			}
 			continue;
 		}
 
 		if (!new_parts->pscheme->adapt_foreign_part_info(new_parts,
-			    &ninfo, old_parts->pscheme, &oinfo))
+			    &ninfo, old_parts->pscheme, &oinfo)) {
+			err = true;
 			continue;
-		new_parts->pscheme->add_partition(new_parts, &ninfo, NULL);
+		}
+		if (!new_parts->pscheme->add_partition(new_parts, &ninfo,
+		    NULL))
+			err = true;
 	}
+	return !err;
 }
 
 bool
@@ -768,10 +862,10 @@ convert_scheme(struct pm_devs *p, bool is_boot_drive, const char **err_msg)
 		return false;
 	}
 
-	convert_copy(old_parts, new_parts);
-
-	if (new_parts->num_part == 0 && old_parts->num_part != 0) {
+	if (!convert_copy(old_parts, new_parts)) {
 		/* need to cleanup */
+		if (err_msg)
+			*err_msg = MSG_cvtscheme_error;
 		new_parts->pscheme->free(new_parts);
 		return false;
 	}
@@ -806,14 +900,19 @@ find_disks(const char *doingwhat, bool allow_cur_system)
 {
 	struct disk_desc disks[MAX_DISKS];
 	/* need two more menu entries: current system + extended partitioning */
-	menu_ent dsk_menu[__arraycount(disks) + 2];
+	menu_ent dsk_menu[__arraycount(disks) + 2],
+	    wedge_menu[__arraycount(dsk_menu)];
+	int disk_no[__arraycount(dsk_menu)], wedge_no[__arraycount(dsk_menu)];
 	struct disk_desc *disk;
-	int i = 0, skipped = 0;
+	int i = 0, dno, wno, skipped = 0;
 	int already_found, numdisks, selected_disk = -1;
-	int menu_no;
+	int menu_no, w_menu_no;
+	size_t max_desc_len;
 	struct pm_devs *pm_i, *pm_last = NULL;
+	bool any_wedges = false;
 
 	memset(dsk_menu, 0, sizeof(dsk_menu));
+	memset(wedge_menu, 0, sizeof(wedge_menu));
 
 	/* Find disks. */
 	numdisks = get_disks(disks, partman_go <= 0);
@@ -823,6 +922,13 @@ find_disks(const char *doingwhat, bool allow_cur_system)
 	refresh();
 	/* Kill typeahead, it won't be what the user had in mind */
 	fpurge(stdin);
+	/*
+	 * we need space for the menu box and the row label,
+	 * this sums up to 7 characters.
+	 */
+	max_desc_len = getmaxx(stdscr) - 8;
+	if (max_desc_len >= __arraycount(disks[0].dd_descr))
+		max_desc_len = __arraycount(disks[0].dd_descr) - 1;
 
 	/*
 	 * partman_go: <0 - we want to see menu with extended partitioning
@@ -838,49 +944,102 @@ find_disks(const char *doingwhat, bool allow_cur_system)
 			return -1;
 		} else {
 			/* One or more disks found or current system allowed */
-			i = 0;
+			dno = wno = 0;
 			if (allow_cur_system) {
-				dsk_menu[i].opt_name = MSG_running_system;
-				dsk_menu[i].opt_flags = OPT_EXIT;
-				dsk_menu[i].opt_action = set_menu_select;
-				i++;
+				dsk_menu[dno].opt_name = MSG_running_system;
+				dsk_menu[dno].opt_flags = OPT_EXIT;
+				dsk_menu[dno].opt_action = set_menu_select;
+				disk_no[dno] = -1;
+				i++; dno++;
 			}
-			for (; i < numdisks+allow_cur_system; i++) {
-				dsk_menu[i].opt_name =
-				    disks[i-allow_cur_system].dd_descr;
-				dsk_menu[i].opt_flags = OPT_EXIT;
-				dsk_menu[i].opt_action = set_menu_select;
+			for (i = 0; i < numdisks; i++) {
+				if (disks[i].dd_no_part) {
+					any_wedges = true;
+					wedge_menu[wno].opt_name =
+					    disks[i].dd_descr;
+					disks[i].dd_descr[max_desc_len] = 0;
+					wedge_menu[wno].opt_flags = OPT_EXIT;
+					wedge_menu[wno].opt_action =
+					    set_menu_select;
+					wedge_no[wno] = i;
+					wno++;
+				} else {
+					dsk_menu[dno].opt_name =
+					    disks[i].dd_descr;
+					disks[i].dd_descr[max_desc_len] = 0;
+					dsk_menu[dno].opt_flags = OPT_EXIT;
+					dsk_menu[dno].opt_action =
+					    set_menu_select;
+					disk_no[dno] = i;
+					dno++;
+				}
+			}
+			if (any_wedges) {
+				dsk_menu[dno].opt_name = MSG_selectwedge;
+				dsk_menu[dno].opt_flags = OPT_EXIT;
+				dsk_menu[dno].opt_action = set_menu_select;
+				disk_no[dno] = -2;
+				dno++;
 			}
 			if (partman_go < 0) {
-				dsk_menu[i].opt_name = MSG_partman;
-				dsk_menu[i].opt_flags = OPT_EXIT;
-				dsk_menu[i].opt_action = set_menu_select;
-				i++;
+				dsk_menu[dno].opt_name = MSG_partman;
+				dsk_menu[dno].opt_flags = OPT_EXIT;
+				dsk_menu[dno].opt_action = set_menu_select;
+				disk_no[dno] = -3;
+				dno++;
 			}
+			w_menu_no = -1;
 			menu_no = new_menu(MSG_Available_disks,
-				dsk_menu, i, -1,
+				dsk_menu, dno, -1,
 				 4, 0, 0, MC_SCROLL,
 				NULL, NULL, NULL, NULL, MSG_exit_menu_generic);
 			if (menu_no == -1)
 				return -1;
-			msg_fmt_display(MSG_ask_disk, "%s", doingwhat);
-			process_menu(menu_no, &selected_disk);
-			free_menu(menu_no);
-			if (allow_cur_system) {
-				if (selected_disk == 0) {
-					pm = dummy_whole_system_pm();
-					return 1;
-				} else {
-					selected_disk--;
+			for (;;) {
+				msg_fmt_display(MSG_ask_disk, "%s", doingwhat);
+				i = -1;
+				process_menu(menu_no, &i);
+				if (i == -1)
+					return -1;
+				if (disk_no[i] == -2) {
+					/* do wedges menu */
+					if (w_menu_no == -1) {
+						w_menu_no = new_menu(
+						    MSG_Available_wedges,
+						    wedge_menu, wno, -1,
+						    4, 0, 0, MC_SCROLL,
+						    NULL, NULL, NULL, NULL,
+						    MSG_exit_menu_generic);
+						if (w_menu_no == -1) {
+							selected_disk = -1;
+							break;
+						}
+					}
+					i = -1;
+					process_menu(w_menu_no, &i);
+					if (i == -1)
+						continue;
+					selected_disk = wedge_no[i];
+					break;
 				}
+				selected_disk = disk_no[i];
+				break;
+			}
+			if (w_menu_no >= 0)
+				free_menu(w_menu_no);
+			free_menu(menu_no);
+			if (allow_cur_system && selected_disk == -1) {
+				pm = dummy_whole_system_pm();
+				return 1;
 			}
 		}
-		if (partman_go < 0 && selected_disk == numdisks) {
+		if (partman_go < 0 &&  selected_disk == -3) {
 			partman_go = 1;
 			return -2;
 		} else
 			partman_go = 0;
-		if (selected_disk < 0 || selected_disk >= numdisks)
+		if (selected_disk < 0 ||  selected_disk < 0
+		    || selected_disk >= numdisks)
 			return -1;
 	}
 
@@ -1080,6 +1239,27 @@ sort_part_usage_by_mount(const void *a, const void *b)
 	return (uintptr_t)a < (uintptr_t)b ? -1 : 1;
 }
 
+/*
+ * Are we able to newfs this type of file system?
+ * Keep in sync with switch labels below!
+ */
+bool
+can_newfs_fstype(unsigned int t)
+{
+	switch (t) {
+	case FS_APPLEUFS:
+	case FS_BSDFFS:
+	case FS_BSDLFS:
+	case FS_MSDOS:
+	case FS_EFI_SP:
+	case FS_SYSVBFS:
+	case FS_V7:
+	case FS_EX2FS:
+		return true;
+	}
+	return false;
+}
+
 int
 make_filesystems(struct install_partition_desc *install)
 {
@@ -1102,7 +1282,7 @@ make_filesystems(struct install_partition_desc *install)
 			if (!ask_noyes(MSG_No_filesystem_newfs))
 				return EINVAL;
 			error = run_program(RUN_DISPLAY | RUN_PROGRESS,
-			    "/sbin/newfs -V2 -O2 %s", rdev);
+			    "/sbin/newfs -V2 -O2ea %s", rdev);
 		}
 
 		md_pre_mount(install, 0);
@@ -1173,9 +1353,16 @@ make_filesystems(struct install_partition_desc *install)
 				    ptn->fs_opt2);
 				strcat(opts, opt);
 			}
+			const char *ffs_fmt;
+			switch (ptn->fs_version) {
+			case 3: ffs_fmt = "2ea"; break;
+			case 2: ffs_fmt = "2"; break;
+			case 1:
+			default: ffs_fmt = "1"; break;
+			}
 			asprintf(&newfs,
-			    "/sbin/newfs -V2 -O %d %s",
-			    ptn->fs_version == 2 ? 2 : 1, opts);
+			    "/sbin/newfs -V2 -O %s %s",
+			    ffs_fmt, opts);
 			if (ptn->mountflags & PUIMNT_LOG)
 				mnt_opts = "-tffs -o log";
 			else
@@ -1191,6 +1378,7 @@ make_filesystems(struct install_partition_desc *install)
 			fsname = "lfs";
 			break;
 		case FS_MSDOS:
+		case FS_EFI_SP:
 			asprintf(&newfs, "/sbin/newfs_msdos");
 			mnt_opts = "-tmsdos";
 			fsname = "msdos";
@@ -2046,7 +2234,7 @@ bootxx_name(struct install_partition_desc *install)
 	switch (fstype) {
 #if defined(BOOTXX_FFSV1) || defined(BOOTXX_FFSV2)
 	case FS_BSDFFS:
-		if (install->infos[i].fs_version == 2) {
+		if (install->infos[i].fs_version >= 2) {
 #ifdef BOOTXX_FFSV2
 			bootxxname = BOOTXX_FFSV2;
 #else

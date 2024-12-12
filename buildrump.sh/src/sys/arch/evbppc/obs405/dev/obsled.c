@@ -1,4 +1,4 @@
-/*	$NetBSD: obsled.c,v 1.10 2014/02/25 18:30:08 pooka Exp $	*/
+/*	$NetBSD: obsled.c,v 1.12 2024/09/07 06:17:38 andvar Exp $	*/
 
 /*
  * Copyright (c) 2004 Shigeyuki Fukushima.
@@ -31,7 +31,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: obsled.c,v 1.10 2014/02/25 18:30:08 pooka Exp $");
+__KERNEL_RCSID(0, "$NetBSD: obsled.c,v 1.12 2024/09/07 06:17:38 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/device.h>
@@ -165,7 +165,7 @@ obsled_set_state(struct obsled_softc *sc)
 
 /*
  * Setting LED interface for inside kernel.
- * Argumnt `led' is 3-bit LED state (led=0-7/ON=1/OFF=0).
+ * Argument `led' is 3-bit LED state (led=0-7/ON=1/OFF=0).
  */
 void
 obs266_led_set(int led)
@@ -174,8 +174,8 @@ obs266_led_set(int led)
 	deviter_t di;
 
 	/*
-	 * Sarching "obsled" devices from device tree.
-	 * Do you have something better idea?
+	 * Searching "obsled" devices from device tree.
+	 * Do you have a better idea?
 	 */
         for (dv = deviter_first(&di, DEVITER_F_ROOT_FIRST); dv != NULL;
 	     dv = deviter_next(&di)) {

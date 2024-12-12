@@ -1,4 +1,4 @@
-/*	$NetBSD: mb8795.c,v 1.66 2020/01/29 05:31:10 thorpej Exp $	*/
+/*	$NetBSD: mb8795.c,v 1.71 2023/12/20 00:40:44 thorpej Exp $	*/
 /*
  * Copyright (c) 1998 Darrin B. Jewell
  * All rights reserved.
@@ -25,7 +25,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: mb8795.c,v 1.66 2020/01/29 05:31:10 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: mb8795.c,v 1.71 2023/12/20 00:40:44 thorpej Exp $");
 
 #include "opt_inet.h"
 
@@ -35,7 +35,6 @@ __KERNEL_RCSID(0, "$NetBSD: mb8795.c,v 1.66 2020/01/29 05:31:10 thorpej Exp $");
 #include <sys/syslog.h>
 #include <sys/socket.h>
 #include <sys/device.h>
-#include <sys/malloc.h>
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 #include <sys/rndsource.h>
@@ -348,6 +347,7 @@ mb8795_rint(struct mb8795_softc *sc)
 		printf("rxmode = %s\n", sbuf);
 	}
 #endif
+	rnd_add_uint32(&sc->rnd_source, rxstat);
 
 	return;
 }
@@ -380,7 +380,7 @@ mb8795_tint(struct mb8795_softc *sc)
 			/* printf ("Z"); */
 			mb8795_start_dma(sc);
 		}
-		return;
+		goto out;
 	}
 
 	if (txstat & MB8795_TXSTAT_SHORTED) {
@@ -414,6 +414,8 @@ mb8795_tint(struct mb8795_softc *sc)
 		    txmask & ~MB8795_TXMASK_READYIE);
 	}
 #endif
+ out:
+	rnd_add_uint32(&sc->rnd_source, txstat);
 
 	return;
 }
@@ -430,7 +432,7 @@ mb8795_reset(struct mb8795_softc *sc)
 
 	DPRINTF (("%s: mb8795_reset()\n", device_xname(sc->sc_dev)));
 
-	sc->sc_ethercom.ec_if.if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	sc->sc_ethercom.ec_if.if_flags &= ~IFF_RUNNING;
 	sc->sc_ethercom.ec_if.if_timer = 0;
 
 	MBDMA_RESET(sc);
@@ -526,7 +528,6 @@ mb8795_init(struct mb8795_softc *sc)
 			MBDMA_TX_SETUP(sc);
 
 			ifp->if_flags |= IFF_RUNNING;
-			ifp->if_flags &= ~IFF_OACTIVE;
 			ifp->if_timer = 0;
 
 			MBDMA_RX_GO(sc);
@@ -674,19 +675,15 @@ mb8795_start(struct ifnet *ifp)
 #endif
 
 	while (1) {
-		if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE))
-		    != IFF_RUNNING)
+		if ((ifp->if_flags & IFF_RUNNING) == 0)
 			return;
 
 #if 0
 		return;	/* @@@ Turn off xmit for debugging */
 #endif
 
-		ifp->if_flags |= IFF_OACTIVE;
-
 		IFQ_DEQUEUE(&ifp->if_snd, m);
 		if (m == 0) {
-			ifp->if_flags &= ~IFF_OACTIVE;
 			return;
 		}
 
@@ -698,8 +695,6 @@ mb8795_start(struct ifnet *ifp)
 		if (!MBDMA_TX_ISACTIVE(sc))
 			mb8795_start_dma(sc);
 		splx(s);
-
-		ifp->if_flags &= ~IFF_OACTIVE;
 	}
 }
 
@@ -718,7 +713,7 @@ mb8795_start_dma(struct mb8795_softc *sc)
 		txstat = MB_READ_REG(sc, MB8795_TXSTAT);
 		if (!turbo && !(txstat & MB8795_TXSTAT_READY)) {
 			/*
-			 * @@@ I used to panic here, but then it paniced once.
+			 * @@@ I used to panic here, but then it panicked once.
 			 * Let's see if I can just reset instead.
 			 * [ dbj 980706.1900 ]
 			 */

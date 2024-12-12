@@ -1,4 +1,4 @@
-/*	$NetBSD: cs89x0.c,v 1.51 2021/07/31 20:29:37 andvar Exp $	*/
+/*	$NetBSD: cs89x0.c,v 1.55 2024/06/29 12:11:11 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2004 Christopher Gilbert
@@ -212,7 +212,7 @@
 */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: cs89x0.c,v 1.51 2021/07/31 20:29:37 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: cs89x0.c,v 1.55 2024/06/29 12:11:11 riastradh Exp $");
 
 #include "opt_inet.h"
 
@@ -302,7 +302,7 @@ static int cs_read_pktpg_from_eeprom(struct cs_softc *, int, uint16_t *);
  * worse is the next 'worse' state in the table.
  *
  * Transition to the next worse state happens automatically when a
- * transmittion underrun occurs.
+ * transmission underrun occurs.
  */
 struct cs_xmit_early {
 	uint16_t	txcmd;
@@ -881,7 +881,7 @@ cs_reset_chip(struct cs_softc *sc)
 	sc->sc_txbusy = FALSE;
 
 	/*
-	 * There was a delay(125); here, but it seems uneccesary 125 usec is
+	 * There was a delay(125); here, but it seems unnecessary 125 usec is
 	 * 1/8000 of a second, not 1/8 of a second. the data sheet advises
 	 * 1/10 of a second here, but the SI_BUSY and INIT_DONE loops below
 	 * should be sufficient.
@@ -1191,7 +1191,6 @@ cs_init(struct ifnet *ifp)
 
 		/* Mark the interface as running */
 		sc->sc_ethercom.ec_if.if_flags |= IFF_RUNNING;
-		sc->sc_ethercom.ec_if.if_flags &= ~IFF_OACTIVE;
 		sc->sc_ethercom.ec_if.if_timer = 0;
 
 		/* Assume we have carrier until we are told otherwise. */
@@ -1565,12 +1564,12 @@ cs_transmit_event(struct cs_softc *sc, uint16_t txEvent)
 	/* Add the number of collisions for this frame */
 	net_stat_ref_t nsr = IF_STAT_GETREF(ifp);
 	if (txEvent & TX_EVENT_16_COLL)
-		if_statadd_ref(nsr, if_collisions, 16);
+		if_statadd_ref(ifp, nsr, if_collisions, 16);
 	else
-		if_statadd_ref(nsr, if_collisions,
+		if_statadd_ref(ifp, nsr, if_collisions,
 		    ((txEvent & TX_EVENT_COLL_MASK) >> 11));
 
-	if_statinc_ref(nsr, if_opackets);
+	if_statinc_ref(ifp, nsr, if_opackets);
 	IF_STAT_PUTREF(ifp);
 
 	/* Transmission is no longer in progress */
@@ -1870,7 +1869,7 @@ cs_start_output(struct ifnet *ifp)
 	sc = ifp->if_softc;
 
 	/* Check that the interface is up and running */
-	if ((ifp->if_flags & (IFF_RUNNING | IFF_OACTIVE)) != IFF_RUNNING)
+	if ((ifp->if_flags & IFF_RUNNING) == 0)
 		return;
 
 	/* Don't interrupt a transmission in progress */
@@ -2131,7 +2130,7 @@ cs_stop(struct ifnet *ifp, int disable)
 	if (disable)
 		cs_disable(sc);
 
-	ifp->if_flags &= ~(IFF_RUNNING | IFF_OACTIVE);
+	ifp->if_flags &= ~IFF_RUNNING;
 }
 
 int

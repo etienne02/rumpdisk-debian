@@ -1,4 +1,4 @@
-/* $NetBSD: hdafg.c,v 1.23 2020/06/11 02:39:30 thorpej Exp $ */
+/* $NetBSD: hdafg.c,v 1.32 2024/01/29 18:58:54 riastradh Exp $ */
 
 /*
  * Copyright (c) 2009 Precedence Technologies Ltd <support@precedence.co.uk>
@@ -60,7 +60,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: hdafg.c,v 1.23 2020/06/11 02:39:30 thorpej Exp $");
+__KERNEL_RCSID(0, "$NetBSD: hdafg.c,v 1.32 2024/01/29 18:58:54 riastradh Exp $");
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -71,6 +71,9 @@ __KERNEL_RCSID(0, "$NetBSD: hdafg.c,v 1.23 2020/06/11 02:39:30 thorpej Exp $");
 #include <sys/bus.h>
 #include <sys/kmem.h>
 #include <sys/module.h>
+#include <sys/condvar.h>
+#include <sys/kthread.h>
+#include <sys/mutex.h>
 
 #include <sys/audioio.h>
 #include <dev/audio/audio_if.h>
@@ -311,8 +314,12 @@ struct hdafg_softc {
 	int				sc_pchan, sc_rchan;
 	audio_params_t			sc_pparam, sc_rparam;
 
-	struct callout			sc_jack_callout;
+	kmutex_t			sc_jack_lock;
+	kcondvar_t			sc_jack_cv;
+	struct lwp			*sc_jack_thread;
 	bool				sc_jack_polling;
+	bool				sc_jack_suspended;
+	bool				sc_jack_dying;
 
 	struct {
 		uint32_t		afg_cap;
@@ -328,6 +335,9 @@ struct hdafg_softc {
 
 	uint16_t			sc_fixed_rate;
 	bool				sc_disable_dip;
+
+	char				sc_name[MAX_AUDIO_DEV_LEN];
+	char				sc_version[MAX_AUDIO_DEV_LEN];
 };
 
 static int	hdafg_match(device_t, cfdata_t, void *);
@@ -2887,7 +2897,8 @@ hdafg_build_mixers(struct hdafg_softc *sc)
 		mx[index].mx_di.prev = mx[index].mx_di.next = AUDIO_MIXER_LAST;
 		mx[index].mx_di.un.v.num_channels = 2;	/* XXX */
 		mx[index].mx_di.mixer_class = HDAUDIO_MIXER_CLASS_OUTPUTS;
-		mx[index].mx_di.un.v.delta = 256 / (masterctl->ctl_step + 1);
+		mx[index].mx_di.un.v.delta = 256 / 
+		    (masterctl->ctl_step ? masterctl->ctl_step : 1);
 		strcpy(mx[index].mx_di.label.name, AudioNmaster);
 		strcpy(mx[index].mx_di.un.v.units.name, AudioNvolume);
 		hda_trace(sc, "  adding outputs.%s\n",
@@ -2922,7 +2933,8 @@ hdafg_build_mixers(struct hdafg_softc *sc)
 		mx[index].mx_di.type = AUDIO_MIXER_VALUE;
 		mx[index].mx_di.prev = mx[index].mx_di.next = AUDIO_MIXER_LAST;
 		mx[index].mx_di.un.v.num_channels = 2;	/* XXX */
-		mx[index].mx_di.un.v.delta = 256 / (ctl->ctl_step + 1);
+		mx[index].mx_di.un.v.delta = 256 /
+		    (ctl->ctl_step ? ctl->ctl_step : 1);
 		if (ctrlcnt[audiodev] > 0)
 			snprintf(mx[index].mx_di.label.name,
 			    sizeof(mx[index].mx_di.label.name),
@@ -3507,16 +3519,18 @@ hdafg_configure_encodings(struct hdafg_softc *sc)
 }
 
 static void
-hdafg_hp_switch_handler(void *opaque)
+hdafg_hp_switch_handler(struct hdafg_softc *sc)
 {
-	struct hdafg_softc *sc = opaque;
 	struct hdaudio_assoc *as = sc->sc_assocs;
 	struct hdaudio_widget *w;
 	uint32_t res = 0;
 	int i, j;
 
+	KASSERT(sc->sc_jack_polling);
+	KASSERT(mutex_owned(&sc->sc_jack_lock));
+
 	if (!device_is_active(sc->sc_dev))
-		goto resched;
+		return;
 
 	for (i = 0; i < sc->sc_nassocs; i++) {
 		if (as[i].as_digital != HDAFG_AS_ANALOG &&
@@ -3575,9 +3589,28 @@ hdafg_hp_switch_handler(void *opaque)
 			}
 		}
 	}
+}
 
-resched:
-	callout_schedule(&sc->sc_jack_callout, HDAUDIO_HP_SENSE_PERIOD);
+static void
+hdafg_hp_switch_thread(void *opaque)
+{
+	struct hdafg_softc *sc = opaque;
+
+	KASSERT(sc->sc_jack_polling);
+
+	mutex_enter(&sc->sc_jack_lock);
+	while (!sc->sc_jack_dying) {
+		if (sc->sc_jack_suspended) {
+			cv_wait(&sc->sc_jack_cv, &sc->sc_jack_lock);
+			continue;
+		}
+		hdafg_hp_switch_handler(sc);
+		(void)cv_timedwait(&sc->sc_jack_cv, &sc->sc_jack_lock,
+		    HDAUDIO_HP_SENSE_PERIOD);
+	}
+	mutex_exit(&sc->sc_jack_lock);
+
+	kthread_exit(0);
 }
 
 static void
@@ -3587,6 +3620,7 @@ hdafg_hp_switch_init(struct hdafg_softc *sc)
 	struct hdaudio_widget *w;
 	bool enable = false;
 	int i, j;
+	int error;
 
 	for (i = 0; i < sc->sc_nassocs; i++) {
 		if (as[i].as_hpredir < 0 && as[i].as_displaydev == false)
@@ -3645,11 +3679,24 @@ hdafg_hp_switch_init(struct hdafg_softc *sc)
 			hda_trace1(sc, ",displayport");
 		hda_trace1(sc, "]\n");
 	}
-	if (enable) {
-		sc->sc_jack_polling = true;
-		hdafg_hp_switch_handler(sc);
-	} else
+	if (!enable) {
 		hda_trace(sc, "jack detect not enabled\n");
+		return;
+	}
+
+	mutex_init(&sc->sc_jack_lock, MUTEX_DEFAULT, IPL_NONE);
+	cv_init(&sc->sc_jack_cv, "hdafghp");
+	sc->sc_jack_polling = true;
+	error = kthread_create(PRI_NONE, KTHREAD_MPSAFE, /*ci*/NULL,
+	    hdafg_hp_switch_thread, sc, &sc->sc_jack_thread,
+	    "%s hotplug detect", device_xname(sc->sc_dev));
+	if (error) {
+		aprint_error_dev(sc->sc_dev, "failed to create hotplug thread:"
+		    " %d", error);
+		sc->sc_jack_polling = false;
+		cv_destroy(&sc->sc_jack_cv);
+		mutex_destroy(&sc->sc_jack_lock);
+	}
 }
 
 static void
@@ -3658,7 +3705,6 @@ hdafg_attach(device_t parent, device_t self, void *opaque)
 	struct hdafg_softc *sc = device_private(self);
 	audio_params_t defparams;
 	prop_dictionary_t args = opaque;
-	char vendor[MAX_AUDIO_DEV_LEN], product[MAX_AUDIO_DEV_LEN];
 	uint64_t fgptr = 0;
 	uint32_t astype = 0;
 	uint8_t nid = 0;
@@ -3671,10 +3717,6 @@ hdafg_attach(device_t parent, device_t self, void *opaque)
 	mutex_init(&sc->sc_lock, MUTEX_DEFAULT, IPL_NONE);
 	mutex_init(&sc->sc_intr_lock, MUTEX_DEFAULT, IPL_SCHED);
 
-	callout_init(&sc->sc_jack_callout, 0);
-	callout_setfunc(&sc->sc_jack_callout,
-	    hdafg_hp_switch_handler, sc);
-
 	if (!pmf_device_register(self, hdafg_suspend, hdafg_resume))
 		aprint_error_dev(self, "couldn't establish power handler\n");
 
@@ -3684,10 +3726,10 @@ hdafg_attach(device_t parent, device_t self, void *opaque)
 
 	prop_dictionary_get_uint16(args, "vendor-id", &sc->sc_vendor);
 	prop_dictionary_get_uint16(args, "product-id", &sc->sc_product);
-	hdaudio_findvendor(vendor, sizeof(vendor), sc->sc_vendor);
-	hdaudio_findproduct(product, sizeof(product), sc->sc_vendor,
+	hdaudio_findvendor(sc->sc_name, sizeof(sc->sc_name), sc->sc_vendor);
+	hdaudio_findproduct(sc->sc_version, sizeof(sc->sc_version), sc->sc_vendor,
 	    sc->sc_product);
-	hda_print1(sc, ": %s %s%s\n", vendor, product,
+	hda_print1(sc, ": %s %s%s\n", sc->sc_name, sc->sc_version,
 	    sc->sc_config ? " (custom configuration)" : "");
 
 	switch (sc->sc_vendor) {
@@ -3757,7 +3799,7 @@ hdafg_attach(device_t parent, device_t self, void *opaque)
 
 	hda_debug(sc, "preparing pin controls\n");
 	hdafg_prepare_pin_controls(sc);
-	hda_debug(sc, "commiting settings\n");
+	hda_debug(sc, "committing settings\n");
 	hdafg_commit(sc);
 
 	hda_debug(sc, "setup jack sensing\n");
@@ -3803,13 +3845,6 @@ hdafg_attach(device_t parent, device_t self, void *opaque)
 	}
 	hda_debug(sc, "assoc type mask: %x\n", astype);
 
-#ifndef HDAUDIO_ENABLE_HDMI
-	astype &= ~(1 << HDAFG_AS_HDMI);
-#endif
-#ifndef HDAUDIO_ENABLE_DISPLAYPORT
-	astype &= ~(1 << HDAFG_AS_DISPLAYPORT);
-#endif
-
 	if (astype == 0)
 		return;
 
@@ -3828,8 +3863,16 @@ hdafg_detach(device_t self, int flags)
 	struct hdaudio_mixer *mx = sc->sc_mixers;
 	int nid;
 
-	callout_halt(&sc->sc_jack_callout, NULL);
-	callout_destroy(&sc->sc_jack_callout);
+	if (sc->sc_jack_polling) {
+		int error __diagused;
+
+		mutex_enter(&sc->sc_jack_lock);
+		sc->sc_jack_dying = true;
+		cv_broadcast(&sc->sc_jack_cv);
+		mutex_exit(&sc->sc_jack_lock);
+		error = kthread_join(sc->sc_jack_thread);
+		KASSERTMSG(error == 0, "error=%d", error);
+	}
 
 	if (sc->sc_config)
 		prop_object_release(sc->sc_config);
@@ -3879,7 +3922,12 @@ hdafg_suspend(device_t self, const pmf_qual_t *qual)
 {
 	struct hdafg_softc *sc = device_private(self);
 
-	callout_halt(&sc->sc_jack_callout, NULL);
+	if (sc->sc_jack_polling) {
+		mutex_enter(&sc->sc_jack_lock);
+		KASSERT(!sc->sc_jack_suspended);
+		sc->sc_jack_suspended = true;
+		mutex_exit(&sc->sc_jack_lock);
+	}
 
 	return true;
 }
@@ -3910,8 +3958,13 @@ hdafg_resume(device_t self, const pmf_qual_t *qual)
 	hdafg_stream_connect(sc, AUMODE_PLAY);
 	hdafg_stream_connect(sc, AUMODE_RECORD);
 
-	if (sc->sc_jack_polling)
-		hdafg_hp_switch_handler(sc);
+	if (sc->sc_jack_polling) {
+		mutex_enter(&sc->sc_jack_lock);
+		KASSERT(sc->sc_jack_suspended);
+		sc->sc_jack_suspended = false;
+		cv_broadcast(&sc->sc_jack_cv);
+		mutex_exit(&sc->sc_jack_lock);
+	}
 
 	return true;
 }
@@ -4061,10 +4114,8 @@ hdafg_getdev(void *opaque, struct audio_device *audiodev)
 	struct hdaudio_audiodev *ad = opaque;
 	struct hdafg_softc *sc = ad->ad_sc;
 
-	hdaudio_findvendor(audiodev->name, sizeof(audiodev->name),
-	    sc->sc_vendor);
-	hdaudio_findproduct(audiodev->version, sizeof(audiodev->version),
-	    sc->sc_vendor, sc->sc_product);
+	memcpy(audiodev->name, sc->sc_name, sizeof(audiodev->name));
+	memcpy(audiodev->version, sc->sc_version, sizeof(audiodev->version));
 	snprintf(audiodev->config, sizeof(audiodev->config),
 	    "%02Xh", sc->sc_nid);
 
@@ -4231,12 +4282,14 @@ hdafg_freem(void *opaque, void *addr, size_t size)
 	struct hdaudio_audiodev *ad = opaque;
 	struct hdaudio_stream *st;
 
-	if (addr == DMA_KERNADDR(&ad->ad_playback->st_data))
+	if (ad->ad_playback != NULL &&
+	    addr == DMA_KERNADDR(&ad->ad_playback->st_data))
 		st = ad->ad_playback;
-	else if (addr == DMA_KERNADDR(&ad->ad_capture->st_data))
+	else if (ad->ad_capture != NULL &&
+	    addr == DMA_KERNADDR(&ad->ad_capture->st_data))
 		st = ad->ad_capture;
 	else
-		return;
+		panic("bad hdafg hwbuf mem: %p (%zu bytes)", addr, size);
 
 	hdaudio_dma_free(st->st_host, &st->st_data);
 }

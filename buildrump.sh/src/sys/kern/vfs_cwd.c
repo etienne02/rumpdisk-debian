@@ -1,7 +1,7 @@
-/*	$NetBSD: vfs_cwd.c,v 1.6 2020/04/21 21:42:47 ad Exp $	*/
+/*	$NetBSD: vfs_cwd.c,v 1.12 2024/12/07 02:11:42 riastradh Exp $	*/
 
 /*-
- * Copyright (c) 2008, 2020 The NetBSD Foundation, Inc.
+ * Copyright (c) 2008, 2020, 2023 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,27 +31,15 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: vfs_cwd.c,v 1.6 2020/04/21 21:42:47 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: vfs_cwd.c,v 1.12 2024/12/07 02:11:42 riastradh Exp $");
 
 #include <sys/param.h>
+
 #include <sys/atomic.h>
 #include <sys/filedesc.h>
+#include <sys/kmem.h>
 #include <sys/proc.h>
 #include <sys/vnode.h>
-
-static int	cwdi_ctor(void *, void *, int);
-static void	cwdi_dtor(void *, void *);
-
-static pool_cache_t cwdi_cache;
-
-void
-cwd_sys_init(void)
-{
-
-	cwdi_cache = pool_cache_init(sizeof(struct cwdinfo), coherency_unit,
-	    0, 0, "cwdi", NULL, IPL_NONE, cwdi_ctor, cwdi_dtor, NULL);
-	KASSERT(cwdi_cache != NULL);
-}
 
 /*
  * Create an initial cwdinfo structure, using the same current and root
@@ -63,7 +51,9 @@ cwdinit(void)
 	struct cwdinfo *cwdi;
 	struct cwdinfo *copy;
 
-	cwdi = pool_cache_get(cwdi_cache, PR_WAITOK);
+	cwdi = kmem_alloc(sizeof(*cwdi), KM_SLEEP);
+	KASSERT(ALIGNED_POINTER(cwdi, COHERENCY_UNIT));
+	rw_init(&cwdi->cwdi_lock);
 	copy = curproc->p_cwdi;
 
 	rw_enter(&copy->cwdi_lock, RW_READER);
@@ -76,29 +66,12 @@ cwdinit(void)
 	cwdi->cwdi_edir = copy->cwdi_edir;
 	if (cwdi->cwdi_edir)
 		vref(cwdi->cwdi_edir);
-	cwdi->cwdi_cmask = copy->cwdi_cmask;
-	cwdi->cwdi_refcnt = 1;
 	rw_exit(&copy->cwdi_lock);
 
-	return (cwdi);
-}
+	cwdi->cwdi_cmask = copy->cwdi_cmask;
+	cwdi->cwdi_refcnt = 1;
 
-static int
-cwdi_ctor(void *arg, void *obj, int flags)
-{
-	struct cwdinfo *cwdi = obj;
-
-	rw_init(&cwdi->cwdi_lock);
-
-	return 0;
-}
-
-static void
-cwdi_dtor(void *arg, void *obj)
-{
-	struct cwdinfo *cwdi = obj;
-
-	rw_destroy(&cwdi->cwdi_lock);
+	return cwdi;
 }
 
 /*
@@ -138,15 +111,18 @@ void
 cwdfree(struct cwdinfo *cwdi)
 {
 
+	membar_release();
 	if (atomic_dec_uint_nv(&cwdi->cwdi_refcnt) > 0)
 		return;
+	membar_acquire();
 
 	vrele(cwdi->cwdi_cdir);
+	rw_destroy(&cwdi->cwdi_lock);
 	if (cwdi->cwdi_rdir)
 		vrele(cwdi->cwdi_rdir);
 	if (cwdi->cwdi_edir)
 		vrele(cwdi->cwdi_edir);
-	pool_cache_put(cwdi_cache, cwdi);
+	kmem_free(cwdi, sizeof(*cwdi));
 }
 
 void

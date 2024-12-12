@@ -1,4 +1,4 @@
-/*	$NetBSD: ioport.h,v 1.2 2014/03/18 18:20:43 riastradh Exp $	*/
+/*	$NetBSD: ioport.h,v 1.8 2021/12/19 12:37:07 riastradh Exp $	*/
 
 /*-
  * Copyright (c) 2013 The NetBSD Foundation, Inc.
@@ -35,22 +35,44 @@
 #include <sys/types.h>
 #include <sys/bus.h>
 
-#define	IORESOURCE_IO	0
-#define	IORESOURCE_MEM	1
+#include <linux/types.h>
+
+#define	IORESOURCE_IO		__BIT(0)
+#define	IORESOURCE_MEM		__BIT(1)
+#define	IORESOURCE_IRQ		__BIT(2)
+#define	IORESOURCE_UNSET	__BIT(3)
 
 struct resource {
 	bus_addr_t start;
-	bus_size_t size;
+	bus_addr_t end;		/* WARNING: Inclusive! */
 	const char *name;
 	unsigned int flags;
 	bus_space_tag_t r_bst;	/* This milk is not organic.  */
 	bus_space_handle_t r_bsh;
 };
 
+#define	DEFINE_RES_MEM(START, SIZE)					      \
+	{ .start = (START), .end = (START) + ((SIZE) - 1) }
+
+static inline resource_size_t
+resource_size(struct resource *resource)
+{
+	return resource->end - resource->start + 1;
+}
+
+static inline bool
+resource_contains(struct resource *r1, struct resource *r2)
+{
+	if (r1->r_bst != r2->r_bst)
+		return false;
+	return r1->start <= r2->start && r2->end <= r1->end;
+}
+
 static inline void
 release_resource(struct resource *resource)
 {
-	bus_space_free(resource->r_bst, resource->r_bsh, resource->size);
+	bus_space_free(resource->r_bst, resource->r_bsh,
+	    resource_size(resource));
 }
 
 #endif  /* _LINUX_IOPORT_H_ */

@@ -1,4 +1,4 @@
-/* $NetBSD: if_bce.c,v 1.58 2020/02/07 00:04:28 thorpej Exp $	 */
+/* $NetBSD: if_bce.c,v 1.65 2024/02/10 09:30:06 andvar Exp $	 */
 
 /*
  * Copyright (c) 2003 Clifford Wright. All rights reserved.
@@ -35,16 +35,13 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: if_bce.c,v 1.58 2020/02/07 00:04:28 thorpej Exp $");
-
-#include "vlan.h"
+__KERNEL_RCSID(0, "$NetBSD: if_bce.c,v 1.65 2024/02/10 09:30:06 andvar Exp $");
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/callout.h>
 #include <sys/sockio.h>
 #include <sys/mbuf.h>
-#include <sys/malloc.h>
 #include <sys/kernel.h>
 #include <sys/device.h>
 #include <sys/socket.h>
@@ -266,7 +263,7 @@ bce_attach(device_t parent, device_t self, void *aux)
 	sc->bce_pa = *pa;
 
 	/* BCM440x can only address 30 bits (1GB) */
-	if (bus_dmatag_subregion(pa->pa_dmat, 0, (1 << 30),
+	if (bus_dmatag_subregion(pa->pa_dmat, 0, __MASK(30),
 	    &(sc->bce_dmatag), BUS_DMA_NOWAIT) != 0) {
 		aprint_error_dev(self,
 		    "WARNING: failed to restrict dma range,"
@@ -349,7 +346,7 @@ bce_attach(device_t parent, device_t self, void *aux)
 	 */
 	/*
 	 * XXX PAGE_SIZE is wasteful; we only need 1KB + 1KB, but
-	 * due to the limition above. ??
+	 * due to the limitation above. ??
 	 */
 	if ((error = bus_dmamem_alloc(sc->bce_dmatag,
 	    2 * PAGE_SIZE, PAGE_SIZE, 2 * PAGE_SIZE,
@@ -546,7 +543,7 @@ bce_start(struct ifnet *ifp)
 
 		/*
 		 * Load the DMA map.  If this fails, the packet either
-		 * didn't fit in the alloted number of segments, or we
+		 * didn't fit in the allotted number of segments, or we
 		 * were short on resources. If the packet will not fit,
 		 * it will be dropped. If short on resources, it will
 		 * be tried again later.
@@ -887,7 +884,7 @@ bce_init(struct ifnet *ifp)
 	/* Cancel any pending I/O. */
 	bce_stop(ifp, 0);
 
-	/* enable pci inerrupts, bursts, and prefetch */
+	/* enable pci interrupts, bursts, and prefetch */
 
 	/* remap the pci registers to the Sonics config registers */
 
@@ -931,7 +928,7 @@ bce_init(struct ifnet *ifp)
 	    bus_space_read_4(sc->bce_btag, sc->bce_bhandle, BCE_MACCTL) &
 	    ~BCE_EMC_PDOWN);
 
-	/* setup DMA interrupt control */
+	/* recv coalesce; 31:24 frame upper bound, 23:0 guard period */
 	bus_space_write_4(sc->bce_btag, sc->bce_bhandle, BCE_DMAI_CTL, 1 << 24);	/* MAGIC */
 
 	/* setup packet filter */
@@ -1035,7 +1032,7 @@ bce_add_mac(struct bce_softc *sc, uint8_t *mac, u_long idx)
 	}
 }
 
-/* Add a receive buffer to the indiciated descriptor. */
+/* Add a receive buffer to the indicated descriptor. */
 static int
 bce_add_rxbuf(struct bce_softc *sc, int idx)
 {

@@ -1,4 +1,4 @@
-/*	$NetBSD: pmap.c,v 1.312 2020/03/14 14:05:43 ad Exp $	*/
+/*	$NetBSD: pmap.c,v 1.319 2024/02/09 22:08:33 andvar Exp $	*/
 /*
  *
  * Copyright (C) 1996-1999 Eduardo Horvath.
@@ -26,7 +26,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.312 2020/03/14 14:05:43 ad Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.319 2024/02/09 22:08:33 andvar Exp $");
 
 #undef	NO_VCACHE /* Don't forget the locked TLB in dostart */
 #define	HWREF
@@ -36,7 +36,6 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.312 2020/03/14 14:05:43 ad Exp $");
 #include "opt_modular.h"
 
 #include <sys/param.h>
-#include <sys/malloc.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
 #include <sys/msgbuf.h>
@@ -82,7 +81,7 @@ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.312 2020/03/14 14:05:43 ad Exp $");
 #define	MEG		(1<<20) /* 1MB */
 #define	KB		(1<<10)	/* 1KB */
 
-paddr_t cpu0paddr;		/* contigious phys memory preallocated for cpus */
+paddr_t cpu0paddr;		/* contiguous phys memory preallocated for cpus */
 
 /* These routines are in assembly to allow access thru physical mappings */
 extern int64_t pseg_get_real(struct pmap *, vaddr_t);
@@ -163,6 +162,7 @@ static void ctx_free(struct pmap *, struct cpu_info *);
 static __inline void
 dmmu_set_secondary_context(uint ctx)
 {
+
 	if (!CPU_ISSUN4V)
 		__asm volatile(
 			"stxa %0,[%1]%2;	"
@@ -175,7 +175,6 @@ dmmu_set_secondary_context(uint ctx)
 			"membar #Sync		"
 			: : "r" (ctx), "r" (CTX_SECONDARY), "n" (ASI_MMU_CONTEXTID)
 			: "memory");
-		
 }
 
 /*
@@ -564,7 +563,7 @@ pmap_mp_init(void)
 			if (CPU_ISSUN4V)
 				tp[i].data |= SUN4V_TLB_X;
 		}
-			
+
 		DPRINTF(PDB_BOOT1, ("xtlb[%d]: Tag: %" PRIx64 " Data: %"
 				PRIx64 "\n", i, tp[i].tag, tp[i].data));
 	}
@@ -1402,7 +1401,7 @@ pmap_virtual_space(vaddr_t *start, vaddr_t *end)
 	 */
 #ifdef __arch64__
 	/*
-	 * On 64 bit kernels, start it beyound firmware, so
+	 * On 64 bit kernels, start it beyond firmware, so
 	 * we are basically unrestricted.
 	 */
 	*start = kbreak = VM_KERNEL_MEM_VA_START;
@@ -1510,9 +1509,11 @@ pmap_destroy(struct pmap *pm)
 #endif
 	struct vm_page *pg;
 
+	membar_release();
 	if ((int)atomic_dec_uint_nv(&pm->pm_refs) > 0) {
 		return;
 	}
+	membar_acquire();
 	DPRINTF(PDB_DESTROY, ("pmap_destroy: freeing pmap %p\n", pm));
 #ifdef MULTIPROCESSOR
 	CPUSET_CLEAR(pmap_cpus_active);
@@ -1537,9 +1538,7 @@ pmap_destroy(struct pmap *pm)
 
 	/* we could be a little smarter and leave pages zeroed */
 	while ((pg = TAILQ_FIRST(&pm->pm_ptps)) != NULL) {
-#ifdef DIAGNOSTIC
 		struct vm_page_md *md = VM_PAGE_TO_MD(pg);
-#endif
 
 		TAILQ_REMOVE(&pm->pm_ptps, pg, pageq.queue);
 		KASSERT(md->mdpg_pvh.pv_pmap == NULL);

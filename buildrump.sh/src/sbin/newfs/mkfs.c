@@ -1,4 +1,4 @@
-/*	$NetBSD: mkfs.c,v 1.130 2020/08/20 15:54:11 riastradh Exp $	*/
+/*	$NetBSD: mkfs.c,v 1.137 2024/05/10 20:36:34 andvar Exp $	*/
 
 /*
  * Copyright (c) 1980, 1989, 1993
@@ -73,7 +73,7 @@
 #if 0
 static char sccsid[] = "@(#)mkfs.c	8.11 (Berkeley) 5/3/95";
 #else
-__RCSID("$NetBSD: mkfs.c,v 1.130 2020/08/20 15:54:11 riastradh Exp $");
+__RCSID("$NetBSD: mkfs.c,v 1.137 2024/05/10 20:36:34 andvar Exp $");
 #endif
 #endif /* not lint */
 
@@ -108,7 +108,7 @@ union dinode {
 	struct ufs2_dinode dp2;
 };
 
-static void initcg(int, const struct timeval *);
+static void initcg(uint32_t, const struct timeval *);
 static int fsinit(const struct timeval *, mode_t, uid_t, gid_t);
 union Buffer;
 static int makedir(union Buffer *, struct direct *, int);
@@ -184,7 +184,8 @@ mkfs(const char *fsys, int fi, int fo,
 	uint fragsperinodeblk, ncg, u;
 	uint cgzero;
 	uint64_t inodeblks, cgall;
-	int32_t cylno, i, csfrags;
+	uint32_t cylno;
+	int i, csfrags;
 	int inodes_per_cg;
 	struct timeval tv;
 	long long sizepb;
@@ -409,7 +410,7 @@ mkfs(const char *fsys, int fi, int fo,
 	if (ncg < MINCYLGRPS) {
 		/*
 		 * We would like to allocate MINCLYGRPS cylinder groups,
-		 * but for small file sytems (especially ones with a lot
+		 * but for small file systems (especially ones with a lot
 		 * of inodes) this is not desirable (or possible).
 		 */
 		u = sblock.fs_size / 2 / (sblock.fs_iblkno +
@@ -610,7 +611,7 @@ mkfs(const char *fsys, int fi, int fo,
 
 		/*
 		 * Ensure there is nothing that looks like a filesystem
-		 * superbock anywhere other than where ours will be.
+		 * superblock anywhere other than where ours will be.
 		 * If fsck finds the wrong one all hell breaks loose!
 		 */
 		for (i = 0; ; i++) {
@@ -671,7 +672,8 @@ mkfs(const char *fsys, int fi, int fo,
 	fld_width = verbosity < 4 ? 1 : snprintf(NULL, 0, "%" PRIu64, 
 		(uint64_t)FFS_FSBTODB(&sblock, cgsblock(&sblock, sblock.fs_ncg-1)));
 	/* Get terminal width */
-	if (ioctl(fileno(stdout), TIOCGWINSZ, &winsize) == 0)
+	if (ioctl(fileno(stdout), TIOCGWINSZ, &winsize) == 0 &&
+	    winsize.ws_col != 0)
 		max_cols = winsize.ws_col;
 	else
 		max_cols = 80;
@@ -745,6 +747,8 @@ mkfs(const char *fsys, int fi, int fo,
 	memset(iobuf + sizeof(sblock), 0, i - sizeof(sblock));
 	if (needswap)
 		ffs_sb_swap(&sblock, (struct fs *)iobuf);
+	if (eaflag)
+		((struct fs *)iobuf)->fs_magic = FS_UFS2EA_MAGIC;
 	if ((sblock.fs_old_flags & FS_FLAGS_UPDATED) == 0)
 		memset(iobuf + offsetof(struct fs, fs_old_postbl_start),
 		    0xff, 256);
@@ -771,11 +775,10 @@ mkfs(const char *fsys, int fi, int fo,
  * Initialize a cylinder group.
  */
 void
-initcg(int cylno, const struct timeval *tv)
+initcg(uint32_t cylno, const struct timeval *tv)
 {
 	daddr_t cbase, dmax;
-	int32_t i, d, dlower, dupper, blkno;
-	uint32_t u;
+	uint32_t i, d, dlower, dupper, blkno, u;
 	struct ufs1_dinode *dp1;
 	struct ufs2_dinode *dp2;
 	int start;
@@ -847,7 +850,7 @@ initcg(int cylno, const struct timeval *tv)
 		acg.cg_nextfreeoff = acg.cg_clusteroff +
 		    howmany(ffs_fragstoblks(&sblock, sblock.fs_fpg), CHAR_BIT);
 	}
-	if (acg.cg_nextfreeoff > sblock.fs_cgsize) {
+	if (acg.cg_nextfreeoff > (unsigned)sblock.fs_cgsize) {
 		printf("Panic: cylinder group too big\n");
 		fserr(37);
 	}

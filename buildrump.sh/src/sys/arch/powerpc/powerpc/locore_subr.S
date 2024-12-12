@@ -1,4 +1,4 @@
-/*	$NetBSD: locore_subr.S,v 1.65 2021/03/06 08:34:58 rin Exp $	*/
+/*	$NetBSD: locore_subr.S,v 1.68 2023/03/01 08:18:13 riastradh Exp $	*/
 
 /*
  * Copyright (c) 2001 Wasabi Systems, Inc.
@@ -215,7 +215,32 @@ ENTRY(cpu_switchto)
 	 */
 
 	GET_CPUINFO(%r7)
+
+	/*
+	 * Issue barriers to coordinate mutex_exit on this CPU with
+	 * mutex_vector_enter on another CPU.
+	 *
+	 * 1. Any prior mutex_exit by oldlwp must be visible to other
+	 *    CPUs before we set ci_curlwp := newlwp on this one,
+	 *    requiring a store-before-store barrier.
+	 *
+	 * 2. ci_curlwp := newlwp must be visible on all other CPUs
+	 *    before any subsequent mutex_exit by newlwp can even test
+	 *    whether there might be waiters, requiring a
+	 *    store-before-load barrier.
+	 *
+	 * See kern_mutex.c for details -- this is necessary for
+	 * adaptive mutexes to detect whether the lwp is on the CPU in
+	 * order to safely block without requiring atomic r/m/w in
+	 * mutex_exit.
+	 */
+#ifdef MULTIPROCESSOR
+	sync	/* store-before-store XXX use eieio if available -- cheaper */
+#endif
 	stptr	%r31,CI_CURLWP(%r7)
+#ifdef MULTIPROCESSOR
+	sync	/* store-before-load */
+#endif
 	mr	%r13,%r31
 #ifdef PPC_BOOKE
 	mtsprg2	%r31			/* save curlwp in sprg2 */
@@ -284,7 +309,7 @@ ENTRY(cpu_switchto)
 #if 1
 	addi	%r1,%r1,CALLFRAMELEN
 #else
-	ldreg	%r1,CFRAME_SP(%r1)	/* pop stack frmae */
+	ldreg	%r1,CFRAME_SP(%r1)	/* pop stack frame */
 #endif
 	ldreg	%r0,CFRAME_LR(%r1)
 	mtlr	%r0
@@ -389,7 +414,17 @@ _ENTRY(softint_fast_dispatch)
 	 * to a kernel thread
 	 */
 
+#ifdef MULTIPROCESSOR
+	sync	/* XXX eieio */		/* for mutex_enter; see cpu_switchto */
+#endif
 	stptr	%r3, CI_CURLWP(%r7)
+	/*
+	 * No need for barrier after ci->ci_curlwp = softlwp -- when we
+	 * enter a softint lwp, it can't be holding any mutexes, so it
+	 * can't release any until after it has acquired them, so we
+	 * need not participate in the protocol with mutex_vector_enter
+	 * barriers here.
+	 */
 	mr	%r13, %r3
 #ifdef PPC_BOOKE
 	mtsprg2	%r3
@@ -423,7 +458,13 @@ _ENTRY(softint_fast_dispatch)
 #endif
 
 	GET_CPUINFO(%r7)
+#ifdef MULTIPROCESSOR
+	sync	/* XXX eieio */		/* for mutex_enter; see cpu_switchto */
+#endif
 	stptr	%r30, CI_CURLWP(%r7)
+#ifdef MULTIPROCESSOR
+	sync				/* for mutex_enter; see cpu_switchto */
+#endif
 	mr	%r13, %r30
 #ifdef PPC_BOOKE
 	mtsprg2	%r30

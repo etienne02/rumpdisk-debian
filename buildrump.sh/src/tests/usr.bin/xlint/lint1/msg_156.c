@@ -1,7 +1,9 @@
-/*	$NetBSD: msg_156.c,v 1.5 2021/02/28 12:40:00 rillig Exp $	*/
+/*	$NetBSD: msg_156.c,v 1.8 2023/03/28 14:44:35 rillig Exp $	*/
 # 3 "msg_156.c"
 
-// Test for message: enum type mismatch, arg #%d (%s != %s) [156]
+// Test for message: function expects '%s', passing '%s' for arg #%d [156]
+
+/* lint1-extra-flags: -X 351 */
 
 enum color {
 	RED	= 1 << 0,
@@ -23,6 +25,8 @@ example(enum color c, enum size s)
 	print_color(GREEN);
 	print_color(c);
 
-	print_color(MEDIUM);		/* expect: 156 */
-	print_color(s);			/* expect: 156 */
+	/* expect+1: warning: function expects 'enum color', passing 'enum size' for arg #1 [156] */
+	print_color(MEDIUM);
+	/* expect+1: warning: function expects 'enum color', passing 'enum size' for arg #1 [156] */
+	print_color(s);
 }

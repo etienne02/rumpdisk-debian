@@ -1,4 +1,4 @@
-/*	$NetBSD: pci_machdep.c,v 1.62 2021/08/21 11:55:24 andvar Exp $	*/
+/*	$NetBSD: pci_machdep.c,v 1.65 2024/09/07 06:17:38 andvar Exp $	*/
 
 /*
  * Copyright (c) 1996 Leo Weppelman.  All rights reserved.
@@ -32,7 +32,7 @@
  */
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: pci_machdep.c,v 1.62 2021/08/21 11:55:24 andvar Exp $");
+__KERNEL_RCSID(0, "$NetBSD: pci_machdep.c,v 1.65 2024/09/07 06:17:38 andvar Exp $");
 
 #include "opt_mbtype.h"
 
@@ -232,7 +232,7 @@ init_pci_bus(void)
 
 	tag   = 0;
 	id    = 0;
-	
+
 	maxndevs = pci_bus_maxdevs(pc, 0);
 
 	for (device = 0; device < maxndevs; device++) {
@@ -284,7 +284,7 @@ overlap_pci_areas(struct pci_memreg *p, struct pci_memreg *self, u_int addr,
 
 	if (p == NULL)
 		return 0;
-    
+
 	q = p;
 	while (q != NULL) {
 		if ((q != self) && (q->csr & what)) {
@@ -314,7 +314,7 @@ overlap_pci_areas(struct pci_memreg *p, struct pci_memreg *self, u_int addr,
 
 /*
  * Enable memory and I/O on pci devices. Care about already enabled devices
- * (probabaly by the console driver).
+ * (probably by the console driver).
  *
  * The idea behind the following code is:
  * We build a by sizes sorted list of the requirements of the different
@@ -359,7 +359,7 @@ enable_pci_devices(void)
 		 * enabled preserve 128k at 0xa0000 as vga memory.
 		 * XXX: if a display card is found without being enabled,
 		 * leave it alone! You will usually only create conflicts
-		 * by enabeling it.
+		 * by enabling it.
 		 */
 		class = pci_conf_read(pc, tag, PCI_CLASS_REG);
 		switch (PCI_CLASS(class)) {
@@ -732,7 +732,6 @@ pci_intr_string(pci_chipset_tag_t pc, pci_intr_handle_t ih, char *buf,
 
 	snprintf(buf, len, "irq %d", ih);
 	return buf;
-	
 }
 
 const struct evcnt *

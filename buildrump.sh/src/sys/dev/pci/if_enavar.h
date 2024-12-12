@@ -1,4 +1,4 @@
-/*	$NetBSD: if_enavar.h,v 1.8 2021/07/19 21:16:33 jmcneill Exp $	*/
+/*	$NetBSD: if_enavar.h,v 1.10 2024/02/09 22:08:35 andvar Exp $	*/
 
 /*-
  * BSD LICENSE
@@ -294,8 +294,8 @@ struct ena_ring {
 	uint16_t next_to_clean;
 
 	union {
-		struct ena_tx_buffer *tx_buffer_info; /* contex of tx packet */
-		struct ena_rx_buffer *rx_buffer_info; /* contex of rx packet */
+		struct ena_tx_buffer *tx_buffer_info; /* context of tx packet */
+		struct ena_rx_buffer *rx_buffer_info; /* context of rx packet */
 	};
 	int ring_size; /* number of tx/rx_buffer_info's entries */
 
@@ -388,6 +388,7 @@ struct ena_adapter {
 	/* RSS*/
 	uint8_t	rss_ind_tbl[ENA_RX_RSS_TABLE_SIZE];
 	bool rss_support;
+	int initialized;
 
 	uint8_t mac_addr[ETHER_ADDR_LEN];
 	/* mdio and phy*/

@@ -1,4 +1,4 @@
-/*	$NetBSD: bcm53xx_machdep.c,v 1.27 2021/03/20 05:58:22 skrll Exp $	*/
+/*	$NetBSD: bcm53xx_machdep.c,v 1.29 2024/02/16 16:28:49 skrll Exp $	*/
 
 /*-
  * Copyright (c) 2012 The NetBSD Foundation, Inc.
@@ -33,7 +33,7 @@
 #define IDM_PRIVATE
 
 #include <sys/cdefs.h>
-__KERNEL_RCSID(0, "$NetBSD: bcm53xx_machdep.c,v 1.27 2021/03/20 05:58:22 skrll Exp $");
+__KERNEL_RCSID(0, "$NetBSD: bcm53xx_machdep.c,v 1.29 2024/02/16 16:28:49 skrll Exp $");
 
 #include "opt_arm_debug.h"
 #include "opt_console.h"
@@ -114,6 +114,12 @@ int comcnmode = CONMODE | CLOCAL;
 #include <sys/kgdb.h>
 #endif
 
+#ifdef VERBOSE_INIT_ARM
+#define VPRINTF(...)	printf(__VA_ARGS__)
+#else
+#define VPRINTF(...)	__nothing
+#endif
+
 static void
 earlyconsputc(dev_t dev, int c)
 {
@@ -148,51 +154,39 @@ static struct consdev earlycons = {
  */
 
 static const struct pmap_devmap devmap[] = {
-	{
+	DEVMAP_ENTRY(
 		KERNEL_IO_IOREG_VBASE,
 		BCM53XX_IOREG_PBASE,		/* 0x18000000 */
-		BCM53XX_IOREG_SIZE,		/* 2MB */
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
-	{
+		BCM53XX_IOREG_SIZE		/* 2MB */
+	),
+	DEVMAP_ENTRY(
 		KERNEL_IO_ARMCORE_VBASE,
 		BCM53XX_ARMCORE_PBASE,		/* 0x19000000 */
-		BCM53XX_ARMCORE_SIZE,		/* 1MB */
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
-	{
+		BCM53XX_ARMCORE_SIZE		/* 1MB */
+	),
+	DEVMAP_ENTRY(
 		KERNEL_IO_ROM_REGION_VBASE,
 		BCM53XX_ROM_REGION_PBASE,	/* 0xfff00000 */
-		BCM53XX_ROM_REGION_SIZE,	/* 1MB */
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		BCM53XX_ROM_REGION_SIZE		/* 1MB */
+	),
 #if NPCI > 0
-	{
+	DEVMAP_ENTRY(
 		KERNEL_IO_PCIE0_OWIN_VBASE,
 		BCM53XX_PCIE0_OWIN_PBASE,	/* 0x08000000 */
-		BCM53XX_PCIE0_OWIN_SIZE,	/* 4MB */
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
-	{
+		BCM53XX_PCIE0_OWIN_SIZE		/* 4MB */
+	),
+	DEVMAP_ENTRY(
 		KERNEL_IO_PCIE1_OWIN_VBASE,
 		BCM53XX_PCIE1_OWIN_PBASE,	/* 0x40000000 */
-		BCM53XX_PCIE1_OWIN_SIZE,	/* 4MB */
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
-	{
+		BCM53XX_PCIE1_OWIN_SIZE		/* 4MB */
+	),
+	DEVMAP_ENTRY(
 		KERNEL_IO_PCIE2_OWIN_VBASE,
 		BCM53XX_PCIE2_OWIN_PBASE,	/* 0x48000000 */
-		BCM53XX_PCIE2_OWIN_SIZE,	/* 4MB */
-		VM_PROT_READ|VM_PROT_WRITE,
-		PTE_NOCACHE,
-	},
+		BCM53XX_PCIE2_OWIN_SIZE		/* 4MB */
+	),
 #endif /* NPCI > 0 */
-	{ 0, 0, 0, 0, 0 }
+	DEVMAP_ENTRY_END
 };
 
 static const struct boot_physmem bp_first256 = {
@@ -285,9 +279,11 @@ initarm(void *arg)
 
 	cn_tab = &earlycons;
 
+	VPRINTF("devmap\n");
 	extern char ARM_BOOTSTRAP_LxPT[];
 	pmap_devmap_bootstrap((vaddr_t)ARM_BOOTSTRAP_LxPT, devmap);
 
+	VPRINTF("bootstrap\n");
 	bcm53xx_bootstrap(KERNEL_IO_IOREG_VBASE);
 
 #ifdef MULTIPROCESSOR
@@ -298,7 +294,9 @@ initarm(void *arg)
 #endif
 	cpu_domains((DOMAIN_CLIENT << (PMAP_DOMAIN_KERNEL*2)) | DOMAIN_CLIENT);
 
+	VPRINTF("consinit ");
 	consinit();
+	VPRINTF("ok\n");
 
 	bcm53xx_cpu_softc_init(curcpu());
 	bcm53xx_print_clocks();
@@ -433,3 +431,20 @@ bcm53xx_system_reset(void)
 	bus_space_write_4(bcm53xx_ioreg_bst, bcm53xx_ioreg_bsh,
 	    MISC_WATCHDOG, 1);
 }
+
+void __noasan
+bcm53xx_platform_early_putchar(char c)
+{
+#ifdef CONSADDR
+#define CONSADDR_VA (CONSADDR - BCM53XX_IOREG_PBASE + KERNEL_IO_IOREG_VBASE)
+	volatile uint32_t *uartaddr = cpu_earlydevice_va_p() ?
+	    (volatile uint32_t *)CONSADDR_VA :
+	    (volatile uint32_t *)CONSADDR;
+
+	while ((le32toh(uartaddr[com_lsr]) & LSR_TXRDY) == 0)
+		;
+
+	uartaddr[com_data] = htole32(c);
+#endif
+}
+
